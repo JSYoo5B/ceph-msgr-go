@@ -17,14 +17,17 @@ no cluster. `list`, `plan` and `env` read local files only.
                                           reproductions, fixture admission of every row
   scenario_plan.py list                   one identifier per line
   scenario_plan.py plan --select S        matrix JSON on stdout, explanation on stderr
-  scenario_plan.py env ID                 shell exports of the native workflow's environment for one row
-  scenario_plan.py sharing                every row's fixture sharing value and the default coverage's
-                                          jobs once shareable rows of one configuration share a fixture
+  scenario_plan.py env ID [ID ...]        shell exports of the native workflow's environment for one row,
+                                          or for the one job that several rows of one fixture share
+  scenario_plan.py sharing                every row's fixture sharing value and the jobs of the default
+                                          coverage
 
 `list`, `plan` and `env` accept --catalog PATH to read another revision's
 catalog (a pull request's vocabulary) while running this trusted script. PATH
 is a fragment directory, or the earlier single catalog file of a pull request
-opened before the split.
+opened before the split. `plan` and `env` then take that revision's test
+sources from --sources-revision SHA (Git blobs, no checkout); without it they
+plan another catalog without grouping.
 
 A selector S is "all", "group:<group>" or a scenario identifier; several can be
 given. An unknown selector is an error, never an empty or conservative match.
@@ -64,9 +67,20 @@ shareable only when every test its effective selector selects is. The fixture
 derives each row's value (TestCatalogRowsDeclareFixtureSharing); validate and
 sharing run that test and refuse a row without a value, a test without a
 declaration and a misplaced declaration. A fixture configuration is a row's
-parameters without test_run. sharing lists, per configuration, the shareable
-rows that one fixture can run and the isolated rows that keep their own; it
-plans nothing, and the default and periodic coverage still run one job per row.
+parameters without test_run.
+
+plan groups the selected rows: the shareable rows of one configuration with
+an explicit test_run, in catalog order, run as one job of at most
+MAX_SEQUENCE_ROWS rows, a fixture sequence (integration/fixture/sequence.go).
+Every other selected row, and a configuration with one such row selected,
+keeps a job of its own, exactly as before; a request of one row is therefore
+never grouped. The plan reads the declarations as text (fixture_sharing.py)
+because it may plan another revision, and validate requires that reading to
+agree with the fixture's for every row with an explicit test_run. A sequence
+job carries the rows' selectors in test_sequence (CEPH_MSGR_TEST_SEQUENCE),
+their union in test_run, the row identifiers in scenarios and its first row in
+scenario. sharing lists, per configuration, the shareable and isolated rows
+and the default coverage's job count.
 
 validate refuses a documented `env ID` of an unknown row, a documented `env`
 that is not this checked form, and a hand-written reproduction that selects
@@ -81,6 +95,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import fixture_sharing as sharing_sources
 import go_test_list
 import scenario_catalog
 
@@ -109,18 +124,26 @@ SHARING_VALUES = ("shareable", "isolated")
 # reproduction through `env` (reproduction_problems).
 DOCUMENTED_RUN = re.compile(r"CEPH_MSGR_TEST_RUN=['\"]?(\^Test[A-Za-z0-9_]+\$)")
 DOCUMENTED_CAPABILITIES = re.compile(r"CEPH_MSGR_TEST_CAPABILITIES=['\"]?([a-z0-9,-]+)")
-DOCUMENTED_ENV = re.compile(r"scenario_plan\.py env ([^\s\"'`)]+)")
+DOCUMENTED_ENV = re.compile(r"scenario_plan\.py env ((?:[^\s\"'`)]+)(?: [^\s\"'`)-][^\s\"'`)]*)*)")
 # The checked form of a documented `env` (env_recipe_problems): the lookup is
 # assigned on its own line inside a subshell, and its status reaches the runner
 # through an && chain.
-CHECKED_ENV = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=\$\(python3 tools/scenario_plan\.py env [^\s)]+\) &&$")
+CHECKED_ENV = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=\$\(python3 tools/scenario_plan\.py env [^\s)]+(?: [^\s)]+)*\) &&$")
 SUBSTITUTED_ENV = re.compile(r"\$\(\s*(?:python3\s+)?\S*scenario_plan\.py env |`python3\s+\S*scenario_plan\.py env ")
 DOCUMENTED_RUNNER = re.compile(r"integration/run\.sh|integration/fixture run ")
+# The most rows one fixture sequence runs; a larger group is split in order.
+MAX_SEQUENCE_ROWS = 8
+# Matrix parameters only the planner sets, for a fixture sequence.
+SEQUENCE_PARAMS = ("test_sequence", "scenarios", "sequence_rows")
 WORKFLOW_BINDING = re.compile(r"(?m)^ +(CEPH_[A-Z0-9_]+): \$\{\{ matrix\.([a-z_]+)(?: \|\| '([^']*)')? \}\}\s*$")
 
 
 class PlanError(Exception):
     pass
+
+
+def args_with_catalog(catalog):
+    return argparse.Namespace(catalog=str(catalog), sources_revision=None)
 
 
 def load_catalog_document(path=CATALOG):
@@ -162,6 +185,9 @@ def validate_catalog(scenarios):
             continue
         for name in sorted(params.keys() - supported):
             problems.append("%s: trusted native runner does not support parameter %s" % (sid, name))
+        for name in SEQUENCE_PARAMS:
+            if name in params:
+                problems.append("%s: parameter %s is set by the planner, not by a row" % (sid, name))
         for name in REQUIRED_PARAMS:
             if not params.get(name):
                 problems.append("%s lacks required parameter %s" % (sid, name))
@@ -175,6 +201,8 @@ def validate_catalog(scenarios):
             else:
                 if "/" in pattern:
                     problems.append("%s: only top-level test selectors are supported" % sid)
+                if re.search(r"\s", pattern):
+                    problems.append("%s: a test selector has no white space" % sid)
                 try:
                     re.compile(pattern)
                 except re.error as error:
@@ -297,9 +325,10 @@ def reproduction_problems(documents, scenarios):
     for name, text in documents:
         for chunk in markdown_chunks(text):
             problems += env_recipe_problems(name, chunk)
-            for sid in DOCUMENTED_ENV.findall(chunk):
-                if sid not in ids and sid != "ID":
-                    problems.append("%s: reproduction names unknown scenario %s" % (name, sid))
+            for listed in DOCUMENTED_ENV.findall(chunk):
+                for sid in listed.split():
+                    if sid not in ids and sid != "ID":
+                        problems.append("%s: reproduction names unknown scenario %s" % (name, sid))
             given = set(DOCUMENTED_CAPABILITIES.findall(chunk))
             for selector in DOCUMENTED_RUN.findall(chunk):
                 wanted = declared.get(selector)
@@ -416,10 +445,41 @@ def sharing_groups(scenarios, values):
     return [groups[key] for key in order]
 
 
-def grouped_jobs(groups):
-    """Jobs of a coverage once each configuration's shareable rows share one
-    fixture: one per configuration with a shareable row, one per isolated row."""
-    return sum((1 if shareable else 0) + len(isolated) for _, shareable, isolated in groups)
+def sequence_problems(scenarios, values, declared):
+    """The planner's text reading of the declarations (declared, from
+    fixture_sharing.declarations) agrees with the fixture's values for every
+    row with an explicit test_run, so plan groups exactly the rows the fixture
+    calls shareable."""
+    problems = []
+    for entry in scenarios:
+        if not entry["params"].get("test_run") or values.get(entry["id"]) not in SHARING_VALUES:
+            continue
+        planner = sharing_sources.shareable_row(entry["params"], declared)
+        if planner != (values[entry["id"]] == "shareable"):
+            problems.append("%s: the planner reads it as %s, the fixture as %s" % (
+                entry["id"], "shareable" if planner else "isolated", values[entry["id"]]))
+    return problems
+
+
+def jobs(entries, declared):
+    """[[entry]] in order: the shareable rows of one configuration with an
+    explicit test_run (fixture_sharing.shareable_row) form one job of at most
+    MAX_SEQUENCE_ROWS rows, placed where its first row is; every other row is
+    a job of its own. declared is None when the sources are unknown, and then
+    nothing is grouped."""
+    result, open_jobs = [], {}
+    for entry in entries:
+        params = entry["params"]
+        if declared is None or "check" in params or not sharing_sources.shareable_row(params, declared):
+            result.append([entry])
+            continue
+        key = json.dumps(configuration(params), sort_keys=True)
+        job = open_jobs.get(key)
+        if job is None or len(job) == MAX_SEQUENCE_ROWS:
+            job = open_jobs[key] = []
+            result.append(job)
+        job.append(entry)
+    return result
 
 
 def fixed_job_problems(document, workflow_text):
@@ -506,12 +566,30 @@ def select(scenarios, selectors):
     return [entry for entry in scenarios if entry["id"] in chosen], explanation
 
 
-def matrix(entries):
+def job_parameters(job):
+    """The matrix entry of one job: a row's parameters, or a fixture sequence."""
+    if len(job) == 1:
+        return dict(job[0]["params"], scenario=job[0]["id"])
+    runs = [entry["params"]["test_run"] for entry in job]
+    return dict(configuration(job[0]["params"]), scenario=job[0]["id"], scenarios=" ".join(entry["id"] for entry in job),
+                sequence_rows=str(len(job)), test_run="|".join(runs), test_sequence=" ".join(runs))
+
+
+def matrix(entries, declared=None):
+    native = [entry for entry in entries if "check" not in entry["params"]]
     return {
-        "include": [dict(entry["params"], scenario=entry["id"])
-                    for entry in entries if "check" not in entry["params"]],
+        "include": [job_parameters(job) for job in jobs(native, declared)],
         "fixed": [entry["params"]["check"] for entry in entries if "check" in entry["params"]],
     }
+
+
+def plan_sources(args):
+    """The declarations plan and env group by, or None (no grouping)."""
+    if getattr(args, "sources_revision", None):
+        return sharing_sources.declarations(sharing_sources.revision_sources(args.sources_revision, Path.cwd()))
+    if Path(args.catalog).resolve() == CATALOG.resolve():
+        return sharing_sources.declarations(sharing_sources.tree_sources(ROOT))
+    return None
 
 
 def fixed_entries(document):
@@ -528,10 +606,12 @@ def main(argv=None):
     plan = sub.add_parser("plan")
     plan.add_argument("--select", action="append", required=True)
     plan.add_argument("--catalog", default=str(CATALOG))
+    plan.add_argument("--sources-revision")
     sub.add_parser("sharing")
     env = sub.add_parser("env")
-    env.add_argument("id")
+    env.add_argument("id", nargs="+")
     env.add_argument("--catalog", default=str(CATALOG))
+    env.add_argument("--sources-revision")
     args = parser.parse_args(argv)
     try:
         scenarios = load_catalog(getattr(args, "catalog", CATALOG))
@@ -545,6 +625,7 @@ def main(argv=None):
                         + fixture_admission_problems())
             shared, values = fixture_sharing()
             problems += shared + sharing_problems(scenarios, values)
+            problems += sequence_problems(scenarios, values, plan_sources(args_with_catalog(CATALOG)))
             for problem in problems:
                 print(problem, file=sys.stderr)
             if problems:
@@ -559,6 +640,7 @@ def main(argv=None):
                     print(problem, file=sys.stderr)
                 return 1
             groups = sharing_groups(scenarios, values)
+            planned = jobs(scenarios, plan_sources(args_with_catalog(CATALOG)))
             for params, shareable, isolated in groups:
                 print("configuration %s" % json.dumps(params, sort_keys=True))
                 for sid in shareable:
@@ -569,8 +651,9 @@ def main(argv=None):
             print("%d rows: %d shareable, %d isolated; %d configurations, %d with more than one shareable row"
                   % (len(scenarios), shareable_rows, len(scenarios) - shareable_rows, len(groups),
                      sum(1 for group in groups if len(group[1]) > 1)))
-            print("default coverage: %d jobs, %d once shareable rows of one configuration share a fixture"
-                  % (len(scenarios), grouped_jobs(groups)))
+            sequences = [job for job in planned if len(job) > 1]
+            print("default coverage: %d rows in %d jobs, %d of them fixture sequences of %s rows"
+                  % (len(scenarios), len(planned), len(sequences), "+".join(str(len(job)) for job in sequences) or "no"))
         elif args.command == "list":
             for entry in scenarios + fixed_entries(load_catalog_document(args.catalog)):
                 print(entry["id"])
@@ -578,10 +661,16 @@ def main(argv=None):
             problems = validate_catalog(scenarios)
             if problems:
                 raise PlanError("; ".join(problems))
-            rows = [entry for entry in scenarios if entry["id"] == args.id]
-            if not rows:
-                raise PlanError("unknown scenario %r" % args.id)
-            for name, value in row_environment(rows[0]["params"], workflow_bindings()):
+            by_id = {entry["id"]: entry for entry in scenarios}
+            for sid in args.id:
+                if sid not in by_id:
+                    raise PlanError("unknown scenario %r" % sid)
+            if len(set(args.id)) != len(args.id):
+                raise PlanError("a scenario is named twice")
+            planned = jobs([entry for entry in scenarios if entry["id"] in args.id], plan_sources(args))
+            if len(planned) != 1:
+                raise PlanError("the rows %s do not form one fixture sequence (%d jobs)" % (" ".join(args.id), len(planned)))
+            for name, value in row_environment(job_parameters(planned[0]), workflow_bindings()):
                 print("export %s=%s" % (name, shlex.quote(value)))
         else:
             problems = validate_catalog(scenarios)
@@ -595,7 +684,15 @@ def main(argv=None):
             for line in explanation:
                 print(line, file=sys.stderr)
             print("selected %d of %d scenarios/checks" % (len(entries), len(vocabulary)), file=sys.stderr)
-            print(json.dumps(matrix(entries), separators=(",", ":")))
+            declared = plan_sources(args)
+            if declared is None:
+                print("no test sources for this catalog: every row runs on its own fixture", file=sys.stderr)
+            planned = matrix(entries, declared)
+            sequences = [job for job in planned["include"] if "test_sequence" in job]
+            for job in sequences:
+                print("fixture sequence of %s rows: %s" % (job["sequence_rows"], job["scenarios"]), file=sys.stderr)
+            print("%d native jobs" % len(planned["include"]), file=sys.stderr)
+            print(json.dumps(planned, separators=(",", ":")))
     except PlanError as error:
         print("scenario_plan: %s" % error, file=sys.stderr)
         return 2

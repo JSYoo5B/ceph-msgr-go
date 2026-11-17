@@ -116,7 +116,9 @@ jobs:
       # forks are refused above); the planner that reads it is the trusted one.
       # scenario_catalog.py extract copies only the revision's catalog blobs
       # (catalog.d fragments, or the single catalog.json of a pull request
-      # opened before the split) and never checks the revision out.
+      # opened before the split) and never checks the revision out. The
+      # planner reads the revision's fixture sharing declarations from its
+      # test-file blobs as text (tools/fixture_sharing.py) to group rows.
       - name: Resolve the selectors against the tested revision
         id: plan
         if: steps.parse.outputs.command == 'accepted' && (steps.parse.outputs.target == 'main' || steps.pullcheck.outputs.pull == 'accepted')
@@ -131,7 +133,7 @@ jobs:
           fi
           args=()
           for selector in $SELECTORS; do args+=(--select "$selector"); done
-          if matrix=$(python3 tools/scenario_plan.py plan --catalog "$catalog" "${args[@]}" 2> "$RUNNER_TEMP/plan.txt"); then
+          if matrix=$(python3 tools/scenario_plan.py plan --catalog "$catalog" --sources-revision "$SHA" "${args[@]}" 2> "$RUNNER_TEMP/plan.txt"); then
             echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           else
             echo "reason=$(tr '\n' ' ' < "$RUNNER_TEMP/plan.txt")" >> "$GITHUB_OUTPUT"
