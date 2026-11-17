@@ -200,8 +200,9 @@ Exact-head CI is separate from these runs.
 - The detailed ledger (`facts.held_flock` in
   `mds-cephfs-sharedflock-recovery-results.json`: submission records with
   TIDs, GlobalID, nonce, MDS identities, blob hex, probe receipts and the
-  GETFILELOCK answers) is written inside the job and is not uploaded for a
-  successful run (issue #1).
+  GETFILELOCK answers) is written inside the job. The successful artifact
+  retains the ordered lock operations, accepted ledger TIDs and native probes
+  in a [bounded projection](../../.github/scenarios/NATIVE_EVIDENCE.md#shared-flock-recovery).
 
 ## Source and licensing
 

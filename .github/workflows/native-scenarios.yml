@@ -224,7 +224,7 @@ jobs:
           compression-level: 9
       - name: Collect reviewed successful-native evidence
         id: evidence
-        if: steps.ceph.outcome == 'success' && (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || (matrix.osd_soak || '') != '')
+        if: steps.ceph.outcome == 'success' && (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || matrix.test_run == '^TestCephMDSCephFSSharedFlockRecoveryIntegration$' || (matrix.osd_soak || '') != '')
         continue-on-error: true
         env:
           TESTED_SHA: ${{ inputs.ref || github.sha }}
@@ -249,7 +249,7 @@ jobs:
           retention-days: 7
           compression-level: 9
       - name: Require complete evidence for the admitted successful rows
-        if: always() && steps.ceph.outcome == 'success' && (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || (matrix.osd_soak || '') != '')
+        if: always() && steps.ceph.outcome == 'success' && (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || matrix.test_run == '^TestCephMDSCephFSSharedFlockRecoveryIntegration$' || (matrix.osd_soak || '') != '')
         env:
           COLLECTION: ${{ steps.evidence.outcome }}
           UPLOAD: ${{ steps.evidence_upload.outcome }}
@@ -266,7 +266,7 @@ jobs:
           SCENARIOS: ${{ matrix.scenarios || matrix.scenario }}
           RESULT: ${{ job.status }}
           TEST_OUTCOME: ${{ steps.ceph.outcome }}
-          EVIDENCE_PILOT: ${{ (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || (matrix.osd_soak || '') != '') }}
+          EVIDENCE_PILOT: ${{ (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || matrix.test_run == '^TestCephMDSCephFSSharedFlockRecoveryIntegration$' || (matrix.osd_soak || '') != '') }}
           EVIDENCE_COLLECTION: ${{ steps.evidence.outcome }}
           EVIDENCE_UPLOAD: ${{ steps.evidence_upload.outcome }}
           TESTED_SHA: ${{ inputs.ref || github.sha }}

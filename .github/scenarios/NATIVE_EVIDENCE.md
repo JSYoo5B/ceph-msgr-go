@@ -6,11 +6,11 @@ planner, authorization path, scheduling queue or fixture capability.
 
 ## Admitted pilot
 
-Two closed families request a successful bundle. The first is the two explicit
+Three closed families request a successful bundle. The first is the two explicit
 `mds-cephfs-capsend` rows, selecting
 `^TestCephMDSCephFSCapSendRecoveryIntegration$`. Their existing CRC/AES IPv4 host BlueStore and secure/aes256k IPv6 container
 MemStore profiles remain unchanged. The second is the single four-minute OSD soak row
-(see [below](#four-minute-osd-soak-family)). Other successful native scenarios still
+(see [below](#four-minute-osd-soak-family)). The third covers the two shared-FLOCK recovery rows described below. Other successful native scenarios still
 retain their ordinary result/test artifacts without a bundle.
 
 The collector is copied from the calling workflow's trusted checkout before
@@ -206,15 +206,38 @@ The verifier consumes data and never executes a receipt, native command or
 embedded path. Hashes provide file integrity, not a signature or proof that
 an otherwise fabricated record came from native execution.
 
-Daemon-free rejection tests (`tools/test_native_evidence.py` and
-`tools/test_native_soak_evidence.py`) validate the contract; a native run and hosted
+Daemon-free rejection tests (`tools/test_native_evidence.py`,
+`tools/test_native_flock_evidence.py` and `tools/test_native_soak_evidence.py`) validate the contract; a native run and hosted
 artifact upload are separate evidence. Before this workflow change reaches
 the default branch, PR-comment runs still use the previous trusted workflow
 and do not run this new collector. An older successful request must not be
 reported as a hosted successful-bundle upload.
 
-The soak family below is the only extension of the admitted rows; the
-cap-send inventory, schema, limits and verdicts above are unchanged.
-
 The [pilot validation record](NATIVE_EVIDENCE_VALIDATION.md) separates its actual
 Linux native run, retained projection and pre-merge hosted-workflow boundary.
+
+## Shared-FLOCK recovery
+
+The two `mds-cephfs-sharedflock-recovery` rows use the metadata fixture and
+require `TestCephMDSCephFSSharedFlockRecoveryIntegration` to pass. Their
+manifest kind is `native-shared-flock-success`. The common manifest, runtime
+and tests files identify the trusted controller, tested source, scenario,
+run and attempt. The metadata and fresh-filesystem cleanup flags are in
+`cleanup.json`.
+
+In `flock.json`, `operations` retains the two original shared acquires and
+two explicit unlocks, in submission order, with their owner, transaction ID
+and signed first reply result. Collection checks each settled call against
+the corresponding accepted SETFILELOCK in the independent request ledger.
+`accepted_tids` preserves the ledger order for download verification.
+The first two post-restart native probes establish the baseline with both
+locks held. Each subsequent exclusive probe carries its unlock transaction
+ID and native request ID, errno, acquired flag and unlocked flag. After the
+first unlock the remaining owner blocks the probe with EAGAIN. After the
+second, the probe acquires and releases the lock.
+
+Use the independent verification procedure above with the actual selected
+shared-FLOCK row. Download the successful bundle from a run using the updated
+trusted controller and compare it with expected context from that run. The
+full request ledger, native addresses, paths, error text and reconnect blob
+stay outside the bundle. The same input, file and total size bounds apply.
