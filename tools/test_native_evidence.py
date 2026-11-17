@@ -285,7 +285,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertIn('github.run_attempt', artifact)
         self.assertNotIn('ceph-diagnostics', artifact)
         self.assertNotIn('/out', artifact)
-        self.assertIn('"test_result":"%s","evidence_result":"%s"', text)
+        self.assertIn('native_terminal.py" --directory "$RUNNER_TEMP"', text)
         self.assertIn('if test "$COLLECTION:$UPLOAD" != success:success;', text)
 
     def test_collection_failure_preserves_passed_test_and_incomplete_evidence_separately(self):

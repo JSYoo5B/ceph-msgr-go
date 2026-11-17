@@ -241,3 +241,47 @@ shared-FLOCK row. Download the successful bundle from a run using the updated
 trusted controller and compare it with expected context from that run. The
 full request ledger, native addresses, paths, error text and reconnect blob
 stay outside the bundle. The same input, file and total size bounds apply.
+
+## Interrupted attempts
+
+The trusted `native_terminal.py` recorder runs in an `always()` step. It
+re-evaluates the original required-test snapshot against the available log,
+including a log whose test command ended before writing `native-tests.json`.
+The resulting `scenario-result/tests.json` preserves the observed verdicts,
+missing requirements and gate failures. `result.json` records the tested and
+controller SHAs, scenario set, run ID and attempt, job/step outcomes and these
+independent observations.
+
+- `test_evidence` is `missing` when the snapshot or log is unavailable,
+  `partial` when required results are missing, and `completed` when every
+  required parent has a terminal result. A completed FAIL or SKIP still fails
+  the gate. Broad selectors retain the existing at-least-one-PASS contract.
+- `test_result=passed` requires both the reconstructed gate and a successful
+  test step. A cancelled step can retain a completed parent PASS while its
+  attempt remains unaccepted. Missing evidence cannot produce acceptance.
+- `evidence_collection` and `evidence_upload` retain their separate step
+  outcomes. An admitted bundle requires both to succeed. `native_cleanup`
+  is verified only when collection validated the family's reviewed cleanup
+  fields. Other cases remain unverified, including an interrupted job whose
+  containers were subsequently removed.
+- `result_artifact_upload=unobserved` describes the recorder's knowledge.
+  Its result precedes its own upload. Check the attempt's upload step and
+  artifact listing to establish publication. Missing files fail the upload.
+  The recorder exits unsuccessfully for an unaccepted attempt.
+
+Scenario and diagnostic artifact names contain run ID and attempt, as successful
+bundles already do. A later attempt creates a distinct artifact. Local recording
+refuses an existing result directory. Retention still expires old artifacts,
+so this provides bounded preservation within the configured retention period.
+
+`always()` cannot guarantee publication when GitHub terminates a runner or
+cancels before the trusted tools are copied. If execution stops before recording
+or upload, the attempt-specific Actions job/step state and any already uploaded
+artifacts remain the available evidence. An absent result artifact does not
+establish whether the test ran, finished, or cleaned up. Runner disposal does
+not independently verify native cleanup flags. Never fill the missing attempt
+from a later attempt's artifacts or infer PASS from a later request status.
+
+The bounded Linux interruption record is in
+[terminal evidence validation](NATIVE_TERMINAL_VALIDATION.md). Hosted cancellation
+and API-visible attempt preservation require a separate live Actions exercise.

@@ -147,7 +147,7 @@ class NativeResultTests(unittest.TestCase):
         self.assertLess(text.index("native_test_results.py\" snapshot"), text.index("sh integration/run.sh"))
         self.assertLess(text.index("sh integration/run.sh"), text.index("native_test_results.py\" verify"))
         self.assertIn('if test "$result" -eq 0; then result=1; fi', text)
-        self.assertIn("scenario-result/tests.json", text)
+        self.assertIn('native_terminal.py" --directory "$RUNNER_TEMP"', text)
 
 
     def test_workflow_copies_the_gate_and_its_local_imports_before_tested_code(self):
