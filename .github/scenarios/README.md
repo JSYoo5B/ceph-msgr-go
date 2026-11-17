@@ -196,7 +196,7 @@ in [FIXTURE_SHARING.md](../../integration/fixture/FIXTURE_SHARING.md).
 
 The catalog preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
-Fifteen further `osd` rows use the four-OSD erasure-capacity topology
+Eighteen further `osd` rows use the four-OSD erasure-capacity topology
 (`osd_replicas` value `4`), each with one test. The first selects
 `TestCephOSDErasureK2M2Integration`, the topology's default selection; every
 other one declares `osd-erasure-width`. The second to the fifth select
@@ -274,6 +274,24 @@ killed. The call must end with an unknown outcome under its original
 identity, the native object must be unchanged after the return, and the
 returned primary's PG log must not hold that identity until the caller
 resubmits it once.
+The sixteenth to the eighteenth carry watch, snapshot and backoff state
+across the epoch changes of lost OSDs
+([validation](../../integration/fixture/OSD_EC_EPOCH_STATE_VALIDATION.md)).
+`TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration` RECONNECTs one Go
+watch to the replacement primary under the primary-first pg_temp and again
+to the returned primary; a notification from a second client must complete
+with its ACK at each primary, and the native watcher list must hold exactly
+that registration.
+`TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration` makes one clone
+through the original primary and one through the replacement, and Go and
+native reads at both snapshot ids and the head and LIST_SNAPS must agree
+under the replacement and after the return.
+`TestCephOSDErasureOptimizedK2M2PGBackoffIntegration` takes two OSDs out of
+the PG so that it is peered below `min_size`: one Go APPEND must draw a
+native PG-wide BLOCK on the primary's actual shard, further requests for the
+PG must be refused locally, and the return of one OSD must end the interval
+with the matching UNBLOCK before the caller resubmits the dropped APPEND
+once.
 Two further `osd-cache-pools` rows: one selects only
 `TestCephOSDCacheTierOpsIntegration`, the native-only cache-tier operation
 checkpoint, and another selects only `TestCephOSDCacheOpGoIntegration`, the

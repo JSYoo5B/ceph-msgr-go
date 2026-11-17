@@ -184,3 +184,16 @@ the fresh frame reach the wire in that order. Native single-object blocks,
 split/merge, primary changes and broader profile combinations remain separate
 acceptance requirements. No newer reply bit or EC behavior is enabled by these
 tests.
+
+A separate [EC control](../../integration/fixture/OSD_EC_EPOCH_STATE_VALIDATION.md)
+observed a live PG-wide BLOCK on an optimized isa k=2,m=2 PG that was peered
+below `min_size` (secure aes256k, IPv4, four BlueStore OSDs,
+`OSDProfileReplicatedPG`). The BLOCK named the primary's actual shard 0 and
+the PG's whole object range. After the explicit ACK the gate refused a READ
+of the object and a STAT naming parity shard 2 with primary-first numbering,
+both as known unsent outcomes. An interval change, caused by the return of
+one OSD while the primary stayed up, delivered the matched UNBLOCK at a newer
+epoch: the primary's `clear_primary_state` releases PG backoffs before
+`on_change` clears them (`osd/PeeringState.cc:807-828`, `osd/PG.cc:352-361`).
+That control does not observe the ACK's native reception or a BLOCK from a
+primary that leads under a primary-first pg_temp.

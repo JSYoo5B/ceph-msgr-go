@@ -79,6 +79,12 @@ func checkPGReplaced(r pgIntervalReceipt, origin osdFixtureOracle, nonprimary []
 	if r.Action != "replaced" || !r.Settled || len(r.Failures) != 0 || r.CommandSent || r.Command != nil {
 		return 0, fmt.Errorf("not an accepted observation without a command: action %q, %q", r.Action, r.Failures)
 	}
+	return r.Observation.replacedOn(origin, nonprimary, since)
+}
+
+// replacedOn is the judgement of checkPGReplaced over one observation alone,
+// whether a pginterval receipt or a read-only pgstate observation carries it.
+func (o pgIntervalObservation) replacedOn(origin osdFixtureOracle, nonprimary []int, since uint32) (int, error) {
 	gone := int(origin.Shard)
 	if origin.PGTemp || slices.Contains(origin.Acting, crushItemNone) || !slices.Equal(origin.Up, origin.Acting) || gone < 0 || gone >= len(origin.Acting) ||
 		origin.Acting[gone] != origin.PrimaryID || origin.ID != origin.PrimaryID || since == 0 || since > origin.Epoch {
@@ -99,7 +105,6 @@ func checkPGReplaced(r pgIntervalReceipt, origin osdFixtureOracle, nonprimary []
 	if lead < 0 || slices.Contains(nonprimary, lead) {
 		return 0, fmt.Errorf("no member of %v can lead", holed)
 	}
-	o := r.Observation
 	if o.Before == nil || o.After == nil || !reflect.DeepEqual(o.Before, o.After) {
 		return 0, fmt.Errorf("the placement records around the query differ or are missing: %s", o.PlacementFailure)
 	}
