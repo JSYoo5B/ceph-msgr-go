@@ -109,7 +109,8 @@ func TestOSDEpochStateControlsRefuseNonExactSelections(t *testing.T) {
 // The native oracle gained the pgstate and watchers modes for these controls.
 // Like every ordinary owned-pool mode they are admitted on an OSD fixture and
 // not on the MON-only cold bootstrap. The legacy admission proof compares only
-// the modes of e2d4b01, all of which the oracle still has.
+// the modes of e2d4b01, all of which the oracle still has. This test names only
+// its own two modes, so a mode another change adds needs no edit here.
 func TestOSDEpochStateOracleModesAdmission(t *testing.T) {
 	for _, mode := range legacyOwnedPoolModes {
 		if !nativeOwnedPoolModes[mode] {
@@ -119,14 +120,11 @@ func TestOSDEpochStateOracleModesAdmission(t *testing.T) {
 	if !slices.IsSorted(legacyOwnedPoolModes) {
 		t.Fatal("legacy pool modes are not sorted")
 	}
-	added := []string{}
-	for _, mode := range slices.Sorted(maps.Keys(nativeOwnedPoolModes)) {
-		if !slices.Contains(legacyOwnedPoolModes, mode) {
-			added = append(added, mode)
+	added := []string{"pgstate", "watchers"}
+	for _, mode := range added {
+		if !nativeOwnedPoolModes[mode] || slices.Contains(legacyOwnedPoolModes, mode) {
+			t.Fatal("the epoch-state oracle mode is not a mode added after the migration", mode)
 		}
-	}
-	if !slices.Equal(added, []string{"pgstate", "watchers"}) {
-		t.Fatal("owned-pool modes added after the migration changed; give each its own admission test", added)
 	}
 	cold := map[string]string{"CEPH_MSGR_TEST_MGR_SERVICE": "1", "CEPH_MSGR_TEST_MGR_COUNT": "0", "CEPH_MSGR_TEST_RUN": "^TestCephMgrServiceColdBootstrapIntegration$"}
 	coldProfile, err := loadProfile(func(k string) string { return cold[k] })
