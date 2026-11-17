@@ -108,7 +108,7 @@ func tierGoHolds(l tierGoLocal, data []byte, dirty bool, version uint64) bool {
 func tierGoSame(a, b tierGoLocal) bool {
 	da, oka := a.dirty()
 	db, okb := b.dirty()
-	return a.Code == b.Code && oka == okb && da == db && bytes.Equal(a.Data, b.Data) && a.Size == b.Size && a.Version == b.Version && a.Seconds == b.Seconds && a.Nanos == b.Nanos
+	return oka && okb && da == db && bytes.Equal(a.Data, b.Data) && a.Size == b.Size && a.Version == b.Version && a.Seconds == b.Seconds && a.Nanos == b.Nanos
 }
 
 // tierGoProxied reports a proxied extent read that returned exactly data.
@@ -645,6 +645,10 @@ func TestTierGoObservationGates(t *testing.T) {
 	}
 	failed := clean
 	failed.Dirty.Prval = -5
+	missing := local(seed, nil, 4)
+	if tierGoSame(failed, failed) || tierGoSame(missing, missing) {
+		t.Error("paired invalid dirty observations accepted as unchanged")
+	}
 	if tierGoHolds(failed, seed, false, 4) {
 		t.Error("failed is_dirty accepted")
 	}

@@ -63,6 +63,7 @@ func TestOSDTierOperationRefusesBeforeSlotMonitorAndIdentity(t *testing.T) {
 		"input":          func(r *OSDRequest) { op(r).Data = []byte{1} },
 		"chunk":          func(r *OSDRequest) { op(r).Chunk.SourceLength = 1 },
 		"redirect":       func(r *OSDRequest) { op(r).Redirect.TargetName = "x" },
+		"invalid-nanos":  func(r *OSDRequest) { r.ModificationTime.Nanoseconds = 1_000_000_000 },
 		"compound":       func(r *OSDRequest) { r.Operations = append(r.Operations, OSDOperation{Code: OSDStat}) },
 		"resubmit":       func(r *OSDRequest) { r.Resubmit = &OSDSubmission{Transaction: 1} },
 		"retry":          func(r *OSDRequest) { r.RetryAttempt = 1 },

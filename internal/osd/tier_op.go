@@ -92,7 +92,7 @@ func ValidateTierRequest(r Request) error {
 	}
 	switch r.Operations[0].Code {
 	case TierPromote:
-		if !r.IgnoreCache && !r.IgnoreOverlay {
+		if !r.IgnoreCache && !r.IgnoreOverlay && r.MTimeNanoseconds < 1_000_000_000 {
 			return nil
 		}
 	case TierFlush, TierEvict:

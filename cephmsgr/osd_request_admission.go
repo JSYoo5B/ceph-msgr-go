@@ -93,7 +93,13 @@ func (o *OSDConnection) validateSetChunk(request OSDRequest) error {
 func (o *OSDConnection) validateTierOperation(request OSDRequest) error {
 	tier := false
 	for _, op := range request.Operations {
-		tier = tier || osd.IsTierOperation(uint16(op.Code))
+		if osd.IsTierOperation(uint16(op.Code)) {
+			if len(request.Operations) != 1 {
+				return osd.ErrOperation
+			}
+			tier = true
+			break
+		}
 	}
 	if !tier {
 		return nil
@@ -107,14 +113,11 @@ func (o *OSDConnection) validateTierOperation(request OSDRequest) error {
 		BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads, IgnoreRedirect: request.IgnoreRedirect,
 		OrderReadsWrites: request.OrderReadsWrites, SkipRWLocks: request.SkipRWLocks, IgnoreCache: request.IgnoreCache,
 		IgnoreOverlay: request.IgnoreOverlay, RetryAttempt: request.RetryAttempt}
-	for _, op := range request.Operations {
-		// A tier operation is inputless and flagless: every other field must
-		// be zero, refused here rather than after slot admission.
-		if osd.IsTierOperation(uint16(op.Code)) && !reflect.DeepEqual(op, OSDOperation{Code: op.Code}) {
-			return fmt.Errorf("%w: tier operations carry no flags or input", osd.ErrOperation)
-		}
-		input.Operations = append(input.Operations, osd.Operation{Code: uint16(op.Code)})
+	op := request.Operations[0]
+	if !reflect.DeepEqual(op, OSDOperation{Code: op.Code}) {
+		return fmt.Errorf("%w: tier operations carry no flags or input", osd.ErrOperation)
 	}
+	input.Operations = []osd.Operation{{Code: uint16(op.Code)}}
 	if err := osd.ValidateTierRequest(input); err != nil {
 		return err
 	}
