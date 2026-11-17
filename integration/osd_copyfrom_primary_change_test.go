@@ -326,12 +326,21 @@ func (r *copyPrimaryRecovery) freeze(t *testing.T, ctx context.Context, osd int3
 
 // thaw resumes a paused OSD in place, which the tests do while it is well
 // inside its heartbeat grace.
-func (r *copyPrimaryRecovery) thaw(t *testing.T, ctx context.Context, osd int32) {
+func (r *copyPrimaryRecovery) thaw(t *testing.T, ctx context.Context, osd int32, deadline time.Time) {
 	t.Helper()
+	if !time.Now().Before(deadline) {
+		t.Fatal("pause budget expired before resume", osd)
+	}
 	if err := testcluster.ControlDaemon(ctx, r.dir, "resume", "osd", strconv.Itoa(int(osd))); err != nil {
 		t.Fatal("resume", osd, err)
 	}
 	delete(r.frozen, osd)
+	if !time.Now().Before(deadline) {
+		// The fixture acknowledged the resume. Restart the late replica
+		// through cleanup without asking the controller to resume it twice.
+		r.kill(t, ctx, osd)
+		t.Fatal("resume exceeded the pause budget", osd)
+	}
 }
 
 // kill SIGKILLs one OSD and returns the fixture's receipt of its exit code,

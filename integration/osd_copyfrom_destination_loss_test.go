@@ -34,7 +34,7 @@ import (
 //     own op. A temporary-object write of a multi-chunk copy is a separate
 //     op context without the client's op.
 //   - src/osd/ReplicatedBackend.cc:1134-1187 (issue_op) marks that op
-//     "waiting for subops from <replicas>" when it sends the repops, with the
+//     "waiting for subops from <replicas>" before it dispatches the repops, with the
 //     flag point "waiting for sub ops"; ReplicatedBackend.cc:641-664
 //     (op_commit) marks "op_commit" at the primary's own commit and
 //     ReplicatedBackend.cc:666-721 (do_repop_reply) "sub_op_commit_rec" at
@@ -80,9 +80,8 @@ type copyLossReceipt struct {
 		GlobalID    uint64 `json:"global_id"`
 		Incarnation uint32 `json:"incarnation"`
 		Epoch       uint32 `json:"epoch"`
-		// Ended says whether the connection or the test's cancel ended
-		// the wait; Cause is the error class only, never its text, which
-		// can carry endpoints.
+		// Ended records how the wait ended. Cause stores only the error
+		// class because the error text can carry endpoints.
 		Ended string `json:"ended"`
 		Cause string `json:"cause"`
 	} `json:"unknown_outcome"`
@@ -94,6 +93,7 @@ type copyLossReceipt struct {
 	LogVersion  string `json:"log_version,omitempty"`
 	Resubmitted struct {
 		Code        int32  `json:"code"`
+		OpResult    *int32 `json:"op_result,omitempty"`
 		TID         uint64 `json:"tid"`
 		Attempt     int32  `json:"attempt"`
 		Flags       uint32 `json:"flags"`
@@ -146,12 +146,12 @@ func copyStagedEvents(op opsInFlightOp, replicas []int32, commits int) error {
 			return fmt.Errorf("sub-op event %q does not name the replicas %v", event, sorted)
 		case event == "op_commit":
 			if local >= 0 || sent < 0 {
-				return fmt.Errorf("op_commit repeated or before the sub-ops were sent: %q", op.Events)
+				return fmt.Errorf("op_commit repeated or before the sub-op marker: %q", op.Events)
 			}
 			local = i
 		case event == "sub_op_commit_rec":
 			if sent < 0 {
-				return fmt.Errorf("a replica commit before the sub-ops were sent: %q", op.Events)
+				return fmt.Errorf("a replica commit before the sub-op marker: %q", op.Events)
 			}
 			received++
 		case event == "commit_sent":
@@ -159,7 +159,7 @@ func copyStagedEvents(op opsInFlightOp, replicas []int32, commits int) error {
 		}
 	}
 	if sent < 0 || local < 0 || received != commits {
-		return fmt.Errorf("events %q: sub-ops sent %t, local commit %t, %d replica commits (want %d)", op.Events, sent >= 0, local >= 0, received, commits)
+		return fmt.Errorf("events %q: sub-op marker present %t, local commit %t, %d replica commits (want %d)", op.Events, sent >= 0, local >= 0, received, commits)
 	}
 	return nil
 }
@@ -224,9 +224,8 @@ func copyLossFrozen(acting []int32, primary, sourcePrimary int32, commits int) (
 // once, bound to the source write. With no replica committed the barrier does
 // not decide the result, so the test records which complete state native
 // readback shows, the seed or the full copy, requires the PG log to agree,
-// and refuses anything else. The paused replicas were already sent the
-// repops and resume before the map marks the primary down, so the copy is
-// expected to survive through them; a kept seed is accepted, not expected. A second Go write then changes the source and
+// and refuses anything else. The barrier records primary-side progress;
+// receiver-side delivery time is unknown. A second Go write changes the source and
 // one explicit resubmission goes to the new primary: it must be answered
 // from the log if the copy survived and must execute once, copying the
 // second source, if it did not. After recovery the original primary must lead
@@ -310,8 +309,13 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	o := mutationConnection(t, r.client, ctx, route)
 	defer o.Close()
 	paused := time.Now()
+	// Reserve the last four seconds for thaw within a single pause interval.
+	thawDeadline := paused.Add(16 * time.Second)
+	workDeadline := thawDeadline.Add(-4 * time.Second)
+	work, stopWork := context.WithDeadline(ctx, workDeadline)
+	defer stopWork()
 	for _, osd := range frozen {
-		recovery.freeze(t, ctx, osd)
+		recovery.freeze(t, work, osd)
 	}
 	call, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
@@ -335,10 +339,13 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	// The barrier must be reached well inside the 20 s heartbeat grace of
 	// the paused replicas, so that they are resumed, not marked down.
 	var staged opsInFlightOp
-	for deadline := time.Now().Add(12 * time.Second); ; {
+	for {
 		pending("before the barrier")
-		ops := copyOpsInFlight(t, ctx, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
-		objecter := copyObjecterRequests(t, ctx, 2, r.dest, nil, pools.ids[1], r.source)
+		ops := copyOpsInFlight(t, work, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
+		objecter := copyObjecterRequests(t, work, 2, r.dest, nil, pools.ids[1], r.source)
+		if !time.Now().Before(workDeadline) {
+			t.Fatal("pause budget expired before the staged barrier")
+		}
 		if staged, err = checkCopyStaged(ops, objecter, route, r.gid, copyPrimaryCopyIncarnation, cell.commits); err == nil {
 			receipt.BarrierEpoch, receipt.BarrierReqid, receipt.BarrierPoint, receipt.BarrierEvents = ops.Before.Epoch, staged.Reqid, staged.FlagPoint, staged.Events
 			receipt.OpsSHA256, receipt.ObjecterSHA256, receipt.ObjecterOps = ops.SHA256, objecter.SHA256, len(objecter.Ops)
@@ -346,24 +353,19 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 				ops.OSD, ops.Before.Epoch, frozen, staged.Reqid, staged.FlagPoint, staged.Events, len(objecter.Ops))
 			break
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("no staged barrier: %v\nop tracker: %s\nobjecter: %s", err, boundedRaw(ops.Raw), boundedRaw(objecter.Raw))
-		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	pending("at the barrier")
 
-	receipt.KillExit = recovery.kill(t, ctx, primary)
+	receipt.KillExit = recovery.kill(t, work, primary)
 	// The killed daemon's connection ends the wait; a bound well inside the
 	// paused replicas' heartbeat grace keeps them from being marked down.
 	var lost outcome
 	select {
 	case lost = <-done:
 		receipt.Unknown.Ended = "connection"
-	case <-time.After(8 * time.Second):
-		cancel()
-		lost = <-done
-		receipt.Unknown.Ended = "cancelled"
+	case <-work.Done():
+		t.Fatal("pause budget expired waiting for the unknown outcome", work.Err())
 	}
 	var unknown *cephmsgr.OutcomeUnknownError
 	if !errors.As(lost.err, &unknown) || lost.reply.Transaction != 0 || lost.reply.Submission.Transaction != staged.TID ||
@@ -372,9 +374,11 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	}
 	receipt.Unknown.TID, receipt.Unknown.GlobalID = lost.reply.Submission.Transaction, lost.reply.Submission.GlobalID
 	receipt.Unknown.Incarnation, receipt.Unknown.Epoch, receipt.Unknown.Cause = lost.reply.Submission.ClientIncarnation, lost.reply.Submission.MapEpoch, outcomeCause(lost.err)
-	o.Close()
+	if !time.Now().Before(workDeadline) {
+		t.Fatal("pause budget expired before thaw")
+	}
 	for _, osd := range frozen {
-		recovery.thaw(t, ctx, osd)
+		recovery.thaw(t, ctx, osd, thawDeadline)
 	}
 	receipt.PausedFor = time.Since(paused).Round(10 * time.Millisecond).String()
 	t.Logf("osd.%d killed (exit %d) at the barrier; the copy ended unknown (%s, %s): %v; osd %v resumed after %s",
@@ -410,9 +414,10 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	again := r.copyRequest(cell.code, moved)
 	again.Resubmit, again.RetryAttempt = &lost.reply.Submission, 1
 	answered := r.send("resubmission to the new primary", moved, again)
+	receipt.Resubmitted.OpResult = &answered.Operations[0].Result
 	receipt.Resubmitted.Code, receipt.Resubmitted.TID, receipt.Resubmitted.Attempt = answered.Code, answered.Transaction, answered.RetryAttempt
 	receipt.Resubmitted.Flags, receipt.Resubmitted.UserVersion, receipt.Resubmitted.Replay = uint32(answered.Flags), answered.UserVersion, replayVersion(answered)
-	t.Logf("resubmitted to osd.%d: code=%d tid=%d attempt=%d flags=%#x user=%d replay=%s", moved.ID, answered.Code, answered.Transaction, answered.RetryAttempt, answered.Flags, answered.UserVersion, replayVersion(answered))
+	t.Logf("resubmitted to osd.%d: code=%d op=%d tid=%d attempt=%d flags=%#x user=%d replay=%s", moved.ID, answered.Code, answered.Operations[0].Result, answered.Transaction, answered.RetryAttempt, answered.Flags, answered.UserVersion, replayVersion(answered))
 	if answered.Transaction != staged.TID || answered.RetryAttempt != 1 || answered.Operations[0].Result != 0 {
 		t.Fatalf("resubmission: tid %d attempt %d op %d", answered.Transaction, answered.RetryAttempt, answered.Operations[0].Result)
 	}

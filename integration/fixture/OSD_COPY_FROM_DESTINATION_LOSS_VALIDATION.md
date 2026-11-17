@@ -30,7 +30,7 @@ pool 1 and the destination a natively seeded head in pool 2.
   separate op context without the client op.
 - [`ReplicatedBackend::issue_op`](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/ReplicatedBackend.cc#L1134-L1187)
   marks that op `waiting for subops from <replicas>` (flag point
-  `waiting for sub ops`) when it sends the repops.
+  `waiting for sub ops`) before it dispatches the individual repops.
   [`op_commit`](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/ReplicatedBackend.cc#L641-L664)
   marks `op_commit` at the primary's own commit and
   [`do_repop_reply`](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/ReplicatedBackend.cc#L666-L721)
@@ -73,9 +73,10 @@ For each cell:
 5. The destination primary is SIGKILLed (exit 137 recorded by the fixture).
    The Go call must end as an `OutcomeUnknownError` carrying the barrier
    op's transaction, the client's global ID and incarnation and the
-   request's map epoch, without a reply. The wait is bounded at 8 s, well
-   inside the paused replicas' heartbeat grace; the receipt records whether
-   the connection or that bound ended it. The paused replicas are resumed, the
+   request's map epoch, without a reply. The first freeze starts a 16 s pause budget.
+   Freeze, snapshots, kill and the connection wait share the first 12 s;
+   the remaining time is reserved for thaw. Exceeding either deadline fails
+   the cell and leaves outstanding replicas to restart cleanup. The paused replicas are resumed, the
    time they were paused is recorded, and the dead OSD is marked down with
    `osd down`. The test waits for two equal placements a second apart under
    a new primary whose up set omits the dead one.
@@ -121,7 +122,7 @@ absence, and the owned-pool cleanup leaves `mon_allow_pool_delete`.
 
 The cell receipts (barrier op and events, raw snapshot digests, the unknown
 outcome's identity and the class of its cause, never the error text,
-native digests, log and replay versions, the resubmission reply)
+native digests, log and replay versions, the resubmission reply including the signed per-operation result when observed)
 are written with `testcluster.WritePublicEvidence` to
 `osd-copyfrom-destination-loss-results.json`, which the fixture archives
 with its diagnostics. A cell skipped at placement selection has no receipt.
@@ -171,14 +172,9 @@ Every unknown outcome ended at the kill with `EOF` and carried the barrier's
 transaction. A replica commit can be recorded before the primary's own
 commit, as in the COPY_FROM2 replica-committed cell; the test accepts either
 order. In both primary-only cells the copy survived: the new primary, chosen
-while the killed OSD was down, held the full copy and its log entry, so at
-least one formerly paused replica applied the repop it had been sent. That
-is the expected course, not chance: the barrier shows the repops were sent,
-so their bytes were already delivered to the paused replicas, and with both
-of the dead OSD's peers paused nothing reported it, so no map had changed
-when they resumed. These cells therefore show survival through a delivered
-but uncommitted repop, not the loss of a transaction staged on the primary
-alone. Every
+while the killed OSD was down, held the full copy and its log entry, establishing survival after recovery. The primary records its
+sub-op event before dispatching individual sends. These observations do
+not timestamp delivery to either replica or intervening map changes. Every
 resubmission was answered from the log with ONDISK, RETRY and WRITE without
 ACK, and the returned original primary held the copy once. These flags are
 recorded as observed; the test does not require them.
@@ -197,11 +193,8 @@ No product change was needed.
 
 ## Not claimed
 
-- The loss of a transaction staged on the primary alone. In the
-  primary-only cells the repops were already delivered and the replicas
-  resume before the map marks the primary down, so the kept-seed branch is
-  close to unreachable in this order. Its judgement (`judgeCopyLoss`,
-  `judgeCopyResubmission`) is unit-tested but was never observed live.
+- The loss of a transaction staged on the primary alone. The kept-seed outcome
+  has unit coverage and was never observed live.
 - Which paused replica applied the copy, or when. The test observes the new
   primary's object and log after the loss, not the replicas' processing.
 - Multi-chunk copies and their temporary objects. Every cell copies one
