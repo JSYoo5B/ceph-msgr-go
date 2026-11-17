@@ -315,6 +315,19 @@ primary PG-log snapshots that must show the source write's request identity
 among the destination entry's extra request IDs. It injects no fault and needs
 no opt-in parameter, so the test also belongs to the broad legacy OSD
 selection ([validation](../../integration/fixture/OSD_COPY_FROM_HISTORY_VALIDATION.md)).
+Two `osd` rows,
+`osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange`
+and
+`osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange`,
+select only `TestCephOSDCopyFromLostReplyPrimaryChangeIntegration` and
+`TestCephOSDCopyFromInFlightPrimaryChangeIntegration` on three BlueStore
+replicas. Both move the destination primary with `osd out` around a
+COPY_FROM and a COPY_FROM2 and resubmit explicitly to the new primary. The
+in-flight test also holds the copy's source read with `osd set pause`. They need no
+fixture capability: every change is a MON command of the test, which a single
+run-level recovery undoes before one clean check. The broad legacy-v6
+three-replica rows select them too
+([validation](../../integration/fixture/OSD_COPY_FROM_PRIMARY_CHANGE_VALIDATION.md)).
 One dedicated `osd` row selects only `TestCephMsgrCompressionOfferIntegration`
 on CRC/AES client and service cipher, IPv4 host runtime, one BlueStore OSD,
 replica/min-size one and legacy-v6. Its ID is
