@@ -37,10 +37,13 @@ Each merged tree then passes the repository's own validators, run from that
 tree: scenario_plan.py validate (catalog, selectors, the fixture's admission
 and sharing of every row), the cluster-free listing tools and the cluster-free
 tests with their result gate, native_path_coverage.py, every test of the
-fixture module and every tools/test_ci_rows_* module. A validator that needs a
-total, a global list or a test-name admission list fails on a merged tree,
-because no branch edits one; a branch that did edit one would conflict in a
-file outside the area.
+fixture module, the coverage map's tests and every tools/test_ci_rows_*
+module. A validator that needs a total, a global list or a test-name
+admission list for the selections the branches add to (single-OSD legacy
+rows, the MDS CephFS, RBD and four-OSD erasure fixtures) fails on a merged
+tree, because no branch edits one; a branch that did edit one would conflict
+in a file outside the area. Checks of selections no branch adds to are not
+exercised here.
 
 The test needs git and the Go toolchain of the fixture module, as the other
 tools tests do. It runs no cluster. Every merged tree is validated in the same
@@ -429,6 +432,12 @@ class MergeProofTest(unittest.TestCase):
         self.assertEqual(coverage.returncode, 0, "native_path_coverage.py refused the merged tree:\n" + coverage.stderr[-6000:])
         released = int(re.search(r"released (\d+)", coverage.stdout).group(1))
         self.assertEqual(released, self.base_released + len(authors))
+        # The coverage map's own tests, so that a check of the map that
+        # lists its files or rows fails once row files exist.
+        map_tests = repo.run(python, "-m", "unittest", "test_native_path_coverage.NativePathCoverageTests", "-v",
+                             check=False, cwd=repo.path / "tools")
+        self.assertEqual(map_tests.returncode, 0, "coverage map tests failed:\n" + map_tests.stderr[-6000:])
+        self.assertRegex(map_tests.stderr, r"test_current_map_is_consistent .*\.\.\. ok")
 
         fixture = subprocess.run(["go", "test", "-mod=readonly", "-count=1", "-v", "./..."], cwd=str(repo.path / "integration" / "fixture"),
                                  env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=TIMEOUT)

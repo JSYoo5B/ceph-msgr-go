@@ -123,20 +123,28 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
             "osd_profile": "legacy-v6", "osd_cache_pools": "1",
             "test_run": "^TestCephOSDIgnoreCacheIntegration$",
         }
-        # The native-only tier-ops checkpoint and the Go cache-op test reuse
-        # the same fixture opt-in, each alone by the capability its row
-        # declares.
-        self.assertEqual(rows, [
+        # The broad rows are the rows without a capability: the fixture admits
+        # no other selection without an exclusive capability of its own.
+        self.assertEqual([row for row in rows if "capabilities" not in row], [
             dict(common, key="aes", service="aes", mode="crc", family="4", runtime="host"),
             dict(common, key="aes256k", service="aes256k", family="6", runtime="container"),
-            dict(common, key="aes256k", service="aes256k", family="6", runtime="container",
-                 test_run="^TestCephOSDCacheTierOpsIntegration$", capabilities="exclusive-osd-cache-pools"),
-            dict(common, key="aes256k", service="aes256k", family="6", runtime="container",
-                 test_run="^TestCephOSDCacheOpGoIntegration$", capabilities="exclusive-osd-cache-pools"),
         ])
+        # The native-only tier-ops checkpoint and the Go cache-op test reuse
+        # the same fixture opt-in, each alone by the capability its row
+        # declares. The mapping is frozen: a later row on this fixture, with
+        # exclusive-osd-cache-pools or an exclusive capability of its own,
+        # checks itself in a module of its own and edits no list here.
+        frozen = {"^TestCephOSDCacheTierOpsIntegration$": "exclusive-osd-cache-pools",
+                  "^TestCephOSDCacheOpGoIntegration$": "exclusive-osd-cache-pools"}
+        for selector, capabilities in frozen.items():
+            self.assertEqual([row for row in rows if row["test_run"] == selector],
+                             [dict(common, key="aes256k", service="aes256k", family="6", runtime="container",
+                                   test_run=selector, capabilities=capabilities)])
         for row in rows:
+            self.assertEqual({key: value for key, value in row.items() if key not in ("key", "service", "mode", "family", "runtime",
+                                                                                      "test_run", "capabilities")},
+                             {key: value for key, value in common.items() if key != "test_run"})
             expected = re.fullmatch(r"\^(\w+)\$", row["test_run"]).group(1)
-            self.assertIn(expected, {"TestCephOSDIgnoreCacheIntegration", "TestCephOSDCacheTierOpsIntegration", "TestCephOSDCacheOpGoIntegration"})
             self.assertIn(expected, self.declared)
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
