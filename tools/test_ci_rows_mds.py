@@ -304,11 +304,13 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
 
     def test_mds_cephfs_data_rows_select_only_the_declared_data_test(self):
         data = [row for row in self.rows if row.get("mds_cephfs_data") == "1"]
-        self.assertEqual(len(data), 6)
-        # The cap-send recovery and writeback-fence rows reuse the owned data
-        # fixture opt-in with their own selectors; they are checked separately below.
+        self.assertEqual(len(data), 8)
+        # The cap-send recovery, writeback-fence and mixed-extent writeback
+        # rows reuse the owned data fixture opt-in with their own selectors;
+        # they are checked separately below.
         rows = [row for row in data if row["test_run"] not in (
-            "^TestCephMDSCephFSCapSendRecoveryIntegration$", "^TestCephMDSCephFSWritebackFenceIntegration$")]
+            "^TestCephMDSCephFSCapSendRecoveryIntegration$", "^TestCephMDSCephFSWritebackFenceIntegration$",
+            "^TestCephMDSCephFSMixedWritebackRecoveryIntegration$")]
         self.assertEqual(len(rows), 2)
         expected = {"TestCephMDSCephFSDataIntegration"}
         self.assertTrue(expected <= self.declared)
@@ -359,9 +361,19 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
         })
 
     def test_mds_cephfs_writeback_rows_reuse_the_data_fixture_with_their_own_test(self):
-        rows = [row for row in self.rows if row.get("test_run") == "^TestCephMDSCephFSWritebackFenceIntegration$"]
+        self.check_data_writeback_rows("TestCephMDSCephFSWritebackFenceIntegration", "mds-cephfs-writeback", "mds-writeback-fence")
+
+    def test_mds_cephfs_mixed_writeback_rows_reuse_the_data_fixture_with_their_own_test(self):
+        self.check_data_writeback_rows("TestCephMDSCephFSMixedWritebackRecoveryIntegration", "mds-cephfs-mixed-writeback",
+                                       "mds-writeback-fence,mds-writeback-mixed")
+
+    def check_data_writeback_rows(self, test, group, capabilities):
+        selector_text = "^" + test + "$"
+        rows = [row for row in self.rows if row.get("test_run") == selector_text]
         self.assertEqual(len(rows), 2)
-        expected = {"TestCephMDSCephFSWritebackFenceIntegration"}
+        self.assertEqual({entry["group"] for entry in self.entries if entry["params"].get("test_run") == selector_text}, {group})
+        self.assertEqual({row.get("capabilities") for row in rows}, {capabilities})
+        expected = {test}
         self.assertTrue(expected <= self.declared)
         observed = set()
         for row in rows:
@@ -372,10 +384,12 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
                 self.assertNotIn(field, row)
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
-            self.assertIsNone(selector.search("TestCephMDSCephFSDataIntegration"))
-            self.assertIsNone(selector.search("TestCephMDSCephFSCapSendRecoveryIntegration"))
-            self.assertIsNone(selector.search("TestCephMDSCephFSWritebackFenceIntegrationExtended"))
-            self.assertIsNone(selector.search("PrefixTestCephMDSCephFSWritebackFenceIntegration"))
+            for other in ("TestCephMDSCephFSDataIntegration", "TestCephMDSCephFSCapSendRecoveryIntegration",
+                          "TestCephMDSCephFSWritebackFenceIntegration", "TestCephMDSCephFSMixedWritebackRecoveryIntegration"):
+                if other != test:
+                    self.assertIsNone(selector.search(other))
+            self.assertIsNone(selector.search(test + "Extended"))
+            self.assertIsNone(selector.search("Prefix" + test))
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"),
                 ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))
