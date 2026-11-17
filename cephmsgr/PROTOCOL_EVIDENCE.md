@@ -34,7 +34,7 @@ Read the receipt entry before attributing a row to a Go sender. For the
 SET_CHUNK opcode row specifically, R27 is the Go-originated acceptance
 (coverage row OSD-26); the native-only SET_CHUNK checkpoint (OSD-24), in
 which no Go client takes part, is listed only in
-[NATIVE_PATH_COVERAGE.md](../integration/fixture/NATIVE_PATH_COVERAGE.md) and
+the [OSD coverage map](../integration/fixture/coverage/OSD.md) and
 is not a receipt for that row.
 
 Public names below are communication primitives; option dependencies and the

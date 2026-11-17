@@ -4,7 +4,7 @@ This is the local native recipe for issue #124 (tracked under #14): native RBD
 snapshot mirroring on an owned disposable profile, one directed fault on the
 source OSD's path to the rbd-mirror daemon, its restoration and the catch-up
 of distinguishable data. It covers rows SVC-2 and SVC-3 of the
-[native path coverage map](NATIVE_PATH_COVERAGE.md). The product implements no
+[native path coverage map](coverage/SVC.md). The product implements no
 daemon role and no mirroring policy; mirroring here is entirely native. The
 cephfs-mirror daemon needs its own setup and oracle and is not covered (SVC-4,
 SVC-5).

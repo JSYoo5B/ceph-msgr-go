@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Check the native path coverage map against the catalog, tests and records.
 
+The map is the directory integration/fixture/coverage: an index (README.md)
+whose "Area files" section links one file per area, <PREFIX>.md, in the
+order the rows compose. Every row is in the Rows table of the area file whose
+prefix its ID carries. The check refuses an entry of the directory that is
+neither the index nor a listed area file, a listed area file that is missing,
+a row in the index, a row in the wrong area file and a row ID used in two
+places. Nothing counts or lists the rows, so a row added to one area edits
+that area file only.
+
 This validates references, not the truth of a native observation. Top-level
 Go test names are the tests Go lists in the product, fixture and quality
 modules (go_test_list.py): listing compiles the test binaries, which may fetch
@@ -18,7 +27,10 @@ import go_test_list
 import scenario_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
-COVERAGE = Path("integration/fixture/NATIVE_PATH_COVERAGE.md")
+COVERAGE = Path("integration") / "fixture" / "coverage"  # relative to a repository root
+INDEX = "README.md"
+AREA_FILE = re.compile(r"([A-Z][A-Z0-9]*)\.md")
+ROW_ID = re.compile(r"([A-Z][A-Z0-9]*)-[1-9][0-9]*")
 SPEC = Path("SPEC.md")
 
 CLASSES = ("released", "main-only", "primitive", "proposed", "absent")
@@ -88,19 +100,10 @@ def split_row(line):
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
 
-def coverage_rows(text):
-    """Yield (area, cells) for every row of every coverage table."""
-    area = None
+def table_rows(text):
+    """Yield the cells of every row of every coverage table of one file."""
     in_table = False
     for line in text.splitlines():
-        if line.startswith("### "):
-            area = line[4:].strip()
-            in_table = False
-            continue
-        if line.startswith("## "):
-            area = None
-            in_table = False
-            continue
         if not line.startswith("|"):
             in_table = False
             continue
@@ -109,16 +112,95 @@ def coverage_rows(text):
             in_table = True
             continue
         if in_table and not set("".join(cells)) <= set("-: "):
-            yield area, cells
+            yield cells
 
 
-def class_counts(text):
+def read_documents(root=ROOT):
+    """Return {entry name: text} for every entry of the coverage directory.
+
+    An entry that is not a regular file (a directory or a symbolic link) maps
+    to None, so the check can refuse it."""
+    documents = {}
+    for path in sorted((Path(root) / COVERAGE).iterdir(), key=lambda p: p.name):
+        if path.is_symlink() or not path.is_file():
+            documents[path.name] = None
+        else:
+            documents[path.name] = path.read_text(encoding="utf-8")
+    return documents
+
+
+def area_files(index):
+    """Return the area files linked from the index's Area files section, in
+    order, or None when the section is missing. Only a plain link to a
+    Markdown file of the same directory names an area file."""
+    match = re.search(r"(?m)^## Area files\n", index)
+    if not match:
+        return None
+    section = re.split(r"(?m)^## ", index[match.end():], maxsplit=1)[0]
+    names = []
+    for _, target in LINK.findall(section):
+        if re.fullmatch(r"[^/\\#:]+\.md", target) and target not in names:
+            names.append(target)
+    return names
+
+
+def title(text):
+    first = text.splitlines()[0] if text else ""
+    return first[2:].strip() if first.startswith("# ") else None
+
+
+def where(name):
+    return (COVERAGE / name).as_posix()
+
+
+def compose(documents):
+    """Return (areas, problems) for a coverage directory's documents.
+
+    areas is a list of (file name, area title, rows) in the index's order;
+    rows are the cells of the file's coverage rows in file order."""
+    index = documents.get(INDEX)
+    if index is None:
+        return [], ["missing index " + where(INDEX)]
+    listed = area_files(index)
+    if listed is None:
+        return [], [where(INDEX) + ": missing Area files section"]
+    problems = []
+    if not listed:
+        problems.append(where(INDEX) + ": lists no area file")
+    for name in sorted(documents):
+        if documents[name] is None:
+            problems.append("not a regular file " + where(name))
+        elif name != INDEX and name not in listed:
+            problems.append("unlisted file " + where(name))
+    for cells in table_rows(index):
+        problems.append("row %s: in the index %s, not in an area file" % (cells[0], where(INDEX)))
+    areas = []
+    for name in listed:
+        if not AREA_FILE.fullmatch(name):
+            problems.append("area file %s: name is not <PREFIX>.md" % where(name))
+            continue
+        if name not in documents:
+            problems.append("missing area file " + where(name))
+            continue
+        text = documents[name]
+        if text is None:
+            continue
+        label = title(text)
+        if label is None:
+            problems.append("area file %s: first line is not a # title" % where(name))
+            continue
+        areas.append((name, label, list(table_rows(text))))
+    return areas, problems
+
+
+def class_counts(documents):
     """Count the coverage rows of each known class; the map keeps no totals."""
     counts = dict.fromkeys(CLASSES, 0)
-    for _, cells in coverage_rows(text):
-        klass = cells[2].strip("`") if len(cells) == len(HEADER) else None
-        if klass in counts:
-            counts[klass] += 1
+    for _, _, rows in compose(documents)[0]:
+        for cells in rows:
+            klass = cells[2].strip("`") if len(cells) == len(HEADER) else None
+            if klass in counts:
+                counts[klass] += 1
     return counts
 
 
@@ -163,54 +245,62 @@ def catalog_from(data):
     return scenarios, groups, suites
 
 
-def check(root=ROOT, text=None, tests=None, catalog=None):
+def check(root=ROOT, documents=None, tests=None, catalog=None):
     root = Path(root)
-    if text is None:
-        text = (root / COVERAGE).read_text()
+    if documents is None:
+        documents = read_documents(root)
     if tests is None:
         tests = go_tests(root)
     if catalog is None:
         catalog = catalog_vocabulary(root)
     scenarios, groups, suites = catalog
-    problems = []
+    areas, problems = compose(documents)
 
-    for token in sorted(set(CODE.findall(text))):
-        problems.extend(token_problems(token, tests, scenarios, groups, suites))
+    directory = root / COVERAGE
+    for name, text in sorted(documents.items()):
+        if text is None:
+            continue
+        for token in sorted(set(CODE.findall(text))):
+            problems.extend(where(name) + ": " + problem
+                            for problem in token_problems(token, tests, scenarios, groups, suites))
+        for label, target in LINK.findall(text):
+            if re.match(r"^[a-z]+:", target) or target.startswith("#"):
+                continue
+            path = (directory / target.split("#", 1)[0]).resolve()
+            if not path.is_relative_to(root.resolve()) or not path.exists():
+                problems.append(where(name) + ": missing or non-repository file " + target)
+            elif path.suffix == ".go" and re.fullmatch(r"Test\w*", label.strip("`")):
+                problems.extend(where(name) + ": " + problem
+                                for problem in test_link_problems(root, label.strip("`"), path))
 
-    document = (root / COVERAGE).parent
-    for label, target in LINK.findall(text):
-        if re.match(r"^[a-z]+:", target) or target.startswith("#"):
-            continue
-        path = (document / target.split("#", 1)[0]).resolve()
-        if not path.is_relative_to(root.resolve()) or not path.exists():
-            problems.append("missing or non-repository file " + target)
-        elif path.suffix == ".go" and re.fullmatch(r"Test\w*", label.strip("`")):
-            problems.extend(test_link_problems(root, label.strip("`"), path))
-
-    areas = set()
-    seen = set()
-    for area, cells in coverage_rows(text):
-        if len(cells) != len(HEADER) or not all(cells):
-            problems.append("row %s: expected %d nonempty columns" % (cells[0], len(HEADER)))
-            continue
-        key, klass = cells[0], cells[2].strip("`")
-        if area is None:
-            problems.append("row " + key + ": outside an area heading")
-        areas.add(area)
-        if key in seen:
-            problems.append("duplicate row " + key)
-        seen.add(key)
-        if klass not in CLASSES:
-            problems.append("row " + key + ": unknown class " + cells[2])
-            continue
-        if klass == "released" and not LINK.search(cells[6]) and not CODE.search(cells[6]):
-            problems.append("row " + key + ": released row needs local evidence")
+    labels = set()
+    seen = {}
+    for name, label, rows in areas:
+        prefix = AREA_FILE.fullmatch(name).group(1)
+        for cells in rows:
+            if len(cells) != len(HEADER) or not all(cells):
+                problems.append("row %s: expected %d nonempty columns" % (cells[0], len(HEADER)))
+                continue
+            key, klass = cells[0], cells[2].strip("`")
+            match = ROW_ID.fullmatch(key)
+            if match is None or match.group(1) != prefix:
+                problems.append("row %s: in %s, whose rows are %s-<number>" % (key, where(name), prefix))
+            if key in seen:
+                problems.append("duplicate row %s: in %s and %s" % (key, where(seen[key]), where(name)))
+            else:
+                seen[key] = name
+            labels.add(label)
+            if klass not in CLASSES:
+                problems.append("row " + key + ": unknown class " + cells[2])
+                continue
+            if klass == "released" and not LINK.search(cells[6]) and not CODE.search(cells[6]):
+                problems.append("row " + key + ": released row needs local evidence")
     if not seen:
         problems.append("no coverage rows")
 
     for label in spec_paths(root):
-        if label not in areas:
-            problems.append("SPEC path without coverage section: " + label)
+        if label not in labels:
+            problems.append("SPEC path without an area file with rows: " + label)
     return problems
 
 
@@ -223,7 +313,7 @@ def main():
         for problem in problems:
             print("native_path_coverage: " + problem, file=sys.stderr)
         return 1
-    counts = class_counts((ROOT / COVERAGE).read_text())
+    counts = class_counts(read_documents())
     print("native path coverage references valid; native outcomes require record review")
     print("rows per class: " + ", ".join("%s %d" % (klass, counts[klass]) for klass in CLASSES))
     return 0
