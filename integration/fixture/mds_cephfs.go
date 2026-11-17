@@ -40,7 +40,7 @@ const mdsCephFSFlockOwner uint64 = 0x8000000063657068
 // place of its default suite: the shared held-FLOCK variant of the recovery
 // acceptance, because the recovery recipe performs the fixture's only owned
 // MDS restart. It uses only actions the metadata fixture already admits.
-var capExclusiveMDSCephFS = defineCapability("exclusive-mds-cephfs",
+var capExclusiveMDSCephFS = defineExclusiveCapability(fixtureMDSCephFS, "exclusive-mds-cephfs",
 	"run one test alone on a fresh MDS CephFS metadata fixture",
 	"MDS_FRESH=1 MDS_CEPHFS=1", nil)
 
@@ -48,7 +48,7 @@ var capExclusiveMDSCephFS = defineCapability("exclusive-mds-cephfs",
 // closed FCNTL byte-range probe of go-file (fcntl-probe): the held FCNTL
 // variant of the recovery acceptance, which performs the fixture's only owned
 // MDS restart.
-var capMDSHeldFcntl = defineCapability("mds-held-fcntl",
+var capMDSHeldFcntl = defineExclusiveCapability(fixtureMDSCephFS, "mds-held-fcntl",
 	"run one test alone on a fresh MDS CephFS metadata fixture with the FCNTL byte-range lock probe",
 	"MDS_FRESH=1 MDS_CEPHFS=1", nil)
 

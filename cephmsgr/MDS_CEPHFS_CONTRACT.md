@@ -600,7 +600,13 @@ selector interrupts buffered data inside the test consumer's revoke callback
 behind a background native reader, latches it, holds FILE_BUFFER until an
 explicit eviction and fences the extent afterwards. Both Linux profiles
 returned the A-branch bytes natively with no resubmission of the uncertain
-write. Partially applied ranges remain unverified.
+write. The [mixed-extent cell](../integration/fixture/MDS_CEPHFS_WRITEBACK_MIXED_VALIDATION.md)
+completes a further write beyond an uncertain one: the test consumer flushed
+only the contiguous completed prefix, and in author-run Linux profiles of
+both selected rows, after an owned MDS restart, native
+`statx` and a native read showed that prefix alone while the native object
+view held both completed writes and not the uncertain one; no object
+request was repeated. Partially applied ranges remain unverified.
 
 Synthetic peers cover
 the profile handshake refusal, feature gates, request correlation, unsafe and

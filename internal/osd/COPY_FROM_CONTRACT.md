@@ -103,6 +103,23 @@ A [second control](../../integration/fixture/OSD_EC_COPY_FROM_SHARD_HISTORY_VALI
 copies from a replicated pool into a fresh head of an optimized isa k=2,m=2
 pool and finds the same binding on the destination primary and in the own
 PG log of each of the four acting shards.
+A [primary-change checkpoint](../../integration/fixture/OSD_COPY_FROM_PRIMARY_CHANGE_VALIDATION.md)
+moves the destination primary with `osd out` on three BlueStore replicas,
+for both opcodes. After a lost reply, one explicit resubmission to the new
+primary (original transaction and incarnation, `RetryAttempt` 1, the
+caller's new placement) is answered from the replicated PG log, even though
+a later write had replaced the source; the destination keeps the first
+copy. A copy held before its source read (`osd set pause`, with the
+destination primary's own Objecter holding one paused copy-get that it never
+sent, with 0 attempts) is dropped
+without a reply by the former primary, whose op tracker and Objecter then
+hold nothing of it. The caller's wait is an unknown outcome, and native
+state shows no change. Only then does an explicit resubmission to the new
+primary execute the copy once; a second resubmission is answered from the
+log. A copy gives the destination the source's user version, which can be
+lower than the destination's previous one. The client never resubmits on
+its own: the server drops a cancelled copy because a native Objecter would
+resend it, and this client leaves that decision to the caller.
 Destination loss after source-read completion/staging remains unverified. A committed copy
 survived OSD SIGKILL and restart on BlueStore; a lost reply was verified
 (unknown outcome, no replay) on single and three-replica BlueStore.

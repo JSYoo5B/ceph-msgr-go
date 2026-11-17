@@ -54,14 +54,26 @@ import (
 // is_blackhole, msg/async/ProtocolV2.cc handle_message and _conn_prefix,
 // messages/MOSDOp.h print, osd/PrimaryLogPG.cc do_op (EBLOCKLISTED),
 // mds/MDSRank.cc evict_client and mds/Server.cc kill_session.
-var capMDSWritebackFence = defineCapability("mds-writeback-fence",
+var capMDSWritebackFence = defineExclusiveCapability(fixtureMDSCephFSData, "mds-writeback-fence",
 	"run one test alone on the owned MDS CephFS data fixture with the OSD client-drop writeback controls",
 	"MDS_FRESH=1 MDS_CEPHFS_DATA=1", nil)
+
+// capMDSWritebackMixed admits the closed native object-bytes view of the
+// mixed-extent writeback recipe (issue #10 checkpoint 2): object-bytes
+// capsnap-file returns, for each planned object of that one file, its
+// existence, size and a SHA-256 digest (whole and per 16 KiB chunk) of its
+// head content, read by the native identity through the python rados
+// binding. It is read-only and runs only where any other native action may
+// (nativeReady). It extends mds-writeback-fence, whose OSD drop interrupts
+// the write whose object it then observes.
+var capMDSWritebackMixed = defineCapability("mds-writeback-mixed",
+	"run the mixed-extent writeback recipe with the native object-bytes view of capsnap-file",
+	"MDS_FRESH=1 MDS_CEPHFS_DATA=1 +mds-writeback-fence", nil)
 
 // capExclusiveMDSCephFSData admits one test alone on the owned data fixture
 // in place of its default suite (the cap-send recovery), with only the
 // actions the data fixture already admits.
-var capExclusiveMDSCephFSData = defineCapability("exclusive-mds-cephfs-data",
+var capExclusiveMDSCephFSData = defineExclusiveCapability(fixtureMDSCephFSData, "exclusive-mds-cephfs-data",
 	"run one test alone on the owned MDS CephFS data fixture",
 	"MDS_FRESH=1 MDS_CEPHFS_DATA=1", nil)
 

@@ -56,6 +56,40 @@ quality matrix jobs retain their expanded check names and report that work was
 not executed by policy. A policy skip is not test/scan success evidence. Weekly
 vulnerability scans still execute. Branch protection settings are not modified.
 
+## Adding a native test
+
+A pull request that adds a native test edits only the files below. It edits
+no list, count or file of another area:
+
+- `integration/<name>_test.go`: the native test `TestCeph<Name>Integration`
+  with its `//fixture:shareable` or `//fixture:isolated` line (see
+  [Fixture sharing](#fixture-sharing)) and any cluster-free helper test.
+  Neither is registered anywhere; the tools list them with `go test -list`.
+- `.github/scenarios/catalog.d/<group>.json`: the row, after the last row of
+  its group's fragment, or a new fragment for a new group. A row with a
+  `test_run` has an identifier that ends in `.t-<name>`.
+- `integration/fixture/<name>.go`: the capability of a test-specific fixture
+  mode, `defineCapability` beside the mode (see
+  [Fixture capabilities](#fixture-capabilities)). The row declares it in
+  `capabilities`. On a fixture with its own default selection the row also
+  declares the one capability that admits its test there: an existing one
+  (`osd-erasure-width` on the four-OSD topology), or a new
+  `defineExclusiveCapability` when the new mode is the admission itself.
+- `integration/fixture/coverage/<AREA>/<AREA>-<name>.md`: the row of the
+  [coverage map](../../integration/fixture/coverage/README.md#area-files)
+  in a row file of its own, named after the row's subject, with its dated
+  note. The area file `<AREA>.md` is not edited, and no number is taken.
+- `tools/test_ci_rows_<group>_<name>.py`: the row's own checks, when it needs
+  more than `validate`, as a module of its own on
+  `ci_row_catalog.RowsTestCase`.
+
+A row's description belongs in its fixture record and its coverage row, not
+in this document. `tools/test_merge_proof.py` makes two such pull requests in
+a temporary Git repository, once in two areas and once in one area, merges
+them and runs the validators on the merged tree. The two areas merge without
+a conflict. In one area, only the group's catalog fragment may conflict, and
+keeping both sides' rows resolves it.
+
 ## Catalog and planner
 
 The catalog is the directory [`catalog.d`](catalog.d/). `_catalog.json` holds the
@@ -105,6 +139,19 @@ therefore needs the fixture module's Go toolchain (1.26 or later). A new
 control adds its `defineCapability` call beside its own code and the
 declaration to its own row; it edits no shared selector list.
 
+A fixture with its own default selection (the MDS command, CephFS metadata,
+completion and data fixtures, the RBD fixture, the cache-pool fixture and the
+four-OSD erasure-capacity topology) runs one further exact test only when a
+capability defined for it with `defineExclusiveCapability` admits that test.
+`loadProfile` asks whether any declared capability of that fixture admits the
+run, so a new one is defined beside its mode without editing `loadProfile`.
+At most one such capability of a fixture may be declared for a run, so these
+capabilities never exclude each other by name. A further mode on such a
+fixture that only extends the test the exclusive capability admits (the
+shard-history capture beside `osd-erasure-width`, or
+`mds-held-flock-split-fragments` beside `mds-held-flock-split`) is an ordinary
+`defineCapability` declared together with it.
+
 A documented reproduction runs a row (scenario identifier `ID`) with the
 environment the catalog gives it, so the declaration and the topology cannot
 drift from the row:
@@ -150,7 +197,7 @@ in [FIXTURE_SHARING.md](../../integration/fixture/FIXTURE_SHARING.md).
 
 The catalog preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
-Fifteen further `osd` rows use the four-OSD erasure-capacity topology
+Eighteen further `osd` rows use the four-OSD erasure-capacity topology
 (`osd_replicas` value `4`), each with one test. The first selects
 `TestCephOSDErasureK2M2Integration`, the topology's default selection; every
 other one declares `osd-erasure-width`. The second to the fifth select
@@ -228,6 +275,24 @@ killed. The call must end with an unknown outcome under its original
 identity, the native object must be unchanged after the return, and the
 returned primary's PG log must not hold that identity until the caller
 resubmits it once.
+The sixteenth to the eighteenth carry watch, snapshot and backoff state
+across the epoch changes of lost OSDs
+([validation](../../integration/fixture/OSD_EC_EPOCH_STATE_VALIDATION.md)).
+`TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration` RECONNECTs one Go
+watch to the replacement primary under the primary-first pg_temp and again
+to the returned primary; a notification from a second client must complete
+with its ACK at each primary, and the native watcher list must hold exactly
+that registration.
+`TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration` makes one clone
+through the original primary and one through the replacement, and Go and
+native reads at both snapshot ids and the head and LIST_SNAPS must agree
+under the replacement and after the return.
+`TestCephOSDErasureOptimizedK2M2PGBackoffIntegration` takes two OSDs out of
+the PG so that it is peered below `min_size`: one Go APPEND must draw a
+native PG-wide BLOCK on the primary's actual shard, further requests for the
+PG must be refused locally, and the return of one OSD must end the interval
+with the matching UNBLOCK before the caller resubmits the dropped APPEND
+once.
 Two further `osd-cache-pools` rows: one selects only
 `TestCephOSDCacheTierOpsIntegration`, the native-only cache-tier operation
 checkpoint, and another selects only `TestCephOSDCacheOpGoIntegration`, the
@@ -247,6 +312,11 @@ Two `mds-cephfs-writeback` rows select only
 `TestCephMDSCephFSWritebackFenceIntegration` in the same two MDS profiles and
 reuse the same input; they declare `mds-writeback-fence`, which alone admits
 the OSD drop, background reader and eviction controls.
+Two `mds-cephfs-mixed-writeback` rows select only
+`TestCephMDSCephFSMixedWritebackRecoveryIntegration` in the same two MDS
+profiles on the same input. They declare `mds-writeback-fence` for the OSD
+drop and `mds-writeback-mixed`, which alone admits the closed native
+object-bytes view of `capsnap-file`.
 One further `osd` row selects only `TestCephOSDSetChunkNativeIntegration`, the
 native-only SET_CHUNK manifest checkpoint, on the single-BlueStore legacy-v6
 fixture. It needs no opt-in parameter: the checkpoint uses the ordinary OSD
@@ -301,6 +371,19 @@ primary PG-log snapshots that must show the source write's request identity
 among the destination entry's extra request IDs. It injects no fault and needs
 no opt-in parameter, so the test also belongs to the broad legacy OSD
 selection ([validation](../../integration/fixture/OSD_COPY_FROM_HISTORY_VALIDATION.md)).
+Two `osd` rows,
+`osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange`
+and
+`osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange`,
+select only `TestCephOSDCopyFromLostReplyPrimaryChangeIntegration` and
+`TestCephOSDCopyFromInFlightPrimaryChangeIntegration` on three BlueStore
+replicas. Both move the destination primary with `osd out` around a
+COPY_FROM and a COPY_FROM2 and resubmit explicitly to the new primary. The
+in-flight test also holds the copy's source read with `osd set pause`. They need no
+fixture capability: every change is a MON command of the test, which a single
+run-level recovery undoes before one clean check. The broad legacy-v6
+three-replica rows select them too
+([validation](../../integration/fixture/OSD_COPY_FROM_PRIMARY_CHANGE_VALIDATION.md)).
 One dedicated `osd` row selects only `TestCephMsgrCompressionOfferIntegration`
 on CRC/AES client and service cipher, IPv4 host runtime, one BlueStore OSD,
 replica/min-size one and legacy-v6. Its ID is

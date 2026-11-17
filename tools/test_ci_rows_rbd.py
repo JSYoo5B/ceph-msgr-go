@@ -14,12 +14,15 @@ RBD_JOURNAL_LOST_APPEND_SELECTOR = "^TestCephRBDJournalLostAppendReplyIntegratio
 RBD_LOCK_OWNER_LOSS_SELECTOR = "^TestCephRBDLockOwnerLossIntegration$"
 RBD_LOCK_OWNER_LOSS_PENDING_SELECTOR = "^TestCephRBDLockOwnerLossPendingIntegration$"
 RBD_JOURNAL_PRIMARY_CHANGE_SELECTOR = "^TestCephRBDJournalPrimaryChangeIntegration$"
-# RBD rows that select one test alone on a fresh fixture.
-RBD_EXCLUSIVE_SELECTORS = (RBD_JOURNAL_LOST_APPEND_SELECTOR, RBD_LOCK_OWNER_LOSS_SELECTOR, RBD_LOCK_OWNER_LOSS_PENDING_SELECTOR,
-                           RBD_JOURNAL_PRIMARY_CHANGE_SELECTOR)
-# Dedicated legacy-v6 rows of this area that select one test explicitly
-# (collected by the cross-area legacy check).
-DEDICATED_LEGACY_SELECTORS = (RBD_MIRROR_SELECTOR,)
+
+
+def broad_rbd_rows(rows):
+    """The rows of the RBD opt-in that run the fixture's own selection.
+
+    Every other row of the opt-in selects one test alone on a fresh fixture,
+    which the fixture admits only by a declared capability, so the broad rows
+    are the ones without one; no list of the other rows is kept."""
+    return [row for row in rows if row.get("rbd") == "1" and "capabilities" not in row]
 
 
 class RBDRowsTest(ci_row_catalog.RowsTestCase):
@@ -44,7 +47,7 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
         # its rows reuse the RBD opt-in and both RBD profiles, select only its
         # test, and the broad RBD rows never match it.
         rows = [row for row in self.rows if row.get("test_run") == RBD_JOURNAL_LOST_APPEND_SELECTOR]
-        broad = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") not in RBD_EXCLUSIVE_SELECTORS]
+        broad = broad_rbd_rows(self.rows)
         self.assertEqual(len(rows), 2)
         self.assertEqual(len(broad), 2)
         expected = "TestCephRBDJournalLostAppendReplyIntegration"
@@ -68,9 +71,8 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
         # profiles, select only its test, and no other RBD row matches it.
         rows = [row for row in self.rows if row.get("test_run") == RBD_LOCK_OWNER_LOSS_SELECTOR]
         others = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") != RBD_LOCK_OWNER_LOSS_SELECTOR]
-        broad = [row for row in others if row.get("test_run") not in RBD_EXCLUSIVE_SELECTORS]
+        broad = broad_rbd_rows(others)
         self.assertEqual(len(rows), 2)
-        self.assertEqual(len(others), 8)
         self.assertEqual(len(broad), 2)
         expected = "TestCephRBDLockOwnerLossIntegration"
         selector = re.compile(RBD_LOCK_OWNER_LOSS_SELECTOR)
@@ -96,9 +98,8 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
         # and no other RBD row matches it.
         rows = [row for row in self.rows if row.get("test_run") == RBD_LOCK_OWNER_LOSS_PENDING_SELECTOR]
         others = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") != RBD_LOCK_OWNER_LOSS_PENDING_SELECTOR]
-        broad = [row for row in others if row.get("test_run") not in RBD_EXCLUSIVE_SELECTORS]
+        broad = broad_rbd_rows(others)
         self.assertEqual(len(rows), 2)
-        self.assertEqual(len(others), 8)
         expected = "TestCephRBDLockOwnerLossPendingIntegration"
         selector = re.compile(RBD_LOCK_OWNER_LOSS_PENDING_SELECTOR)
         self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
@@ -120,7 +121,6 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
         rows = [row for row in self.rows if row.get("test_run") == RBD_JOURNAL_PRIMARY_CHANGE_SELECTOR]
         others = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") != RBD_JOURNAL_PRIMARY_CHANGE_SELECTOR]
         self.assertEqual(len(rows), 2)
-        self.assertEqual(len(others), 8)
         expected = "TestCephRBDJournalPrimaryChangeIntegration"
         selector = re.compile(RBD_JOURNAL_PRIMARY_CHANGE_SELECTOR)
         self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
@@ -142,7 +142,7 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
         self.assertEqual({row["capabilities"] for row in rows}, {"rbd-journal-primary-change"})
 
     def test_rbd_rows_select_only_the_declared_rbd_tests(self):
-        rows = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") not in RBD_EXCLUSIVE_SELECTORS]
+        rows = broad_rbd_rows(self.rows)
         self.assertEqual(len(rows), 2)
         expected = {"TestCephRBDBaseIntegration", "TestCephRBDWriteIntegration", "TestCephRBDExclusiveLockIntegration", "TestCephRBDCloneIntegration",
                     "TestCephRBDJournalIntegration"}

@@ -55,9 +55,9 @@ var rbdLockActions = []string{"setup", "lock", "observe-released"}
 // capRBDLockOwnerLoss admits the lock-owner-loss acceptance. Its test runs
 // alone on a fresh RBD fixture, and the lock control replaces the ordinary
 // sequence with rbdLockOwnerLossActions.
-var capRBDLockOwnerLoss = defineCapability("rbd-lock-owner-loss",
+var capRBDLockOwnerLoss = defineExclusiveCapability(fixtureRBD, "rbd-lock-owner-loss",
 	"run one test alone on a fresh RBD fixture with the lock-owner-loss sequence (blocklists and a native SIGKILL)",
-	"RBD=1 !rbd-journal-lost-append !rbd-journal-primary-change", nil)
+	"RBD=1", nil)
 
 // rbdLockOwnerLossActions is the closed, ordered action sequence of the
 // lock-owner-loss acceptance on the same image plan. After the setup, the Go

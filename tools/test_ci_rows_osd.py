@@ -22,11 +22,6 @@ COPY_FROM_HISTORY_SELECTOR = "^TestCephOSDCopyFromDestinationHistoryIntegration$
 COMPRESSION_SELECTOR = "^TestCephMsgrCompressionOfferIntegration$"
 APPLIED_OSD_PG_COMMAND_SELECTOR = "^TestCephApplied(OSD|PG)CommandIsNotReplayedIntegration$"
 OSD_COMMAND_OUTCOME_SELECTOR = "^TestCephOSDCommand(s|Crash)Integration$"
-# Dedicated legacy-v6 rows of this area that select one test explicitly
-# (collected by the cross-area legacy check).
-DEDICATED_LEGACY_SELECTORS = (SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, TIER_OP_GO_SELECTOR, COPY_FROM_LATE_ERROR_SELECTOR, COPY_FROM_MULTI_CHUNK_SELECTOR,
-                              COPY_FROM_HISTORY_SELECTOR, COMPRESSION_SELECTOR, APPLIED_OSD_PG_COMMAND_SELECTOR,
-                              OSD_COMMAND_OUTCOME_SELECTOR)
 
 
 class OSDRowsTest(ci_row_catalog.RowsTestCase):
@@ -129,20 +124,28 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
             "osd_profile": "legacy-v6", "osd_cache_pools": "1",
             "test_run": "^TestCephOSDIgnoreCacheIntegration$",
         }
-        # The native-only tier-ops checkpoint and the Go cache-op test reuse
-        # the same fixture opt-in, each alone by the capability its row
-        # declares.
-        self.assertEqual(rows, [
+        # The broad rows are the rows without a capability: the fixture admits
+        # no other selection without an exclusive capability of its own.
+        self.assertEqual([row for row in rows if "capabilities" not in row], [
             dict(common, key="aes", service="aes", mode="crc", family="4", runtime="host"),
             dict(common, key="aes256k", service="aes256k", family="6", runtime="container"),
-            dict(common, key="aes256k", service="aes256k", family="6", runtime="container",
-                 test_run="^TestCephOSDCacheTierOpsIntegration$", capabilities="exclusive-osd-cache-pools"),
-            dict(common, key="aes256k", service="aes256k", family="6", runtime="container",
-                 test_run="^TestCephOSDCacheOpGoIntegration$", capabilities="exclusive-osd-cache-pools"),
         ])
+        # The native-only tier-ops checkpoint and the Go cache-op test reuse
+        # the same fixture opt-in, each alone by the capability its row
+        # declares. The mapping is frozen: a later row on this fixture, with
+        # exclusive-osd-cache-pools or an exclusive capability of its own,
+        # checks itself in a module of its own and edits no list here.
+        frozen = {"^TestCephOSDCacheTierOpsIntegration$": "exclusive-osd-cache-pools",
+                  "^TestCephOSDCacheOpGoIntegration$": "exclusive-osd-cache-pools"}
+        for selector, capabilities in frozen.items():
+            self.assertEqual([row for row in rows if row["test_run"] == selector],
+                             [dict(common, key="aes256k", service="aes256k", family="6", runtime="container",
+                                   test_run=selector, capabilities=capabilities)])
         for row in rows:
+            self.assertEqual({key: value for key, value in row.items() if key not in ("key", "service", "mode", "family", "runtime",
+                                                                                      "test_run", "capabilities")},
+                             {key: value for key, value in common.items() if key != "test_run"})
             expected = re.fullmatch(r"\^(\w+)\$", row["test_run"]).group(1)
-            self.assertIn(expected, {"TestCephOSDIgnoreCacheIntegration", "TestCephOSDCacheTierOpsIntegration", "TestCephOSDCacheOpGoIntegration"})
             self.assertIn(expected, self.declared)
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
@@ -216,11 +219,16 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
     def test_three_replica_v8_rows_select_only_their_closed_acceptance(self):
         rows = [row for row in self.rows if row.get("osd_profile") in {"replicated-pg-v8", "replicated-pg-reply-v8"}
                 and row.get("osd_replicas") == "3"]
-        self.assertEqual(len(rows), 4)
-        expected = {"TestCephOSDObjectBackoffFailoverIntegration", "TestCephOSDUpmapIntegration"}
-        self.assertTrue(expected <= self.declared)
-        observed = {name: set() for name in expected}
-        counts = {name: 0 for name in expected}
+        # Each row selects one closed acceptance, an exact set of tests, and
+        # each acceptance runs on both cells. A later acceptance on this
+        # topology adds its two rows and edits no count or list here; the
+        # frozen set only keeps the existing acceptances present.
+        frozen = {
+            frozenset({"TestCephOSDObjectBackoffFailoverIntegration"}),
+            frozenset({"TestCephOSDUpmapIntegration"}),
+            frozenset({"TestCephOSDCopyFromLostReplyPrimaryChangeIntegration", "TestCephOSDCopyFromInFlightPrimaryChangeIntegration"}),
+        }
+        observed = {}
         for row in rows:
             self.assertEqual((row["osd_profile"], row["osd"], row["osd_store"], row["stress"]),
                              ("replicated-pg-v8", "1", "bluestore", ""))
@@ -228,19 +236,17 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
             self.assertNotIn("race", row)
             self.assertNotIn("mds_fresh", row)
             selector = re.compile(row["test_run"])
-            selected = {name for name in self.declared if selector.search(name)}
-            self.assertEqual(len(selected), 1)
-            self.assertTrue(selected <= expected)
-            name = next(iter(selected))
-            self.assertIsNone(selector.search(name + "Extended"))
-            self.assertIsNone(selector.search("Prefix" + name))
-            counts[name] += 1
-            observed[name].add(tuple(row.get(field, fallback) for field, fallback in (
+            selected = frozenset(name for name in self.declared if selector.search(name))
+            self.assertTrue(selected, row["test_run"])
+            for name in selected:
+                self.assertIsNone(selector.search(name + "Extended"))
+                self.assertIsNone(selector.search("Prefix" + name))
+            observed.setdefault(selected, []).append(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"), ("family", ""), ("runtime", "container"))))
-        for name in expected:
-            with self.subTest(test=name):
-                self.assertEqual(counts[name], 2)
-                self.assertEqual(observed[name], {("aes", "aes", "crc", "4", "host"), ("aes256k", "aes256k", "secure", "6", "container")})
+        self.assertTrue(frozen <= set(observed))
+        for acceptance, cells in observed.items():
+            with self.subTest(tests=sorted(acceptance)):
+                self.assertEqual(sorted(cells), [("aes", "aes", "crc", "4", "host"), ("aes256k", "aes256k", "secure", "6", "container")])
 
     def test_compression_row_selects_only_the_crc_single_osd_test(self):
         rows = [row for row in self.rows if row.get("test_run") == COMPRESSION_SELECTOR]

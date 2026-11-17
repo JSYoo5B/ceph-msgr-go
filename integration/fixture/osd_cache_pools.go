@@ -20,7 +20,7 @@ import (
 // capExclusiveOSDCachePools admits one test alone on the live cache-pool
 // fixture in place of its IGNORE_CACHE default: the native cache-tier
 // operation checkpoint and the Go-originated cache operations.
-var capExclusiveOSDCachePools = defineCapability("exclusive-osd-cache-pools",
+var capExclusiveOSDCachePools = defineExclusiveCapability(fixtureOSDCachePools, "exclusive-osd-cache-pools",
 	"run one test alone on the live OSD cache-pool fixture",
 	"OSD_CACHE_POOLS=1", nil)
 

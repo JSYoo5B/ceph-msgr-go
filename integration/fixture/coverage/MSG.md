@@ -33,3 +33,7 @@ says how they differ from environment completeness.
   ([compression plan](../../../internal/msgr/COMPRESSION_PLAN.md)).
 - MON, MGR and OSD sessions do not implement cookie resume; this is a
   documented contract boundary, not a gap.
+
+## Updates
+
+Dated notes of changes to this area's rows follow here, oldest first.
