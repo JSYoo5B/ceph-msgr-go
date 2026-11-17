@@ -70,11 +70,13 @@ SET_CHUNK changes another object's references:
   Its audit, native-only checkpoint and bounded Go contract are in
   [MANIFEST_CONTRACT.md](MANIFEST_CONTRACT.md#set_chunk-and-manifest-tier-operations).
 
-The cache-tier operations and SET_CHUNK are implemented separately
+The cache-tier operations, SET_CHUNK and the TIER_PROMOTE, TIER_FLUSH and
+TIER_EVICT manifest operations are implemented separately
 ([cache_op.go](cache_op.go) with
-[CACHE_POOL_CONTRACT.md](CACHE_POOL_CONTRACT.md#cache-tier-operations), and
-[set_chunk.go](set_chunk.go)); none of them is part of the dirty-flag
-contract. Plain-pool refusal is not absence of a daemon handler.
+[CACHE_POOL_CONTRACT.md](CACHE_POOL_CONTRACT.md#cache-tier-operations),
+[set_chunk.go](set_chunk.go) and [tier_op.go](tier_op.go)); none of them is
+part of the dirty-flag contract, although TIER_FLUSH and TIER_EVICT clear the
+dirty flag of the object they act on. Plain-pool refusal is not absence of a daemon handler.
 
 ## Verification
 

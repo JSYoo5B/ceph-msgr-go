@@ -35,6 +35,33 @@ class NativeResultTests(unittest.TestCase):
         self.assertFalse(results.verify(request, text)["passed"])
         self.assertTrue(results.verify(request, text + "Running Ceph test suite: client\n--- PASS: TestRequired (0.00s)\n")["passed"])
 
+    def test_sequence_check_failure_fails_the_test_before_it_and_leaves_the_rest_missing(self):
+        request = {"selector": "^TestA$|^TestB$", "expected": [["api", "TestA"], ["api", "TestB"]]}
+        passed = ("Running Ceph test suite: api\n--- PASS: TestA (1.00s)\n"
+                  "Fixture start state after api/TestA: passed (1 polls, 300 ms)\n"
+                  "Running Ceph test suite: api\n--- PASS: TestB (1.00s)\n"
+                  "Fixture start state after api/TestB: passed (1 polls, 300 ms)\n")
+        self.assertTrue(results.verify(request, passed)["passed"])
+        stopped = ("Running Ceph test suite: api\n--- PASS: TestA (1.00s)\n"
+                   "Fixture start state after api/TestA: FAILED: config: mon/mon_allow_pool_delete set, absent at start\n")
+        result = results.verify(request, stopped)
+        self.assertFalse(result["passed"])
+        self.assertIn("api/TestA: the fixture start-state check after it failed: config: mon/mon_allow_pool_delete set, absent at start",
+                      result["problems"])
+        self.assertIn("api/TestB: MISSING", result["problems"])
+        # A sequence snapshot requires a passed check after every test: a
+        # fixture that ran the union without checks cannot pass.
+        sequenced = dict(request, sequence=True)
+        self.assertTrue(results.verify(sequenced, passed)["passed"])
+        unchecked = passed.replace("Fixture start state after api/TestA: passed (1 polls, 300 ms)\n", "")
+        self.assertTrue(results.verify(request, unchecked)["passed"])
+        self.assertIn("api/TestA: no passed fixture start-state check after it", results.verify(sequenced, unchecked)["problems"])
+        with self.assertRaises(ValueError):
+            results.snapshot(".", "", sequence=True)
+        # A failed check after the last test fails the gate as well.
+        last = passed.replace("after api/TestB: passed (1 polls, 300 ms)", "after api/TestB: FAILED: osd-flags: OSDMap flags set [noout]")
+        self.assertFalse(results.verify(request, last)["passed"])
+
     def test_default_profile_records_skips_without_requiring_optional_tests(self):
         request = {"selector": "", "expected": []}
         text = "Running Ceph test suite: api\n--- PASS: TestNative (0.00s)\n--- SKIP: TestOptional (0.00s)\n"

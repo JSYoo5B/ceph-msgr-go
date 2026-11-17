@@ -71,6 +71,9 @@ replace their earlier failures. The result of the last poll is written to
  "passed": false, "failures": [{"condition": "osd-flags", "detail": "OSDMap flags set [noout], cleared []"}]}
 ```
 
+A [fixture sequence](FIXTURE_SHARING.md#fixture-sequences) calls the same
+check itself, with a 60-second budget, after every test it runs.
+
 A failed check is a result. The fixture keeps serving, so a caller can
 restore the state and check again. Only an invalid request (a budget outside
 the range or extra fields) is a fixture control failure.

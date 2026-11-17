@@ -23,7 +23,7 @@ import (
 // exists) and also creates and removes pool snapshots by name. The independent
 // native client observes the OSDMap pool state and uses the ids end to end.
 //
-//fixture:isolated snapshots in owned pools; the pool cleanup leaves mon/mon_allow_pool_delete in central config
+//fixture:shareable pool and self-managed snapshots in owned pools only; checked owned-pool cleanup removes the pools
 func TestCephMonPoolOpIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {
@@ -297,7 +297,7 @@ func TestCephMonPoolOpIntegration(t *testing.T) {
 // hides it: the native pool shows the id consumed, and the next allocation
 // returns the id after it.
 //
-//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete set in central config
+//fixture:shareable client-side lost reply of a snapshot allocation in an owned pool; checked owned-pool cleanup removes it
 func TestCephMonPoolOpLostReplyIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {
@@ -388,7 +388,7 @@ func TestCephMonPoolOpLostReplyIntegration(t *testing.T) {
 // election and completes once on the new leader: exactly one id is consumed.
 // The stopped MON is restarted and the election settled on every path.
 //
-//fixture:isolated stops and restarts the leader with a settled quorum, but pool cleanup leaves mon_allow_pool_delete config
+//fixture:shareable stops and restarts the MON leader and waits for a settled full quorum; checked owned-pool cleanup removes its pool
 func TestCephMonPoolOpLeaderStopIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {
@@ -524,7 +524,7 @@ func TestCephMonPoolOpLeaderStopIntegration(t *testing.T) {
 // osd write. The test-only identity is created and removed through MON auth
 // commands on the disposable fixture.
 //
-//fixture:isolated auth entity removed, but owned-pool cleanup leaves mon/mon_allow_pool_delete in config
+//fixture:isolated creates an auth entity before registering its removal and does not confirm the auth rm
 func TestCephMonPoolOpScopedCapsIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

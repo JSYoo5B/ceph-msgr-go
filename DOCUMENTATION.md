@@ -65,7 +65,7 @@ must follow the owner.
 | Join of a wire row to its unit selector and native receipt; attribution category of each receipt | [PROTOCOL_EVIDENCE.md](cephmsgr/PROTOCOL_EVIDENCE.md) | `python3 tools/protocol_evidence.py` |
 | Provenance of retained native codec vectors | the `testdata/*README.md` files and provenance records beside each package's vectors | the native-vector tests of that package |
 | Scenario definitions and required rows | [catalog.d](.github/scenarios/catalog.d/); rules in the [scenario README](.github/scenarios/README.md) | `python3 tools/scenario_plan.py validate`, `TestCICatalogInventory` |
-| Classification of native recipes per path, and where each record is | the [coverage map index](integration/fixture/coverage/README.md) and one area file per path beside it | `python3 tools/native_path_coverage.py` |
+| Classification of native recipes per path, and where each record is | the [coverage map index](integration/fixture/coverage/README.md), one area file per path beside it and the row files of each area | `python3 tools/native_path_coverage.py` |
 | Reproducible fixture setup and control | `integration/fixture/*_FIXTURE.md`, `*_RECIPE.md` and `*_ORACLE.md` | review |
 | An observed native result: tested source, image, profile, outcome and what was not verified | the `integration/fixture/*_VALIDATION.md` record of that run | review; records are not rewritten by later changes |
 | Successful native evidence bundle format | [NATIVE_EVIDENCE.md](.github/scenarios/NATIVE_EVIDENCE.md) | its validation record beside it |
@@ -94,7 +94,8 @@ answer.
    client feature bit is declared or withheld per profile in
    [CLIENT_EXTENSION_DECISIONS.md](internal/mds/CLIENT_EXTENSION_DECISIONS.md).
    The row also names the unit or native-vector selector.
-4. **Scenario.** Find the path's row in its area file of the
+4. **Scenario.** Find the path's row in its area file, or in a row file of
+   that area's directory, of the
    [native path coverage map](integration/fixture/coverage/README.md). Its
    Evidence column names the catalog scenario ID or group and the Go test;
    its Visibility column says whether a dedicated row requires the test or a

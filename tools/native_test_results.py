@@ -11,6 +11,15 @@ that selects a name Go lists more than once in one suite package (the internal
 and the external test package both declare it) is refused by `snapshot`, before
 any run: `-run` runs both under that name and a result line cannot tell which
 one it reports.
+
+A fixture sequence (several rows' tests on one fixture, run one test at a
+time) reports the start-state check after each test on a line
+"Fixture start state after <suite>/<Test>: FAILED: ..." when it fails; that
+test then fails the gate with the check's conditions, and the tests the
+sequence did not reach are missing. A snapshot taken with --sequence
+(the job forwards CEPH_MSGR_TEST_SEQUENCE) also requires a passed check line
+after every expected test, so a fixture that ran the union selector without
+the checks between tests cannot pass.
 """
 import argparse
 import json
@@ -23,7 +32,7 @@ import go_test_list
 SUITES = (("api", "integration"), ("client", "cephmsgr"))
 
 
-def snapshot(root, selector):
+def snapshot(root, selector, sequence=False):
     if "/" in selector:
         raise ValueError("only top-level test selectors are supported")
     pattern = re.compile(selector) if selector else None
@@ -36,11 +45,16 @@ def snapshot(root, selector):
             expected.extend([suite, name] for name in sorted(selected[directory]))
     if selector and not expected:
         raise ValueError("explicit selector matches no top-level tests")
-    return {"selector": selector, "expected": expected}
+    if sequence and not selector:
+        raise ValueError("a fixture sequence needs an explicit selector")
+    request = {"selector": selector, "expected": expected}
+    if sequence:
+        request["sequence"] = True
+    return request
 
 
 def verify(request, text):
-    suite, observed, problems = None, {}, []
+    suite, observed, problems, passed_checks = None, {}, [], set()
     for line in text.splitlines():
         if line in ("Running Ceph test suite: api", "Running Ceph test suite: client"):
             suite = line.rsplit(" ", 1)[1]
@@ -50,9 +64,19 @@ def verify(request, text):
             if key in observed:
                 problems.append("duplicate result: %s/%s" % key)
             observed[key] = match[1]
+        check = re.fullmatch(r"Fixture start state after (api|client)/(Test\w*): FAILED: ([^\r\n]*)", line)
+        if check:
+            problems.append("%s/%s: the fixture start-state check after it failed: %s" % (check[1], check[2], check[3]))
+        checked = re.fullmatch(r"Fixture start state after (api|client)/(Test\w*): passed \([^\r\n]*\)", line)
+        if checked:
+            passed_checks.add((checked[1], checked[2]))
     for key in map(tuple, request["expected"]):
         if observed.get(key) != "PASS":
             problems.append("%s/%s: %s" % (*key, observed.get(key, "MISSING")))
+    if request.get("sequence"):
+        for key in map(tuple, request["expected"]):
+            if observed.get(key) == "PASS" and key not in passed_checks:
+                problems.append("%s/%s: no passed fixture start-state check after it" % key)
     if not any(state == "PASS" for state in observed.values()):
         problems.append("no top-level native test passed")
     if "FAIL" in observed.values():
@@ -69,6 +93,8 @@ def main(argv=None):
     capture = sub.add_parser("snapshot")
     capture.add_argument("--selector", default="")
     capture.add_argument("--root", default=".")
+    capture.add_argument("--sequence", action="store_true",
+                         help="the job is a fixture sequence: require a passed start-state check after every test")
     check = sub.add_parser("verify")
     check.add_argument("--expected", required=True)
     check.add_argument("--log", required=True)
@@ -77,7 +103,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "snapshot":
-            result = snapshot(args.root, args.selector)
+            result = snapshot(args.root, args.selector, args.sequence)
         else:
             result = verify(json.loads(Path(args.expected).read_text(encoding="utf-8")),
                             Path(args.log).read_text(encoding="utf-8", errors="replace"))

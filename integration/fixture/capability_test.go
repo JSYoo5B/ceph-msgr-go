@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -207,6 +208,41 @@ func TestCatalogRowsAreAdmittedByTheFixture(t *testing.T) {
 	if !slices.ContainsFunc(rows, func(row ciScenario) bool { return row.Params["capabilities"] != "" }) {
 		t.Error("catalog admission: no catalog row declares a capability")
 	}
+	// validate also passes the fixture sequences its planner makes of the
+	// default coverage (CEPH_MSGR_PLANNED_JOBS, a JSON list of matrix
+	// entries), so a planned job the fixture would refuse fails validation.
+	if path := os.Getenv("CEPH_MSGR_PLANNED_JOBS"); path != "" {
+		data, err := os.ReadFile(path)
+		var jobs []map[string]string
+		if err == nil {
+			err = json.Unmarshal(data, &jobs)
+		}
+		if err != nil {
+			t.Fatal("catalog admission: planned jobs:", err)
+		}
+		for _, problem := range plannedJobAdmissionProblems(jobs, ciWorkflowBindings(t)) {
+			t.Error("catalog admission: " + problem)
+		}
+	}
+}
+
+// plannedJobAdmissionProblems passes each planned fixture sequence job, as the
+// native workflow forwards it, through loadProfile.
+func plannedJobAdmissionProblems(jobs []map[string]string, bindings map[string]ciBinding) []string {
+	var problems []string
+	for _, job := range jobs {
+		params := maps.Clone(job)
+		for _, planner := range []string{"scenario", "scenarios", "sequence_rows"} {
+			delete(params, planner)
+		}
+		p, err := ciProfile(ciScenario{ID: job["scenario"], Params: params}, bindings)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("planned sequence %s: the fixture refuses it: %v", job["scenarios"], err))
+		} else if job["test_sequence"] != "" && p.sequence != job["test_sequence"] {
+			problems = append(problems, fmt.Sprintf("planned sequence %s: the fixture loaded no sequence", job["scenarios"]))
+		}
+	}
+	return problems
 }
 
 // A declared capability whose own requirement terms hold can still sit on a
@@ -248,5 +284,113 @@ func TestCatalogAdmissionRefusesCapabilityOnRefusedTopology(t *testing.T) {
 		if len(problems) == 0 || !strings.HasPrefix(problems[0], row.ID+": ") {
 			t.Fatalf("%s: row admitted: %v", name, problems)
 		}
+	}
+}
+
+// A fixture with its own default selection admits one further exact test by
+// any capability defined for it with defineExclusiveCapability, and by no
+// other: a capability of another fixture is refused, and so is a second
+// exclusive capability of the same fixture. A capability defined beside a new
+// mode is admitted without an edit to loadProfile or to any other
+// capability's requirements.
+func TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture(t *testing.T) {
+	bindings := ciWorkflowBindings(t)
+	byFixture := map[ownFixture][]string{}
+	for name, c := range fixtureCapabilities {
+		if c.exclusive != "" {
+			byFixture[c.exclusive] = append(byFixture[c.exclusive], name)
+		}
+	}
+	for _, f := range []ownFixture{fixtureMDSCommands, fixtureMDSCephFS, fixtureMDSCephFSCompletion, fixtureMDSCephFSData,
+		fixtureRBD, fixtureOSDCachePools, fixtureOSDErasureCapacity} {
+		if len(byFixture[f]) == 0 {
+			t.Fatalf("no capability admits an exclusive test of the %s fixture", f)
+		}
+	}
+	// declaresExclusive is the one exclusive capability a row declares.
+	declaresExclusive := func(row ciScenario) *fixtureCapability {
+		for _, name := range strings.Split(row.Params["capabilities"], ",") {
+			if c := fixtureCapabilities[name]; c != nil && c.exclusive != "" {
+				return c
+			}
+		}
+		return nil
+	}
+	replace := func(row ciScenario, from, to string) ciScenario {
+		names := strings.Split(row.Params["capabilities"], ",")
+		names[slices.Index(names, from)] = to
+		slices.Sort(names)
+		params := maps.Clone(row.Params)
+		params["capabilities"] = strings.Join(slices.Compact(names), ",")
+		return ciScenario{ID: row.ID, Params: params}
+	}
+	checked, admittedNew, bothRefused := map[ownFixture]bool{}, map[ownFixture]bool{}, map[ownFixture]bool{}
+	for _, row := range ciRepositoryCatalog(t) {
+		own := declaresExclusive(row)
+		if own == nil {
+			continue
+		}
+		checked[own.exclusive] = true
+		for f, names := range byFixture {
+			for _, name := range names {
+				if name == own.name {
+					continue
+				}
+				problems := catalogAdmissionProblems([]ciScenario{replace(row, own.name, name)}, bindings)
+				if f != own.exclusive && len(problems) == 0 {
+					t.Fatalf("%s: capability %s of the %s fixture admitted on the %s fixture", row.ID, name, f, own.exclusive)
+				}
+				if f == own.exclusive {
+					// Both declared: refused whatever their own terms say.
+					both := maps.Clone(row.Params)
+					both["capabilities"] = strings.Join(slices.Sorted(slices.Values(append(strings.Split(row.Params["capabilities"], ","), name))), ",")
+					problems = catalogAdmissionProblems([]ciScenario{{ID: row.ID, Params: both}}, bindings)
+					if len(problems) == 0 {
+						t.Fatalf("%s: two exclusive capabilities %s and %s of the %s fixture admitted", row.ID, own.name, name, f)
+					}
+					if strings.Contains(problems[0], "each admit the one exclusive test of the "+string(f)+" fixture") {
+						bothRefused[f] = true
+					}
+				}
+			}
+		}
+		// An exclusive capability of another fixture whose own terms this row
+		// meets is refused all the same: the fixture asks for its own.
+		for f := range byFixture {
+			if f == own.exclusive {
+				continue
+			}
+			const name = "merge-proof-other-exclusive"
+			defineExclusiveCapability(f, name, "a capability of another fixture defined by this test", "OSD=1", nil)
+			problems := catalogAdmissionProblems([]ciScenario{replace(row, own.name, name)}, bindings)
+			delete(fixtureCapabilities, name)
+			if len(problems) == 0 {
+				t.Fatalf("%s: an exclusive capability of the %s fixture admitted on the %s fixture", row.ID, f, own.exclusive)
+			}
+		}
+		// A new capability for this fixture, defined beside a new mode, on a
+		// row that declares nothing else. A row whose topology belongs to its
+		// own capability (the three-OSD RBD primary change) refuses it.
+		if row.Params["capabilities"] == own.name {
+			const name = "merge-proof-exclusive"
+			defineExclusiveCapability(own.exclusive, name, "a capability defined by this test", "OSD=1", nil)
+			if len(catalogAdmissionProblems([]ciScenario{replace(row, own.name, name)}, bindings)) == 0 {
+				admittedNew[own.exclusive] = true
+			}
+			delete(fixtureCapabilities, name)
+		}
+	}
+	for f := range byFixture {
+		if !admittedNew[f] {
+			t.Fatalf("a new exclusive capability of the %s fixture is refused on every row of that fixture", f)
+		}
+		// Where a fixture has two exclusive capabilities, declaring both is
+		// refused by the one-exclusive rule, not only by a topology.
+		if len(byFixture[f]) > 1 && !bothRefused[f] {
+			t.Fatalf("no row of the %s fixture refuses two of its exclusive capabilities %v by the one-exclusive rule", f, byFixture[f])
+		}
+	}
+	if len(checked) != len(byFixture) {
+		t.Fatalf("catalog rows declare exclusive capabilities of %d of %d fixtures", len(checked), len(byFixture))
 	}
 }

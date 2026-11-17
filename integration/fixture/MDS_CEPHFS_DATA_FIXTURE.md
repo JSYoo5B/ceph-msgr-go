@@ -3,9 +3,10 @@
 `CEPH_MSGR_TEST_MDS_CEPHFS_DATA=1` is a closed development-only extension of
 `CEPH_MSGR_TEST_MDS_FRESH=1`. It selects only
 `^TestCephMDSCephFSDataIntegration$`,
-`^TestCephMDSCephFSCapSendRecoveryIntegration$` or
-`^TestCephMDSCephFSWritebackFenceIntegration$` (one per run; they share
-every leaf except the single owned restart recipe) and excludes
+`^TestCephMDSCephFSCapSendRecoveryIntegration$`,
+`^TestCephMDSCephFSWritebackFenceIntegration$` or
+`^TestCephMDSCephFSMixedWritebackRecoveryIntegration$` (one per run; they
+share every leaf except the single owned restart recipe) and excludes
 `CEPH_MSGR_TEST_MDS_COMMANDS=1`, `CEPH_MSGR_TEST_MDS_SESSIONS=1`,
 `CEPH_MSGR_TEST_MDS_CEPHFS=1`, `CEPH_MSGR_TEST_MDS_CEPHFS_RANKS=1` and
 `CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION=1`: it writes file data, sets a
@@ -16,11 +17,13 @@ min_size 1/1) and one active rank 0 without standby. Its Go client enables
 MDS, CephFS and OSD sessions with the default v6 object-hash profile. No MON
 feature exception is added. The closed control temporarily changes only
 `debug_mds`, `debug_ms`, `mds_log_pause` and `ms_blackhole_client` on the owned MDS incarnation,
-with baseline readback and restoration/discard verification. The
-writeback-fence selector alone may also change `debug_ms` and
-`ms_blackhole_client` on the single owned OSD up to twice, one change at a
-time, run one background native reader and evict one registered owned Go
-session. The closed control also permits one explicitly armed restart of its owned rank-0 MDS,
+with baseline readback and restoration/discard verification. A row
+that declares `mds-writeback-fence` (the writeback-fence and the mixed-extent
+selectors) may also change `debug_ms` and `ms_blackhole_client` on the
+single owned OSD up to twice, one change at a time, run one background
+native reader and evict one registered owned Go session; one that also
+declares `mds-writeback-mixed` may read the head content of `capsnap-file`'s
+objects. The closed control also permits one explicitly armed restart of its owned rank-0 MDS,
 with adoption of the same daemon's new GID, nonce and incarnation. The fixture
 termination budget is two minutes.
 
@@ -122,6 +125,7 @@ time; the controller holds the shared MDS fresh scope lock and is bounded to
 | `stat` | a target | read only: LibCephFS `statx` (mode, nlink, uid, gid, mtime seconds, ctime, ino, size, change attribute) or ENOENT, and for the directory and files the `ceph.dir.layout` or `ceph.file.layout` virtual xattr (ENODATA reported as absent) |
 | `read` | a file, `snapshot-file` or `capsnap-a/b-file` | read only: open read-only, read to EOF in 64 KiB calls (bounded to 4 MiB), then `statx`; reports length, SHA-256 and the SHA-256 of each 16 KiB chunk |
 | `objects` | a file | read only: `statx` for the inode, then the python rados binding's `stat` of `<ino hex>.<objno %08x>` for the planned object count; for `snap-file` and `capsnap-file` also `rados --format json listsnaps` of each existing object (clone IDs, snapshots, sizes, overlaps) |
+| `object-bytes` | `capsnap-file` | read only, `mds-writeback-mixed` only (it requires `mds-writeback-fence`) and only where other native work is admitted: `statx` for the inode, then the python rados binding's `stat` of each planned object and a whole-object `read` (bounded to 4 MiB, exactly the stat size) of each existing one; reports existence, size and the content's length, SHA-256 and the SHA-256 of each 16 KiB chunk |
 | `capsnap-create-a`, `capsnap-create-b` | none | mutation, once each: create the two fixed snapshots; B requires an applied A |
 | `capsnap-remove-a`, `capsnap-remove-b` | none | mutation, once each after the corresponding applied creation: remove the fixed snapshot |
 | `list` | none | read only: `opendir`/`readdir` of the directory with `statx` per entry; only plan files are admitted, each once |
@@ -144,15 +148,15 @@ time; the controller holds the shared MDS fresh scope lock and is bounded to
 | `flush-journal` | none | one journaled admin-socket barrier after confirmed resume/blackhole; require return code zero; an uncertain result is not retried |
 | `cap-log-mark` | none | mark the bounded owned daemon log after debug-on |
 | `cap-log` | Go GlobalID and nonce | two-argument action: both canonical and previously registered by observe; preserve paired incoming/handler/snapshot-or-dedupe evidence and attributed outgoing ACK blackholes after the mark |
-| `osd-drop-on` | none | writeback-fence selector only, at most twice per run and only after the previous drop is restored, never during a restart or beside an MDS client blackhole: read the single owned OSD's `debug_ms` and `ms_blackhole_client` (which must be `false`), mark its log, journal intent, then set and read back `debug_ms=10/10` and `ms_blackhole_client=true`; incoming client messages to the OSD are then dropped after Messenger receipt and before dispatch |
+| `osd-drop-on` | none | `mds-writeback-fence` only, at most twice per run and only after the previous drop is restored, never during a restart or beside an MDS client blackhole: read the single owned OSD's `debug_ms` and `ms_blackhole_client` (which must be `false`), mark its log, journal intent, then set and read back `debug_ms=10/10` and `ms_blackhole_client=true`; incoming client messages to the OSD are then dropped after Messenger receipt and before dispatch |
 | (exclusion) | | while `osd-drop-on` is intended, applied, uncertain, restore-intended or restore-uncertain, `log-pause`, `blackhole-on` and `client-drop-on` are refused; `debug-on`/`debug-off`, `log-resume` and cleanup restoration stay available |
-| `osd-drop-off` | none | writeback-fence selector only, after a confirmed `osd-drop-on`: restore and read back `ms_blackhole_client` and then `debug_ms` |
-| `osd-log` | Go GlobalID and nonce | writeback-fence selector only, two-argument action after a confirmed drop: return same-thread pairs of the OSD's `received message ... from=client.<gid> type=42 osd_op()` line and its `handle_message blackhole` line after the mark, both on a connection from the registered peer nonce |
-| `reader-start` | none | writeback-fence selector only, once per run, only while no OSD drop is active and no restart or MDS fault is in effect (LibCephFS checks pool permission with its own OSD operations before it waits for capabilities): start the `read-shared` driver action on `shared-file` in the background (75-second process bound) and return at once; its data reads wait for the Go writer to release its capabilities |
-| `reader-status` | none | writeback-fence selector only, after `reader-start`: report whether the background reader is still running, without blocking |
-| `reader-wait` | none | writeback-fence selector only, once, after the OSD drop is restored: wait within the request bound for the background reader and return its `read-shared` output and process receipt |
+| `osd-drop-off` | none | `mds-writeback-fence` only, after a confirmed `osd-drop-on`: restore and read back `ms_blackhole_client` and then `debug_ms` |
+| `osd-log` | Go GlobalID and nonce | `mds-writeback-fence` only, two-argument action after a confirmed drop: return same-thread pairs of the OSD's `received message ... from=client.<gid> type=42 osd_op()` line and its `handle_message blackhole` line after the mark, both on a connection from the registered peer nonce |
+| `reader-start` | none | `mds-writeback-fence` only, once per run, only while no OSD drop is active and no restart or MDS fault is in effect (LibCephFS checks pool permission with its own OSD operations before it waits for capabilities): start the `read-shared` driver action on `shared-file` in the background (75-second process bound) and return at once; its data reads wait for the Go writer to release its capabilities |
+| `reader-status` | none | `mds-writeback-fence` only, after `reader-start`: report whether the background reader is still running, without blocking |
+| `reader-wait` | none | `mds-writeback-fence` only, once, after the OSD drop is restored: wait within the request bound for the background reader and return its `read-shared` output and process receipt |
 | (exclusion) | | while the background reader runs, other native work, eviction, MDS faults and restart arm are refused; an OSD drop, status, `osd-log`, `osd-drop-off` and observation stay available, and cleanup waits for the reader before its native readback |
-| `evict` | GlobalID | writeback-fence selector only, once per run, while no restart is pending, no client blackhole is active and the background reader is not running: require `mds_session_blocklist_on_evict=true`, a session of the owned Go identity at an address registered by observe and no existing blocklist entry for it; journal intent, run `session evict id=<gid>` on the owned admin socket and wait until the session is gone and its exact address is blocklisted |
+| `evict` | GlobalID | `mds-writeback-fence` only, once per run, while no restart is pending, no client blackhole is active and the background reader is not running: require `mds_session_blocklist_on_evict=true`, a session of the owned Go identity at an address registered by observe and no existing blocklist entry for it; journal intent, run `session evict id=<gid>` on the owned admin socket and wait until the session is gone and its exact address is blocklisted |
 
 Every action proves the owned rank-0 incarnation before and after it runs
 (FSID, FSCID, daemon name, GID, rank 0, endpoint, nonce, incarnation, pools)

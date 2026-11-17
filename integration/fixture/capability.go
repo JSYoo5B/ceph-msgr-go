@@ -35,10 +35,31 @@ import (
 //
 // extra, when not nil, is a further condition on fixture inputs that no row
 // parameter carries (for example the local oracle variables).
+//
+// exclusive, when set, names the fixture with its own default selection whose
+// one further exact test this capability admits (defineExclusiveCapability).
 type fixtureCapability struct {
 	name, summary, requires string
 	extra                   func(profile) bool
+	exclusive               ownFixture
 }
+
+// An ownFixture is a fixture that loadProfile gives its own default selection
+// and that runs nothing else unless a capability admits one other exact test
+// on it (ownSelection). Its admission asks admitsExclusive, so a new
+// capability for one of these fixtures is defined beside its own mode with
+// defineExclusiveCapability and edits no shared list of capabilities.
+type ownFixture string
+
+const (
+	fixtureMDSCommands         ownFixture = "MDS command"
+	fixtureMDSCephFS           ownFixture = "MDS CephFS metadata"
+	fixtureMDSCephFSCompletion ownFixture = "MDS CephFS completion"
+	fixtureMDSCephFSData       ownFixture = "MDS CephFS data"
+	fixtureRBD                 ownFixture = "RBD"
+	fixtureOSDCachePools       ownFixture = "OSD cache-pool"
+	fixtureOSDErasureCapacity  ownFixture = "four-OSD erasure-capacity"
+)
 
 // fixtureCapabilities is filled by the defineCapability calls of this package.
 var fixtureCapabilities = map[string]*fixtureCapability{}
@@ -68,6 +89,30 @@ func defineCapability(name, summary, requires string, extra func(profile) bool) 
 	c := &fixtureCapability{name: name, summary: summary, requires: requires, extra: extra}
 	fixtureCapabilities[name] = c
 	return c
+}
+
+// defineExclusiveCapability defines a capability that admits one exact test
+// other than the default selection on the fixture f. At most one such
+// capability of a fixture may be declared for a run (capabilityTopologyProblem),
+// so two of them never need to exclude each other by name.
+func defineExclusiveCapability(f ownFixture, name, summary, requires string, extra func(profile) bool) *fixtureCapability {
+	if f == "" {
+		panic("fixture capability " + name + " names no fixture")
+	}
+	c := defineCapability(name, summary, requires, extra)
+	c.exclusive = f
+	return c
+}
+
+// admitsExclusive reports whether a declared capability admits one exact test
+// other than the default selection on the fixture f.
+func (p profile) admitsExclusive(f ownFixture) bool {
+	for _, name := range p.declaredCapabilities() {
+		if c := fixtureCapabilities[name]; c != nil && c.exclusive == f && p.admits(c) {
+			return true
+		}
+	}
+	return false
 }
 
 // supported reports whether the profile meets the capability's requirements.
@@ -119,10 +164,17 @@ func parseCapabilities(value, selector string) (string, error) {
 // capabilityTopologyProblem refuses a declared capability whose requirements
 // the loaded profile does not meet.
 func capabilityTopologyProblem(p profile) error {
+	exclusive := map[ownFixture]string{}
 	for _, name := range p.declaredCapabilities() {
 		c := fixtureCapabilities[name]
 		if c == nil {
 			return fmt.Errorf("undefined fixture capability %s", name)
+		}
+		if c.exclusive != "" {
+			if other := exclusive[c.exclusive]; other != "" {
+				return fmt.Errorf("fixture capabilities %s and %s each admit the one exclusive test of the %s fixture", other, name, c.exclusive)
+			}
+			exclusive[c.exclusive] = name
 		}
 		if !c.supported(p) {
 			return fmt.Errorf("fixture capability %s is not supported by this fixture profile (requires %s)", name, c.requires)
@@ -140,8 +192,23 @@ func (p profile) declaredCapabilities() []string {
 
 // declares reports whether the capability is declared for an exact one-test
 // selection. It does not check the requirements; admits does.
+//
+// A fixture sequence (sequence.go) declares it when every member is one
+// exact test: each member alone declares it, and the sequence was admitted
+// only because every member alone loads the same profile.
 func (p profile) declares(c *fixtureCapability) bool {
-	return exactTestSelector.MatchString(p.testRun) && slices.Contains(p.declaredCapabilities(), c.name)
+	if !slices.Contains(p.declaredCapabilities(), c.name) {
+		return false
+	}
+	if p.sequence != "" {
+		for _, member := range strings.Fields(p.sequence) {
+			if !exactTestSelector.MatchString(member) {
+				return false
+			}
+		}
+		return true
+	}
+	return exactTestSelector.MatchString(p.testRun)
 }
 
 // admits is the admission of one capability's mode: declared for exactly one

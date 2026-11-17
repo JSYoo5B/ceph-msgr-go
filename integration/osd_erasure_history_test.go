@@ -137,7 +137,7 @@ func hobjectHead(route osdFixtureOracle) string {
 // calibrates presence detection only: it claims nothing about absence,
 // replica or shard-local history, trimming or replay.
 //
-//fixture:isolated only I/O in its own EC pool, removed checked; its CRUSH rule and mon_allow_pool_delete config entry are left
+//fixture:shareable I/O in its own EC pool only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
 func TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration(t *testing.T) {
 	width := erasureK2M2
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

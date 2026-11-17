@@ -64,15 +64,16 @@ func validateCacheOperation(op Operation, total int) (uint64, error) {
 // operation: the negotiated cache-pool capability, a standalone head object
 // without snapshot context, replica-read, ordering, redirect, full or retry
 // flags, and exactly the native request flags. IgnoreOverlay is refused on
-// every other request. The public caller additionally refuses explicit
-// resubmission and erasure-coded placement.
+// every other request except a manifest tier operation, whose own contract
+// (ValidateTierRequest) requires it for flush and evict. The public caller
+// additionally refuses explicit resubmission and erasure-coded placement.
 func ValidateCacheRequest(r Request, features uint64) error {
 	cache := false
 	for _, op := range r.Operations {
 		cache = cache || IsCacheOperation(op.Code)
 	}
 	if !cache {
-		if r.IgnoreOverlay {
+		if r.IgnoreOverlay && !IsTierRequest(r.Operations) {
 			return ErrRequest
 		}
 		return nil

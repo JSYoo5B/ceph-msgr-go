@@ -22,7 +22,7 @@ import (
 // ratios are restored before the killed OSD restarts (backfill would otherwise
 // be held as too full).
 //
-//fixture:isolated lowers full ratios, kills and restarts an OSD; owned-pool cleanup leaves mon_allow_pool_delete in config
+//fixture:isolated lowers full ratios, kills and restarts an OSD without a pg_temp proof; rewrites the fixture object unverified
 func TestCephOSDFullFailoverIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" || isReplicatedPGFixtureProfile() {
 		// The shared restoration helper is legacy-v6 only.

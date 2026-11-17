@@ -3,9 +3,10 @@
 Shared loading lives in ci_row_catalog. These tests check what spans the
 areas: the closed profile and opt-in fields of every row with their workflow
 bindings, the broad legacy-v6 rows, the bounded and retried infrastructure
-steps, and the separate soak opt-in. The dedicated legacy-v6 rows of each
-area are declared in that area's test_ci_rows_* module.
+steps, and the separate soak opt-in. The dedicated rows of each area are
+checked in that area's test_ci_rows_* module; this module names none of them.
 """
+import re
 import unittest
 
 import ci_row_catalog
@@ -26,14 +27,13 @@ class CrossAreaRowsTest(ci_row_catalog.RowsTestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
-        # Dedicated legacy-v6 rows select one test explicitly (each area
-        # module declares its own); the original broad legacy rows keep
-        # their suite selection.
-        dedicated = ci_row_catalog.dedicated_legacy_selectors()
-        legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
-                  and not row.get("osd_soak") and row.get("test_run") not in dedicated
-                  and all(row.get(field, "0") == "0" for field in opt_ins)]
-        self.assertEqual(len(legacy), 30)
+        # A row selects tests explicitly exactly when its identifier says so
+        # (a final ".t-" component), so a broad row cannot gain a selector
+        # without a visible identifier change. The broad legacy rows keep
+        # their suite selection; no list of the dedicated rows or count of
+        # the broad ones is kept here.
+        for entry in self.entries:
+            self.assertEqual("test_run" in entry["params"], re.search(r"\.t-[a-z0-9-]+$", entry["id"]) is not None, entry["id"])
         for row in self.rows:
             profile = row.get("osd_profile", "legacy-v6")
             self.assertIn(profile, {"legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8"})
@@ -45,8 +45,7 @@ class CrossAreaRowsTest(ci_row_catalog.RowsTestCase):
             self.assertIn(row.get("mds_cephfs_ranks_replay", "0"), {"0", "1"})
             if row.get("mds_cephfs_ranks_replay", "0") == "1":
                 self.assertEqual(row.get("mds_cephfs_ranks"), "1")
-            if profile == "legacy-v6" and all(row.get(field, "0") == "0" for field in opt_ins) and row.get("test_run") not in dedicated:
-                self.assertNotIn("test_run", row, "existing rows must retain their original suite selection")
+            if profile == "legacy-v6" and all(row.get(field, "0") == "0" for field in opt_ins) and "test_run" not in row:
                 self.assertNotIn("mds_fresh", row)
                 for field in opt_ins:
                     self.assertNotIn(field, row)
