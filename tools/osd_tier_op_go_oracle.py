@@ -65,7 +65,7 @@ WIRE_FLAGS = {"tier-promote": 0x20, "tier-flush": 0x10 | 0x8000 | 0x20000, "tier
 # The closed twin objects a native tier operation may touch, and the objects
 # an observation may read. Every name lives in slot 1.
 TWINS = ("tier-absent", "tier-plain-native", "tier-chunk-native", "tier-redirect-native", "tier-dedup-native")
-OBSERVED = TWINS + ("tier-plain-go", "tier-chunk-go", "tier-redirect-go", "tier-dedup-go")
+OBSERVED = TWINS + ("tier-plain-go", "tier-chunk-go", "tier-redirect-go", "tier-dedup-go", "tier-evict-lost-reply")
 # Closed dedup configuration of slot 1: CDC "fixed" with 16-byte chunks
 # (do_cdc uses cbits(size)-1 bits, so 16 gives 16-byte chunks).
 DEDUP = (("fingerprint_algorithm", "sha256"), ("dedup_chunk_algorithm", "fixed"), ("dedup_cdc_chunk_size", "16"))

@@ -206,6 +206,18 @@ func tierGoObserve(t *testing.T, ctx context.Context, name string, extent ...uin
 	return l
 }
 
+func tierGoBind(t *testing.T, ctx context.Context, pools ownedPools) {
+	t.Helper()
+	var bound struct {
+		Source int64 `json:"source_pool_id"`
+		Chunk  int64 `json:"chunk_pool_id"`
+	}
+	if err := json.Unmarshal(tierGoOracle(t, ctx, map[string]any{"action": "bind", "source_pool_id": pools.ids[1], "chunk_pool_id": pools.ids[2]}), &bound); err != nil ||
+		bound.Source != pools.ids[1] || bound.Chunk != pools.ids[2] {
+		t.Fatal("native tier observer bound other pools", bound, err)
+	}
+}
+
 //fixture:isolated owned-pool cleanup leaves central config mon/mon_allow_pool_delete=true set
 func TestCephOSDTierOpGoIntegration(t *testing.T) {
 	fixture := osdFixture
@@ -231,14 +243,7 @@ func TestCephOSDTierOpGoIntegration(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	var bound struct {
-		Source int64 `json:"source_pool_id"`
-		Chunk  int64 `json:"chunk_pool_id"`
-	}
-	if err := json.Unmarshal(tierGoOracle(t, ctx, map[string]any{"action": "bind", "source_pool_id": pools.ids[1], "chunk_pool_id": pools.ids[2]}), &bound); err != nil ||
-		bound.Source != pools.ids[1] || bound.Chunk != pools.ids[2] {
-		t.Fatal("native tier observer bound other pools", bound, err)
-	}
+	tierGoBind(t, ctx, pools)
 	routes := map[string]osdFixtureOracle{}
 	for _, set := range [][2]tierGoTwin{tierGoPlain, tierGoChunk, tierGoRedirect, tierGoDedup} {
 		for _, twin := range set {
