@@ -349,7 +349,9 @@ type cephfsRevokeWriteback struct {
 // consumer still holds an uncertain object write, then reconnects the same
 // client to the new incarnation. Nothing is resent: the completed writes are
 // not repeated, the uncertain one is not retried, and no flush is chosen,
-// because the consumer's only dirty data has no completed writeback.
+// because the consumer carries no dirty metadata into the restart: the
+// writeback-fence recipe flushed only before the interruption, the
+// mixed-extent recipe only its completed prefix after it.
 func restartAcrossInterruptedWriteback(t *testing.T, ctx context.Context, control *mdsCephFSDataControl, client *cephmsgr.Client, dials *recoveryDials,
 	oldConnection *cephmsgr.MDSConnection, oldSession *cephmsgr.MDSSession, oldAgent *cephfsCapAgent, realms map[uint64]cephmsgr.MDSSnapRealm,
 	metadata map[string]string, io *cephfsDataIO, ino uint64, facts map[string]any,

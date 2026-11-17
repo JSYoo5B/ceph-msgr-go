@@ -140,8 +140,9 @@ func mdsCephFSDataNativeCaps(fsName string) ceph.ClientCaps {
 // One fixed native LibCephFS driver. It admits only the owned directory, its
 // six files, the three planned snapshots and their admitted file views.
 // Payloads are regenerated from the plan seeds; nothing else reaches it.
-// Object views use the python rados binding and, for clones, the rados CLI's
-// listsnaps on the same identity. Sources: pybind/cephfs/cephfs.pyx,
+// Object views use the python rados binding (stat, and for object-bytes one
+// whole-object read) and, for clones, the rados CLI's listsnaps on the same
+// identity. Sources: pybind/cephfs/cephfs.pyx,
 // pybind/rados/rados.pyx and tools/rados/rados.cc at mdsFreshSource;
 // independent driver, no code copied.
 const mdsCephFSDataNativePython = `
@@ -214,7 +215,7 @@ def write_at(p, pieces):
     finally:
         fs.close(fd)
     return written
-def objects(ino, count, snaps):
+def objects(ino, count, snaps, content=False):
     import rados
     if count < 1 or count > 16:
         raise ValueError('object count outside its bound')
@@ -233,6 +234,13 @@ def objects(ino, count, snaps):
                     entry['exists'], entry['size'] = True, size
                 except rados.ObjectNotFound:
                     pass
+                if content and entry['exists']:
+                    if entry['size'] > LIMIT:
+                        raise ValueError('native object exceeds its bound')
+                    data = ioctx.read(name, entry['size'] + 1, 0)
+                    if len(data) != entry['size']:
+                        raise IOError('native object read length differs from its stat')
+                    entry['digest'] = digest(data)
                 if snaps and entry['exists']:
                     proc = subprocess.run(['rados', '-c', CONF, '--id', rid, '--keyring', native_keyring_file(identity), '-p', pool, '--format', 'json', 'listsnaps', name],
                                           stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
@@ -317,6 +325,9 @@ try:
     elif action == 'objects' and path in files and len(extra) == 2 and extra[1] in ('plain', 'snaps'):
         out['stat'] = stat(path)
         out['objects'] = objects(out['stat']['ino'], int(extra[0]), extra[1] == 'snaps') if out['stat']['exists'] else []
+    elif action == 'object-bytes' and path == root + '/capsnap-file' and len(extra) == 1:
+        out['stat'] = stat(path)
+        out['objects'] = objects(out['stat']['ino'], int(extra[0]), False, True) if out['stat']['exists'] else []
     else:
         raise ValueError('native CephFS data action is not admitted')
 finally:
@@ -362,6 +373,9 @@ type mdsCephFSDataObject struct {
 	Exists bool                `json:"exists"`
 	Size   uint64              `json:"size"`
 	Snaps  *mdsCephFSDataSnaps `json:"snaps,omitempty"`
+	// Digest is the head object's whole content, only in the object-bytes
+	// view of the mixed-extent writeback recipe.
+	Digest *mdsCephFSDataDigest `json:"digest,omitempty"`
 }
 
 type mdsCephFSDataEntry struct {
@@ -470,13 +484,20 @@ func decodeMDSCephFSDataNative(action, target, path, pool string, plan mdsCephFS
 			ok = ok && slices.Contains(plan.Files, entry.Name) && !seen[entry.Name] && entry.DIno != 0 && validMDSCephFSDataStat(entry.Stat) && entry.Stat.Exists
 			seen[entry.Name] = true
 		}
-	case "objects":
+	case "objects", "object-bytes":
 		count := plan.ObjectCounts[target]
-		ok = stat && count > 0 && (result.Stat.Exists && len(result.Objects) == count || !result.Stat.Exists && len(result.Objects) == 0)
+		ok = stat && count > 0 && (result.Stat.Exists && len(result.Objects) == count || !result.Stat.Exists && len(result.Objects) == 0) &&
+			(action == "objects" || target == "capsnap-file")
 		for i, o := range result.Objects {
 			ok = ok && o.ObjNo == i && o.Name == fmt.Sprintf("%x.%08x", result.Stat.Ino, i) && (o.Exists || o.Size == 0) && (o.Snaps == nil || (target == "snap-file" || target == "capsnap-file") && o.Exists)
 			if o.Snaps != nil {
-				ok = ok && len(o.Snaps.Clones) <= 64
+				ok = ok && len(o.Snaps.Clones) <= 64 && action == "objects"
+			}
+			// object-bytes carries the content of exactly the existing objects.
+			if action == "objects" || !o.Exists {
+				ok = ok && o.Digest == nil
+			} else {
+				ok = ok && validMDSCephFSDataDigest(o.Digest) && o.Digest.Length == o.Size && o.Size <= plan.ObjectSize
 			}
 		}
 	}
@@ -599,6 +620,11 @@ func parseMDSCephFSDataRequest(fields []string, token string, previousID int64) 
 	case "objects":
 		if !hasArg || !slices.Contains(mdsCephFSDataFiles, arg) {
 			return 0, mdsCephFSDataAction{}, errors.New("MDS CephFS data object view admits only a planned file")
+		}
+		action.target = arg
+	case "object-bytes":
+		if !hasArg || arg != "capsnap-file" {
+			return 0, mdsCephFSDataAction{}, errors.New("MDS CephFS data object-bytes view admits only capsnap-file")
 		}
 		action.target = arg
 	case "restart-arm", "restart-fire", "restart-status", "restart-adopt":
@@ -793,7 +819,7 @@ func (c *fixtureCluster) mdsCephFSDataRunNativeAdmitted(ctx context.Context, act
 	}
 	timeout := 30 * time.Second
 	switch action {
-	case "write-native", "write-trunc", "truncate", "mksnap", "rmsnap", "objects", "layout-set", "layout-clear":
+	case "write-native", "write-trunc", "truncate", "mksnap", "rmsnap", "objects", "object-bytes", "layout-set", "layout-clear":
 		timeout = 60 * time.Second
 	case "read-shared":
 		// The concurrent reader waits until the Go client flushes its
@@ -923,6 +949,8 @@ func (x *mdsCephFSDataScope) extra(action, target string) []string {
 			mode = "snaps"
 		}
 		return []string{strconv.Itoa(p.ObjectCounts[target]), mode}
+	case "object-bytes":
+		return []string{strconv.Itoa(p.ObjectCounts[target])}
 	}
 	return nil
 }
@@ -959,6 +987,9 @@ func (c *fixtureCluster) mdsCephFSDataAct(ctx context.Context, id int64, action 
 		}
 		result.Blocklist, err = c.mdsSessionsBlocklist(ctx)
 		return err
+	}
+	if action.name == "object-bytes" && !c.profile.admits(capMDSWritebackMixed) {
+		return errors.New("DATA object-bytes view requires capability " + capMDSWritebackMixed.name)
 	}
 	if err := x.nativeReady(); err != nil {
 		return err
