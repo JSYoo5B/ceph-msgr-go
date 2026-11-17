@@ -152,9 +152,10 @@ path's name in SPEC.md, as in the table below.
 | `SVC` | Service-induced paths | [SVC.md](SVC.md) |
 
 Each area file has a Rows section with one table of the columns of every
-area; no coverage table is outside it. Where they
-apply, a Product wire gaps section follows it, then an Updates section with
-the dated notes of changes to that area's rows. A change to one area edits
+area; no coverage table is outside it. Where it
+applies, a Product wire gaps section follows it, then an Updates section with
+the dated notes of changes to that area's rows. Every area file has its
+Updates section already, so two notes added at once never both create it. A change to one area edits
 that area file only:
 
 - a new row goes into its area's table with an unused number of that

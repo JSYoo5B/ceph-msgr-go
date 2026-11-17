@@ -36,3 +36,7 @@ says how they differ from environment completeness.
 
 - Daemon-to-daemon paths need no Go server implementation; their rows above
   are environment requirements only.
+
+## Updates
+
+Dated notes of changes to this area's rows follow here, oldest first.
