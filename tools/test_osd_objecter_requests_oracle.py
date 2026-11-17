@@ -48,6 +48,11 @@ class ParseTest(unittest.TestCase):
         found = requests.source_ops(parsed, 3, "copy-primary-source")
         self.assertEqual((found[0]["paused"], found[0]["attempts"], found[0]["copy_get_max"]), (False, 1, [32768]))
         self.assertEqual(requests.parse_requests(dump([])), ([], dict.fromkeys(requests.SECTIONS, 0)))
+        # A copy-get sent once and paused again by a later map keeps its
+        # count; the caller tells it from one that was never sent.
+        parsed, _ = requests.parse_requests(dump([op(paused=1, attempts=1)]))
+        found = requests.source_ops(parsed, 3, "copy-primary-source")
+        self.assertEqual((found[0]["paused"], found[0]["attempts"]), (True, 1))
 
     def test_refuses_untrusted_shapes(self):
         bad = {
@@ -63,6 +68,7 @@ class ParseTest(unittest.TestCase):
             "tid as text": dump([dict(op(), tid="7")]),
             "paused as a boolean": dump([dict(op(), paused=True)]),
             "paused out of range": dump([dict(op(), paused=2)]),
+            "negative attempts": dump([dict(op(), attempts=-1)]),
             "object as a number": dump([dict(op(), object_id=1)]),
             "osd_ops not text": dump([dict(op(), osd_ops=[1])]),
             "age as text": dump([dict(op(), age="3")]),

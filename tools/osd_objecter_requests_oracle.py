@@ -31,6 +31,11 @@ module copies no Ceph code; it reads the JSON shape that the pinned Ceph
 - src/osdc/Objecter.cc:2820-2830 (``target_should_be_paused``) pauses a READ
   op while the OSDMap carries ``pauserd``; such an op stays in the dump with
   ``paused`` 1 and is not sent (src/osdc/Objecter.cc:2550-2556).
+  src/osdc/Objecter.cc:3081 also pauses an op that was already sent once a
+  later map calls for it, and src/osdc/Objecter.cc:3385-3400 counts every
+  prepared send in ``attempts``. ``paused`` alone therefore does not show
+  that an op was never sent; ``attempts`` 0 does. This module reports both
+  and judges neither.
 
 A receipt is complete only when the native command returned 0, the reply is
 within the byte bound, parses as one strict JSON document of exactly that
@@ -99,8 +104,8 @@ def parse_requests(raw):
             raise RequestsError("op %d has a field of an unexpected type" % index)
         if type(op["age"]) not in (int, float) or not isinstance(op["osd_ops"], list) or any(not isinstance(o, str) for o in op["osd_ops"]):
             raise RequestsError("op %d age or osd_ops are invalid" % index)
-        if op["paused"] not in (0, 1) or op["tid"] < 0:
-            raise RequestsError("op %d tid or paused flag are out of range" % index)
+        if op["paused"] not in (0, 1) or op["tid"] < 0 or op["attempts"] < 0:
+            raise RequestsError("op %d tid, paused flag or attempts are out of range" % index)
         parsed.append(op)
     return parsed, {section: len(document[section]) for section in SECTIONS}
 
