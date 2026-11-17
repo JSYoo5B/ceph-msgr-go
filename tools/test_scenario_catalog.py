@@ -47,6 +47,20 @@ class FragmentTests(unittest.TestCase):
         self.assertEqual(document["version"], 1)
         self.assertEqual(document["fixed_jobs"], [{"id": "race", "job": "race"}])
 
+    def test_same_group_subject_fragments_preserve_group_selection(self):
+        self.write("osd.alpha.json", {"scenarios": [row("osd.alpha", "osd")]})
+        self.write("osd.beta.json", {"scenarios": [row("osd.beta", "osd")]})
+        code, out, err = plan(self.dir, "group:osd")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([r["scenario"] for r in json.loads(out)["include"]],
+                         ["osd.alpha", "osd.beta", "osd.b", "osd.a"])
+
+    def test_same_group_subject_duplicate_and_wrong_group_are_refused(self):
+        self.write("osd.subject.json", {"scenarios": [row("osd.a", "osd")]})
+        self.refused("duplicate identifier osd.a")
+        self.write("osd.subject.json", {"scenarios": [row("rbd.new", "rbd")]})
+        self.refused("belongs to group 'rbd', not 'osd'")
+
     def test_refuses_duplicate_identifier_across_fragments(self):
         self.write("rbd.json", {"scenarios": [row("osd.a", "rbd")]})
         self.refused("duplicate identifier osd.a in osd.json and rbd.json")
@@ -62,7 +76,7 @@ class FragmentTests(unittest.TestCase):
         self.refused("belongs to group None")
 
     def test_refuses_unknown_files_and_entries(self):
-        for name in ("README.md", "osd_x.json", "osd.json.orig", "_other.json", ".hidden.json"):
+        for name in ("README.md", "osd_x.json", "osd..json", "osd.a.b.json", "osd.json.orig", "_other.json", ".hidden.json"):
             with self.subTest(name=name):
                 self.write(name, "{}")
                 self.refused("unknown catalog file " + name)
@@ -107,19 +121,9 @@ class FragmentTests(unittest.TestCase):
 
 
 class RepositoryCatalogTests(unittest.TestCase):
-    def test_fragments_are_canonical_and_split_back_unchanged(self):
-        document = catalog.load()
-        files = {path.name: path.read_text(encoding="utf-8") for path in catalog.CATALOG_DIR.iterdir()}
-        self.assertEqual(catalog.split(document), files)
-
-    def test_adding_a_row_edits_exactly_one_fragment(self):
-        document = catalog.load()
-        before = catalog.split(document)
-        for group in sorted({r["group"] for r in document["scenarios"]}):
-            with self.subTest(group=group):
-                added = dict(document, scenarios=document["scenarios"] + [row(group + ".new", group)])
-                after = catalog.split(added)
-                self.assertEqual(sorted(name for name in after if after[name] != before.get(name)), [group + ".json"])
+    def test_fragments_have_canonical_json(self):
+        for path in catalog.CATALOG_DIR.iterdir():
+            self.assertEqual(catalog.dump(json.loads(path.read_text())), path.read_text(), path.name)
 
     def test_single_file_and_fragments_plan_identically(self):
         """The trusted planner gives the same answer for a revision with the
@@ -199,6 +203,18 @@ class ExtractTests(unittest.TestCase):
         self.assertEqual((code, [r["scenario"] for r in json.loads(out)["include"]]), (0, ["osd.a"]))
         self.assertEqual(plan(path, "all")[1], json.dumps(scenario_plan.matrix(
             catalog.load(path)["scenarios"] + scenario_plan.fixed_entries(self.document)), separators=(",", ":")) + "\n")
+
+    def test_subject_fragment_is_extracted_from_git_objects(self):
+        directory = self.fragments()
+        self.document["scenarios"].append(row("osd.extra", "osd"))
+        (directory / "osd.subject.json").write_text(json.dumps({
+            "scenarios": [self.document["scenarios"][-1]]}))
+        revision = self.commit()
+        (directory / "osd.subject.json").unlink()
+        extracted = self.extract(revision)
+        self.assertEqual(set(r["id"] for r in catalog.load(extracted)["scenarios"]),
+                         set(r["id"] for r in self.document["scenarios"]))
+        self.assertEqual(plan(extracted, "osd.extra")[0], 0)
 
     def test_refuses_missing_ambiguous_and_irregular_layouts(self):
         self.refused(self.commit(), "the tested revision has no scenario catalog")

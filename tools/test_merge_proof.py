@@ -8,7 +8,7 @@ and only that:
 
 - a native test TestCeph<Name>Integration with its //fixture: sharing line
   and a cluster-free helper test, in a new integration/<name>_test.go;
-- its catalog row, appended to its group's fragment in catalog.d;
+- its catalog row in a new subject-named fragment of its group in catalog.d;
 - the fixture capability the row declares, in a new integration/fixture file
   (defineCapability, or defineExclusiveCapability on a fixture with its own
   default selection);
@@ -23,15 +23,10 @@ Two authors of one area therefore pick their coverage row IDs without knowing
 each other.
 
 Case A merges an OSD branch with an MDS branch, which must merge without a
-textual conflict in any file. Case B merges two RBD branches, which may
-conflict only in the one file both edit, the RBD catalog fragment; a
-conflict is resolved by keeping both sides' rows (a composition that refuses
-anything but rows added on both sides), and the result must pass. A clean
-merge is accepted as well, and both paths must end in one merge commit of
-the two branches. Case C does the same for two controls of the four-OSD
-erasure topology, the most frequent kind of new row, in the OSD fragment:
-one declares the existing osd-erasure-width beside its own mode, the other
-admits its test by an exclusive capability of its own.
+textual conflict in any file. Case B merges two RBD branches and Case C
+merges two controls of the four-OSD erasure topology. Every case requires a
+clean merge without conflict resolution. Each branch owns its fragment and
+coverage row.
 
 Each merged tree then passes the repository's own validators, run from that
 tree: scenario_plan.py validate (catalog, selectors, the fixture's admission
@@ -168,7 +163,7 @@ class Author:
     def paths(self):
         return {
             "test": "integration/%s_test.go" % self.snake,
-            "fragment": ".github/scenarios/catalog.d/%s.json" % self.group,
+            "fragment": ".github/scenarios/catalog.d/%s.%s.json" % (self.group, self.slug),
             "capability": "integration/fixture/%s.go" % self.snake,
             "coverage": "integration/fixture/coverage/%s/%s.md" % (self.area, self.coverage_id),
             "checks": "tools/test_ci_rows_%s_%s.py" % (self.group.replace("-", "_"), self.snake),
@@ -193,42 +188,6 @@ AUTHORS = {
     "ecb": Author("ECB", "osd", "OSD", {}, "fixtureOSDErasureCapacity", "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=4",
                   test="TestCephOSDErasureMergeProofECBIntegration", base=ERASURE_PARAMS, id_profile=ERASURE_ID_PROFILE),
 }
-
-
-# Text edits that keep each file's line ending.
-
-def newline(text):
-    return "\r\n" if "\r\n" in text else "\n"
-
-
-def append_rows(text, rows):
-    """Append catalog rows to a fragment as an author does: after its last row."""
-    nl = newline(text)
-    match = re.search(r"\r?\n  \}\r?\n \]\r?\n\}(\r?\n)?\Z", text)
-    if not match:
-        raise AssertionError("catalog fragment does not end in its last row")
-    blocks = []
-    for row in rows:
-        body = json.dumps(row, indent=1, ensure_ascii=False).split("\n")
-        blocks.append(nl.join("  " + line for line in body))
-    tail = nl + "  }," + nl + ("," + nl).join(blocks) + nl + " ]" + nl + "}" + (match.group(1) or "")
-    return text[:match.start()] + tail
-
-
-# Conflict resolution that keeps the rows of both sides and refuses anything else.
-
-def compose_fragment(base, ours, theirs):
-    rows = [json.loads(text)["scenarios"] for text in (base, ours, theirs)]
-    for side in rows[1:]:
-        if side[:len(rows[0])] != rows[0]:
-            raise AssertionError("a side changed rows of the base fragment; not a composition of added rows")
-    added = rows[2][len(rows[0]):]
-    if {row["id"] for row in added} & {row["id"] for row in rows[1]}:
-        raise AssertionError("both sides add a row with one identifier")
-    composed = append_rows(ours, added)
-    if json.loads(composed)["scenarios"] != rows[1] + added:
-        raise AssertionError("composed fragment does not hold both sides' rows")
-    return composed
 
 
 class Repository:
@@ -263,13 +222,6 @@ class Repository:
                         # into the repository while it is removed.
                         "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "core.fsmonitor=false",
                         *args, check=check)
-
-    def blob(self, revision):
-        result = subprocess.run(["git", *self.isolation, "show", revision], cwd=str(self.path), env=self.env,
-                                capture_output=True, timeout=TIMEOUT)
-        if result.returncode != 0:
-            raise AssertionError("git show %s failed: %s" % (revision, result.stderr.decode(errors="replace")))
-        return result.stdout.decode("utf-8")
 
     def read(self, relative):
         return (self.path / relative).read_bytes().decode("utf-8")
@@ -359,8 +311,8 @@ class MergeProofTest(unittest.TestCase):
         repo.write(paths["test"], author.native_test())
         repo.write(paths["capability"], author.capability_source())
         repo.write(paths["checks"], author.row_checks())
-        repo.write(paths["fragment"], append_rows(repo.read(paths["fragment"]),
-                                                  [{"id": author.id, "group": author.group, "params": author.params}]))
+        repo.write(paths["fragment"], json.dumps({"scenarios": [
+            {"id": author.id, "group": author.group, "params": author.params}]}, indent=1) + "\n")
         repo.write(paths["coverage"], author.coverage_file())
         repo.git("add", "--", *paths.values())
         repo.git("commit", "-q", "--no-verify", "-m", "add " + author.test)
@@ -369,34 +321,18 @@ class MergeProofTest(unittest.TestCase):
     def changed(self, branch):
         return set(self.repo.git("diff", "--name-only", "base", branch).stdout.split())
 
-    def merge(self, ours, theirs, allowed=frozenset()):
-        """Merge theirs into ours and return the paths that conflicted.
-
-        A clean merge is committed by git merge itself. Conflicts are allowed
-        only in the paths of allowed, and each is resolved by composing both
-        sides' added rows before the merge is committed. Either way the result
-        must be one merge commit whose parents are the two branch tips."""
+    def merge(self, ours, theirs):
+        """Require a clean merge commit of the independently registered rows."""
         repo = self.repo
         tips = [repo.git("rev-parse", "--verify", branch + "^{commit}").stdout.strip() for branch in (ours, theirs)]
         repo.git("checkout", "-q", "-f", ours)
         result = repo.git("merge", "--no-ff", "--no-edit", theirs, check=False)
         unmerged = set(repo.git("diff", "--name-only", "--diff-filter=U").stdout.split())
-        if not unmerged:
-            self.assertEqual(result.returncode, 0, "the merge failed without a conflict:\n" + result.stdout + result.stderr)
-        else:
-            self.assertTrue(unmerged <= set(allowed), "conflicts outside %s: %s" % (sorted(allowed), sorted(unmerged - set(allowed))))
-            for relative in unmerged:
-                stages = [self.stage(relative, number) for number in (1, 2, 3)]
-                repo.write(relative, compose_fragment(*stages))
-                repo.git("add", "--", relative)
-            repo.git("commit", "-q", "--no-verify", "--no-edit")
-        self.assertEqual(repo.git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()[1:], tips, "not one merge commit of both branches")
-        self.assertEqual(repo.git("status", "--porcelain", "--untracked-files=no").stdout, "", "the merge left changes uncommitted")
+        self.assertEqual(unmerged, set(), "independent registrations conflict")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(repo.git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()[1:], tips)
+        self.assertEqual(repo.git("status", "--porcelain", "--untracked-files=no").stdout, "")
         return unmerged
-
-    def stage(self, relative, number):
-        """One stage of an unmerged path, byte for byte (its line endings kept)."""
-        return self.repo.blob(":%d:%s" % (number, relative))
 
     def validate(self, authors):
         """Run the validators of the merged tree in it and check they saw the
@@ -447,6 +383,8 @@ class MergeProofTest(unittest.TestCase):
                      "TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture"):
             self.assertRegex(fixture.stdout, r"(?m)^--- PASS: %s \(" % test)
 
+        repo.run(python, "-m", "unittest", "discover", "-s", "tools", "-p", "test_scenario_catalog.py")
+
         checks = repo.run(python, "-m", "unittest", "discover", "-s", "tools", "-p", "test_ci_rows_*.py", "-v", check=False)
         self.assertEqual(checks.returncode, 0, "row checks failed:\n" + checks.stderr[-6000:])
         for author in authors:
@@ -477,7 +415,7 @@ class MergeProofTest(unittest.TestCase):
         for first, second in (("rbda", "rbdb"), ("eca", "ecb")):
             self.assertNotEqual(AUTHORS[first].coverage_id, AUTHORS[second].coverage_id)
             self.assertEqual(self.changed(self.branches[first]) & self.changed(self.branches[second]),
-                             {AUTHORS[first].paths()["fragment"]}, "same-area branches share more than the group's fragment")
+                             set(), "same-area branches edit a shared file")
 
     def test_merges_compose_and_validate(self):
         # Case A and Case B run in this order in one test so that both merged
@@ -489,48 +427,22 @@ class MergeProofTest(unittest.TestCase):
         self.assertEqual(self.merge(self.branches["osd"], self.branches["mds"]), set(), "two branches of different areas conflict")
         self.validate([AUTHORS["osd"], AUTHORS["mds"]])
 
-        # Case B: one area; a conflict, if any, only in the group's catalog
-        # fragment, resolved by keeping both rows.
+        # Case B: two additions to one area must also merge cleanly.
         self.same_area("rbda", "rbdb")
         # Case C: two controls of the four-OSD erasure topology in one area.
         self.same_area("eca", "ecb")
 
     def same_area(self, first, second):
         ours, theirs = AUTHORS[first], AUTHORS[second]
-        fragment = ours.paths()["fragment"]
-        self.assertEqual(fragment, theirs.paths()["fragment"])
-        self.merge(self.branches[first], self.branches[second], allowed={fragment})
-        text = self.repo.read(fragment)
+        self.assertNotEqual(ours.paths()["fragment"], theirs.paths()["fragment"])
+        self.merge(self.branches[first], self.branches[second])
         for author in (ours, theirs):
-            self.assertIn(author.id, text)
+            self.assertIn(author.id, self.repo.read(author.paths()["fragment"]))
             self.assertEqual(self.repo.read(author.paths()["coverage"]), author.coverage_file())
         self.validate([ours, theirs])
 
 
-class CompositionTest(unittest.TestCase):
-    """The conflict resolution keeps both sides' rows and refuses anything else."""
-
-    FRAGMENT = '{\n "scenarios": [\n  {\n   "id": "a",\n   "group": "g",\n   "params": {}\n  }\n ]\n}\n'
-
-    def test_fragment_composition_keeps_both_added_rows(self):
-        ours = append_rows(self.FRAGMENT, [{"id": "b", "group": "g", "params": {}}])
-        theirs = append_rows(self.FRAGMENT, [{"id": "c", "group": "g", "params": {}}])
-        composed = compose_fragment(self.FRAGMENT, ours, theirs)
-        self.assertEqual([row["id"] for row in json.loads(composed)["scenarios"]], ["a", "b", "c"])
-        crlf = self.FRAGMENT.replace("\n", "\r\n")
-        added = append_rows(crlf, [{"id": "b", "group": "g", "params": {}}])
-        self.assertTrue(added.startswith(crlf[:crlf.rindex("\r\n  }")]))
-        self.assertEqual(added.replace("\r\n", ""), added.replace("\r\n", "").replace("\r", "").replace("\n", ""))
-        self.assertEqual(added.replace("\r\n", "\n"), append_rows(self.FRAGMENT, [{"id": "b", "group": "g", "params": {}}]))
-        crlf_ours, crlf_theirs = (append_rows(crlf, [{"id": sid, "group": "g", "params": {}}]) for sid in ("b", "c"))
-        crlf_composed = compose_fragment(crlf, crlf_ours, crlf_theirs)
-        self.assertEqual(crlf_composed.replace("\r\n", "\n"), composed)
-        self.assertNotIn("\n", crlf_composed.replace("\r\n", ""))
-        with self.assertRaisesRegex(AssertionError, "changed rows of the base"):
-            compose_fragment(self.FRAGMENT, ours, theirs.replace('"a"', '"z"'))
-        with self.assertRaisesRegex(AssertionError, "one identifier"):
-            compose_fragment(self.FRAGMENT, ours, ours)
-
+class AuthorInstructionsTest(unittest.TestCase):
     def test_readme_section_names_the_files(self):
         patterns = [pattern for pattern, _ in readme_patterns()]
         self.assertEqual(len(patterns), len(Author("X", "g", "A", {}, None, "").paths()), patterns)
