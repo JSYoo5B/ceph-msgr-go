@@ -2,7 +2,7 @@
 
 This is the acceptance test of issue #170 (issue #177). It copies the tracked
 files of this checkout into a temporary Git repository, commits them as a
-base and makes four branches from it. Each branch adds what the section
+base and makes six branches from it. Each branch adds what the section
 "Adding a native test" of .github/scenarios/README.md tells an author to add,
 and only that:
 
@@ -20,6 +20,8 @@ textual conflict in any file. Case B merges two RBD branches, which may
 conflict only in the RBD catalog fragment and the RBD coverage file that both
 edit; the conflict is resolved by keeping both sides' rows (a composition that
 refuses anything but rows added on both sides), and the result must pass.
+Case C does the same for two controls of the four-OSD erasure topology, the
+most frequent kind of new row, in the OSD fragment and coverage file.
 
 Each merged tree then passes the repository's own validators, run from that
 tree: scenario_plan.py validate (catalog, selectors, the fixture's admission
@@ -63,18 +65,21 @@ class Author:
     """One branch's additions: one native test, one helper, one row, one
     capability, one coverage row and the row's own checks."""
 
-    def __init__(self, name, group, area, opt_ins, exclusive, requires):
+    def __init__(self, name, group, area, opt_ins, exclusive, requires, test=None, base=None, id_profile=ID_PROFILE, also=()):
         self.name = name                      # e.g. OSD, RBDA
         self.snake = "merge_proof_" + name.lower()
         self.slug = "merge-proof-" + name.lower()
         self.group, self.area = group, area
-        self.test = "TestCephMergeProof%sIntegration" % name
+        self.test = test or "TestCephMergeProof%sIntegration" % name
         self.helper = "TestMergeProof%sHelper" % name
         self.capability = self.slug
         self.selector = "^%s$" % self.test
-        self.id = "%s.%s.t-mergeproof%s" % (group, ID_PROFILE, name.lower())
-        self.params = dict(BASE_PARAMS, **opt_ins)
-        self.params.update(test_run=self.selector, capabilities=self.capability)
+        self.id = "%s.%s.t-mergeproof%s" % (group, id_profile, name.lower())
+        self.params = dict(base or BASE_PARAMS, **opt_ins)
+        # The declared list: this author's capability and any existing one
+        # its topology requires, sorted as the catalog requires.
+        self.declared = ",".join(sorted((self.capability,) + tuple(also)))
+        self.params.update(test_run=self.selector, capabilities=self.declared)
         self.exclusive, self.requires = exclusive, requires
         self.number = None                    # coverage row number, set per base
 
@@ -125,7 +130,7 @@ class Author:
                 "        selector = re.compile(rows[0][\"test_run\"])\n"
                 "        self.assertEqual({name for name in self.declared if selector.search(name)}, {%r})\n\n\n"
                 "if __name__ == \"__main__\":\n"
-                "    unittest.main()\n" % (self.name, self.name, self.selector, self.capability, self.test))
+                "    unittest.main()\n" % (self.name, self.name, self.selector, self.declared, self.test))
 
     def coverage_row(self):
         return ("| %s-%d | Merge proof path %s | `released` | Merge proof fixture | Merge proof observation "
@@ -152,6 +157,15 @@ AUTHORS = {
     "rbda": Author("RBDA", "rbd", "RBD", {"rbd": "1"}, "fixtureRBD", "RBD=1"),
     "rbdb": Author("RBDB", "rbd", "RBD", {"rbd": "1"}, "fixtureRBD", "RBD=1"),
 }
+# Two controls of the four-OSD erasure topology, the most frequent kind of
+# new row: each its own mode capability beside osd-erasure-width.
+ERASURE_PARAMS = {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container",
+                  "osd": "1", "osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8"}
+for _key in ("eca", "ecb"):
+    AUTHORS[_key] = Author(_key.upper(), "osd", "OSD", {}, None, "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=4",
+                           test="TestCephOSDErasureMergeProof%sIntegration" % _key.upper(), base=ERASURE_PARAMS,
+                           id_profile="aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8",
+                           also=("osd-erasure-width",))
 
 
 # Text edits that keep each file's line ending.
@@ -388,7 +402,7 @@ class MergeProofTest(unittest.TestCase):
         self.assertEqual(rows, self.base_rows + len(authors))
         for author in authors:
             plan = json.loads(repo.run(python, "tools/scenario_plan.py", "plan", "--select", author.id).stdout)
-            self.assertEqual([(row["scenario"], row["capabilities"]) for row in plan["include"]], [(author.id, author.capability)])
+            self.assertEqual([(row["scenario"], row["capabilities"]) for row in plan["include"]], [(author.id, author.declared)])
 
         repo.run(python, "tools/cluster_free_tests.py", "check")
         selector = repo.run(python, "tools/cluster_free_tests.py", "selector").stdout.strip()
@@ -450,9 +464,14 @@ class MergeProofTest(unittest.TestCase):
 
         # Case B: one area; a conflict only in the area's fragment and
         # coverage file, resolved by keeping both rows.
-        ours, theirs = AUTHORS["rbda"], AUTHORS["rbdb"]
+        self.same_area("rbda", "rbdb")
+        # Case C: two controls of the four-OSD erasure topology in one area.
+        self.same_area("eca", "ecb")
+
+    def same_area(self, first, second):
+        ours, theirs = AUTHORS[first], AUTHORS[second]
         allowed = {ours.paths()["fragment"], ours.paths()["coverage"]}
-        unmerged = self.merge(self.branches["rbda"], self.branches["rbdb"])
+        unmerged = self.merge(self.branches[first], self.branches[second])
         self.assertTrue(unmerged <= allowed, "conflicts outside the area's fragment and coverage file: %s" % sorted(unmerged - allowed))
         for relative in unmerged:
             stages = [self.stage(relative, number) for number in (1, 2, 3)]
