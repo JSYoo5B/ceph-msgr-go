@@ -711,6 +711,7 @@ class OwnedClaimTest(unittest.TestCase):
                 self.assertEqual(mutations(rados), [])
                 self.assertEqual(len(rados.pools), 1)
                 self.assertEqual(result["unclaimed_present"]["pools"], [oracle.pool_name(1)])
+                self.assertFalse(result["pools_removed"])
                 self.assertTrue(result["pool_delete_config_restored"])
                 self.assertEqual(result["pool_delete_config_prior"], prior)
 
@@ -724,6 +725,7 @@ class OwnedClaimTest(unittest.TestCase):
         before = len(mutations(rados))
         result = cleanup(rados)
         self.assertNothingTouched(rados, before)
+        self.assertFalse(result["pools_removed"])
         self.assertEqual(result["unclaimed_present"], {"pools": [oracle.pool_name(1)], "crush_rules": [oracle.pool_name(1)],
                                                        "ec_profiles": ["ceph-msgr-owned-ec-k2m2"]})
         # The restore of the entry still ran on the failed path.

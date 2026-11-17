@@ -264,8 +264,8 @@ that step reports a failure. It refuses an existing pool, an existing rule of
 the pool's name and an existing profile it did not create, so it never takes
 over or overwrites an earlier object. The cleanup reads and drops that record
 before it removes anything, so a later test's cleanup never removes what an
-earlier test left; it reports owned names present without a claim and leaves
-them to the start-state check. It changes `mon_allow_pool_delete` only while
+earlier test left; it reports owned names present without a claim, leaves
+them, and `nativePool` fails the test for them. It changes `mon_allow_pool_delete` only while
 it removes a claimed pool: it reads the entry first, enables deletion only
 when it is not already enabled, restores the prior state on every path
 (removes the entry it added, or sets the earlier value back) and confirms it

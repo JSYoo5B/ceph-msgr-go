@@ -1282,8 +1282,9 @@ def mode_cleanup(rados, cluster, request, out):
     erasure-coded pool and the owned erasure-code profiles it created. Pool
     removal enables the central mon_allow_pool_delete entry only while a
     claimed pool is removed and restores its prior state on every path. An
-    owned name present without a claim is reported, never removed; a
-    survivor is reported, not retried."""
+    owned name present without a claim is reported, never removed, and an
+    owned pool of either kind keeps pools_removed false; a survivor is
+    reported, not retried."""
     claims = take_claims(out)
     removed = []
     prior = pool_delete_entry(rados, cluster)
@@ -1307,7 +1308,9 @@ def mode_cleanup(rados, cluster, request, out):
             restored = code >= 0 and pool_delete_entry(rados, cluster) == prior
     else:
         remove_owned_pools(rados, cluster, set(), removed)
-    gone = all(find_pool(rados.dump(cluster), p) is None for p in claims["pools"])
+    # No owned pool may remain, claimed or not: an unclaimed one is a
+    # leftover this cleanup leaves, or a create whose claim went missing.
+    gone = all(find_pool(rados.dump(cluster), pool_name(slot)) is None for slot in SLOTS)
     present_rules = set(crush_rules(rados, cluster))
     for rule in sorted(set(claims["crush_rules"]) & present_rules):
         rados.mon(cluster, {"prefix": "osd crush rule rm", "name": rule})
