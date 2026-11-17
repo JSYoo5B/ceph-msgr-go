@@ -140,8 +140,23 @@ func (p profile) declaredCapabilities() []string {
 
 // declares reports whether the capability is declared for an exact one-test
 // selection. It does not check the requirements; admits does.
+//
+// A fixture sequence (sequence.go) declares it when every member is one
+// exact test: each member alone declares it, and the sequence was admitted
+// only because every member alone loads the same profile.
 func (p profile) declares(c *fixtureCapability) bool {
-	return exactTestSelector.MatchString(p.testRun) && slices.Contains(p.declaredCapabilities(), c.name)
+	if !slices.Contains(p.declaredCapabilities(), c.name) {
+		return false
+	}
+	if p.sequence != "" {
+		for _, member := range strings.Fields(p.sequence) {
+			if !exactTestSelector.MatchString(member) {
+				return false
+			}
+		}
+		return true
+	}
+	return exactTestSelector.MatchString(p.testRun)
 }
 
 // admits is the admission of one capability's mode: declared for exactly one

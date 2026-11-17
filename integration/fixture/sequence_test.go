@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
+	"time"
 )
 
 func fourOSDEnvironment(change map[string]string) func(string) string {
@@ -73,6 +75,50 @@ func TestSequenceLoadsTheOneProfileOfItsMembers(t *testing.T) {
 	if _, err := loadProfile(broad(map[string]string{sequenceEnv: ok, "CEPH_MSGR_TEST_RUN": strings.ReplaceAll(ok, " ", "|")})); err != nil {
 		t.Fatal("ordinary fixture sequence refused", err)
 	}
+}
+
+// A capability's mode is read at run time through admits; a sequence of
+// members that each declare it must get the mode and the test environment
+// each member gets alone.
+func TestSequenceKeepsTheCapabilityModesOfItsMembers(t *testing.T) {
+	const connected, unprocessed = "^TestCephMonMapVersionConnectedKillIntegration$", "^TestCephMonMapVersionUnprocessedKillIntegration$"
+	env := func(change map[string]string) func(string) string {
+		values := map[string]string{"CEPH_MSGR_TEST_KEY_TYPE": "aes", "CEPH_MSGR_TEST_SERVICE_CIPHER": "aes", "CEPH_MSGR_TEST_IP_FAMILY": "4",
+			"CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_OSD": "1",
+			"CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "legacy-v6",
+			"CEPH_MSGR_TEST_CAPABILITIES": "mon-forced-kill"}
+		maps.Copy(values, change)
+		return func(name string) string { return values[name] }
+	}
+	alone, err := loadProfile(env(map[string]string{"CEPH_MSGR_TEST_RUN": connected}))
+	if err != nil || !alone.monForcedKillSelected() {
+		t.Fatal("the member alone", err)
+	}
+	p, err := loadProfile(env(map[string]string{sequenceEnv: connected + " " + unprocessed, "CEPH_MSGR_TEST_RUN": connected + "|" + unprocessed}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.monForcedKillSelected() || !maps.Equal(p.testEnvironment("/out", ""), alone.testEnvironment("/out", "")) {
+		t.Fatal("the sequence lost its members' capability mode", p.testEnvironment("/out", ""))
+	}
+	a, s := fixtureTicketTTLsPair(alone), fixtureTicketTTLsPair(p)
+	if a != s {
+		t.Fatal("ticket lifetimes differ", a, s)
+	}
+	// Without the capability the same sequence gets no mode either.
+	plain := profile{sequence: connected + " " + unprocessed, testRun: connected + "|" + unprocessed}
+	if plain.declares(capMONForcedKill) {
+		t.Fatal("an undeclared capability was declared")
+	}
+	broad := profile{sequence: connected + " ^TestCephMonMap.*$", capabilities: "mon-forced-kill"}
+	if broad.declares(capMONForcedKill) {
+		t.Fatal("a sequence with a non-exact member declares a capability")
+	}
+}
+
+func fixtureTicketTTLsPair(p profile) [2]time.Duration {
+	auth, service := fixtureTicketTTLs(p)
+	return [2]time.Duration{auth, service}
 }
 
 type fakeSequence struct {
@@ -185,5 +231,25 @@ func TestSequenceThatSelectsNothingFails(t *testing.T) {
 	f := &fakeSequence{listing: map[string]string{}}
 	if err := runSequence(context.Background(), profile{sequence: "^TestA$ ^TestB$"}, f.steps()); err == nil {
 		t.Fatal("an empty sequence passed")
+	}
+}
+
+// validate passes the planner's sequence jobs through the fixture; a job the
+// fixture would refuse at run time is reported before any run.
+func TestPlannedSequenceJobsAreAdmittedOrReported(t *testing.T) {
+	bindings := ciWorkflowBindings(t)
+	job := map[string]string{"scenario": "osd.a", "scenarios": "osd.a osd.b", "sequence_rows": "2",
+		"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container", "osd": "1",
+		"osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8", "capabilities": "osd-erasure-width",
+		"test_run": sequenceOptimized + "|" + sequenceCalibration, "test_sequence": sequenceOptimized + " " + sequenceCalibration}
+	if problems := plannedJobAdmissionProblems([]map[string]string{job}, bindings); len(problems) != 0 {
+		t.Fatal(problems)
+	}
+	refused := maps.Clone(job)
+	refused["test_sequence"] = "^TestCephOSDErasureK2M2Integration$ " + sequenceOptimized
+	refused["test_run"] = "^TestCephOSDErasureK2M2Integration$|" + sequenceOptimized
+	problems := plannedJobAdmissionProblems([]map[string]string{refused}, bindings)
+	if len(problems) != 1 || !strings.Contains(problems[0], "planned sequence osd.a osd.b: the fixture refuses it") {
+		t.Fatal(problems)
 	}
 }

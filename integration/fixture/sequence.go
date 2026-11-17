@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -40,7 +41,9 @@ const (
 // after a test; tools/native_test_results.py reads the failed form.
 const sequenceStartStateLine = "Fixture start state after "
 
-var listedTest = regexp.MustCompile(`^Test[A-Za-z0-9_]*$`)
+// listedTest is a top-level test name as -test.list prints it (any Go
+// identifier after Test, as the result gate's \w reads it).
+var listedTest = regexp.MustCompile(`^Test[\p{L}\p{N}_]*$`)
 
 // loadSequenceProfile admits a sequence only when every member, as the only
 // CEPH_MSGR_TEST_RUN, is admitted by loadSingleProfile and all members load
@@ -66,6 +69,7 @@ func loadSequenceProfile(getenv func(string) string, sequence string) (profile, 
 		return profile{}, fmt.Errorf("%s requires CEPH_MSGR_TEST_RUN to be its members' union %q", sequenceEnv, union)
 	}
 	var first profile
+	var alone []profile
 	for i, member := range members {
 		p, err := loadSingleProfile(func(name string) string {
 			if name == "CEPH_MSGR_TEST_RUN" {
@@ -81,6 +85,7 @@ func loadSequenceProfile(getenv func(string) string, sequence string) (profile, 
 			// default (runsDefault); a union would change them.
 			return profile{}, fmt.Errorf("%s member %q is its fixture's default selection or a soak; it runs alone", sequenceEnv, member)
 		}
+		alone = append(alone, p)
 		p.testRun = ""
 		if i == 0 {
 			first = p
@@ -90,6 +95,19 @@ func loadSequenceProfile(getenv func(string) string, sequence string) (profile, 
 	}
 	first.testRun = strings.Join(members, "|")
 	first.sequence = strings.Join(members, " ")
+	// The runtime reads the selection only through the capability
+	// admissions and the tests' environment; both must be what each member
+	// alone gets, or the sequence would start another fixture.
+	for i, p := range alone {
+		for name, c := range fixtureCapabilities {
+			if p.admits(c) != first.admits(c) {
+				return profile{}, fmt.Errorf("%s member %q: capability %s is admitted %t alone and %t in the sequence", sequenceEnv, members[i], name, p.admits(c), first.admits(c))
+			}
+		}
+		if !maps.Equal(p.testEnvironment("/out", ""), first.testEnvironment("/out", "")) {
+			return profile{}, fmt.Errorf("%s member %q gets another test environment alone", sequenceEnv, members[i])
+		}
+	}
 	return first, nil
 }
 
@@ -141,6 +159,8 @@ func runSequence(ctx context.Context, p profile, steps sequenceSteps) (result er
 		report, err := steps.check(ctx)
 		last.StartStateAfter = &report
 		if err != nil {
+			// A check that could not run is a failed check of this test too.
+			fmt.Fprintf(steps.stdout, "%s%s: FAILED: check error: %v\n", sequenceStartStateLine, name, err)
 			return fmt.Errorf("start-state check after %s: %w", name, err)
 		}
 		if !report.Passed {
