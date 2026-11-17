@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """Check frame/message/role ledger links to tests and retained evidence.
 
-This validates references, not the truth of a native observation. No tests,
-producer tools or network requests are executed by this inventory check.
+This validates references, not the truth of a native observation. A linked
+unit test must be declared as a top-level test in the linked file and listed by
+Go for that file's package (go_test_list.declares: `go test -list` gives the
+runnable set and Go's parser the declaring file; listing compiles the test
+binaries and executes no test body). No producer tools are executed by this
+inventory check.
 """
 import csv
 import re
 import sys
 from pathlib import Path
 
+import go_test_list
+
 ROOT = Path(__file__).resolve().parent.parent
 EVIDENCE = Path("cephmsgr/PROTOCOL_EVIDENCE.md")
 LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-TEST = re.compile(r"(?m)^func (Test\w+)\(t \*testing\.T\)")
 
 
 def table(text, heading):
@@ -100,6 +105,44 @@ def frame_receipt_problems(cell, receipts):
     return problems
 
 
+def module_dir(root, path):
+    """The directory of the go.mod nearest to `path` inside root, or None.
+
+    A nested module (integration/fixture, tools/quality) lists its own
+    packages; the root module's listing does not contain them."""
+    root, directory = Path(root).resolve(), Path(path).resolve().parent
+    while directory.is_relative_to(root):
+        if (directory / "go.mod").is_file():
+            return directory
+        if directory == root:
+            break
+        directory = directory.parent
+    return None
+
+
+def listed_test(root, path, name):
+    """True when `path` declares `name` as a top-level test that Go lists for
+    the package compiling `path` in the module containing it (see
+    go_test_list.declares)."""
+    module = module_dir(root, path)
+    return module is not None and go_test_list.declares(module, path, name)
+
+
+def linked_test_directories(root, rows):
+    """Directories of every linked _test.go file, so that one parser run
+    covers them all."""
+    directories = set()
+    for row in rows:
+        for _, target in LINK.findall(row[2]):
+            try:
+                path = local_file(root, EVIDENCE, target)
+            except ValueError:
+                continue
+            if path.name.endswith("_test.go"):
+                directories.add(path.parent)
+    return sorted(directories)
+
+
 def local_file(root, document, target):
     # Only repository-local file links are evidence inputs. External run URLs
     # can occur in prose, but cannot replace a checked-in receipt or test.
@@ -142,6 +185,8 @@ def check(root=ROOT, text=None):
                     problems.append("receipt " + name + ": record must be Markdown")
             except ValueError as error:
                 problems.append(str(error))
+    go_test_list.declarations(linked_test_directories(
+        root, [row for rows in (messages, features, frames, opcodes) for row in rows.values() if len(row) > 2]))
     for label, rows in (("message", messages), ("feature", features), ("frame", frames), ("opcode", opcodes)):
         for key, row in rows.items():
             prefix = label + " " + key
@@ -169,7 +214,7 @@ def check(root=ROOT, text=None):
             for name, target in tests:
                 try:
                     path = local_file(root, EVIDENCE, target)
-                    if not path.name.endswith("_test.go") or name not in TEST.findall(path.read_text()):
+                    if not path.name.endswith("_test.go") or not listed_test(root, path, name):
                         problems.append(prefix + ": missing top-level Go test " + name)
                     elif "integration" in path.relative_to(root.resolve()).parts:
                         problems.append(prefix + ": integration selector is not unit evidence")

@@ -43,12 +43,28 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
+      # The Python tools list Go tests in every module, and the fixture module
+      # needs Go 1.26 or later. They run first with Go 1.27.x; the product
+      # steps below run with the matrix Go, installed after them.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ matrix.go }}
+          go-version: '1.27.x'
+          cache-dependency-path: integration/fixture/go.sum
       - name: Test CI diagnostic tools
         run: |
           "$DIAGNOSTIC_PYTHON" -m unittest discover -s tools -p 'test_*.py'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Check the matrix Go is the active toolchain
+        env:
+          MATRIX_GO: ${{ matrix.go }}
+        run: |
+          go version
+          case "$(go version)" in
+            *" go${MATRIX_GO%.x}"[.\ ]*) ;;
+            *) echo "expected Go $MATRIX_GO" >&2; exit 1 ;;
+          esac
       - name: Unit tests with per-test failure annotations
         id: unit_tests
         run: |

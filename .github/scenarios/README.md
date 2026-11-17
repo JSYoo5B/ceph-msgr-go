@@ -478,10 +478,10 @@ See the
 sent cancellation rows above now also run `MonCommand` and `MgrCommand`
 subtests, and the public MDS command rows a last subtest that stops the
 fixture's MDS.
-The catalog has 126 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
-Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
-coverage; deleting a row requires an explicit coverage change.
+Only Tentacle 20.2.x is accepted. Every catalog row is in the default coverage
+(`all`, which the periodic run selects); there is no separate list of required
+rows or row total to edit, and deleting a row is a visible catalog change.
 
 The trusted planner refuses catalog parameters that its native workflow cannot
 forward. Land new workflow opt-ins before requesting a feature PR's new profile;
@@ -489,7 +489,8 @@ checking out that PR does not replace the default branch's reusable workflow.
 The MGR-service opt-in is forwarded in advance of its feature implementation.
 
 Native runs use the calling revision's result gate. For an explicit `test_run`,
-it inventories matching top-level tests in the tested checkout before execution
+it lists the matching top-level tests that `go test -list` reports for the tested
+checkout's `integration` and `cephmsgr` packages before execution
 and requires a complete PASS result for every selected test. A skipped, missing
 or failed selected test fails the job even if the process exits zero. An empty
 secondary package is permitted; a selector matching no tests is refused.
@@ -517,6 +518,36 @@ python3 tools/scenario_plan.py list
 python3 tools/scenario_plan.py plan --select group:rbd --select windows-ceph
 ```
 
+The tools never read `func Test...` text to decide which top-level tests exist.
+`validate`, the native result gate, the cluster-free gate, the row admission
+tests, the coverage map check and the protocol evidence check all ask
+`go test -json -list` through `tools/go_test_list.py`, per Go module with
+`GOWORK=off`, `CGO_ENABLED=0` and `-mod=readonly`. Listing compiles the test
+binaries and runs no test body. A missing `go`, a build failure or unexpected
+listing output is an error, never an empty set. `go test -list` says which tests
+exist, not where they are declared: a check that ties a test to a file (the
+protocol evidence links, test-named links in the coverage map) also needs Go's
+parser to find the declaration in that file (`go_test_list.declares`, through
+`tools/quality/testdecls` under the go/build context). That file check counts
+only the test-shaped declarations of the looked-up test, so other functions of
+the file, such as repeated `init` functions, do not affect it.
+
+The listing keeps how often Go lists each name. The internal and the external
+test package of one directory may both declare a test of the same name, and Go
+lists and runs both under that one name. The checks that select tests for a run
+or read their result lines (the selector check of `validate`, the native result
+gate's `snapshot` and the cluster-free gate) refuse a selected name that Go lists
+more than once, before any result is read: `-run` cannot select one of the two
+tests and a `--- PASS` line cannot say which one it reports. The checks that ask
+only whether a name exists or where it is declared read the names.
+
+The coverage map check also lists the fixture module, and `validate` runs
+cluster-free tests of the fixture module, so the Python tool tests need Go 1.26 or later.
+Basic CI and the platform unit matrix run them with Go 1.27 and install the
+product's Go 1.25.0 (or the matrix Go) afterwards for the product steps;
+`tools/test_workflow_toolchains.py` refuses a workflow step whose installed Go
+is older than the modules its tools load.
+
 The planner emits native rows in `include` and selected check suites in `fixed`.
 `--catalog` reads the tested revision's vocabulary using the trusted planner.
 It takes a fragment directory, or the single `catalog.json` that held the
@@ -528,16 +559,15 @@ neither layout, with both, or with a symlink, subdirectory or unknown file in
 the split and can be removed once none of them is open.
 Unknown selectors fail rather than silently matching nothing. Validation rejects
 duplicate identifiers, unsupported releases, missing parameters, bad or empty
-test selectors, selectors matching no test, missing mandatory native rows and
-missing suite definitions.
+test selectors, selectors matching no test and missing suite definitions.
 
 ## Test inventory and selection evidence
 
-Basic CI verifies two explicit inventories without starting a cluster:
+Basic CI verifies two inventories without starting a cluster:
 
-- `native-tests.txt` registers every top-level `TestCeph...Integration` in
-  `integration` and `cephmsgr`. Fixture tests parse Go declarations, reject
-  missing/stale/duplicate registrations, and compare the source list with the
+- The native test inventory is every top-level `TestCeph...Integration` declared
+  in `integration` and `cephmsgr`; there is no list to edit. Fixture tests parse
+  Go declarations, reject duplicate names, and compare the source set with the
   compiled `go test -json -list` result. The current check requires these tests
   in the default build; adding platform-constrained tests needs an explicit
   inventory-policy change.
@@ -549,20 +579,20 @@ Basic CI verifies two explicit inventories without starting a cluster:
 `TestCICatalogInventory` reads the native workflow's actual matrix-to-environment
 bindings (including fallback values) and passes each catalog row through the
 fixture's real `loadProfile`. Unsupported expressions, unforwarded parameters,
-invalid fixture combinations, empty effective selections and native tests outside
-all selections fail the check. It uses Go regular expressions, matching the
-native runner's selector semantics. This complements `scenario_plan.py validate`;
-it does not replace catalog/mandatory-row checks.
+invalid fixture combinations, rows whose effective selection includes no native
+test and native tests that no row selects fail the check. It uses Go regular
+expressions, matching the native runner's selector semantics. This complements
+`scenario_plan.py validate`; it does not replace the catalog checks.
 
 The `native-test-selection` artifact lists the source location, candidate scenarios
 and explicit-selector required scenarios for every native test. `required_scenarios`
 means that the existing native result gate requires that top-level test to PASS
 when the scenario runs. It is not evidence of an actual PASS. Broad candidates
-can still skip because of per-test environment requirements. The initial inventory
-has 229 native tests: 59 have an explicit required scenario and 170 have only
-broad candidates. These counts describe selection, not verified interoperability.
-Adding a test requires registering it and reviewing its intended fixture/selector;
-registration alone cannot prove that all of its skip conditions are satisfied.
+can still skip because of per-test environment requirements. The artifact's counts
+describe selection, not verified interoperability. A new native test needs no
+registration; some catalog row's selector must include it, and its intended
+fixture and selector still need review. Selection alone cannot prove that all of
+its skip conditions are satisfied.
 
 Requested/periodic `fuzz` now runs all 26 registered targets, including wire,
 MDS and additional CephX/OSD decoders omitted from the former ten-command list.

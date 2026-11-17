@@ -48,11 +48,14 @@ type testSharing struct{ Value, Reason, Source string }
 
 // nativeTestSharing reads the declaration of every native test of the
 // integration and cephmsgr suites under root, keyed by "package/TestName",
-// and reports each missing, repeated, invalid or misplaced declaration.
+// and reports each missing, repeated, invalid or misplaced declaration. The
+// files are the ones the build context selects (ciSuiteTestFiles), the same
+// as ciNativeSources, so a build-excluded file neither adds a native test nor
+// a declaration.
 func nativeTestSharing(root string) (map[string]testSharing, []string, error) {
 	tests, problems := map[string]testSharing{}, []string{}
 	for _, pkg := range []string{"integration", "cephmsgr"} {
-		paths, err := filepath.Glob(filepath.Join(root, pkg, "*_test.go"))
+		paths, err := ciSuiteTestFiles(root, pkg)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -267,6 +270,46 @@ func TestNativeTestSharingRefusesMissingRepeatedInvalidAndMisplacedDeclarations(
 		if tests[name] != declared {
 			t.Fatalf("%s: %+v, want %+v", name, tests[name], declared)
 		}
+	}
+}
+
+// TestNativeTestSharingReadsTheBuildSelectedFiles is the negative control of
+// the file selection: a build-excluded file declares no native test, so its
+// test needs no declaration, and the external test package is read. On the
+// repository the inventory equals ciNativeSources, which
+// TestCINativeCompiledInventory pairs with go test -list.
+func TestNativeTestSharingReadsTheBuildSelectedFiles(t *testing.T) {
+	root := writeSharingSuite(t, map[string]string{
+		"integration/a_test.go": "//fixture:shareable reads only\nfunc TestCephAIntegration(t *testing.T) {}\n",
+		"cephmsgr/b_test.go":    "//fixture:shareable reads only\nfunc TestCephBIntegration(t *testing.T) {}\n",
+	})
+	files := map[string]string{
+		"ignored_test.go":  "//go:build ignore\n\npackage integration\n\nimport \"testing\"\n\nfunc TestCephIgnoredIntegration(t *testing.T) {}\n",
+		"external_test.go": "package integration_test\n\nimport \"testing\"\n\n//fixture:isolated stops osd.0\nfunc TestCephExternalIntegration(t *testing.T) {}\n",
+	}
+	for name, text := range files {
+		if err := os.WriteFile(filepath.Join(root, "integration", name), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tests, problems, err := nativeTestSharing(root)
+	if err != nil || len(problems) != 0 {
+		t.Fatal(err, problems)
+	}
+	if got, want := slices.Sorted(maps.Keys(tests)), []string{"cephmsgr/TestCephBIntegration", "integration/TestCephAIntegration", "integration/TestCephExternalIntegration"}; !slices.Equal(got, want) {
+		t.Fatalf("native tests %v, want %v", got, want)
+	}
+	repository := filepath.Join("..", "..")
+	tests, _, err = nativeTestSharing(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources, err := ciNativeSources(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := slices.Sorted(maps.Keys(tests)), slices.Sorted(maps.Keys(sources)); !slices.Equal(got, want) {
+		t.Fatalf("sharing inventory %v differs from the native sources %v", got, want)
 	}
 }
 

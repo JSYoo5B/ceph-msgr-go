@@ -1,6 +1,7 @@
 import unittest
 
 import native_path_coverage as coverage
+from test_go_test_list import REPEATED, SHAPES, WRONG_FILE, module
 
 
 class NativePathCoverageTests(unittest.TestCase):
@@ -28,6 +29,43 @@ class NativePathCoverageTests(unittest.TestCase):
     def test_go_tests_include_both_integration_packages(self):
         self.assertIn("TestCephMonPingIntegration", self.tests)
         self.assertIn("TestCephServiceKeyEpochIntegration", self.tests)
+
+    def test_plain_test_names_resolve_against_the_tests_go_lists(self):
+        tests = coverage.go_tests(module(self, SHAPES), modules=(".",))
+        # Literal expectation: the bare Test, the aliased-import test and the
+        # blank parameter are tests; TestMain, the method, the lowercase helper
+        # and the build-constrained test are not.
+        self.assertEqual(tests, {"Test", "TestAlias", "TestX"})
+        for token in ("TestAlias", "TestX/subtest", "^TestAl.*$"):
+            self.assertEqual(coverage.token_problems(token, tests, set(), set(), set()), [], token)
+        for token in ("TestMain", "TestY", "TestIgnored"):
+            self.assertEqual(coverage.token_problems(token, tests, set(), set(), set()),
+                             ["missing top-level Go test " + token])
+
+    def test_test_link_must_reach_the_declaring_file(self):
+        root = module(self, dict(SHAPES, **WRONG_FILE))
+        package = (root / "integration").resolve()
+        self.assertEqual(coverage.test_link_problems(root, "TestActual", package / "right_test.go"), [])
+        self.assertEqual(coverage.test_link_problems(root, "TestAlias", package / "alias_test.go"), [])
+        for name, file in (("TestActual", "wrong_test.go"), ("TestIgnored", "ignored_test.go"),
+                           ("TestY", "shapes_test.go"), ("TestAlias", "shapes_test.go")):
+            self.assertEqual(coverage.test_link_problems(root, name, package / file),
+                             ["link integration/%s does not reach the file declaring top-level Go test %s" % (file, name)])
+
+    def test_repeated_init_functions_do_not_hide_a_linked_test(self):
+        root = module(self, REPEATED)
+        package = (root / "integration").resolve()
+        self.assertEqual(coverage.test_link_problems(root, "TestActual", package / "right_test.go"), [])
+        self.assertEqual(coverage.test_link_problems(root, "TestActual", package / "wrong_test.go"),
+                         ["link integration/wrong_test.go does not reach the file declaring top-level Go test TestActual"])
+
+    def test_test_links_in_the_map_are_checked(self):
+        row = self.row("MSG-1")
+        right = row.replace(" |", " [TestCephMonPingIntegration](../../integration/mon_ping_test.go) |", 1)
+        self.assertEqual(self.check(self.text.replace(row, right)), [])
+        wrong = row.replace(" |", " [`TestCephMonPingIntegration`](../../integration/commands_test.go) |", 1)
+        self.assertIn("link integration/commands_test.go does not reach the file declaring top-level Go test "
+                      "TestCephMonPingIntegration", self.check(self.text.replace(row, wrong)))
 
     def test_unknown_scenario_group_and_suite_are_reported(self):
         text = self.text.replace("`mon-mgr.aes256k.ip4.expiry-1`", "`mon-mgr.aes256k.ip4.expiry-2`")
@@ -65,30 +103,30 @@ class NativePathCoverageTests(unittest.TestCase):
         text = self.text + "\n[outside](../../../outside.md)\n"
         self.assertIn("missing or non-repository file ../../../outside.md", self.check(text))
 
-    def test_rows_need_a_known_class_unique_ids_and_matching_summary(self):
+    def test_rows_need_a_known_class_and_unique_ids(self):
         row = self.row("MSG-1")
         text = self.text.replace(row, row.replace("`released`", "`covered`"))
-        problems = self.check(text)
-        self.assertIn("row MSG-1: unknown class `covered`", problems)
-        self.assertTrue(any(problem.startswith("summary released: table says") for problem in problems))
+        self.assertIn("row MSG-1: unknown class `covered`", self.check(text))
         text = self.text.replace(row, row + "\n" + row)
         self.assertIn("duplicate row MSG-1", self.check(text))
         text = self.text.replace(row, "| MSG-1 | short |")
         self.assertIn("row MSG-1: expected 8 nonempty columns", self.check(text))
 
-    def test_unmerged_pull_requests_are_not_capabilities(self):
-        # Self-contained: list a synthetic open PR and cite it from a row, so the
-        # check does not depend on which pull requests are open today.
-        row = self.row("MDS-10")
-        heading = "## Open pull requests\n"
-        text = self.text.replace(heading, heading + "\n| Pull request | Scope | Status |\n"
-                                 "| --- | --- | --- |\n| #999 | synthetic | open PR, unmerged |\n")
-        cited_row = row.replace("issue #11;", "issue #11; open PR #999;", 1)
-        cited = text.replace(row, cited_row)
-        self.assertEqual(self.check(cited), [])
-        cited = cited.replace(cited_row, cited_row.replace("`proposed`", "`released`", 1))
-        self.assertIn("row MDS-10: unmerged PR #999 cited as released", self.check(cited))
+    def test_class_counts_come_from_the_rows(self):
+        counts = coverage.class_counts(self.text)
+        self.assertEqual(set(counts), set(coverage.CLASSES))
+        self.assertEqual(sum(counts.values()), len(list(coverage.coverage_rows(self.text))))
+        row = self.row("MSG-1")
+        moved = coverage.class_counts(self.text.replace(row, row.replace("`released`", "`proposed`")))
+        self.assertEqual(moved["released"], counts["released"] - 1)
+        self.assertEqual(moved["proposed"], counts["proposed"] + 1)
 
+    def test_released_rows_need_local_evidence(self):
+        row = self.row("MSG-1")
+        cells = coverage.split_row(row)
+        cells[6] = "upstream receipt only"
+        text = self.text.replace(row, "| " + " | ".join(cells) + " |")
+        self.assertIn("row MSG-1: released row needs local evidence", self.check(text))
 
 if __name__ == "__main__":
     unittest.main()

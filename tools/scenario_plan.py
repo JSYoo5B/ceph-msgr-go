@@ -4,14 +4,17 @@
 The catalog (composed by scenario_catalog.py) is the discoverable list of the
 real-daemon scenarios and selectable platform check suites. Each native entry
 has a stable identifier, group and workflow matrix parameters. This tool
-validates the catalog against the mandatory list, the reusable check jobs and
-the fixture, and prints the selected matrix with an explanation. `list`,
-`plan` and `env` read local files only. `validate` also runs the fixture's own
-admission of every row (one cluster-free Go test of integration/fixture, which
-needs the fixture module's Go toolchain) and starts no cluster.
+validates the catalog against the reusable check jobs, the tests it selects and
+the fixture, and prints the selected matrix with an explanation. Every catalog
+row is in the default coverage (`all`); there is no separate list of required
+rows. `validate` resolves test selectors against the tests Go lists for the
+native suites (go_test_list.py compiles them and executes no test body) and runs
+the fixture's own admission of every row (one cluster-free Go test of
+integration/fixture, which needs the fixture module's Go toolchain); it starts
+no cluster. `list`, `plan` and `env` read local files only.
 
-  scenario_plan.py validate               invariants, mandatory list, fixed jobs, selector targets,
-                                          documented reproductions, fixture admission of every row
+  scenario_plan.py validate               invariants, fixed jobs, selector targets, documented
+                                          reproductions, fixture admission of every row
   scenario_plan.py list                   one identifier per line
   scenario_plan.py plan --select S        matrix JSON on stdout, explanation on stderr
   scenario_plan.py env ID                 shell exports of the native workflow's environment for one row
@@ -78,6 +81,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import go_test_list
 import scenario_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,7 +89,6 @@ CATALOG = ROOT / scenario_catalog.CATALOG
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CHECKS_WORKFLOW = ROOT / ".github" / "workflows" / "platform-checks.yml"
 NATIVE_WORKFLOW = ROOT / ".github" / "workflows" / "native-scenarios.yml"
-MANDATORY = ROOT / ".github" / "scenarios" / "mandatory.txt"
 REQUIRED_PARAMS = ("key", "service", "family")
 SUPPORTED_RELEASE = re.compile(r"^20\.2\.\d+$")
 FIXTURE = ROOT / "integration" / "fixture"
@@ -419,28 +422,6 @@ def grouped_jobs(groups):
     return sum((1 if shareable else 0) + len(isolated) for _, shareable, isolated in groups)
 
 
-def mandatory_problems(scenarios, mandatory):
-    """The mandatory list names every scenario the default coverage must run.
-
-    Removing or renaming a scenario therefore needs an explicit edit of both
-    files; a scenario cannot be dropped from the catalog silently."""
-    ids = [entry["id"] for entry in scenarios if isinstance(entry.get("id"), str)]
-    problems = []
-    for sid in mandatory:
-        if sid not in ids:
-            problems.append("mandatory scenario missing from catalog: %s" % sid)
-    for sid in ids:
-        if sid not in mandatory:
-            problems.append("catalog scenario not in the mandatory list: %s" % sid)
-    if len(set(mandatory)) != len(mandatory):
-        problems.append("mandatory list has duplicates")
-    return problems
-
-
-def load_mandatory(path=MANDATORY):
-    return [line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
 def fixed_job_problems(document, workflow_text):
     """Selectable suites must exist in the reusable platform workflow."""
     problems = []
@@ -460,25 +441,42 @@ def fixed_job_problems(document, workflow_text):
     return problems
 
 
-def integration_tests(directories=(ROOT / "integration", ROOT / "cephmsgr")):
-    """Names of the top-level Go tests of both native suites.
+SUITE_PACKAGES = ("integration", "cephmsgr")
+
+
+def suite_tests(root=ROOT):
+    """{package: {top-level test: count}} that Go lists for both native suites.
 
     The native runner applies one selector to the API suite (integration) and
     the client suite (cephmsgr), as the result gate does."""
-    names = set()
-    for directory in directories:
-        for path in sorted(Path(directory).glob("*_test.go")):
-            names.update(re.findall(r"(?m)^func (Test[A-Za-z0-9_]*)\(", path.read_text(encoding="utf-8")))
-    return names
+    return go_test_list.list_tests(root, ["./" + package for package in SUITE_PACKAGES])
 
 
-def selector_problems(scenarios, tests):
-    """A test selector that matches no test would silently run nothing."""
+def integration_tests(root=ROOT):
+    """Names of the top-level Go tests of both native suites, each once."""
+    return set().union(*suite_tests(root).values())
+
+
+def selector_problems(scenarios, listing):
+    """A row's test selector must select at least one listed test, each of
+    them listed once.
+
+    `listing` is suite_tests(). A selector that matches no test would silently
+    run nothing. A selected name that Go lists more than once in one suite
+    package (the internal and the external test package both declare it)
+    cannot be selected alone, and the result gate refuses it before the run
+    (go_test_list.selected_tests), so the row is refused here already."""
     problems = []
     for entry in scenarios:
         pattern = entry["params"].get("test_run")
-        if pattern and not any(re.search(pattern, name) for name in tests):
+        if not pattern:
+            continue
+        def chosen(package, name):
+            return bool(re.search(pattern, name))
+        if not any(chosen(package, name) for package, names in listing.items() for name in names):
             problems.append("%s: selector %s matches no integration test" % (entry["id"], pattern))
+        for repeat in go_test_list.repeated(listing, chosen):
+            problems.append("%s: selector %s selects %s" % (entry["id"], pattern, go_test_list.repeated_message(*repeat)))
     return problems
 
 
@@ -539,9 +537,9 @@ def main(argv=None):
         scenarios = load_catalog(getattr(args, "catalog", CATALOG))
         if args.command == "validate":
             document = load_catalog_document()
-            problems = (validate_catalog(scenarios) + mandatory_problems(scenarios, load_mandatory())
+            problems = (validate_catalog(scenarios)
                         + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
-                        + selector_problems(scenarios, integration_tests())
+                        + selector_problems(scenarios, suite_tests())
                         + reproduction_problems([(str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
                                                  for path in documentation_files()], scenarios)
                         + fixture_admission_problems())
@@ -551,7 +549,7 @@ def main(argv=None):
                 print(problem, file=sys.stderr)
             if problems:
                 return 1
-            print("catalog valid: %d scenarios, all mandatory, selecting existing tests, admitted by the fixture,"
+            print("catalog valid: %d scenarios, all in default coverage, selecting existing tests, admitted by the fixture,"
                   " each with a fixture sharing value" % len(scenarios))
         elif args.command == "sharing":
             problems, values = fixture_sharing()

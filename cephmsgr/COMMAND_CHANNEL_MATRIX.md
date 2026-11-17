@@ -243,4 +243,6 @@ explanation and is kept explicit instead of rerouting. No channel has a
 typed administrative API.
 
 The guard test in `command_channel_matrix_test.go` fails if a test selector named
-here no longer exists in either integration suite.
+here is not a top-level test that a compiled test file of either integration
+suite package declares (Go's parser under the build context) and that
+`go test -list` reports for that package.
