@@ -139,16 +139,50 @@ archive.
 
 ## Lost reply
 
-The lost-reply boundary is synthetic:
+The test-peer control covers all three opcodes.
 `TestOSDTierOperationPublicTransportAndUnknownOutcome` drops the connection
 after each tier request is written and requires `OutcomeUnknownError` with
 the original transaction, no redial and no resent request, on the
 object-hash, replicated reply-v8 and request-v9 profiles.
 
+`TestCephManifestTierEvictLostReplyIntegration` exercises TIER_EVICT
+(opcode `0x822c`) on a clean chunked manifest across two owned plain
+pools. On the dedicated legacy-v6, CRC/AES IPv4 host row, a single
+BlueStore OSD serves both pools. Setup and cleanup use a separate client.
+The subject sends a single TIER_EVICT with IGNORE_CACHE and IGNORE_OVERLAY.
+Its dedicated CRC gate recognizes the owned object name in outgoing
+MOSDOp frames across all subject OSD connections and withholds the entire
+reply frame for the captured connection and TID.
+
+On a Linux amd64 host with Docker 29.9.1 and the pinned image above,
+the sole expected test passed in 12.25 s. The gate saw one marked frame,
+on connection 1 at TID 1, and held MOSDOpReply type 43 for that pair.
+The caller canceled its wait while the frame was held and received
+`OutcomeUnknownError` wrapping context cancellation, with global ID 4734,
+TID 1, incarnation 71, epoch 20 and attempt 0. The subject issued no
+resubmission. Through a second native observation, about 0.90 s after
+the held connection was closed, the marked-request count remained one.
+
+Before evict, the local source contained its seed bytes and the target
+held one exact by-object reference. Both observations after evict showed
+zeros in the first 16 local bytes, the original suffix, clean state, and
+unchanged version 4 and mtime. A proxied read still returned the target's
+bytes. The target's bytes, xattrs including its reference, version and
+mtime remained unchanged. Deleting the source from the setup client
+released the final reference. The target was absent on the first native
+poll, the source was absent, and owned-pool cleanup confirmed removal.
+The fixture writes the gate, original submission and object observations to
+`osd-tier-evict-lost-reply.json` and the pool cleanup to `osd-pool-result.json`.
+
+The count covers subject transmissions in this observation window. The test
+uses independent native reads to establish the state transition. It does
+not instrument daemon execution counts or establish crash durability.
+
+
 ## Not verified
 
 Other authentication, address and runtime profiles beyond those above; a
-hosted exact-SHA CI receipt; a live lost reply; TIER_* on a pool in a
+hosted exact-SHA CI receipt; live lost replies for TIER_PROMOTE and TIER_FLUSH; TIER_* on a pool in a
 cache-tier relation (EOPNOTSUPP without the capability, EINVAL from a tier's
 handler: source-derived only); scoped identities; erasure-coded pools
 (refused locally); snapshot clones and their reference arithmetic; fastcdc

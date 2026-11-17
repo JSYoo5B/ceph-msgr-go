@@ -319,8 +319,12 @@ Evidence:
   TIER_FLUSH and TIER_EVICT, each paired with the same operation issued once
   by a native librados twin on its own object, against two owned plain pools
   on one secure/aes256k IPv6 container legacy-v6 single-BlueStore profile,
-  judged by native observations that never promote. Other profiles, a live
-  lost reply, snapshot clones, scoped identities, fastcdc chunking and a
+  judged by native observations that never promote. A separate single-OSD
+  legacy-v6 IPv4 CRC host run withheld one TIER_EVICT reply on the bound
+  connection and transaction. Native reads saw the evicted extent and intact
+  chunk reference while the caller retained an unknown outcome. The client
+  sent one correlated request during observation. Live lost replies for
+  TIER_PROMOTE and TIER_FLUSH, snapshot clones, scoped identities, fastcdc chunking and a
   failed dedup reference remain unverified.
 
 ### Native-only evidence and remaining stages
