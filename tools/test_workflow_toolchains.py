@@ -32,6 +32,7 @@ LISTERS = {
     "native_path_coverage": (None, None),  # its MODULES, read below
     "fuzz_targets": (None, (".",)),
     "product_dependencies": (None, (".",)),
+    "workflow_lint": (None, (".",)),  # pinned Go tool under the product toolchain
     "windows_interop": (None, (".", "integration/fixture")),
 }
 SUITE = re.compile(r"-m unittest discover -s tools(?: -p '([^']+)')?")
