@@ -265,6 +265,11 @@ Two `mds-cephfs-writeback` rows select only
 `TestCephMDSCephFSWritebackFenceIntegration` in the same two MDS profiles and
 reuse the same input; they declare `mds-writeback-fence`, which alone admits
 the OSD drop, background reader and eviction controls.
+Two `mds-cephfs-mixed-writeback` rows select only
+`TestCephMDSCephFSMixedWritebackRecoveryIntegration` in the same two MDS
+profiles on the same input. They declare `mds-writeback-fence` for the OSD
+drop and `mds-writeback-mixed`, which alone admits the closed native
+object-bytes view of `capsnap-file`.
 One further `osd` row selects only `TestCephOSDSetChunkNativeIntegration`, the
 native-only SET_CHUNK manifest checkpoint, on the single-BlueStore legacy-v6
 fixture. It needs no opt-in parameter: the checkpoint uses the ordinary OSD
