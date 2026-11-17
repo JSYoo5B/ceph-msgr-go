@@ -378,7 +378,9 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 		t.Fatal("pause budget expired before thaw")
 	}
 	for _, osd := range frozen {
-		recovery.thaw(t, ctx, osd, thawDeadline)
+		if err := recovery.thaw(ctx, osd, thawDeadline); err != nil {
+			t.Fatalf("resume osd.%d within the pause budget: %v", osd, err)
+		}
 	}
 	receipt.PausedFor = time.Since(paused).Round(10 * time.Millisecond).String()
 	// Release the old endpoint before reconnecting to the restarted OSD.

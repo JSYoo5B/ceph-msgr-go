@@ -326,21 +326,35 @@ func (r *copyPrimaryRecovery) freeze(t *testing.T, ctx context.Context, osd int3
 
 // thaw resumes a paused OSD in place, which the tests do while it is well
 // inside its heartbeat grace.
-func (r *copyPrimaryRecovery) thaw(t *testing.T, ctx context.Context, osd int32, deadline time.Time) {
-	t.Helper()
-	if !time.Now().Before(deadline) {
-		t.Fatal("pause budget expired before resume", osd)
+func (r *copyPrimaryRecovery) thaw(ctx context.Context, osd int32, deadline time.Time) error {
+	thaw, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	if err := thaw.Err(); err != nil {
+		return err
 	}
-	if err := testcluster.ControlDaemon(ctx, r.dir, "resume", "osd", strconv.Itoa(int(osd))); err != nil {
-		t.Fatal("resume", osd, err)
+	if err := testcluster.ControlDaemon(thaw, r.dir, "resume", "osd", strconv.Itoa(int(osd))); err != nil {
+		return err
+	}
+	if !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
 	}
 	delete(r.frozen, osd)
-	if !time.Now().Before(deadline) {
-		// The fixture acknowledged the resume. Restart the late replica
-		// through cleanup without asking the controller to resume it twice.
-		r.kill(t, ctx, osd)
-		t.Fatal("resume exceeded the pause budget", osd)
+	return nil
+}
+
+// recoverFrozen asks the controller to settle the original pause and resume
+// before killing the replica. Its original resume may already have applied.
+func (r *copyPrimaryRecovery) recoverFrozen(ctx context.Context, osd int32) error {
+	name := strconv.Itoa(int(osd))
+	if err := testcluster.RequestControl(ctx, r.dir, "recover-paused-osd", "osd-pause-recovered", name); err != nil {
+		return fmt.Errorf("recover pause of osd.%d: %w", osd, err)
 	}
+	delete(r.frozen, osd)
+	r.killed[osd] = true
+	if err := testcluster.ControlDaemon(ctx, r.dir, "kill", "osd", name); err != nil {
+		return fmt.Errorf("kill thawed osd.%d: %w", osd, err)
+	}
+	return nil
 }
 
 // kill SIGKILLs one OSD and returns the fixture's receipt of its exit code,
@@ -421,15 +435,8 @@ func (r *copyPrimaryRecovery) restore(t *testing.T) {
 	// (a test failed before thawing it), so it is restarted rather than
 	// thawed in place, as in the source failover test.
 	for _, osd := range sortedOSDs(r.frozen) {
-		name := strconv.Itoa(int(osd))
-		if err := testcluster.ControlDaemon(ctx, r.dir, "resume", "osd", name); err != nil {
-			failed = append(failed, fmt.Errorf("resume osd.%d: %w", osd, err))
-			continue
-		}
-		delete(r.frozen, osd)
-		r.killed[osd] = true
-		if err := testcluster.ControlDaemon(ctx, r.dir, "kill", "osd", name); err != nil {
-			failed = append(failed, fmt.Errorf("kill thawed osd.%d: %w", osd, err))
+		if err := r.recoverFrozen(ctx, osd); err != nil {
+			failed = append(failed, err)
 		}
 	}
 	for _, osd := range sortedOSDs(r.killed) {

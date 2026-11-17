@@ -75,8 +75,9 @@ For each cell:
    op's transaction, the client's global ID and incarnation and the
    request's map epoch, without a reply. The first freeze starts a 16 s pause budget.
    Freeze, snapshots, kill and the connection wait share the first 12 s;
-   the remaining time is reserved for thaw. Exceeding either deadline fails
-   the cell and leaves outstanding replicas to restart cleanup. The paused replicas are resumed, the
+   the remaining time bounds the resume acknowledgement waits. Exceeding either
+   deadline fails the cell and leaves outstanding replicas to restart cleanup.
+   On success the paused replicas are resumed, the
    time they were paused is recorded, and the dead OSD is marked down with
    `osd down`. The test waits for two equal placements a second apart under
    a new primary whose up set omits the dead one.
@@ -111,10 +112,13 @@ For each cell:
 ## Recovery
 
 The run-level recovery of the primary-change tests also covers these cells.
-It records each pause and kill before sending it. It resumes, kills and
-restarts any OSD still paused (one frozen past its heartbeat grace is not
-thawed in place), starts every killed OSD, and keeps going after a failed
-command. Then it checks the native OSDMap flags once, waits once for
+It records each pause and kill before sending it. An unacknowledged or late
+resume leaves the replica marked for recovery. On its separate cleanup request,
+the controller first processes pending daemon actions, then releases the OSD's
+pause lease if it still holds one. Its recovery acknowledgement allows the
+test to kill and restart the replica even if the original resume took effect
+and its acknowledgement was lost. Cleanup starts every killed OSD and keeps
+going after a failed command. Then it checks the native OSDMap flags once, waits once for
 `osd-ready clean`, and republishes the fixture's routing for the restarted
 OSD. If a command failed it reports every failure and skips the clean check.
 The test is `//fixture:isolated`: the clean wait does not prove pg_temp

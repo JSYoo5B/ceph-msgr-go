@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // The daemon controls keep every action for MON, MGR and OSD. An MDS may only
 // be stopped, and only by the public MDS command acceptance: not by the
@@ -51,5 +57,31 @@ func TestDaemonControlAdmitsOnlyStoppingTheCommandFixtureMDS(t *testing.T) {
 	}
 	if len(daemonControlKinds) != 4 || daemonControlKinds[3] != "mds" {
 		t.Fatal("daemon control kinds changed", daemonControlKinds)
+	}
+}
+
+// An already released pause lease needs no second daemon resume. An earlier
+// invalid daemon request must still fail before the recovery acknowledgement.
+func TestRecoverPausedOSDOrdersPendingDaemonControl(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "recover-paused-osd"), []byte("42 2"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if pending {
+			if err := os.WriteFile(filepath.Join(dir, "resume-osd"), []byte("41"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var c fixtureCluster
+		err := c.controlDaemonRequests(context.Background(), dir)
+		_, ack := os.Stat(filepath.Join(dir, "osd-pause-recovered.42"))
+		if pending {
+			if err == nil || !errors.Is(ack, os.ErrNotExist) {
+				t.Fatal("recovery acknowledged before pending resume", err, ack)
+			}
+		} else if err != nil || ack != nil {
+			t.Fatal("recovery of an already resumed OSD", err, ack)
+		}
 	}
 }
