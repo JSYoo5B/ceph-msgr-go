@@ -59,7 +59,29 @@ That initial execution did not archive the new JSON filename because it was
 missing from the diagnostic collector allowlist. Its assertions and text
 results passed, but it is not a retained raw-receipt claim. The follow-up
 adds that explicit filename and re-executes the row to retain the receipt.
-Exact-SHA hosted CI remains distinct from these local Linux executions.
+
+The retained run at `522ada1dc5a42c7d1a4e0a9b7869da2b795b3d99` (tree
+`7eb07caf8e00d224d916417444510f57e63d5cff`) passed the same row in 13.16 s.
+All 16 cells passed with the same version/result classification above, 15
+known-unsent refusals and `cleaned: true`. Native trim took 603 ms and the
+fixture was active+clean. Eight fixture containers terminated and the final
+testcontainers inventory was empty. The archived public JSON is 46,360 bytes;
+SHA-256 `c002958ccf5004827617bcf3cf9029dbdd1d82914f68920faac91d932ae0a8b8`.
+It retains the raw signed per-op results (including -115), complete public
+replies and before/after native destination observations. The executed
+validation copy had the exact source tree above. Subsequent changes to this
+record do not alter the test implementation. Exact-SHA hosted CI remains
+distinct from these local Linux executions.
+
+The initial prepush attempt found an invalid new coverage-row format and
+existing paired-suite guards that treated a dedicated modern row as a suite.
+The corrected row has its own check while the six original suite gates remain.
+The coverage merge-test helper now creates parent directories for row files;
+the first real row file exposed its previous root-files-only assumption.
+A separate verification-copy error (missing Git tracked-file metadata) was
+fixed in that copy. A later document check caught a link in a receipt-ID-only
+column; the link now belongs to the contract description column. These were
+prepush/tooling failures, not failed daemon cells.
 
 ## Boundaries
 
