@@ -3,8 +3,8 @@
 Context: issue #178, part of #171. Before several catalog rows can run on one
 fixture, each test must be known not to leave state that a later test could
 depend on or be hurt by. This document defines the classification and where
-it is declared. It runs nothing on a shared fixture: the default and periodic
-coverage still start one fixture per row.
+it is declared. The planner runs the shareable rows of one configuration as
+one fixture sequence (#180, [below](#fixture-sequences)).
 
 ## Declaration
 
@@ -132,6 +132,60 @@ one fixture. Both need the fixture module's Go toolchain.
 Adding a native test adds its declaration in its own file. No shared list
 changes.
 
+## Fixture sequences
+
+`scenario_plan.py plan` groups the selected rows: the shareable rows of one
+configuration that have an explicit `test_run` form one job of at most eight
+rows, in catalog order, at the place of its first row. An isolated row, a
+broad row (no `test_run`), a row of another configuration and a request that
+selects one row of a configuration keep a job of their own with unchanged
+parameters, so `/ci run <row>` runs exactly that row. Because `plan` also
+plans a pull request's catalog for `/ci run`, it does not build that
+revision: [`tools/fixture_sharing.py`](../../tools/fixture_sharing.py) reads
+the declarations above as text, from the working tree or from the tested
+revision's test-file blobs. It calls a row shareable only if every top-level
+test its selector matches in `integration` and `cephmsgr` has a
+`//fixture:shareable` declaration directly above its function, and
+`validate` requires that reading to agree with
+`TestCatalogRowsDeclareFixtureSharing` for every row with an explicit
+`test_run`. Without the sources of another revision's catalog, `plan` groups
+nothing.
+
+A sequence job has the configuration's parameters, the rows' selectors in
+`test_sequence` (forwarded as `CEPH_MSGR_TEST_SEQUENCE`), their union in
+`test_run` (the result gate's snapshot), its row identifiers in `scenarios`
+and its first row in `scenario`. A reproduction names its rows:
+
+```sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2 osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2primaryhistorycalibration) &&
+  eval "$env_lines" &&
+  sh integration/run.sh
+)
+```
+
+The fixture ([`sequence.go`](sequence.go)) admits a sequence only when every
+member, as the only `CEPH_MSGR_TEST_RUN`, is admitted by the single-row rules
+and loads the same profile; a member that is its fixture's default selection
+or a soak runs alone. It starts one fixture and then, for each member in
+order and each suite (`api`, then `client`), lists the member's tests
+(`-test.list`) and runs every top-level test alone (`-test.run ^Name$`), each
+test once. After every test it requires the
+[start-state check](FIXTURE_START_STATE.md) to pass within 60 seconds,
+before the next test and after the last one:
+
+- a failed test stops the sequence, so the diagnostics collected on that
+  failure follow the failed test;
+- a failed check stops the sequence and prints `Fixture start state after
+  <suite>/<Test>: FAILED: <condition>: <detail>; ...` for the test that ran
+  before it. The native result gate (`tools/native_test_results.py`)
+  records it as a problem of that test, and every later test as missing.
+
+Every selected test still needs its own `PASS` line in the gate.
+`fixture-sequence.json`, kept with the diagnostics, records each test's
+suite, selector, start and end time, result and the check report after it,
+so a daemon log line can be placed in the test whose window holds it.
+
 ## Findings at classification
 
 The classification covers 255 native tests and 130 rows: 81 tests and 19
@@ -178,18 +232,34 @@ fails the test unless a native read confirms the key is absent.
 `TestCephConfigCommandsIntegration` removes its central configuration entry
 as its last step, which the `config` condition covers.
 
-Two leftovers of the shared owned-pool cleanup (`mode_cleanup` in
-[`tools/osd_pool_oracle.py`](../../tools/osd_pool_oracle.py)) make every test
-that removes its owned pools through it `isolated`, including every
-four-OSD erasure-capacity control:
+At classification, two leftovers of the shared owned-pool cleanup
+(`mode_cleanup` in [`tools/osd_pool_oracle.py`](../../tools/osd_pool_oracle.py))
+made every test that removes its owned pools through it `isolated`,
+including every four-OSD erasure-capacity control:
 
-- it sets `mon_allow_pool_delete=true` in the MON section of the central
-  configuration and never removes it. The fixture starts without that entry
+- it set `mon_allow_pool_delete=true` in the MON section of the central
+  configuration and never removed it. The fixture starts without that entry
   ([`osd_cache_pools.go`](osd_cache_pools.go) restores its own window), so
-  the start-state `config` condition fails afterwards;
+  the start-state `config` condition failed afterwards;
 - an erasure-coded owned pool is created without a rule name, so the MON
-  creates a CRUSH rule named after the pool, and nothing removes it; the
-  `crush-rule` condition fails afterwards.
+  creates a CRUSH rule named after the pool, and nothing removed it; the
+  `crush-rule` condition failed afterwards.
+
+#180 removed both. The cleanup reads the entry first, enables deletion only
+when it is not already enabled, restores the prior state on every path
+(removes the entry it added, or sets the earlier value back) and confirms it
+with a fresh `config dump`. It removes the CRUSH rules named after the owned
+pools; creating an erasure-coded owned pool refuses an existing rule of that
+name, so that rule is always the one the pool's creation made. `nativePool`
+fails the calling test unless the receipt confirms the restored entry and
+lists no remaining owned rule or erasure-code profile. Of the 57 tests whose
+reason named a leftover, 26 became `shareable`. The other 31 keep `isolated`
+with their remaining reason: they kill or pause daemons and wait only for
+`osd-ready clean` (no pg_temp proof), inject data errors, remove an auth
+entity or a filesystem without a confirmed or registered removal, restore
+the OSDMap full ratios without confirming them, recycle a MON with the open
+[MON freeze issue](MON_FREEZE_FIXTURE_ISSUE.md), or run the once-per-fixture
+native SET_CHUNK checkpoint.
 
 The outage controls' own proofs are recorded in their reasons. The
 `osd-ready clean` wait covers OSDs up and in and every PG `active+clean`, but

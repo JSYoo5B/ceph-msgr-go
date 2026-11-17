@@ -144,9 +144,14 @@ selector selects is. The fixture derives each row's value
 runs it and refuses a native test without a valid declaration, a misplaced
 declaration and a row without a value. `scenario_plan.py sharing` lists the
 shareable and isolated rows of each fixture configuration (a row's
-parameters without `test_run`). The planner does not group rows yet; every
-row still runs on its own fixture. The rule and the first classification are
-in [FIXTURE_SHARING.md](../../integration/fixture/FIXTURE_SHARING.md).
+parameters without `test_run`) and the job count of the default coverage.
+`plan` runs the selected shareable rows of one configuration that have an
+explicit `test_run` as one fixture sequence job (at most eight rows, in
+catalog order); every other row, and a request that selects one row of a
+configuration, keeps a job of its own. The sequence runs each test alone and
+requires the start-state check after every test. The rule, the
+classification and the sequence are in
+[FIXTURE_SHARING.md](../../integration/fixture/FIXTURE_SHARING.md).
 
 The catalog preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
@@ -608,7 +613,9 @@ campaign. `python3 tools/fuzz_targets.py verify` only validates selection.
 ```
 
 For example, `/ci run windows-ceph race` runs those two suites without starting
-the native scenario matrix. `/ci run group:rbd` runs just the RBD rows.
+the native scenario matrix. `/ci run group:rbd` runs just the RBD rows. Rows
+that a request selects together and that may share a fixture run as one
+fixture sequence job; a single named row always runs alone.
 `group:checks` selects all five check suites. `all` selects everything.
 
 One command per comment, on its own line, with at most 20 selectors. Quoted and
