@@ -42,7 +42,8 @@ class OSDErasureRowsTest(ci_row_catalog.RowsTestCase):
                   ("OptimizedK2M2CopyFromHistory", capture), ("OptimizedK2M2PartialWriteShardHistory", capture),
                   ("OptimizedK2M2PartialWriteLaterWriteShardHistory", interval), ("OptimizedK2M2PartialWriteNewIntervalShardHistory", interval),
                   ("OptimizedK2M2PartialWriteShardReturnShardHistory", interval), ("OptimizedK2M2PartialWriteDegradedWriteShardHistory", interval),
-                  ("OptimizedK2M2PartialWritePrimaryReplacementShardHistory", interval), ("OptimizedK2M2RequestHeldAtDyingPrimary", width)]
+                  ("OptimizedK2M2PartialWritePrimaryReplacementShardHistory", interval), ("OptimizedK2M2RequestHeldAtDyingPrimary", width),
+                  ("OptimizedK2M2WatchFailover", width), ("OptimizedK2M2SnapshotFailover", width), ("OptimizedK2M2PGBackoff", width)]
         for cell, capabilities in frozen:
             selector = "^TestCephOSDErasure%sIntegration$" % cell
             self.assertEqual([row.get("capabilities") for row in rows if row["test_run"] == selector], [capabilities], selector)
