@@ -138,7 +138,7 @@ a particular test in it ran. The Visibility column states which applies:
 
 Each path of the [final test-environment scope](../../../SPEC.md#final-test-environment-scope)
 has one area file in this directory. A row's ID starts with the prefix of
-its area file, and the row is in that file only. The file's title is the
+its area file, and the row is in that area only. The file's title is the
 path's name in SPEC.md, as in the table below.
 
 | Prefix | Path | Area file |
@@ -154,13 +154,25 @@ path's name in SPEC.md, as in the table below.
 Each area file has a Rows section with one table of the columns of every
 area; no coverage table is outside it. Where it
 applies, a Product wire gaps section follows it, then an Updates section with
-the dated notes of changes to that area's rows. Every area file has its
-Updates section already, so two notes added at once never both create it. A change to one area edits
-that area file only:
+the dated notes of changes to that area's rows. The rows of an area file have
+numbered IDs (`OSD-24`); row IDs are never renumbered or moved to another
+prefix.
 
-- a new row goes into its area's table with an unused number of that
-  prefix; row IDs are never renumbered or moved to another prefix;
-- a dated note of that change goes into the area file's Updates section;
+A new row is a row file of its own in the area's directory,
+`<PREFIX>/<PREFIX>-<name>.md`, for example `RBD/RBD-journal-trim.md`. Its
+ID is the file name without `.md`: the prefix and a lowercase name of the
+row's subject (letters, digits and single hyphens, starting with a letter),
+chosen by the author without looking at other pull requests. Its first line
+is the title `# <ID>`; its Rows section holds that one row in the table of
+the area files, and its Updates section holds the dated note of the change.
+Its relative links start from the area directory, one level below the area
+files. So two pull requests that add rows to one area add two files and
+need not agree on a number:
+
+- a new row adds its row file and edits no area file, and the area file
+  keeps its rows and notes;
+- a later change to an existing row edits the file that holds that row, with
+  its dated note in that file's Updates section;
 - nothing in this index counts or lists the rows.
 
 A note on an update that changes rows of several areas at once is under
@@ -269,15 +281,18 @@ underlying Messenger paths and are not application completeness claims.
 
 ## Drift check
 
-`python3 tools/native_path_coverage.py` checks this index and every area file
-without running any test body. It reads every entry of this directory and
-refuses an entry that is neither this index nor an area file listed under
-[Area files](#area-files) (including a directory, a symbolic link or a file
-that is not UTF-8 text), a listed area file that is missing, an area file
-whose title or prefix differs from its line in the Area files table or that
-has no Rows section, a row in this index or outside an area file's Rows
-section, a row whose ID does not have the prefix of its area file and a row
-ID used twice in any of the files. In every file, every scenario ID, `group:`
+`python3 tools/native_path_coverage.py` checks this index, every area file
+and every row file without running any test body. It reads every entry of
+this directory and of its area directories and refuses an entry that is
+neither this index, an area file listed under [Area files](#area-files) nor
+a row file `<PREFIX>/<PREFIX>-<name>.md` of a listed area (including a
+nested directory, a symbolic link or a file that is not UTF-8 text), a
+listed area file that is missing, an area file whose title or prefix differs
+from its line in the Area files table or that has no Rows section, a row
+file whose title is not its ID or whose Rows section does not hold exactly
+the row of that ID, a row in this index or outside a Rows section, a row
+whose ID does not have the prefix of its area (a number in an area file, a
+name in a row file) and a row ID used twice in any of the files. In every file, every scenario ID, `group:`
 and `suite:` reference exists in the catalog, every plain test name is a
 top-level Go test that `go test -list` reports in the product, fixture or
 quality module, every linked record exists, and a link whose text is a test
