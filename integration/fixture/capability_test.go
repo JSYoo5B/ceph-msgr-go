@@ -318,6 +318,20 @@ func TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture(t *testing.T) {
 				}
 			}
 		}
+		// An exclusive capability of another fixture whose own terms this row
+		// meets is refused all the same: the fixture asks for its own.
+		for f := range byFixture {
+			if f == own.exclusive {
+				continue
+			}
+			const name = "merge-proof-other-exclusive"
+			defineExclusiveCapability(f, name, "a capability of another fixture defined by this test", "OSD=1", nil)
+			problems := catalogAdmissionProblems([]ciScenario{replace(row, own.name, name)}, bindings)
+			delete(fixtureCapabilities, name)
+			if len(problems) == 0 {
+				t.Fatalf("%s: an exclusive capability of the %s fixture admitted on the %s fixture", row.ID, f, own.exclusive)
+			}
+		}
 		// A new capability for this fixture, defined beside a new mode, on a
 		// row that declares nothing else. A row whose topology belongs to its
 		// own capability (the three-OSD RBD primary change) refuses it.

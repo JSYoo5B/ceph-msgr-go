@@ -352,7 +352,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		// The Go cache-tier and cache-operation acceptances reuse the live
 		// cache-pool fixture alone and are admitted only by its capability.
 		if p.mgrCount != "2" || !ownSelection(p.testRun, selected, p.admitsExclusive(fixtureOSDCachePools)) {
-			return profile{}, fmt.Errorf("cache-pool acceptance requires two MGRs and its exclusive selector %s or one test with capability %s", selected, capExclusiveOSDCachePools.name)
+			return profile{}, fmt.Errorf("cache-pool acceptance requires two MGRs and its exclusive selector %s or one test admitted by an exclusive capability of this fixture, such as %s", selected, capExclusiveOSDCachePools.name)
 		}
 		checked := p
 		checked.osdCachePools = "0"
@@ -387,7 +387,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 			p.osdCachePools != "0" || p.mgrService != "0" || p.mdsFresh != "0" || p.rbdBase != "0" ||
 			p.sparseReadOracle != "" || p.mapExtOracle != "" || p.u64XattrOracle != "" || p.writeSameOracle != "" ||
 			!ownSelection(p.testRun, selected, p.admitsExclusive(fixtureOSDErasureCapacity)) {
-			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires its default selector %s or one test with capability %s, BlueStore and the legacy-v6 or replicated-pg-v8 profile", selected, capOSDErasureWidth.name)
+			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires its default selector %s or one test admitted by an exclusive capability of this topology, such as %s, BlueStore and the legacy-v6 or replicated-pg-v8 profile", selected, capOSDErasureWidth.name)
 		}
 	}
 	p.testRun = cmp.Or(p.testRun, selected)
