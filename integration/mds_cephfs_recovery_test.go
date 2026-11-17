@@ -2031,8 +2031,12 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 				t.Fatalf("explicit %s after restart failed: %d %d", name, unlockFirst.Result, unlockSafe.Result)
 			}
 			remaining := hf.Locks[i+1:]
+			probeStart := len(hf.ProbeAfter)
 			if err := heldFlockObserve(ctx, control, recipe.probes(len(remaining)), hf.Ino, &heldNativeBaseline, &hf.ProbeAfter); err != nil {
 				t.Fatalf("native probes after %s with %d Go locks still held differ: %v", name, len(remaining), err)
+			}
+			for j := probeStart; j < len(hf.ProbeAfter); j++ {
+				hf.ProbeAfter[j].AfterUnlockTID = unlockCall.Transaction()
 			}
 			if len(remaining) == 0 {
 				break
