@@ -201,9 +201,13 @@ Native and Go behaviour on the same object:
 
 - Object BLOCK under the default configuration (only unfound objects back off
   by default). The unfound path and its release were not exercised.
-- UNBLOCK delivered by an interval change. `on_change` calls
-  `clear_backoffs()` without sending UNBLOCK (`PrimaryLogPG.cc:13039`); the
-  failover leaf deliberately used the non-backoff parking path.
+- UNBLOCK delivered by an interval change for an object backoff. `on_change`
+  calls `clear_backoffs()` without sending UNBLOCK (`PrimaryLogPG.cc:13039`),
+  but a primary that stays up runs `clear_primary_state` first, and that
+  releases every backoff in the PG's range with UNBLOCK
+  (`PeeringState.cc:807-828`, `PG.cc:352-361`). The failover leaf deliberately
+  used the non-backoff parking path. A PG-wide backoff released this way was
+  observed on an EC PG ([EC epoch-state control](OSD_EC_EPOCH_STATE_VALIDATION.md)).
 - Late ACK after an object UNBLOCK, range (non-equal) object bounds, more than
   one simultaneous object backoff, split during an object backoff, EC pools,
   `replicated-pg-reply-v8` with three replicas, and remote CI. Only the two

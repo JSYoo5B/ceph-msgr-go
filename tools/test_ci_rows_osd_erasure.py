@@ -30,7 +30,8 @@ class OSDErasureRowsTest(ci_row_catalog.RowsTestCase):
                  ("OptimizedK2M2CopyFromHistory", capture), ("OptimizedK2M2PartialWriteShardHistory", capture),
                  ("OptimizedK2M2PartialWriteLaterWriteShardHistory", interval), ("OptimizedK2M2PartialWriteNewIntervalShardHistory", interval),
                  ("OptimizedK2M2PartialWriteShardReturnShardHistory", interval), ("OptimizedK2M2PartialWriteDegradedWriteShardHistory", interval),
-                 ("OptimizedK2M2PartialWritePrimaryReplacementShardHistory", interval), ("OptimizedK2M2RequestHeldAtDyingPrimary", width)]
+                 ("OptimizedK2M2PartialWritePrimaryReplacementShardHistory", interval), ("OptimizedK2M2RequestHeldAtDyingPrimary", width),
+                 ("OptimizedK2M2WatchFailover", width), ("OptimizedK2M2SnapshotFailover", width), ("OptimizedK2M2PGBackoff", width)]
         expected_rows = []
         for cell, capabilities in cells:
             row = dict(base, test_run="^TestCephOSDErasure%sIntegration$" % cell)
