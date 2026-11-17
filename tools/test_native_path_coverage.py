@@ -235,12 +235,14 @@ class NativePathCoverageTests(unittest.TestCase):
         problems = self.check(documents)
         self.assertProblem(problems, "unlisted file " + where("NOTES.md"))
         documents = dict(self.documents, **{"drafts": None})
-        self.assertEqual(self.check(documents), ["not a regular file " + where("drafts")])
+        self.assertEqual(self.check(documents), ["not a regular UTF-8 text file " + where("drafts")])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / coverage.COVERAGE / "drafts").mkdir(parents=True)
             (root / coverage.COVERAGE / "README.md").write_text("# Map\r\n\r\ntext\r\n", encoding="utf-8")
-            self.assertEqual(coverage.read_documents(root), {"README.md": "# Map\n\ntext\n", "drafts": None})
+            (root / coverage.COVERAGE / ".DS_Store").write_bytes(b"\x00\x00\x00\x01Bud1\xff\xfe")
+            self.assertEqual(coverage.read_documents(root),
+                             {".DS_Store": None, "README.md": "# Map\n\ntext\n", "drafts": None})
 
     def test_index_must_list_existing_area_files_and_hold_no_rows(self):
         documents = dict(self.documents)
@@ -262,6 +264,28 @@ class NativePathCoverageTests(unittest.TestCase):
                          "missing index " + where(coverage.INDEX))
         documents = self.edit("SVC.md", "# Service-induced paths\n", "Service-induced paths\n")
         self.assertProblem(self.check(documents), "area file %s: first line is not a # title" % where("SVC.md"))
+
+    def test_area_files_keep_rows_in_their_rows_section(self):
+        documents = self.edit("SVC.md", "\n## Updates\n", "\n## Updates\n\n| " + " | ".join(coverage.HEADER)
+                              + " |\n" + "| --- " * len(coverage.HEADER) + "|\n" + synthetic_row("SVC") + "\n")
+        self.assertEqual(self.check(documents),
+                         ["row SVC-900: outside the Rows section of " + where("SVC.md")])
+        documents = self.edit("SVC.md", "## Rows\n", "## Table\n")
+        self.assertProblem(self.check(documents), "area file %s: missing Rows section" % where("SVC.md"))
+
+    def test_area_titles_and_prefixes_match_the_index(self):
+        documents = self.edit("SVC.md", "# Service-induced paths\n", "# Daemon-to-daemon\n")
+        self.assertProblem(self.check(documents),
+                           "area file %s: title Daemon-to-daemon and prefix SVC differ from the index line "
+                           "SVC | Service-induced paths" % where("SVC.md"))
+        documents = self.edit(coverage.INDEX, "| `SVC` | Service-induced paths |", "| `SRV` | Service-induced paths |")
+        self.assertEqual(self.check(documents),
+                         ["area file %s: title Service-induced paths and prefix SVC differ from the index line "
+                          "SRV | Service-induced paths" % where("SVC.md")])
+        documents = self.edit(coverage.INDEX, "| `SVC` | Service-induced paths | [SVC.md](SVC.md) |\n",
+                              "\nAlso [SVC.md](SVC.md).\n")
+        self.assertEqual(self.check(documents),
+                         ["area file %s: no Prefix | Path | Area file line in the index" % where("SVC.md")])
 
     def test_class_counts_come_from_the_rows(self):
         counts = coverage.class_counts(self.documents)

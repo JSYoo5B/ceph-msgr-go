@@ -3,11 +3,13 @@
 
 The map is the directory integration/fixture/coverage: an index (README.md)
 whose "Area files" section links one file per area, <PREFIX>.md, in the
-order the rows compose. Every row is in the Rows table of the area file whose
+order the rows compose, with each file's prefix and title (its SPEC.md path)
+in one table line. Every row is in the Rows section of the area file whose
 prefix its ID carries. The check refuses an entry of the directory that is
-neither the index nor a listed area file, a listed area file that is missing,
-a row in the index, a row in the wrong area file and a row ID used in two
-places. Nothing counts or lists the rows, so a row added to one area edits
+neither the index nor a listed area file (a directory, a symbolic link or
+non-UTF-8 data included), a listed area file that is missing or disagrees
+with its table line, a row in the index or outside a Rows section, a row in
+the wrong area file and a row ID used in two places. Nothing counts or lists the rows, so a row added to one area edits
 that area file only.
 
 This validates references, not the truth of a native observation. Top-level
@@ -118,27 +120,49 @@ def table_rows(text):
 def read_documents(root=ROOT):
     """Return {entry name: text} for every entry of the coverage directory.
 
-    An entry that is not a regular file (a directory or a symbolic link) maps
-    to None, so the check can refuse it."""
+    An entry that is not a regular UTF-8 text file (a directory, a symbolic
+    link or binary data such as a desktop's folder metadata) maps to None, so
+    the check refuses it instead of failing to read it."""
     documents = {}
     for path in sorted((Path(root) / COVERAGE).iterdir(), key=lambda p: p.name):
-        if path.is_symlink() or not path.is_file():
-            documents[path.name] = None
-        else:
-            documents[path.name] = path.read_text(encoding="utf-8")
+        documents[path.name] = None
+        if not path.is_symlink() and path.is_file():
+            try:
+                documents[path.name] = path.read_text(encoding="utf-8")
+            except UnicodeError:
+                pass
     return documents
+
+
+def section(text, heading):
+    """The body of the ## section with this heading, or None."""
+    match = re.search(r"(?m)^## " + re.escape(heading) + r"\n", text)
+    if not match:
+        return None
+    return re.split(r"(?m)^## ", text[match.end():], maxsplit=1)[0]
+
+
+def area_table(index):
+    """{area file: (prefix, path)} from the Prefix | Path | Area file table
+    of the index's Area files section."""
+    table = {}
+    for line in (section(index, "Area files") or "").splitlines():
+        cells = split_row(line) if line.startswith("|") else []
+        links = LINK.findall(cells[2]) if len(cells) == 3 else []
+        if len(links) == 1:
+            table[links[0][1]] = (cells[0].strip("`"), cells[1])
+    return table
 
 
 def area_files(index):
     """Return the area files linked from the index's Area files section, in
     order, or None when the section is missing. Only a plain link to a
     Markdown file of the same directory names an area file."""
-    match = re.search(r"(?m)^## Area files\n", index)
-    if not match:
+    section_text = section(index, "Area files")
+    if section_text is None:
         return None
-    section = re.split(r"(?m)^## ", index[match.end():], maxsplit=1)[0]
     names = []
-    for _, target in LINK.findall(section):
+    for _, target in LINK.findall(section_text):
         if re.fullmatch(r"[^/\\#:]+\.md", target) and target not in names:
             names.append(target)
     return names
@@ -169,11 +193,12 @@ def compose(documents):
         problems.append(where(INDEX) + ": lists no area file")
     for name in sorted(documents):
         if documents[name] is None:
-            problems.append("not a regular file " + where(name))
+            problems.append("not a regular UTF-8 text file " + where(name))
         elif name != INDEX and name not in listed:
             problems.append("unlisted file " + where(name))
     for cells in table_rows(index):
         problems.append("row %s: in the index %s, not in an area file" % (cells[0], where(INDEX)))
+    table = area_table(index)
     areas = []
     for name in listed:
         if not AREA_FILE.fullmatch(name):
@@ -189,7 +214,20 @@ def compose(documents):
         if label is None:
             problems.append("area file %s: first line is not a # title" % where(name))
             continue
-        areas.append((name, label, list(table_rows(text))))
+        prefix, path = table.get(name, (None, None))
+        if path is None:
+            problems.append("area file %s: no Prefix | Path | Area file line in the index" % where(name))
+        elif prefix != name[:-3] or path != label:
+            problems.append("area file %s: title %s and prefix %s differ from the index line %s | %s"
+                            % (where(name), label, name[:-3], prefix, path))
+        rows = section(text, "Rows")
+        if rows is None:
+            problems.append("area file %s: missing Rows section" % where(name))
+            rows = ""
+        inside = list(table_rows(rows))
+        for cells in table_rows(text.replace(rows, "", 1) if rows else text):
+            problems.append("row %s: outside the Rows section of %s" % (cells[0], where(name)))
+        areas.append((name, label, inside))
     return areas, problems
 
 

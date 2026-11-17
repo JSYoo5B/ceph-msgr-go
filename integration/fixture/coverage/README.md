@@ -139,7 +139,7 @@ a particular test in it ran. The Visibility column states which applies:
 Each path of the [final test-environment scope](../../../SPEC.md#final-test-environment-scope)
 has one area file in this directory. A row's ID starts with the prefix of
 its area file, and the row is in that file only. The file's title is the
-path's name in SPEC.md.
+path's name in SPEC.md, as in the table below.
 
 | Prefix | Path | Area file |
 | --- | --- | --- |
@@ -151,7 +151,8 @@ path's name in SPEC.md.
 | `D2D` | Daemon-to-daemon | [D2D.md](D2D.md) |
 | `SVC` | Service-induced paths | [SVC.md](SVC.md) |
 
-Each area file has a Rows table with the columns of every area. Where they
+Each area file has a Rows section with one table of the columns of every
+area; no coverage table is outside it. Where they
 apply, a Product wire gaps section follows it, then an Updates section with
 the dated notes of changes to that area's rows. A change to one area edits
 that area file only:
@@ -270,9 +271,12 @@ underlying Messenger paths and are not application completeness claims.
 `python3 tools/native_path_coverage.py` checks this index and every area file
 without running any test body. It reads every entry of this directory and
 refuses an entry that is neither this index nor an area file listed under
-[Area files](#area-files), a listed area file that is missing, a row in this
-index, a row whose ID does not have the prefix of its area file and a row ID
-used twice in any of the files. In every file, every scenario ID, `group:`
+[Area files](#area-files) (including a directory, a symbolic link or a file
+that is not UTF-8 text), a listed area file that is missing, an area file
+whose title or prefix differs from its line in the Area files table or that
+has no Rows section, a row in this index or outside an area file's Rows
+section, a row whose ID does not have the prefix of its area file and a row
+ID used twice in any of the files. In every file, every scenario ID, `group:`
 and `suite:` reference exists in the catalog, every plain test name is a
 top-level Go test that `go test -list` reports in the product, fixture or
 quality module, every linked record exists, and a link whose text is a test
