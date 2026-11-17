@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -77,6 +80,25 @@ class TerminalTests(unittest.TestCase):
         self.assertEqual(result["test_result"], "passed")
         self.assertEqual(result["evidence_result"], "incomplete")
         self.assertEqual(result["native_cleanup"], "verified")
+        self.assertFalse(result["accepted"])
+
+    def test_complete_bundle_acceptance(self):
+        self.log("--- PASS: TestNative (1s)\n")
+        result = self.record(EVIDENCE_PILOT="true",
+                             EVIDENCE_COLLECTION="success", EVIDENCE_UPLOAD="success")
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["native_cleanup"], "verified")
+        self.assertEqual(result["result_artifact_upload"], "unobserved")
+
+    def test_cli_records_missing_verdict_and_exits_unsuccessfully(self):
+        self.log("=== RUN   TestNative\n")
+        command = subprocess.run(
+            [sys.executable, str(Path(native_terminal.__file__)),
+             "--directory", str(self.root)], env=os.environ | self.env,
+            capture_output=True, text=True, check=False)
+        self.assertEqual(command.returncode, 1, command.stderr)
+        result = json.loads((self.root / "scenario-result/result.json").read_text())
+        self.assertEqual(result["result"], "failure")
         self.assertFalse(result["accepted"])
 
     def test_preserve_first_attempt(self):
