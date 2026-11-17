@@ -75,9 +75,10 @@ no list, count or file of another area:
   declares the one capability that admits its test there: an existing one
   (`osd-erasure-width` on the four-OSD topology), or a new
   `defineExclusiveCapability` when the new mode is the admission itself.
-- `integration/fixture/coverage/<AREA>.md`: the row of the
-  [coverage map](../../integration/fixture/coverage/README.md) in the area's
-  Rows table and a dated note under its Updates section.
+- `integration/fixture/coverage/<AREA>/<AREA>-<name>.md`: the row of the
+  [coverage map](../../integration/fixture/coverage/README.md#area-files)
+  in a row file of its own, named after the row's subject, with its dated
+  note. The area file `<AREA>.md` is not edited, and no number is taken.
 - `tools/test_ci_rows_<group>_<name>.py`: the row's own checks, when it needs
   more than `validate`, as a module of its own on
   `ci_row_catalog.RowsTestCase`.
@@ -86,8 +87,8 @@ A row's description belongs in its fixture record and its coverage row, not
 in this document. `tools/test_merge_proof.py` makes two such pull requests in
 a temporary Git repository, once in two areas and once in one area, merges
 them and runs the validators on the merged tree. The two areas merge without
-a conflict. In one area, only the area's catalog fragment and coverage file
-may conflict, and keeping both sides' rows resolves them.
+a conflict. In one area, only the group's catalog fragment may conflict, and
+keeping both sides' rows resolves it.
 
 ## Catalog and planner
 

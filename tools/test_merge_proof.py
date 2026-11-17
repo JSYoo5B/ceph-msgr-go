@@ -12,16 +12,26 @@ and only that:
 - the fixture capability the row declares, in a new integration/fixture file
   (defineCapability, or defineExclusiveCapability on a fixture with its own
   default selection);
-- a coverage row with a dated note in the area's coverage file;
+- a coverage row with its dated note, in a new row file
+  integration/fixture/coverage/<AREA>/<AREA>-<name>.md;
 - the row's own checks, in a new tools/test_ci_rows_<group>_<name>.py.
+
+Every branch is made from the base and its author's own name only: no
+number, name or file is allocated across the branches, and the test
+test_branches_are_independent rebuilds each one alone and compares the trees.
+Two authors of one area therefore pick their coverage row IDs without knowing
+each other.
 
 Case A merges an OSD branch with an MDS branch, which must merge without a
 textual conflict in any file. Case B merges two RBD branches, which may
-conflict only in the RBD catalog fragment and the RBD coverage file that both
-edit; the conflict is resolved by keeping both sides' rows (a composition that
-refuses anything but rows added on both sides), and the result must pass.
-Case C does the same for two controls of the four-OSD erasure topology, the
-most frequent kind of new row, in the OSD fragment and coverage file.
+conflict only in the one file both edit, the RBD catalog fragment; a
+conflict is resolved by keeping both sides' rows (a composition that refuses
+anything but rows added on both sides), and the result must pass. A clean
+merge is accepted as well, and both paths must end in one merge commit of
+the two branches. Case C does the same for two controls of the four-OSD
+erasure topology, the most frequent kind of new row, in the OSD fragment:
+one declares the existing osd-erasure-width beside its own mode, the other
+admits its test by an exclusive capability of its own.
 
 Each merged tree then passes the repository's own validators, run from that
 tree: scenario_plan.py validate (catalog, selectors, the fixture's admission
@@ -36,7 +46,6 @@ The test needs git and the Go toolchain of the fixture module, as the other
 tools tests do. It runs no cluster. Every merged tree is validated in the same
 directory, so the Go build cache serves the unchanged packages.
 """
-import difflib
 import json
 import os
 from pathlib import Path
@@ -66,6 +75,8 @@ class Author:
     capability, one coverage row and the row's own checks."""
 
     def __init__(self, name, group, area, opt_ins, exclusive, requires, test=None, base=None, id_profile=ID_PROFILE, also=()):
+        self.args = (name, group, area, opt_ins, exclusive, requires)
+        self.kwargs = dict(test=test, base=base, id_profile=id_profile, also=also)
         self.name = name                      # e.g. OSD, RBDA
         self.snake = "merge_proof_" + name.lower()
         self.slug = "merge-proof-" + name.lower()
@@ -81,7 +92,9 @@ class Author:
         self.declared = ",".join(sorted((self.capability,) + tuple(also)))
         self.params.update(test_run=self.selector, capabilities=self.declared)
         self.exclusive, self.requires = exclusive, requires
-        self.number = None                    # coverage row number, set per base
+        # The coverage row is named after this author's subject; no number
+        # is taken, so no other branch needs to be known.
+        self.coverage_id = "%s-merge-proof-%s" % (area, name.lower())
 
     # The files, as an author writes them.
 
@@ -133,39 +146,50 @@ class Author:
                 "    unittest.main()\n" % (self.name, self.name, self.selector, self.declared, self.test))
 
     def coverage_row(self):
-        return ("| %s-%d | Merge proof path %s | `released` | Merge proof fixture | Merge proof observation "
+        return ("| %s | Merge proof path %s | `released` | Merge proof fixture | Merge proof observation "
                 "| Merge proof cleanup | `%s`, `%s` | dedicated row |"
-                % (self.area, self.number, self.name, self.id, self.test))
+                % (self.coverage_id, self.name, self.id, self.test))
 
-    def coverage_note(self):
-        return ("Updated by the merge proof %s. %s-%d is new, with one dedicated catalog row. No class changed."
-                % (self.name, self.area, self.number))
+    def coverage_file(self):
+        """The row file of the coverage map, as an author writes it."""
+        header = ["ID", "Path", "Class", "Setup and control", "Independent observation",
+                  "Fault and cleanup", "Evidence", "Visibility"]
+        return ("# %s\n\n"
+                "This file holds one `%s` row of the [native path coverage map](../README.md).\n\n"
+                "## Rows\n\n| %s |\n%s|\n%s\n\n"
+                "## Updates\n\n"
+                "Updated by the merge proof %s. %s is new, with one dedicated catalog row. No class changed.\n"
+                % (self.coverage_id, self.area, " | ".join(header), "| --- " * len(header), self.coverage_row(),
+                   self.name, self.coverage_id))
 
     def paths(self):
         return {
             "test": "integration/%s_test.go" % self.snake,
             "fragment": ".github/scenarios/catalog.d/%s.json" % self.group,
             "capability": "integration/fixture/%s.go" % self.snake,
-            "coverage": "integration/fixture/coverage/%s.md" % self.area,
+            "coverage": "integration/fixture/coverage/%s/%s.md" % (self.area, self.coverage_id),
             "checks": "tools/test_ci_rows_%s_%s.py" % (self.group.replace("-", "_"), self.snake),
         }
 
 
+# Two controls of the four-OSD erasure topology, the most frequent kind of
+# new row. ECA declares its own mode capability beside the existing
+# osd-erasure-width; ECB admits its test by an exclusive capability of its
+# own (defineExclusiveCapability), the other path the README names.
+ERASURE_PARAMS = {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container",
+                  "osd": "1", "osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8"}
+ERASURE_ID_PROFILE = "aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8"
 AUTHORS = {
     "osd": Author("OSD", "osd", "OSD", {}, None, "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=1 OSD_PROFILE=legacy-v6"),
     "mds": Author("MDS", "mds-cephfs", "MDS", {"mds_fresh": "1", "mds_cephfs": "1"}, "fixtureMDSCephFS", "MDS_FRESH=1 MDS_CEPHFS=1"),
     "rbda": Author("RBDA", "rbd", "RBD", {"rbd": "1"}, "fixtureRBD", "RBD=1"),
     "rbdb": Author("RBDB", "rbd", "RBD", {"rbd": "1"}, "fixtureRBD", "RBD=1"),
+    "eca": Author("ECA", "osd", "OSD", {}, None, "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=4",
+                  test="TestCephOSDErasureMergeProofECAIntegration", base=ERASURE_PARAMS, id_profile=ERASURE_ID_PROFILE,
+                  also=("osd-erasure-width",)),
+    "ecb": Author("ECB", "osd", "OSD", {}, "fixtureOSDErasureCapacity", "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=4",
+                  test="TestCephOSDErasureMergeProofECBIntegration", base=ERASURE_PARAMS, id_profile=ERASURE_ID_PROFILE),
 }
-# Two controls of the four-OSD erasure topology, the most frequent kind of
-# new row: each its own mode capability beside osd-erasure-width.
-ERASURE_PARAMS = {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container",
-                  "osd": "1", "osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8"}
-for _key in ("eca", "ecb"):
-    AUTHORS[_key] = Author(_key.upper(), "osd", "OSD", {}, None, "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=4",
-                           test="TestCephOSDErasureMergeProof%sIntegration" % _key.upper(), base=ERASURE_PARAMS,
-                           id_profile="aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8",
-                           also=("osd-erasure-width",))
 
 
 # Text edits that keep each file's line ending.
@@ -188,34 +212,6 @@ def append_rows(text, rows):
     return text[:match.start()] + tail
 
 
-def coverage_with(text, row, note):
-    """Add a row to the area file's Rows table and a dated note under Updates."""
-    nl = newline(text)
-    lines = text.split(nl)
-    end = lines.index("## Rows")
-    while not lines[end].startswith("|"):
-        end += 1
-    while end < len(lines) and lines[end].startswith("|"):
-        end += 1
-    lines.insert(end, row)
-    if "## Updates" in lines:
-        at = lines.index("## Updates") + 1
-        while at < len(lines) and not lines[at].startswith("## "):
-            at += 1
-        while lines[at - 1] == "":
-            at -= 1
-        lines[at:at] = ["", note]
-    else:
-        while lines and lines[-1] == "":
-            lines.pop()
-        lines += ["", "## Updates", "", note, ""]
-    return nl.join(lines)
-
-
-def row_numbers(text, area):
-    return [int(number) for number in re.findall(r"(?m)^\| %s-(\d+) \|" % re.escape(area), text)]
-
-
 # Conflict resolution that keeps the rows of both sides and refuses anything else.
 
 def compose_fragment(base, ours, theirs):
@@ -230,29 +226,6 @@ def compose_fragment(base, ours, theirs):
     if json.loads(composed)["scenarios"] != rows[1] + added:
         raise AssertionError("composed fragment does not hold both sides' rows")
     return composed
-
-
-def compose_insertions(base, ours, theirs):
-    """Both sides' added lines at their base positions, ours first; any other
-    change than an insertion refuses the composition."""
-    nl = newline(ours)
-    base_lines = base.split(nl)
-    inserted = []
-    for side in (ours, theirs):
-        lines, at = side.split(nl), {}
-        for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, base_lines, lines, autojunk=False).get_opcodes():
-            if op == "insert":
-                at[i1] = lines[j1:j2]
-            elif op != "equal":
-                raise AssertionError("a side changed base lines; not a composition of added lines")
-        inserted.append(at)
-    result = []
-    for index in range(len(base_lines) + 1):
-        for at in inserted:
-            result += at.get(index, [])
-        if index < len(base_lines):
-            result.append(base_lines[index])
-    return nl.join(result)
 
 
 class Repository:
@@ -358,12 +331,6 @@ class MergeProofTest(unittest.TestCase):
                                 for path in (cls.repo.path / ".github" / "scenarios" / "catalog.d").glob("*.json")
                                 if not path.name.startswith("_"))
             cls.branches = {}
-            for area in ("OSD", "MDS", "RBD"):
-                taken = max(row_numbers(cls.repo.read("integration/fixture/coverage/%s.md" % area), area))
-                for author in AUTHORS.values():
-                    if author.area == area:
-                        taken += 1
-                        author.number = taken
             for key, author in AUTHORS.items():
                 cls.branches[key] = cls.author_branch(author)
         except BaseException:
@@ -375,27 +342,49 @@ class MergeProofTest(unittest.TestCase):
         remove_tree(cls.scratch)
 
     @classmethod
-    def author_branch(cls, author):
+    def author_branch(cls, author, branch=None):
+        """Make the author's branch from the base; it reads only the base
+        tree and the author's own attributes."""
         repo, paths = cls.repo, author.paths()
-        repo.git("checkout", "-q", "-f", "-b", "add-" + author.name.lower(), "base")
+        branch = branch or "add-" + author.name.lower()
+        repo.git("checkout", "-q", "-f", "-b", branch, "base")
         repo.write(paths["test"], author.native_test())
         repo.write(paths["capability"], author.capability_source())
         repo.write(paths["checks"], author.row_checks())
         repo.write(paths["fragment"], append_rows(repo.read(paths["fragment"]),
                                                   [{"id": author.id, "group": author.group, "params": author.params}]))
-        repo.write(paths["coverage"], coverage_with(repo.read(paths["coverage"]), author.coverage_row(), author.coverage_note()))
+        repo.write(paths["coverage"], author.coverage_file())
         repo.git("add", "--", *paths.values())
         repo.git("commit", "-q", "--no-verify", "-m", "add " + author.test)
-        return "add-" + author.name.lower()
+        return branch
 
     def changed(self, branch):
         return set(self.repo.git("diff", "--name-only", "base", branch).stdout.split())
 
-    def merge(self, ours, theirs):
-        """Merge theirs into ours; return the unmerged paths."""
-        self.repo.git("checkout", "-q", "-f", ours)
-        self.repo.git("merge", "--no-ff", "--no-edit", theirs, check=False)
-        return set(self.repo.git("diff", "--name-only", "--diff-filter=U").stdout.split())
+    def merge(self, ours, theirs, allowed=frozenset()):
+        """Merge theirs into ours and return the paths that conflicted.
+
+        A clean merge is committed by git merge itself. Conflicts are allowed
+        only in the paths of allowed, and each is resolved by composing both
+        sides' added rows before the merge is committed. Either way the result
+        must be one merge commit whose parents are the two branch tips."""
+        repo = self.repo
+        tips = [repo.git("rev-parse", "--verify", branch + "^{commit}").stdout.strip() for branch in (ours, theirs)]
+        repo.git("checkout", "-q", "-f", ours)
+        result = repo.git("merge", "--no-ff", "--no-edit", theirs, check=False)
+        unmerged = set(repo.git("diff", "--name-only", "--diff-filter=U").stdout.split())
+        if not unmerged:
+            self.assertEqual(result.returncode, 0, "the merge failed without a conflict:\n" + result.stdout + result.stderr)
+        else:
+            self.assertTrue(unmerged <= set(allowed), "conflicts outside %s: %s" % (sorted(allowed), sorted(unmerged - set(allowed))))
+            for relative in unmerged:
+                stages = [self.stage(relative, number) for number in (1, 2, 3)]
+                repo.write(relative, compose_fragment(*stages))
+                repo.git("add", "--", relative)
+            repo.git("commit", "-q", "--no-verify", "--no-edit")
+        self.assertEqual(repo.git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()[1:], tips, "not one merge commit of both branches")
+        self.assertEqual(repo.git("status", "--porcelain", "--untracked-files=no").stdout, "", "the merge left changes uncommitted")
+        return unmerged
 
     def stage(self, relative, number):
         """One stage of an unmerged path, byte for byte (its line endings kept)."""
@@ -462,6 +451,20 @@ class MergeProofTest(unittest.TestCase):
             for pattern, compiled in patterns:
                 self.assertTrue([path for path in changed if compiled.match(path)], "%s edits no %s" % (branch, pattern))
 
+    def test_branches_are_independent(self):
+        """Each branch is the same when its author is alone: no ID, number or
+        file depends on the other authors or on the order they branch in."""
+        for key in reversed(list(AUTHORS)):
+            original = AUTHORS[key]
+            alone = Author(*original.args, **original.kwargs)
+            branch = self.author_branch(alone, "alone-" + key)
+            self.assertEqual(self.repo.git("rev-parse", branch + "^{tree}").stdout,
+                             self.repo.git("rev-parse", self.branches[key] + "^{tree}").stdout, key)
+        for first, second in (("rbda", "rbdb"), ("eca", "ecb")):
+            self.assertNotEqual(AUTHORS[first].coverage_id, AUTHORS[second].coverage_id)
+            self.assertEqual(self.changed(self.branches[first]) & self.changed(self.branches[second]),
+                             {AUTHORS[first].paths()["fragment"]}, "same-area branches share more than the group's fragment")
+
     def test_merges_compose_and_validate(self):
         # Case A and Case B run in this order in one test so that both merged
         # trees are validated in one directory and share the build cache.
@@ -469,32 +472,24 @@ class MergeProofTest(unittest.TestCase):
         self.base_released = int(re.search(r"released (\d+)", self.repo.run(sys.executable, "tools/native_path_coverage.py").stdout).group(1))
 
         # Case A: different areas, no textual conflict in any file.
-        unmerged = self.merge(self.branches["osd"], self.branches["mds"])
-        self.assertEqual(unmerged, set(), "two branches of different areas conflict")
-        self.assertEqual(len(self.repo.git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()), 3, "no merge commit")
+        self.assertEqual(self.merge(self.branches["osd"], self.branches["mds"]), set(), "two branches of different areas conflict")
         self.validate([AUTHORS["osd"], AUTHORS["mds"]])
 
-        # Case B: one area; a conflict only in the area's fragment and
-        # coverage file, resolved by keeping both rows.
+        # Case B: one area; a conflict, if any, only in the group's catalog
+        # fragment, resolved by keeping both rows.
         self.same_area("rbda", "rbdb")
         # Case C: two controls of the four-OSD erasure topology in one area.
         self.same_area("eca", "ecb")
 
     def same_area(self, first, second):
         ours, theirs = AUTHORS[first], AUTHORS[second]
-        allowed = {ours.paths()["fragment"], ours.paths()["coverage"]}
-        unmerged = self.merge(self.branches[first], self.branches[second])
-        self.assertTrue(unmerged <= allowed, "conflicts outside the area's fragment and coverage file: %s" % sorted(unmerged - allowed))
-        for relative in unmerged:
-            stages = [self.stage(relative, number) for number in (1, 2, 3)]
-            compose = compose_fragment if relative.endswith(".json") else compose_insertions
-            self.repo.write(relative, compose(*stages))
-            self.repo.git("add", "--", relative)
-        self.repo.git("commit", "-q", "--no-verify", "--no-edit")
-        for relative in allowed:
-            text = self.repo.read(relative)
-            for author in (ours, theirs):
-                self.assertIn(author.id if relative.endswith(".json") else author.coverage_row(), text)
+        fragment = ours.paths()["fragment"]
+        self.assertEqual(fragment, theirs.paths()["fragment"])
+        self.merge(self.branches[first], self.branches[second], allowed={fragment})
+        text = self.repo.read(fragment)
+        for author in (ours, theirs):
+            self.assertIn(author.id, text)
+            self.assertEqual(self.repo.read(author.paths()["coverage"]), author.coverage_file())
         self.validate([ours, theirs])
 
 
@@ -521,17 +516,6 @@ class CompositionTest(unittest.TestCase):
             compose_fragment(self.FRAGMENT, ours, theirs.replace('"a"', '"z"'))
         with self.assertRaisesRegex(AssertionError, "one identifier"):
             compose_fragment(self.FRAGMENT, ours, ours)
-
-    def test_line_composition_refuses_a_changed_line(self):
-        base = "# T\n\n| A-1 |\n\n## Updates\n\nnote 1\n"
-        ours = base.replace("| A-1 |\n", "| A-1 |\n| A-2 |\n") + "\nnote 2\n"
-        theirs = base.replace("| A-1 |\n", "| A-1 |\n| A-3 |\n") + "\nnote 3\n"
-        self.assertEqual(compose_insertions(base, ours, theirs),
-                         "# T\n\n| A-1 |\n| A-2 |\n| A-3 |\n\n## Updates\n\nnote 1\n\nnote 2\n\nnote 3\n")
-        crlf = [text.replace("\n", "\r\n") for text in (base, ours, theirs)]
-        self.assertEqual(compose_insertions(*crlf), compose_insertions(base, ours, theirs).replace("\n", "\r\n"))
-        with self.assertRaisesRegex(AssertionError, "changed base lines"):
-            compose_insertions(base, ours, theirs.replace("note 1", "note one"))
 
     def test_readme_section_names_the_files(self):
         patterns = [pattern for pattern, _ in readme_patterns()]
