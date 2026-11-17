@@ -723,12 +723,40 @@ without running PR code. Only owners, members and collaborators are accepted.
 Trusted default-branch control code records the PR head once and resolves names
 against that revision. Test jobs check out that exact SHA with read-only access
 and no persisted credentials. Separate trusted jobs publish a request-specific
-`ci-command/run-<run-id>` status and summary. A failed, canceled, skipped or
+`ci-command/run-<run-id>/attempt-<attempt>` status and summary. A failed, canceled, skipped or
 missing selected suite cannot become a pass; unselected suites are skipped.
 Later requests preserve earlier statuses and results. Each PR has its own
-command concurrency group, separate from basic checks. GitHub permits one
-running and one pending request per group; a newer pending request can replace
-an older pending request.
+command concurrency group, separate from basic checks. It uses `queue: max`
+and `cancel-in-progress: false`, allowing one running workflow plus up to
+100 pending workflows. Pending workflows proceed in the order they started
+waiting for the group. New requests beyond that capacity are canceled by
+GitHub before controller code can publish a SHA-bound status. Inspect their
+Actions run records and submit a new request after capacity becomes available.
+Every event entering this workflow shares that capacity, including comments
+that the parser will later ignore. The controller captures a PR head when its
+request job starts, so a queued request can capture a later head than the one
+present when the comment was posted. Reruns have distinct attempt statuses and
+attempt-specific result links.
+[GitHub concurrency policy](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+Basic CI runs `python3 tools/workflow_lint.py`. The pinned actionlint v1.7.7
+rejects GitHub's `queue` key. This adapter accepts only the explicit
+three-entry top-level queue policy in `ci-command.yml`, validates each key
+and value, and blanks only its `queue: max` line before actionlint checks
+the complete workflow. Other workflow text and line numbers are preserved.
+Duplicate keys, aliases, anchors, inline values with comments, alternative
+indentation, dynamic cancellation and unsupported queue modes fail this
+repository's deliberately narrow policy. Other workflow files receive the
+original actionlint validation.
+
+The hosted acceptance run requires the updated controller on the default
+branch. On a disposable same-repository PR, hold one requested job active,
+post three authorized requests, and record their comment IDs, workflow run
+IDs, attempts, captured SHAs and terminal statuses. Verify that all three
+survive the wait, and that baseline PR checks keep their independent results.
+Local policy tests and actionlint checks cannot establish GitHub scheduling
+behavior. This hosted exercise remains pending until the updated controller
+is available on the default branch.
 
 Native jobs run with at most eight concurrent runners and keep per-scenario
 commit, image, result and run artifacts. The selected platform suites retain
