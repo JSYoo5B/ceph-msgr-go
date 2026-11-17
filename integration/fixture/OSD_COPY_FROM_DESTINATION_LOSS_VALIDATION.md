@@ -2,7 +2,8 @@
 
 Issue #7, checkpoint 3: the destination primary dies after the copy finished
 reading its source and the primary committed locally, while at least one
-replica commit was still outstanding. This is the interval left open by the post-ONDISK SIGKILL test, by the
+replica commit was still outstanding. This is the interval left open by the
+post-ONDISK SIGKILL test, by the
 destination SIGKILL while the source read was blocked
 ([earlier record](OSD_COPY_FROM_VALIDATION.md)) and by the primary-change
 cells, which move the primary without losing a daemon
@@ -136,7 +137,25 @@ left after cleanup. Each cell is listed with its duration.
 | --- | --- | --- |
 | `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange` | PASS 19.2 s / 28.1 s | PASS 18.9 s / 29.2 s |
 
-Observed values from the CRC IPv4 row:
+Both dedicated replicated-PG-v8 rows subsequently passed all three selected
+tests on `e3c1711`. The columns below give staged-loss subtest times in the
+same opcode and replica-commit order as the first table.
+
+| Configuration | COPY_FROM | COPY_FROM2 |
+| --- | --- | --- |
+| IPv4 CRC host | 19.84 s / 30.92 s | 19.24 s / 29.09 s |
+| IPv6 secure container | 16.71 s / 23.00 s | 16.70 s / 31.49 s |
+
+All eight cells observed the full copy under the new primary. Each explicit
+resubmission returned the original PG log version. The earlier native
+measurements below come from the first CRC IPv4 run.
+
+On `e07cd85` the staged-loss test alone ran on the IPv4 secure legacy-v6
+three-replica configuration. The replica-committed cases passed in 18.99 s
+and 18.94 s. Both primary-only cases skipped at placement selection because
+the source and destination pools had different primaries. The public result
+contained exactly the two executed cells.
+
 
 | Cell | Source primary; destination primary (killed); paused | Barrier epoch; events after `started` | Paused for | New primary, epoch | Native result before resubmission | Resubmission reply | Returned primary |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -196,7 +215,6 @@ No product change was needed.
   compound copy/xattr vectors, MemStore, the complete broad legacy-v6
   three-replica rows, and automatic routing or replay. The client never
   resubmits on its own.
-- Rows not listed under Results, in particular the `legacy-v6` skip of a
-  primary-only cell when the one-PG pools have different primaries.
+- Legacy-v6 primary-only execution and rows not listed under Results.
 - Exact-SHA hosted CI. These are worker-tree native runs, separate from CI
   on the pull request head.
