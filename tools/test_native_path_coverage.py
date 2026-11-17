@@ -1,4 +1,7 @@
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 import native_path_coverage as coverage
 from test_go_test_list import REPEATED, SHAPES, WRONG_FILE, module
@@ -8,6 +11,26 @@ DIRECTORY = coverage.COVERAGE.as_posix()
 
 def where(name):
     return DIRECTORY + "/" + name
+
+
+def synthetic_row(prefix):
+    return ("| %s-900 | Synthetic path | `proposed` | Not defined | Not defined | Not defined | issue #176 "
+            "| not in catalog |" % prefix)
+
+
+def add_row(text, row):
+    """Append row to the end of the file's coverage table."""
+    lines = text.splitlines()
+    at = lines.index("| " + " | ".join(coverage.HEADER) + " |") + 2
+    while at < len(lines) and lines[at].startswith("|"):
+        at += 1
+    return "\n".join(lines[:at] + [row] + lines[at:]) + "\n"
+
+
+def git(cwd, *args):
+    return subprocess.run(["git", "-c", "user.name=CI test", "-c", "user.email=ci@example.invalid",
+                           "-c", "core.autocrlf=false", *args],
+                          cwd=cwd, capture_output=True, text=True, timeout=60)
 
 
 class NativePathCoverageTests(unittest.TestCase):
@@ -49,6 +72,11 @@ class NativePathCoverageTests(unittest.TestCase):
 
     def test_current_map_is_consistent(self):
         self.assertEqual(self.check(self.documents), [])
+
+    def test_index_lists_every_area_file_in_order(self):
+        names = coverage.area_files(self.documents[coverage.INDEX])
+        self.assertEqual(names, ["MSG.md", "MM.md", "OSD.md", "MDS.md", "RBD.md", "D2D.md", "SVC.md"])
+        self.assertEqual(sorted(names + [coverage.INDEX]), sorted(self.documents))
 
     def test_every_spec_path_has_an_area_file_with_rows(self):
         areas = {label for _, label, rows in coverage.compose(self.documents)[0] if rows}
@@ -149,14 +177,65 @@ class NativePathCoverageTests(unittest.TestCase):
         self.assertProblem(self.check(self.with_text(coverage.INDEX, text)),
                            where(coverage.INDEX) + ": missing or non-repository file ../../../../outside.md")
 
-    def test_rows_need_a_known_class_unique_ids_and_columns(self):
+    def test_rows_need_a_known_class_and_columns(self):
         name, row = self.row("MSG-1")
         self.assertProblem(self.check(self.edit(name, row, row.replace("`released`", "`covered`"))),
                            "row MSG-1: unknown class `covered`")
-        self.assertProblem(self.check(self.edit(name, row, row + "\n" + row)),
-                           "duplicate row MSG-1: in %s and %s" % (where(name), where(name)))
         self.assertProblem(self.check(self.edit(name, row, "| MSG-1 | short |")),
                            "row MSG-1: expected 8 nonempty columns")
+
+    def test_duplicate_row_ids_are_refused_within_and_across_files(self):
+        name, row = self.row("MSG-1")
+        self.assertProblem(self.check(self.edit(name, row, row + "\n" + row)),
+                           "duplicate row MSG-1: in %s and %s" % (where(name), where(name)))
+        _, other = self.row("MM-1")
+        moved = other.replace("| MM-1 |", "| MSG-1 |", 1)
+        problems = self.check(self.edit("MM.md", other, other + "\n" + moved))
+        self.assertProblem(problems, "duplicate row MSG-1: in %s and %s" % (where("MSG.md"), where("MM.md")))
+
+    def test_a_row_in_the_wrong_area_file_is_refused(self):
+        name, row = self.row("MSG-1")
+        documents = self.edit(name, row + "\n", "")
+        documents["MM.md"] = add_row(documents["MM.md"], row)
+        self.assertEqual(self.check(documents), ["row MSG-1: in %s, whose rows are MM-<number>" % where("MM.md")])
+        for key in ("MM1", "MM-01", "mm-1", "MM-1a"):
+            with self.subTest(key=key):
+                _, line = self.row("MM-1")
+                documents = self.edit("MM.md", line, line.replace("| MM-1 |", "| %s |" % key, 1))
+                self.assertProblem(self.check(documents), "row %s: in %s, whose rows are MM-<number>" % (key, where("MM.md")))
+
+    def test_an_unlisted_or_irregular_entry_is_refused(self):
+        documents = dict(self.documents, **{"NOTES.md": self.documents["SVC.md"]})
+        problems = self.check(documents)
+        self.assertProblem(problems, "unlisted file " + where("NOTES.md"))
+        documents = dict(self.documents, **{"drafts": None})
+        self.assertEqual(self.check(documents), ["not a regular file " + where("drafts")])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / coverage.COVERAGE / "drafts").mkdir(parents=True)
+            (root / coverage.COVERAGE / "README.md").write_text("# Map\r\n\r\ntext\r\n", encoding="utf-8")
+            self.assertEqual(coverage.read_documents(root), {"README.md": "# Map\n\ntext\n", "drafts": None})
+
+    def test_index_must_list_existing_area_files_and_hold_no_rows(self):
+        documents = dict(self.documents)
+        del documents["OSD.md"]
+        self.assertProblem(self.check(documents), "missing area file " + where("OSD.md"))
+        documents = self.edit(coverage.INDEX, "[SVC.md](SVC.md)", "SVC.md")
+        problems = self.check(documents)
+        self.assertProblem(problems, "unlisted file " + where("SVC.md"))
+        self.assertProblem(problems, "SPEC path without an area file with rows: Service-induced paths")
+        documents = self.edit(coverage.INDEX, "[SVC.md](SVC.md)", "[SVC.md](SVC.md), [svc.md](svc.md)")
+        self.assertProblem(self.check(documents), "area file %s: name is not <PREFIX>.md" % where("svc.md"))
+        index = add_row(self.documents[coverage.INDEX] + "\n" + "| " + " | ".join(coverage.HEADER) + " |\n"
+                        + "| --- " * len(coverage.HEADER) + "|\n", synthetic_row("SVC"))
+        self.assertProblem(self.check(self.with_text(coverage.INDEX, index)),
+                           "row SVC-900: in the index %s, not in an area file" % where(coverage.INDEX))
+        documents = self.edit(coverage.INDEX, "## Area files\n", "## Areas\n")
+        self.assertEqual(self.check(documents)[0], where(coverage.INDEX) + ": missing Area files section")
+        self.assertEqual(self.check({k: v for k, v in self.documents.items() if k != coverage.INDEX})[0],
+                         "missing index " + where(coverage.INDEX))
+        documents = self.edit("SVC.md", "# Service-induced paths\n", "Service-induced paths\n")
+        self.assertProblem(self.check(documents), "area file %s: first line is not a # title" % where("SVC.md"))
 
     def test_class_counts_come_from_the_rows(self):
         counts = coverage.class_counts(self.documents)
@@ -174,6 +253,62 @@ class NativePathCoverageTests(unittest.TestCase):
         cells[6] = "upstream receipt only"
         self.assertProblem(self.check(self.edit(name, row, "| " + " | ".join(cells) + " |")),
                            "row MSG-1: released row needs local evidence")
+
+    def test_a_row_added_to_one_area_edits_that_area_file_only(self):
+        """No count, index line or list elsewhere has to change with a row."""
+        for name in coverage.area_files(self.documents[coverage.INDEX]):
+            with self.subTest(area=name):
+                documents = self.with_text(name, add_row(self.documents[name], synthetic_row(name[:-3])))
+                self.assertEqual([n for n in documents if documents[n] != self.documents[n]], [name])
+                self.assertEqual(self.check(documents), [])
+                counts = coverage.class_counts(documents)
+                self.assertEqual(counts["proposed"], coverage.class_counts(self.documents)["proposed"] + 1)
+
+
+class MergeTests(unittest.TestCase):
+    """Two branches add a row each; Git composes them and the map stays valid."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.documents = coverage.read_documents()
+        cls.tests = coverage.go_tests(coverage.ROOT)
+
+    def run_git(self, *args):
+        result = git(self.root, *args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def write(self, name, text):
+        (self.root / coverage.COVERAGE / name).write_text(text, encoding="utf-8", newline="\n")
+
+    def branch(self, name, area):
+        self.run_git("checkout", "-q", "-b", name, "base")
+        path = self.root / coverage.COVERAGE / area
+        self.write(area, add_row(path.read_text(encoding="utf-8"), synthetic_row(area[:-3])
+                                 .replace("-900 |", "-90%d |" % (len(name)))))
+        self.run_git("commit", "-q", "-am", name)
+        return self.run_git("diff", "--name-only", "base", name).split()
+
+    def test_rows_of_two_areas_merge_without_a_conflict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.root = Path(directory)
+            (self.root / coverage.COVERAGE).mkdir(parents=True)
+            for name, text in self.documents.items():
+                self.write(name, text)
+            self.run_git("init", "-q")
+            self.run_git("add", "-A")
+            self.run_git("commit", "-q", "-m", "base")
+            self.run_git("branch", "base")
+            self.assertEqual(self.branch("a", "OSD.md"), [where("OSD.md")])
+            self.assertEqual(self.branch("bb", "MDS.md"), [where("MDS.md")])
+            self.run_git("checkout", "-q", "a")
+            self.run_git("merge", "-q", "--no-edit", "bb")
+            merged = coverage.read_documents(self.root)
+            self.assertEqual(coverage.check(documents=merged, tests=self.tests), [])
+            keys = [cells[0] for _, _, rows in coverage.compose(merged)[0] for cells in rows]
+            self.assertIn("OSD-901", keys)
+            self.assertIn("MDS-902", keys)
+
 
 if __name__ == "__main__":
     unittest.main()
