@@ -20,7 +20,7 @@ configuration, platform or higher-level storage operation.
 | --- | --- |
 | Package user | [Which side Go implements](#which-side-of-the-connection-go-implements), [Installation](#installation), [Quick start](#quick-start), [Representative operations](#representative-operations) and [Limitations](#limitations) |
 | Protocol implementer | [Tracing one feature](DOCUMENTATION.md#tracing-one-feature): public contract, pinned wire reference, implementation status, scenario, observed native result and remaining limits |
-| Fixture or CI contributor | [Fixture and CI entry points](DOCUMENTATION.md#fixture-and-ci-contributors), the [scenario catalog guide](.github/scenarios/README.md) and the [native path coverage map](integration/fixture/NATIVE_PATH_COVERAGE.md) |
+| Fixture or CI contributor | [Fixture and CI entry points](DOCUMENTATION.md#fixture-and-ci-contributors), the [scenario catalog guide](.github/scenarios/README.md) and the [native path coverage map](integration/fixture/coverage/README.md) |
 
 [DOCUMENTATION.md](DOCUMENTATION.md) names the authoritative document for each
 kind of information. This README summarizes usage and feature boundaries; when
@@ -53,7 +53,7 @@ and in selected recipes an RGW gateway or an `rbd-mirror` daemon, together
 with native clients (librados, librbd, libcephfs) that act as independent
 oracles. Daemon-to-daemon paths are therefore exercised between real Ceph
 daemons, never by Go; see the daemon-to-daemon rows of the
-[coverage map](integration/fixture/NATIVE_PATH_COVERAGE.md#daemon-to-daemon).
+[coverage map](integration/fixture/coverage/D2D.md).
 The fixture and its dependencies live in the separate `integration/fixture`
 module and are not product dependencies.
 
