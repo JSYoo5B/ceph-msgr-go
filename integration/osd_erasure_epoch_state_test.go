@@ -1259,7 +1259,7 @@ func TestECEpochRunRecoversEveryOutageOnce(t *testing.T) {
 				case action == "kill" && daemon == "osd":
 					down[id] = true
 					receipt, _ := json.Marshal(map[string]any{"daemon": "osd." + id, "exit_code": 137})
-					return os.WriteFile(filepath.Join(dir, "osd-crash-state.json"), receipt, 0o600)
+					return testcluster.WritePublicEvidence(filepath.Join(dir, "osd-crash-state.json"), receipt)
 				case action == "start" && daemon == "osd":
 					delete(down, id)
 				case action == "verify" && daemon == "osd-ready" && len(down) != 0:
