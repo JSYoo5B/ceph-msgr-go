@@ -69,10 +69,12 @@ no list, count or file of another area:
   its group's fragment, or a new fragment for a new group. A row with a
   `test_run` has an identifier that ends in `.t-<name>`.
 - `integration/fixture/<name>.go`: the capability of a test-specific fixture
-  mode, `defineCapability` beside the mode, or `defineExclusiveCapability`
-  when the test runs alone on a fixture with its own default selection (see
+  mode, `defineCapability` beside the mode (see
   [Fixture capabilities](#fixture-capabilities)). The row declares it in
-  `capabilities`.
+  `capabilities`. On a fixture with its own default selection the row also
+  declares the one capability that admits its test there: an existing one
+  (`osd-erasure-width` on the four-OSD topology), or a new
+  `defineExclusiveCapability` when the new mode is the admission itself.
 - `integration/fixture/coverage/<AREA>.md`: the row of the
   [coverage map](../../integration/fixture/coverage/README.md) in the area's
   Rows table and a dated note under its Updates section.
@@ -143,7 +145,11 @@ capability defined for it with `defineExclusiveCapability` admits that test.
 `loadProfile` asks whether any declared capability of that fixture admits the
 run, so a new one is defined beside its mode without editing `loadProfile`.
 At most one such capability of a fixture may be declared for a run, so these
-capabilities never exclude each other by name.
+capabilities never exclude each other by name. A further mode on such a
+fixture that only extends the test the exclusive capability admits (the
+shard-history capture beside `osd-erasure-width`, or
+`mds-held-flock-split-fragments` beside `mds-held-flock-split`) is an ordinary
+`defineCapability` declared together with it.
 
 A documented reproduction runs a row (scenario identifier `ID`) with the
 environment the catalog gives it, so the declaration and the topology cannot
