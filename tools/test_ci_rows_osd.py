@@ -21,11 +21,6 @@ COPY_FROM_HISTORY_SELECTOR = "^TestCephOSDCopyFromDestinationHistoryIntegration$
 COMPRESSION_SELECTOR = "^TestCephMsgrCompressionOfferIntegration$"
 APPLIED_OSD_PG_COMMAND_SELECTOR = "^TestCephApplied(OSD|PG)CommandIsNotReplayedIntegration$"
 OSD_COMMAND_OUTCOME_SELECTOR = "^TestCephOSDCommand(s|Crash)Integration$"
-# Dedicated legacy-v6 rows of this area that select one test explicitly
-# (collected by the cross-area legacy check).
-DEDICATED_LEGACY_SELECTORS = (SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, COPY_FROM_LATE_ERROR_SELECTOR, COPY_FROM_MULTI_CHUNK_SELECTOR,
-                              COPY_FROM_HISTORY_SELECTOR, COMPRESSION_SELECTOR, APPLIED_OSD_PG_COMMAND_SELECTOR,
-                              OSD_COMMAND_OUTCOME_SELECTOR)
 
 
 class OSDRowsTest(ci_row_catalog.RowsTestCase):

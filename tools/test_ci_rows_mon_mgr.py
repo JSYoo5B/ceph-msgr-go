@@ -19,11 +19,6 @@ APPLIED_CURRENT_MGR_TELL_SELECTOR = "^TestCephAppliedCurrentManagerTellIsNotRepl
 APPLIED_MGR_TELL_SECURE_SELECTOR = "^TestCephApplied(Named|Current)ManagerTellIsNotReplayedIntegration$"
 SENT_TELL_CANCELLATION_SELECTOR = "^TestCephSentTellCancellationIntegration$"
 UNAVAILABLE_TARGET_SELECTOR = "^TestCeph(CompleteMonitorOutage|NamedMonitorTell|NamedManagerTell)Integration$"
-# Dedicated legacy-v6 rows of this area that select one test explicitly
-# (collected by the cross-area legacy check).
-DEDICATED_LEGACY_SELECTORS = (SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR, SERVICE_MAP_LARGE_SELECTOR, MON_CONNECTED_KILL_SELECTOR, MON_UNPROCESSED_KILL_SELECTOR,
-                              APPLIED_NAMED_MGR_TELL_SELECTOR, APPLIED_CURRENT_MGR_TELL_SELECTOR, APPLIED_MGR_TELL_SECURE_SELECTOR,
-                              SENT_TELL_CANCELLATION_SELECTOR, UNAVAILABLE_TARGET_SELECTOR)
 
 
 class MonMgrCommandRowsTest(ci_row_catalog.RowsTestCase):

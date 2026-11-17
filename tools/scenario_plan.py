@@ -31,9 +31,9 @@ given. An unknown selector is an error, never an empty or conservative match.
 
 A row may declare the fixture capabilities its test needs in the parameter
 "capabilities": a comma-separated, sorted list of names that the fixture
-defines with defineCapability calls in integration/fixture. Every reading of
-the catalog refuses a capability on a row whose test_run is not exactly one
-anchored test (^TestName$). Whether the fixture defines a declared capability
+defines with defineCapability (or defineExclusiveCapability) calls in
+integration/fixture. Every reading of the catalog refuses a capability on a
+row whose test_run is not exactly one anchored test (^TestName$). Whether the fixture defines a declared capability
 and admits it on the row's topology is the fixture's own decision: validate
 passes every row, as the native workflow forwards it, through the fixture's
 loadProfile (TestCatalogRowsAreAdmittedByTheFixture) and reports each row the
