@@ -145,5 +145,9 @@ Not claimed: native-encoded vectors, compound vectors other than a copy
 followed by xattr writes,
 `MAP_SNAP_CLONE` and the cache-tier flags, fadvise hints (cross-pool and
 cross-namespace copies are in OSD_POOL_VALIDATION.md), a destination primary
-killed after the copy's source read completed, EC, and host runtime profiles. The in-OSD copy of a source in another PG is
+killed after the copy's source read completed, EC, and host runtime profiles.
+A later [primary-change checkpoint](OSD_COPY_FROM_PRIMARY_CHANGE_VALIDATION.md)
+moves the destination primary without killing it, after a lost reply and
+while a copy is held before its source read, with explicit resubmission to
+the new primary. The in-OSD copy of a source in another PG is
 exercised only incidentally by the 8-PG profile.

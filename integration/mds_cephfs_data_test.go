@@ -398,6 +398,8 @@ type nativeMDSCephFSDataObject struct {
 		Seq    uint64                     `json:"seq"`
 		Clones []nativeMDSCephFSDataClone `json:"clones"`
 	} `json:"snaps"`
+	// Digest is the head content, only in the object-bytes view.
+	Digest *nativeMDSCephFSDataDigest `json:"digest"`
 }
 
 type nativeMDSCephFSDataOutput struct {
@@ -973,6 +975,10 @@ const (
 	// unknown outcome, an MDS restart, a capability revoke and an eviction
 	// whose blocklist entry fences the client's later object write.
 	cephfsDataWritebackFenceRestart
+	// cephfsDataMixedWritebackRestart: a completed prefix, an interrupted
+	// extent with an unknown outcome and a completed extent beyond it; the
+	// metadata flush reports only the prefix and survives an MDS restart.
+	cephfsDataMixedWritebackRestart
 )
 
 //fixture:isolated pauses the MDS log, blackholes acks and fails the owned MDS (mds fail); no restored-state proof
@@ -995,6 +1001,16 @@ func TestCephMDSCephFSCapSendRecoveryIntegration(t *testing.T) {
 //fixture:isolated restarts the owned MDS with mds fail and evicts a client session, adding a blocklist entry that stays
 func TestCephMDSCephFSWritebackFenceIntegration(t *testing.T) {
 	runCephMDSCephFSDataAcceptance(t, cephfsDataWritebackFenceRestart)
+}
+
+// TestCephMDSCephFSMixedWritebackRecoveryIntegration runs the same owned data
+// fixture with the mixed-extent writeback recipe: a confirmed prefix, an
+// unknown gap and a confirmed extent beyond it, a metadata flush of the prefix
+// only and an owned MDS restart.
+//
+//fixture:isolated restarts the owned rank-0 MDS with mds fail and leaves a new incarnation and object data beyond the file size
+func TestCephMDSCephFSMixedWritebackRecoveryIntegration(t *testing.T) {
+	runCephMDSCephFSDataAcceptance(t, cephfsDataMixedWritebackRestart)
 }
 
 func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe) {
@@ -2159,7 +2175,8 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 	}
 
 	capSnapsCreated := [2]bool{}
-	facts["restart_recipe"] = map[cephfsDataRestartRecipe]string{cephfsDataCapSnapRestart: "cap-snap", cephfsDataCapSendRestart: "cap-send", cephfsDataWritebackFenceRestart: "writeback-fence"}[recipe]
+	facts["restart_recipe"] = map[cephfsDataRestartRecipe]string{cephfsDataCapSnapRestart: "cap-snap", cephfsDataCapSendRestart: "cap-send", cephfsDataWritebackFenceRestart: "writeback-fence",
+		cephfsDataMixedWritebackRestart: "mixed-writeback"}[recipe]
 	if recipe == cephfsDataCapSendRestart && !leaf("uncertain_and_refused_cap_sends_recovered_across_mds_restart", func(t *testing.T) {
 		f := &cephfsDataFileEvidence{Name: "capsnap-file"}
 		files[f.Name] = f
@@ -2770,6 +2787,197 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 			ledger.count(cephfsWriteFenced, "c") != 1 {
 			t.Fatal("object writes were repeated or misclassified", len(writes), ledger.Writes)
 		}
+	}) {
+		return
+	}
+	if recipe == cephfsDataMixedWritebackRestart && !leaf("mixed_writeback_prefix_flushed_across_mds_restart", func(t *testing.T) {
+		f := &cephfsDataFileEvidence{Name: "capsnap-file"}
+		files[f.Name] = f
+		st := create(t, f.Name)
+		f.Ino, f.ReplyCap, f.ReplyCaps, f.ReplyMaxSize = st.Ino, st.Cap, cephCapString(st.Cap.Caps), st.MaxSize
+		checkLayout(t, f, st)
+		m, err := cephfsMixedWritebackPlan(layout)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ensureMaxSize(t, f, m.end())
+		if c, _ := agent.cap(f.Ino); c.Issued&cephCapFileWR == 0 {
+			t.Fatalf("file lacks Fw: %s", cephCapString(c.Issued))
+		}
+		trunc := truncOf(f.Ino)
+		context := snapc(t, f.Ino)
+		f.Truncate, f.SnapContext = &trunc, context
+		dataA := cephfsDataStream("ceph-msgr-cephfs-data-mixed-a:"+oracle.Token, m.A[1])
+		dataB := cephfsDataStream("ceph-msgr-cephfs-data-mixed-b:"+oracle.Token, m.B[1])
+		dataC := cephfsDataStream("ceph-msgr-cephfs-data-mixed-c:"+oracle.Token, m.C[1])
+		ledger := &cephfsWritebackLedger{}
+		mx := map[string]any{"file": f, "plan": m, "context": context, "ledger": ledger,
+			"extents": map[string]any{"a": layout.fileToExtents(m.A[0], m.A[1]), "b": layout.fileToExtents(m.B[0], m.B[1]), "c": layout.fileToExtents(m.C[0], m.C[1])}}
+		facts["mixed_writeback"] = mx
+		identityBefore := client.Snapshot()
+		gidArg, nonceArg := strconv.FormatUint(identityBefore.GlobalID, 10), strconv.FormatUint(uint64(identityBefore.CephFSNonce), 10)
+		leafWrites := func() []cephfsDataObjectIO {
+			osdIO.mu.Lock()
+			defer osdIO.mu.Unlock()
+			var writes []cephfsDataObjectIO
+			for _, op := range osdIO.log {
+				if op.Leaf == osdIO.leaf && op.Op == "write" {
+					writes = append(writes, op)
+				}
+			}
+			return writes
+		}
+
+		// 1. A, the prefix, completes (ONDISK). No metadata is flushed yet.
+		timeA := newMTime(f.Ino)
+		if out := ledger.writeback(osdIO, "a", f.Ino, layout, m.A[0], dataA, context, timeA, trunc, 30*time.Second); !slices.Equal(out, []string{cephfsWriteCompleted}) {
+			t.Fatal("A did not complete", out, ledger.Writes)
+		}
+
+		// 2. B is interrupted: the owned OSD drops client messages after
+		// Messenger receipt, the bounded local wait ends without a reply and
+		// the consumer records an unknown outcome.
+		_, n := observe(t)
+		if n == nil || !strings.HasSuffix(n.Address, ":0/"+nonceArg) {
+			t.Fatal("native session address does not carry the shared nonce", n)
+		}
+		mx["osd_drop"] = req(t, "osd-drop-on", "").OSDDrop
+		timeB := newMTime(f.Ino)
+		if out := ledger.writeback(osdIO, "b", f.Ino, layout, m.B[0], dataB, context, timeB, trunc, 5*time.Second); !slices.Equal(out, []string{cephfsWriteUncertain}) {
+			t.Fatal("B was not an unknown outcome", out, ledger.Writes[len(ledger.Writes)-1])
+		}
+		uncertain := ledger.Writes[1].IO
+		extB := layout.fileToExtents(m.B[0], m.B[1])[0]
+		if uncertain.Submission == nil || uncertain.Submission.GlobalID != identityBefore.GlobalID || uncertain.Submission.MapEpoch == 0 ||
+			uncertain.ObjectNo != extB.ObjectNo || uncertain.Offset != extB.Offset || uncertain.Length != extB.Length || uncertain.RequestSHA256 == "" {
+			t.Fatalf("uncertain write identity differs: %+v", uncertain)
+		}
+		mx["uncertain_write"] = uncertain
+		var dropLog *nativeMDSCephFSDataOSDDropLog
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			r, err := control.request(ctx, "osd-log", gidArg, nonceArg)
+			if err != nil {
+				t.Fatal("OSD drop log", err)
+			}
+			dropLog = r.OSDLog
+			if len(dropLog.Lines) != 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("owned OSD did not record the attributed drop of B")
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		mx["osd_drop_log"] = dropLog
+		if len(dropLog.Lines) != 2 || !strings.Contains(dropLog.Lines[0], " from=client."+gidArg+" type=42 ") {
+			t.Fatal("the OSD did not drop exactly one object request of this client", dropLog.Lines)
+		}
+		mx["osd_drop_restored"] = req(t, "osd-drop-off", "").OSDDrop
+
+		// 3. C, beyond B, is a new deliberate write on A's object; B is not
+		// resent. It completes, so the ledger holds a completed end past the gap.
+		timeC := newMTime(f.Ino)
+		if out := ledger.writeback(osdIO, "c", f.Ino, layout, m.C[0], dataC, context, timeC, trunc, 30*time.Second); !slices.Equal(out, []string{cephfsWriteCompleted}) {
+			t.Fatal("C did not complete", out, ledger.Writes)
+		}
+		if writes := leafWrites(); len(writes) != 3 || len(ledger.Writes) != 3 || writes[2].ObjectNo == uncertain.ObjectNo {
+			t.Fatal("B was resubmitted or C reached B's object", len(writes), ledger.Writes)
+		}
+
+		// 4. The metadata flush reports the contiguous completed prefix only,
+		// not C's end, with C's time as the last modification.
+		committed := ledger.committedEnd(0)
+		mx["committed_end"], mx["completed_end"] = committed, ledger.completedEnd()
+		if committed != m.A[1] || ledger.completedEnd() != m.end() {
+			t.Fatal("the committed end is not A's end below a completed C", committed, ledger.completedEnd())
+		}
+		if err := agent.markDirty(f.Ino, committed, timeC, context.Sequence, false, 0, nil); err != nil {
+			t.Fatal(err)
+		}
+		f.MTime = timeC
+		flush(t, f)
+		if msg := f.FlushMessage; msg.Size != committed || msg.MTime != timeC || msg.SnapFollows != context.Sequence {
+			t.Fatalf("accepted flush differs: %+v", msg)
+		}
+		acceptedAt := f.FlushAck.Received
+		mx["accepted_flush"] = map[string]any{"tid": f.FlushTID, "message": f.FlushMessage, "ack": f.FlushAck}
+		// Independent observation before the restart: A and C landed in
+		// object 0, B's object does not exist.
+		checkObjects(t, f, cephfsObjectSizes(layout, [][2]uint64{m.A, m.C}))
+		mx["objects_before_restart"] = f.ObjectSizes
+
+		// 5. Owned MDS restart with B still uncertain and no dirty metadata.
+		restartFacts := map[string]any{}
+		mx["restart"] = restartFacts
+		preRestart := agent
+		connection, session, agent, target = restartAcrossInterruptedWriteback(t, ctx, control, client, dials, connection, session, agent, realms, metadata, osdIO, f.Ino, restartFacts)
+		after := req(t, "stat", f.Name).Native.Stat
+		if after == nil || !after.Exists || after.Ino != f.Ino || after.Size != committed || after.MTime != int64(timeC.Seconds) {
+			t.Fatal("the accepted prefix flush did not survive the restart", after)
+		}
+		mx["native_stat_after_restart"] = after
+
+		// 6. Independent observation on the new incarnation: the file is A
+		// only; object 0 holds exactly A then C and B's object is absent.
+		nativeRead(t, f, f.Name, dataA)
+		content := req(t, "object-bytes", f.Name).Native
+		if content.Stat == nil || !content.Stat.Exists || content.Stat.Ino != f.Ino || content.Stat.Size != committed {
+			t.Fatal("native object-bytes view differs", content.Stat)
+		}
+		mx["native_object_bytes"] = content.Objects
+		if err := cephfsCheckObjectContent(content.Objects, f.Ino, plan.ObjectCounts[f.Name], cephfsObjectImages(layout, []cephfsFileWrite{{m.A[0], dataA}, {m.C[0], dataC}})); err != nil {
+			t.Fatal(err)
+		}
+		checkObjects(t, f, cephfsObjectSizes(layout, [][2]uint64{m.A, m.C}))
+		found := lookup(t, dirIno, f.Name)
+		if found.Ino != f.Ino || found.Size != committed || found.MTime != timeC {
+			t.Fatalf("MDS metadata after the restart differs: size %d mtime %+v", found.Size, found.MTime)
+		}
+		head, holes, err := osdIO.read(f.Ino, layout, 0, m.end(), cephmsgr.OSDHeadSnapshot, trunc)
+		if err != nil || len(holes) != 1 || holes[extB.ObjectNo] != "missing" || !bytes.Equal(head[:m.A[1]], dataA) ||
+			!bytes.Equal(head[m.B[0]:m.B[0]+m.B[1]], make([]byte, m.B[1])) || !bytes.Equal(head[m.C[0]:], dataC) {
+			t.Fatal("Go head bytes differ from A, a hole at B and C", err, holes)
+		}
+
+		// 7. The consumer's rules: B stays uncertain although the native
+		// view shows it did not land, nothing is resendable, and neither the
+		// max_size request nor any cap update recorded for the dirty file by
+		// either incarnation's agent reported more than the prefix.
+		closeFile(t, f, cephFileModeRDWR)
+		for i := range ledger.Writes {
+			if ledger.mayResend(i) == nil {
+				t.Fatal("recovery may resend write", i, ledger.Writes[i].Outcome)
+			}
+		}
+		if ledger.count(cephfsWriteCompleted, "a") != 1 || ledger.count(cephfsWriteUncertain, "b") != 1 || ledger.count(cephfsWriteCompleted, "c") != 1 || len(leafWrites()) != 3 {
+			t.Fatal("object writes were repeated or misclassified", len(leafWrites()), ledger.Writes)
+		}
+		var capUpdates []cephfsDirtyEvent
+		for _, a := range []*cephfsCapAgent{preRestart, agent} {
+			d, _ := a.dirtyState(f.Ino)
+			for _, ev := range d.Events {
+				// The reconnected agent starts from a copy of the old one's
+				// events; each cap update is kept once.
+				if ev.Kind == "cap-update" && !slices.ContainsFunc(capUpdates, func(r cephfsDirtyEvent) bool { return r.At.Equal(ev.At) && r.Seq == ev.Seq && r.TID == ev.TID }) {
+					capUpdates = append(capUpdates, ev)
+				}
+			}
+			if tids := a.dirtyFlushesSince(f.Ino, acceptedAt); len(tids) != 0 {
+				t.Fatal("a metadata flush followed the accepted prefix flush", tids)
+			}
+		}
+		mx["cap_updates"] = capUpdates
+		if len(capUpdates) == 0 {
+			t.Fatal("no cap message of the writer was recorded")
+		}
+		if beyond := cephfsCapUpdatesBeyond(capUpdates, committed); len(beyond) != 0 {
+			t.Fatalf("a cap update reported a size beyond the completed prefix: %+v", beyond)
+		}
+		if r := f.MaxSizeRequest; r != nil && r.Size > committed {
+			t.Fatalf("the max_size request reported a size beyond the completed prefix: %+v", r)
+		}
+		mx["object_writes"] = leafWrites()
 	}) {
 		return
 	}
