@@ -14,9 +14,15 @@ func (o *OSDConnection) validateIgnoreCache(request OSDRequest) error {
 	if !request.IgnoreCache {
 		return nil
 	}
-	// A cache-tier operation has its own contract (validateCacheOperation).
+	// A cache-tier operation has its own contract (validateCacheOperation),
+	// and so does a manifest tier operation (validateTierOperation).
 	if len(request.Operations) == 1 && osd.IsCacheOperation(uint16(request.Operations[0].Code)) {
 		return nil
+	}
+	for _, op := range request.Operations {
+		if osd.IsTierOperation(uint16(op.Code)) {
+			return nil
+		}
 	}
 	if !o.client.options.EnableOSDCachePools {
 		return fmt.Errorf("%w: IgnoreCache requires EnableOSDCachePools", ErrUnsupportedFeatures)
@@ -81,15 +87,52 @@ func (o *OSDConnection) validateSetChunk(request OSDRequest) error {
 	return err
 }
 
+// validateTierOperation applies the manifest tier-operation contract before
+// shared-slot admission, monitor readiness or TID allocation. Requests without
+// a tier opcode are unaffected.
+func (o *OSDConnection) validateTierOperation(request OSDRequest) error {
+	tier := false
+	for _, op := range request.Operations {
+		tier = tier || osd.IsTierOperation(uint16(op.Code))
+	}
+	if !tier {
+		return nil
+	}
+	if request.Resubmit != nil || request.Placement != nil && request.Placement.Erasure {
+		return fmt.Errorf("%w: tier operations refuse resubmission and erasure-coded placement", osd.ErrRequest)
+	}
+	input := osd.Request{MTimeSeconds: request.ModificationTime.Seconds, MTimeNanoseconds: request.ModificationTime.Nanoseconds,
+		ReadSnap: request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots,
+		OrderSnap: request.OrderSnapshots, EnforceSnapContext: request.EnforceSnapContext, FullTry: request.FullTry, FullForce: request.FullForce,
+		BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads, IgnoreRedirect: request.IgnoreRedirect,
+		OrderReadsWrites: request.OrderReadsWrites, SkipRWLocks: request.SkipRWLocks, IgnoreCache: request.IgnoreCache,
+		IgnoreOverlay: request.IgnoreOverlay, RetryAttempt: request.RetryAttempt}
+	for _, op := range request.Operations {
+		// A tier operation is inputless and flagless: every other field must
+		// be zero, refused here rather than after slot admission.
+		if osd.IsTierOperation(uint16(op.Code)) && !reflect.DeepEqual(op, OSDOperation{Code: op.Code}) {
+			return fmt.Errorf("%w: tier operations carry no flags or input", osd.ErrOperation)
+		}
+		input.Operations = append(input.Operations, osd.Operation{Code: uint16(op.Code)})
+	}
+	if err := osd.ValidateTierRequest(input); err != nil {
+		return err
+	}
+	_, _, err := osd.ValidateOperations(input.Operations, ^uint32(0))
+	return err
+}
+
 // validateCacheOperation applies the cache-operation contract before
 // shared-slot admission, monitor readiness or TID allocation. Requests without
-// a cache opcode only refuse IgnoreOverlay.
+// a cache opcode only refuse IgnoreOverlay, which a tier operation's own
+// contract checks instead.
 func (o *OSDConnection) validateCacheOperation(request OSDRequest) error {
-	cache := false
+	cache, tier := false, false
 	for _, op := range request.Operations {
 		cache = cache || osd.IsCacheOperation(uint16(op.Code))
+		tier = tier || osd.IsTierOperation(uint16(op.Code))
 	}
-	if !cache && !request.IgnoreOverlay {
+	if !cache && (!request.IgnoreOverlay || tier) {
 		return nil
 	}
 	if cache && !o.client.options.EnableOSDCachePools {

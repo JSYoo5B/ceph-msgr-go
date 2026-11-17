@@ -44,6 +44,9 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 	if err := o.validateCacheOperation(request); err != nil {
 		return result, err
 	}
+	if err := o.validateTierOperation(request); err != nil {
+		return result, err
+	}
 	if err := o.validateEnforceSnapContext(request); err != nil {
 		return result, err
 	}

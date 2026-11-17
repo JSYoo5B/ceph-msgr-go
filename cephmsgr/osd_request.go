@@ -66,6 +66,26 @@ const (
 	// an overlapping chunk), and a lost reply after transmission remains an
 	// unknown outcome that is never resent.
 	OSDSetChunk OSDOpcode = OSDOpcode(osd.SetChunk)
+	// OSDTierPromote, OSDTierFlush and OSDTierEvict act on the targeted
+	// manifest object of a pool that is not a cache tier (librados
+	// tier_promote, tier_flush and tier_evict). Each is inputless, standalone
+	// and flagless and takes exactly the native request flags: promote is a
+	// write with no IgnoreCache or IgnoreOverlay; flush and evict are reads
+	// that require IgnoreCache and IgnoreOverlay and no mtime. None needs
+	// EnableOSDCachePools, resubmission or erasure-coded placement.
+	// OSDTierPromote copies a redirect target, or every chunk target of a
+	// chunked manifest, into the object (a plain object is a no-op);
+	// OSDTierEvict marks every chunk missing and zeroes its local range
+	// (EINVAL for a plain object); OSDTierFlush runs the dedup flush that the
+	// pool's own dedup options configure for a dirty or plain object (EINVAL
+	// without them) and reports a clean manifest as done. Results are the
+	// OSD's signed codes (ENOENT for an absent object, EINVAL on a cache-tier
+	// pool), and a lost reply after transmission remains an unknown outcome
+	// that is never resent. Choosing objects, chunking and dedup pools stays
+	// with the caller.
+	OSDTierPromote OSDOpcode = OSDOpcode(osd.TierPromote)
+	OSDTierFlush   OSDOpcode = OSDOpcode(osd.TierFlush)
+	OSDTierEvict   OSDOpcode = OSDOpcode(osd.TierEvict)
 )
 
 // OSD reply completion flags are native OSD flags, not Messenger ACKs.
@@ -286,13 +306,16 @@ type OSDRequest struct {
 	// only standalone head STAT/READ/WRITEFULL/DELETE on replicated placement
 	// are admitted, without request replay, snapshot, replica-read, ordering,
 	// redirect, lock-bypass, per-op flags or extent-truncate combinations.
+	// The cache-tier operations and OSDTierFlush/OSDTierEvict carry it under
+	// their own contracts; the tier operations need no EnableOSDCachePools.
 	// Cache promotion/proxy is bypassed; dirty tracking remains. This neither
 	// selects the base pool nor guarantees absence of snapshot whiteouts.
 	IgnoreCache bool
 	// IgnoreOverlay sends CEPH_OSD_FLAG_IGNORE_OVERLAY. Native clients read it
 	// when they choose a target; here the caller supplies the target, so it
-	// is sent only with OSDCacheFlush, OSDCacheTryFlush and OSDCacheEvict,
-	// which native callers submit with it. Every other request refuses it.
+	// is sent only with OSDCacheFlush, OSDCacheTryFlush, OSDCacheEvict,
+	// OSDTierFlush and OSDTierEvict, which native callers submit with it.
+	// Every other request refuses it.
 	IgnoreOverlay bool
 	// Resubmit explicitly repeats an earlier request of this client under its
 	// original identity (transaction ID and incarnation) so the OSD can answer
