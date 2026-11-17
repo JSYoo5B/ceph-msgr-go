@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"reflect"
 	"slices"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -352,8 +354,12 @@ var copyPrimaryChangeCases = []copyPrimaryChangeCase{{"COPY_FROM", cephmsgr.OSDC
 // copyPrimaryChangeRun is the shared state of one subtest: one client for
 // every request (resubmission is bound to its GlobalID), the owned pools,
 // and a fault that withholds replies on every connection to one armed OSD.
-// Every OSD connection is wrapped when it is dialed, so arming does not
-// depend on whether the client reuses a connection it already holds.
+// Every connection is wrapped when it is dialed and keyed by the endpoint it
+// dialed, so arming does not depend on whether the client reuses a
+// connection it already holds. The key is the endpoint of the OSD's address
+// in the native map, not the fixture's peer names: those are recorded when
+// the fixture starts, and an OSD that an earlier test of a broad row killed
+// and restarted may listen on another port since.
 type copyPrimaryChangeRun struct {
 	t        *testing.T
 	ctx      context.Context
@@ -361,7 +367,8 @@ type copyPrimaryChangeRun struct {
 	gid      uint64
 	pools    ownedPools
 	recovery *copyPrimaryRecovery
-	armed    map[int32]*atomic.Bool
+	mu       sync.Mutex
+	armed    map[string]*atomic.Bool
 	blocked  chan struct{}
 	source   string
 	dest     string
@@ -377,10 +384,7 @@ const (
 func newCopyPrimaryChangeRun(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, label string) *copyPrimaryChangeRun {
 	t.Helper()
 	r := &copyPrimaryChangeRun{t: t, ctx: ctx, pools: pools, recovery: recovery, blocked: make(chan struct{}, 1)}
-	r.armed = map[int32]*atomic.Bool{}
-	for _, osd := range []int32{0, 1, 2} {
-		r.armed[osd] = &atomic.Bool{}
-	}
+	r.armed = map[string]*atomic.Bool{}
 	options := integrationOptions(t)
 	options.EnableOSD = true
 	if isReplicatedPGFixtureProfile() {
@@ -392,16 +396,11 @@ func newCopyPrimaryChangeRun(t *testing.T, ctx context.Context, pools ownedPools
 		if err != nil {
 			return nil, err
 		}
-		var armed *atomic.Bool
-		for osd, flag := range r.armed {
-			if _, kind, _ := testcluster.SplitPeer(endpoint); kind == "osd."+strconv.Itoa(int(osd)) {
-				armed = flag
-			}
+		normalized := endpoint
+		if parsed, e := netip.ParseAddrPort(endpoint); e == nil {
+			normalized = parsed.String()
 		}
-		if armed == nil {
-			return conn, nil
-		}
-		return &testcluster.LostReplyConn{Conn: conn, Armed: armed, Closed: make(chan struct{}), SignalBlocked: func() {
+		return &testcluster.LostReplyConn{Conn: conn, Armed: r.fault(normalized), Closed: make(chan struct{}), SignalBlocked: func() {
 			select {
 			case r.blocked <- struct{}{}:
 			default:
@@ -426,6 +425,16 @@ func newCopyPrimaryChangeRun(t *testing.T, ctx context.Context, pools ownedPools
 		t.Fatal("source and destination are not in distinct owned PGs", r.srcRoute.PGID, r.dstRoute.PGID)
 	}
 	return r
+}
+
+// fault is the reply fault of every connection to one dialed endpoint.
+func (r *copyPrimaryChangeRun) fault(endpoint string) *atomic.Bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.armed[endpoint] == nil {
+		r.armed[endpoint] = &atomic.Bool{}
+	}
+	return r.armed[endpoint]
 }
 
 // send issues one Go request once on a new connection to route and requires
@@ -614,10 +623,10 @@ func TestCephOSDCopyFromLostReplyPrimaryChangeIntegration(t *testing.T) {
 			first, firstSource := r.writeSource("first source write", 1700009000, []byte("copy-primary\x00\xff first source bytes"), []byte{1, 0xff})
 
 			o := mutationConnection(t, r.client, ctx, r.dstRoute)
-			if r.armed[r.dstRoute.ID] == nil {
-				t.Fatalf("no reply fault for osd.%d", r.dstRoute.ID)
-			}
-			r.armed[r.dstRoute.ID].Store(true)
+			endpoint := osdEndpoint(t, r.dstRoute.Address)
+			_, peer, _ := testcluster.SplitPeer(endpoint)
+			t.Logf("reply fault armed for osd.%d at %s (fixture peer name %q)", r.dstRoute.ID, endpoint, peer)
+			r.fault(endpoint).Store(true)
 			call, cancel := context.WithCancel(ctx)
 			defer cancel()
 			type outcome struct {
@@ -632,8 +641,8 @@ func TestCephOSDCopyFromLostReplyPrimaryChangeIntegration(t *testing.T) {
 			}()
 			select {
 			case <-r.blocked:
-			case <-ctx.Done():
-				t.Fatal("receive fault not activated", ctx.Err())
+			case <-time.After(60 * time.Second):
+				t.Fatalf("receive fault not activated within 60 s on %s", endpoint)
 			}
 			var executed nativeXattrSnapshot
 			for deadline := time.Now().Add(60 * time.Second); ; {
@@ -657,7 +666,7 @@ func TestCephOSDCopyFromLostReplyPrimaryChangeIntegration(t *testing.T) {
 				t.Fatalf("lost reply metadata: %+v %v", lost.reply, lost.err)
 			}
 			o.Close()
-			r.armed[r.dstRoute.ID].Store(false)
+			r.fault(endpoint).Store(false)
 
 			second, _ := r.writeSource("second source write", 1700009200, []byte("copy-primary second source bytes, longer"), []byte{2, 0xfe})
 			r.recovery.markOut(t, ctx, r.dstRoute.ID)
