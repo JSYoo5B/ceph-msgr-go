@@ -137,18 +137,19 @@ owned-pool cleanup leaves `mon_allow_pool_delete`.
 
 ## Results
 
-The runs used a Linux amd64 host with Docker 29.9.1. The source was this
-change's test, tool and record tree on main `987e6e6`, run one row after
-another on one Docker engine. Results were gated by
-`tools/native_test_results.py`, which reported no problems for any row, and
-each fixture's ten containers were terminated with none left over. Each
-subtest is listed with its duration.
+The runs used a Linux amd64 host with Docker 29.9.1. The source was the
+test, tool and record tree at `024b8ec` (this change merged with main
+`94b5441`, with the never-sent barrier, the returned-primary wait and the
+endpoint-keyed reply fault), run one row after another on one Docker
+engine. Results were gated by `tools/native_test_results.py`, which reported
+no problems for any row, and no Testcontainers container was left after
+cleanup. Each subtest is listed with its duration.
 
 | Row (selector) | Lost reply COPY_FROM / COPY_FROM2 | Held copy COPY_FROM / COPY_FROM2 |
 | --- | --- | --- |
-| `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange` | PASS 16.0 s / 15.4 s | PASS 21.4 s / 22.9 s |
-| `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange` | PASS 15.1 s / 14.9 s | PASS 23.9 s / 24.8 s |
-| `osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3` (legacy-v6) narrowed to the copy-from tests, see below | PASS 14.5 s / 14.1 s | PASS 22.5 s / 24.3 s |
+| `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange` | PASS 17.2 s / 18.3 s | PASS 23.5 s / 22.1 s |
+| `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange` | PASS 17.0 s / 15.7 s | PASS 24.1 s / 24.0 s |
+| `osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3` (legacy-v6) narrowed to the copy-from tests, see below | PASS 17.7 s / 16.6 s | PASS 24.0 s / 24.2 s |
 
 The legacy-v6 run narrowed that broad row's selector to
 `^TestCephOSD(CopyFrom|CopyFromCompound|CopyFromCrash|CopyFromDestinationCrash|CopyFromDestinationHistory|CopyFromLostReply|CopyFromSourceFailover|CrossPoolAndNamespaceCopyFrom|CopyFromLostReplyPrimaryChange|CopyFromInFlightPrimaryChange|ResubmitFailover)Integration$`.
@@ -156,15 +157,15 @@ All eleven selected tests passed on one fixture, so the existing copy-from
 tests and the earlier primary-change resubmission test still pass with
 these tests running beside them. The broad row itself was not run.
 
-Observed values from the secure IPv6 row. The CRC row had the same OSDs and
-versions at epochs two lower.
+Observed values from the secure IPv6 row. The CRC row had the same OSDs,
+epochs and versions.
 
 | Cell | Former → new primary | Resubmission reply | PG log |
 | --- | --- | --- | --- |
-| Lost reply, COPY_FROM | osd.1 → osd.2, epoch 29 | code 0, tid 2, attempt 1, user 1, replay 26'1, flags `0x400002c` | copy once on osd.2, with the first source write as extra ID; the same on the returned osd.1 at epoch 32 |
-| Lost reply, COPY_FROM2 | osd.0 → osd.2, epoch 35 | code 0, tid 2, attempt 1, user 1, replay 32'1, flags `0x400002c` | the same on osd.2, then on the returned osd.0 at epoch 38 |
-| Held copy, COPY_FROM | osd.1 → osd.2; barrier at epoch 47, dropped by epoch 50 | first: tid 2, user 1, replay 51'3, flags `0x400002d`; second: attempt 2, same user and replay version, flags `0x400002c` | no copy before the first resubmission, once after both; the same on the returned osd.1 at epoch 54 |
-| Held copy, COPY_FROM2 | osd.1 → osd.0; barrier at epoch 55, dropped by epoch 58 | first: user 3, replay 59'3, flags `0x400002d`; second: same versions, flags `0x400002c` | the same, then on the returned osd.1 at epoch 62 |
+| Lost reply, COPY_FROM | osd.1 → osd.2, epoch 27 | code 0, tid 2, attempt 1, user 1, replay 24'1, flags `0x400002c` | copy once on osd.2, with the first source write as extra ID; the same on the returned osd.1 at epoch 30 |
+| Lost reply, COPY_FROM2 | osd.0 → osd.2, epoch 33 | code 0, tid 2, attempt 1, user 1, replay 30'1, flags `0x400002c` | the same on osd.2, then on the returned osd.0 at epoch 36 |
+| Held copy, COPY_FROM | osd.1 → osd.2; barrier at epoch 45, dropped by epoch 48 | first: tid 2, user 1, replay 49'3, flags `0x400002d`; second: attempt 2, same user and replay version, flags `0x400002c` | no copy before the first resubmission, once after both; the same on the returned osd.1 at epoch 52 |
+| Held copy, COPY_FROM2 | osd.1 → osd.0; barrier at epoch 53, dropped by epoch 56 | first: user 3, replay 57'3, flags `0x400002d`; second: same versions, flags `0x400002c` | the same, then on the returned osd.1 at epoch 60 |
 
 In every barrier the op tracker showed the op at flag point `started`, with
 the events `initiated`, `header_read`, `throttled`, `all_read`,
@@ -172,7 +173,9 @@ the events `initiated`, `header_read`, `throttled`, `all_read`,
 showed one op, `copy-get max 8388608 in=29b`, paused, with 0 attempts. A
 resubmission that executed was answered with ACK (`0x1`) among its flags.
 Every answer from the PG log had ONDISK, RETRY and WRITE without ACK. These
-flags are recorded as observed; the tests do not require them.
+flags are recorded as observed; the tests do not require them. In every
+cell the returned-primary wait found the original placement, and the
+post-recovery checks ran on the original primary.
 
 The first runs failed on test defects, all fixed in this change:
 
@@ -187,8 +190,19 @@ The first runs failed on test defects, all fixed in this change:
 5. On legacy-v6 the lost-reply cell first armed its reply fault only on
    connections dialed while it was armed. The client then sent the copy on
    a connection to the same OSD that it already held, the fault never
-   triggered, and the cell failed at its bound. Every OSD connection is now
-   wrapped at dial and armed per OSD.
+   triggered, and the cell failed at its bound.
+6. After that fix the cell still chose the connections to fault by the
+   fixture's peer names, which are recorded when the fixture starts. In the
+   narrowed legacy-v6 run at `575e40e`, earlier tests kill and restart OSDs, and a
+   restarted OSD can come back on another OSD's former address. The lost-reply
+   COPY_FROM subtest then armed the peer name of the destination primary,
+   which matched no connection to it; nothing was withheld and the subtest
+   failed when the test context expired after 894 s. The two dedicated rows,
+   which restart no OSD first, passed at the same commit. Every connection
+   is now wrapped at dial and the fault is keyed by the dialed endpoint of
+   the primary's address in the native map. The passing legacy-v6 run above
+   logged that endpoint, `172.18.0.7:6800` for osd.0, under the fixture peer
+   name `osd.2`.
 
 No product change was needed.
 
