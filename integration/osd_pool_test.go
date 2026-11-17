@@ -83,6 +83,9 @@ type poolReceipt struct {
 	ECProfilesRemaining      []string `json:"ec_profiles_remaining"`
 	CrushRulesRemaining      []string `json:"crush_rules_remaining"`
 	PoolDeleteConfigRestored bool     `json:"pool_delete_config_restored"`
+	// cleanup mode: owned erasure-code profiles whose read neither found
+	// them nor reported them absent, with the native error code.
+	ECProfilesUnread map[string]int `json:"ec_profiles_unread"`
 	// cleanup mode: owned names present that this test's create did not
 	// record; the cleanup leaves them and nativePool fails the test.
 	UnclaimedPresent map[string][]string `json:"unclaimed_present"`
@@ -178,6 +181,9 @@ func nativePool(t *testing.T, ctx context.Context, mode string, input any) poolR
 		}
 		if len(receipt.CrushRulesRemaining) != 0 || len(receipt.ECProfilesRemaining) != 0 {
 			t.Error("owned-pool cleanup left owned CRUSH rules", receipt.CrushRulesRemaining, "or erasure-code profiles", receipt.ECProfilesRemaining)
+		}
+		if len(receipt.ECProfilesUnread) != 0 {
+			t.Error("owned-pool cleanup could not read owned erasure-code profiles", receipt.ECProfilesUnread)
 		}
 		// An owned name this test's create did not record is either an
 		// earlier test's leftover or a lost claim; the cleanup leaves it.

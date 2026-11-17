@@ -603,6 +603,20 @@ def fail_once(rados, prefix, creates=False):
     rados.mon = mon
 
 
+def script_reads(rados, prefix, codes):
+    """Answer the next reads with prefix by the given native codes, in
+    order; None passes a read through to the fake MON."""
+    original, queue = rados.mon, list(codes)
+    def mon(cluster, command):
+        if command["prefix"] == prefix and queue:
+            code = queue.pop(0)
+            if code is not None:
+                rados.commands.append(command)
+                return code, b""
+        return original(cluster, command)
+    rados.mon = mon
+
+
 class OwnedClaimTest(unittest.TestCase):
     """Cleanup removes or changes only what this run's create made."""
 
@@ -671,6 +685,97 @@ class OwnedClaimTest(unittest.TestCase):
                 self.assertEqual(bool(pools), any(c["prefix"] == "config set" for c in rados.commands))
                 self.assertTrue(result["pools_removed"] and result["pool_delete_config_restored"])
                 self.assertEqual(result["unclaimed_present"], {"pools": [], "crush_rules": [], "ec_profiles": []})
+                self.assertEqual(result["ec_profiles_unread"], {})
+
+    def test_a_failed_set_and_a_failed_read_claim_no_profile(self):
+        # Absent before the set; the set times out without applying, and the
+        # read after it fails. The name is unknown, not this run's.
+        for code in (-5, -110, -1):
+            with self.subTest(code=code):
+                rados = FakeErasureRados()
+                fail_once(rados, "osd erasure-code-profile set")
+                script_reads(rados, "osd erasure-code-profile get", [None, code])
+                with self.assertRaises(RuntimeError) as refused:
+                    create(rados, width="k2m2", plugin="isa")
+                result = cleanup(rados)
+                self.assertFalse(any(c["prefix"] == "osd erasure-code-profile rm" for c in rados.commands))
+                self.assertEqual(result["claimed"], {"pools": [], "crush_rules": [], "ec_profiles": []})
+                # The create names the unread profile and its read error.
+                self.assertRegex(str(refused.exception), "could not be read.*ec_profiles ceph-msgr-owned-ec-k2m2.*%d" % code)
+                self.assertEqual(mutations(rados), [{"prefix": "osd erasure-code-profile set", "name": "ceph-msgr-owned-ec-k2m2",
+                                                     "profile": ["k=2", "m=2", "crush-failure-domain=osd", "plugin=isa"]}])
+
+    def test_an_applied_set_with_a_failed_read_stays_unclaimed_and_is_reported(self):
+        rados = FakeErasureRados()
+        fail_once(rados, "osd erasure-code-profile set", creates=True)
+        script_reads(rados, "osd erasure-code-profile get", [None, -5])
+        with self.assertRaises(RuntimeError):
+            create(rados, width="k2m2", plugin="isa")
+        result = cleanup(rados)
+        self.assertFalse(any(c["prefix"] == "osd erasure-code-profile rm" for c in rados.commands))
+        self.assertIn("ceph-msgr-owned-ec-k2m2", rados.profiles)
+        self.assertEqual(result["unclaimed_present"]["ec_profiles"], ["ceph-msgr-owned-ec-k2m2"])
+
+    def test_an_unreadable_profile_refuses_the_create(self):
+        for width, plugin in (("k2m2", "isa"), ("k2m1", "jerasure")):
+            with self.subTest(width=width):
+                rados = FakeErasureRados()
+                script_reads(rados, "osd erasure-code-profile get", [-5])
+                with self.assertRaisesRegex(RuntimeError, "presence is unknown"):
+                    create(rados, width=width, plugin=plugin)
+                self.assertEqual(mutations(rados), [])
+                self.assertFalse(any(c["prefix"] == "osd pool create" for c in rados.commands))
+
+    def test_a_failed_read_back_after_the_set_names_the_read(self):
+        rados = FakeErasureRados()
+        # Before, the claim read after the set, then the read-back.
+        script_reads(rados, "osd erasure-code-profile get", [None, None, -5])
+        with self.assertRaisesRegex(RuntimeError, "read-back failed: -5"):
+            create(rados, width="k2m2", plugin="isa")
+        self.assertEqual(cleanup(rados)["claimed"]["ec_profiles"], ["ceph-msgr-owned-ec-k2m2"])
+
+    def test_a_failed_pool_read_still_checks_the_rule_and_claims_neither_unread(self):
+        rados = FakeErasureRados()
+        original_dump, state = rados.dump, {"calls": 0}
+        def dump(cluster):
+            # The refusal check before the steps reads once; the claim read
+            # after `osd pool create` fails.
+            state["calls"] += 1
+            if state["calls"] == 2:
+                raise RuntimeError("native osd dump failed: -5")
+            return original_dump(cluster)
+        rados.dump = dump
+        with self.assertRaisesRegex(RuntimeError, "osd pool create.*pools ceph-msgr-owned-pool-1"):
+            create(rados, width="k2m2", plugin="isa")
+        # The rule's own read succeeded, so the rule is claimed; the pool is not.
+        self.assertEqual(json.loads((rados.out / oracle.CLAIMS_FILE).read_text()),
+                         {"pools": [], "crush_rules": [oracle.pool_name(1)], "ec_profiles": ["ceph-msgr-owned-ec-k2m2"]})
+
+    def test_a_failed_rule_read_claims_no_rule(self):
+        rados = FakeErasureRados()
+        # The refusal check before the steps reads once; the claim read fails.
+        script_reads(rados, "osd crush rule ls", [None, -5])
+        with self.assertRaisesRegex(RuntimeError, "crush_rules ceph-msgr-owned-pool-1"):
+            create(rados, width="k2m2", plugin="isa")
+        self.assertEqual(json.loads((rados.out / oracle.CLAIMS_FILE).read_text()),
+                         {"pools": [oracle.pool_name(1)], "crush_rules": [], "ec_profiles": ["ceph-msgr-owned-ec-k2m2"]})
+
+    def test_cleanup_reports_an_unreadable_profile_apart_from_survivors(self):
+        rados = FakeErasureRados()
+        create(rados, width="k2m2", plugin="isa")
+        # The removal applies; the read after it fails for the claimed
+        # profile and succeeds (absent) for the other.
+        script_reads(rados, "osd erasure-code-profile get", [None, -5])
+        result = cleanup(rados)
+        self.assertEqual(result["ec_profiles_unread"], {"ceph-msgr-owned-ec-k2m2": -5})
+        self.assertEqual(result["ec_profiles_remaining"], [])
+        self.assertEqual(result["unclaimed_present"]["ec_profiles"], [])
+        stuck = FakeErasureRados(existing_profiles=[oracle.EC_PROFILE])
+        script_reads(stuck, "osd erasure-code-profile get", [-110])
+        result = cleanup(stuck)
+        self.assertEqual(result["ec_profiles_unread"], {oracle.EC_PROFILE: -110})
+        self.assertEqual(result["unclaimed_present"]["ec_profiles"], [])
+        self.assertEqual(mutations(stuck), [])
 
     def test_replicated_cleanup_never_touches_rules_or_profiles(self):
         rados = FakeErasureRados(existing_profiles=list(oracle.EC_PROFILES))
