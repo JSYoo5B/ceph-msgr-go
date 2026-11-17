@@ -9,7 +9,7 @@ Go client. create also makes an erasure-coded pool of a closed width: k2m1
 (profile ceph-msgr-owned-ec) or k2m2 (its own ceph-msgr-owned-ec-k2m2 profile,
 isa, never overwritten, optionally optimized with its nonprimary shards read
 back); cleanup removes both profiles.
-Modes: create, seed, observe, place, pghistory, opsinflight, objecterrequests, shardhistory, pginterval, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
+Modes: create, seed, observe, place, pghistory, opsinflight, objecterrequests, shardhistory, pginterval, pgstate, watchers, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
 pghistory takes one bounded primary PG-history snapshot for an owned object:
 placement before, the PG `log` command to that primary OSD, placement after,
 then the fail-closed parse in osd_pg_history_oracle.py. It reports where exact
@@ -39,6 +39,9 @@ position, whose OSD the caller took out through the fixture's daemon control;
 action replaced sends none and judges one observation of the PG active under
 the member the map makes primary after the caller took the primary's own OSD
 out the same way.
+pgstate reads the same two placement records around one `pg query` of the
+primary, judges nothing and sends no command. watchers runs the pinned
+`rados listwatchers` for one owned object and reports its entries.
 servicemetadata prepares/restores the native selftest module and reads only a
 fixed get_metadata expression for the exclusive MGR service fixture.
 servicecompare independently registers a native service with the Go caller's
@@ -76,7 +79,7 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "pghistory", "opsinflight", "objecterrequests", "shardhistory", "pginterval", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
+MODES = ("create", "seed", "observe", "place", "pghistory", "opsinflight", "objecterrequests", "shardhistory", "pginterval", "pgstate", "watchers", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
 RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
@@ -650,25 +653,15 @@ INTERVAL_SECONDS = 30
 INTERVAL_PAUSE = .5
 
 
-def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=time.sleep):
-    """One owned interval change of the PG of an owned object, or one observation of it.
+def pg_observer(rados, cluster, request):
+    """The owned pool's map entry and the two reads of one PG observation.
 
-    Action repeer requires a clean erasure-coded PG without a pg_temp, sends
-    one `pg repeer` command, which is never resent, and observes until the
-    PG is settled in a newer interval or the time bound is used up. Action
-    show observes once and judges a clean PG on the recorded placement.
-    Action absent observes once and judges the PG active without the member
-    of one acting position of the recorded placement. Action replaced
-    observes once and judges the PG active under the primary that the map
-    names without the recorded primary's member. Each reports the last
-    observation and its judgement; a PG that did not settle is reported, not
-    raised.
+    place reads one placement record of the owned object, or says why none
+    could be read. observe reads one placement record, sends `pg query` to
+    the primary it names (or to the given one when there is no record) and
+    reads one more placement record (osd_pg_interval_oracle.observation).
+    Neither sends anything that changes the cluster.
     """
-    action = request.get("action")
-    allowed = {"action", "slot", "object", "namespace"} | {"show": {"origin"}, "absent": {"origin", "shard", "since"},
-                                                           "replaced": {"origin", "since"}}.get(action, set())
-    if action not in ("repeer", "show", "absent", "replaced") or set(request) - allowed:
-        raise ValueError("pginterval needs action repeer, show, absent or replaced and no unknown field")
     pool = pool_name(request["slot"])
     _, namespace = object_request(request)
     descriptor = find_pool(rados.dump(cluster), pool)
@@ -693,6 +686,78 @@ def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=ti
                                                  pg_interval.MAX_QUERY_BYTES)
         return pg_interval.observation(first, code, raw, status, oversized, place())
 
+    return descriptor, place, observe
+
+
+def mode_pgstate(rados, cluster, request, out, clock=time.monotonic):
+    """One read-only observation of the PG of an owned object.
+
+    Two placement records around one `pg query` of the primary the first
+    record names, as pginterval observes it, without any judgement and
+    without any command that changes the cluster. A PG whose placement
+    cannot be read is reported with the reason and no query.
+    """
+    if set(request) - {"slot", "object", "namespace"}:
+        raise ValueError("pgstate takes only slot, object and namespace")
+    _, place, observe = pg_observer(rados, cluster, request)
+    started = clock()
+    first = place()
+    if not isinstance(first, dict):
+        seen = {"before": None, "after": None, "code": None, "placement_failure": first}
+    else:
+        seen = observe(first["pgid"], first["primary_id"])
+    return {"pg_state": dict(seen, elapsed_ms=int((clock() - started) * 1000))}
+
+
+# A pinned `rados listwatchers` line (src/tools/rados/rados.cc).
+WATCHER_LINE = re.compile(r"watcher=(\S+) client\.([0-9]+) cookie=([0-9]+)")
+
+
+def mode_watchers(rados, cluster, request, out, run=subprocess.run):
+    """The native watcher list of one owned object (`rados listwatchers`).
+
+    Read-only: the pinned CLI sends one LIST_WATCHERS read to the object's
+    primary. Output beyond its bounds or a line of another shape fails.
+    """
+    if set(request) - {"slot", "object", "namespace"}:
+        raise ValueError("watchers takes only slot, object and namespace")
+    pool = pool_name(request["slot"])
+    _, namespace = object_request(request)
+    args = ["rados", "-c", str(rados.root / "ceph.conf"), "-n", "client.test", "--keyring", str(rados.root / "keyring"), "-p", pool]
+    if namespace:
+        args += ["-N", namespace]
+    result = run(args + ["listwatchers", request["object"]], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    if result.returncode != 0 or len(result.stdout) > 65536 or len(result.stderr) > 4096:
+        raise RuntimeError("native listwatchers failed (%d) or exceeded its output bound" % result.returncode)
+    entries = []
+    for line in result.stdout.decode().splitlines():
+        match = WATCHER_LINE.fullmatch(line)
+        if not match:
+            raise ValueError("unexpected pinned listwatchers output")
+        entries.append({"address": match[1], "global_id": int(match[2]), "cookie": int(match[3])})
+    return {"watchers": {"pool": pool, "object": request["object"], "namespace": namespace, "entries": entries}}
+
+
+def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=time.sleep):
+    """One owned interval change of the PG of an owned object, or one observation of it.
+
+    Action repeer requires a clean erasure-coded PG without a pg_temp, sends
+    one `pg repeer` command, which is never resent, and observes until the
+    PG is settled in a newer interval or the time bound is used up. Action
+    show observes once and judges a clean PG on the recorded placement.
+    Action absent observes once and judges the PG active without the member
+    of one acting position of the recorded placement. Action replaced
+    observes once and judges the PG active under the primary that the map
+    names without the recorded primary's member. Each reports the last
+    observation and its judgement; a PG that did not settle is reported, not
+    raised.
+    """
+    action = request.get("action")
+    allowed = {"action", "slot", "object", "namespace"} | {"show": {"origin"}, "absent": {"origin", "shard", "since"},
+                                                           "replaced": {"origin", "since"}}.get(action, set())
+    if action not in ("repeer", "show", "absent", "replaced") or set(request) - allowed:
+        raise ValueError("pginterval needs action repeer, show, absent or replaced and no unknown field")
+    descriptor, place, observe = pg_observer(rados, cluster, request)
     started = clock()
     if action in ("show", "absent", "replaced"):
         origin = request.get("origin")
@@ -1159,7 +1224,7 @@ def mode_cleanup(rados, cluster, request, out):
     return {"removed": removed, "pools_removed": gone, "ec_profiles_remaining": remaining}
 
 
-HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory, "opsinflight": mode_opsinflight, "objecterrequests": mode_objecterrequests, "shardhistory": mode_shardhistory, "pginterval": mode_pginterval,
+HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory, "opsinflight": mode_opsinflight, "objecterrequests": mode_objecterrequests, "shardhistory": mode_shardhistory, "pginterval": mode_pginterval, "pgstate": mode_pgstate, "watchers": mode_watchers,
             "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "mgrstate": mode_mgrstate, "service": mode_service, "servicewatch": mode_servicewatch, "servicecompare": mode_servicecompare, "servicemetadata": mode_servicemetadata, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
 
 

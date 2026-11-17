@@ -388,3 +388,12 @@ beyond the cases above, and replica (shard) reads: a balanced read routed to
 a non-primary shard crashes the OSD in the EC read pipeline (observed
 2026-10-20, Ceph assert, not a client behavior; see
 EC_NONPRIMARY_READ_CRASH.md), so that path is not exercised.
+
+## Watch, snapshot and PG backoff across epoch changes (2026-11-17)
+
+Three more four-OSD rows, one test each, run on their own optimized isa
+k=2,m=2 pool: a watch RECONNECTed to the replacement primary and back, clones
+made through the original and the replacement primary, and a PG-wide backoff
+of a PG peered below `min_size` that the interval change of a returning OSD
+releases. Method, observations and limits are in
+[OSD_EC_EPOCH_STATE_VALIDATION.md](OSD_EC_EPOCH_STATE_VALIDATION.md).
