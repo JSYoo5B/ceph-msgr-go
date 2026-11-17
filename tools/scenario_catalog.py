@@ -4,13 +4,15 @@
 The catalog lives in .github/scenarios/catalog.d/:
 
   _catalog.json   {"version": 1, "fixed_jobs": [...]}
-  <group>.json    {"scenarios": [...]}, every row of one row group
+  <group>.json             {"scenarios": [...]}, existing rows of a group
+  <group>.<subject>.json   {"scenarios": [...]}, independently added rows
 
 The composed document is {"version", "scenarios", "fixed_jobs"}. Its rows are
 the fragments' rows, fragment by fragment in file-name order and in file order
-within a fragment. Adding a row to a group therefore edits that group's file
-only. A row whose "group" is not its file's name, a duplicate identifier in
-any two fragments and a file that is neither the index nor a group fragment
+within a fragment. New tests add a subject-named fragment of their group.
+A row whose "group" differs from the filename before the first dot, a
+duplicate identifier in any two fragments and a file that is neither the
+index nor a group fragment
 are refused.
 
 Every reader of the catalog uses load(). It also accepts the earlier single
@@ -38,7 +40,7 @@ CATALOG = SCENARIOS / "catalog.d"  # relative to a repository root
 CATALOG_DIR = ROOT / CATALOG
 INDEX = "_catalog.json"
 LEGACY = "catalog.json"
-FRAGMENT = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\.json")
+FRAGMENT = re.compile(r"[a-z0-9][a-z0-9-]{0,63}(?:\.[a-z0-9][a-z0-9-]{0,63})?\.json")
 INDEX_KEYS = {"version", "fixed_jobs"}
 LEGACY_KEYS = {"version", "scenarios", "fixed_jobs"}
 
@@ -90,7 +92,7 @@ def compose(directory):
     _version(head, INDEX)
     scenarios, owner = [], {}
     for path in fragments:
-        group = path.name[: -len(".json")]
+        group = path.name.split(".", 1)[0]
         rows = _object(_read_json(path), path.name, {"scenarios"}).get("scenarios")
         if not isinstance(rows, list) or not rows:
             raise CatalogError("%s has no scenarios" % path.name)
@@ -139,7 +141,7 @@ def split(document):
         groups.setdefault(row["group"], []).append(row)
     for group, rows in groups.items():
         name = group + ".json"
-        if not FRAGMENT.fullmatch(name):
+        if "." in group or not FRAGMENT.fullmatch(name):
             raise CatalogError("group %r cannot name a fragment file" % group)
         files[name] = dump({"scenarios": rows})
     return dict(sorted(files.items()))

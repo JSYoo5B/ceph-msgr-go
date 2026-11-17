@@ -65,9 +65,8 @@ no list, count or file of another area:
   with its `//fixture:shareable` or `//fixture:isolated` line (see
   [Fixture sharing](#fixture-sharing)) and any cluster-free helper test.
   Neither is registered anywhere; the tools list them with `go test -list`.
-- `.github/scenarios/catalog.d/<group>.json`: the row, after the last row of
-  its group's fragment, or a new fragment for a new group. A row with a
-  `test_run` has an identifier that ends in `.t-<name>`.
+- `.github/scenarios/catalog.d/<group>.<name>.json`: the new test's rows in
+  a new file named after its subject. A row with a `test_run` has an identifier that ends in `.t-<name>`.
 - `integration/fixture/<name>.go`: the capability of a test-specific fixture
   mode, `defineCapability` beside the mode (see
   [Fixture capabilities](#fixture-capabilities)). The row declares it in
@@ -86,23 +85,31 @@ no list, count or file of another area:
 A row's description belongs in its fixture record and its coverage row, not
 in this document. `tools/test_merge_proof.py` makes two such pull requests in
 a temporary Git repository, once in two areas and once in one area, merges
-them and runs the validators on the merged tree. The two areas merge without
-a conflict. In one area, only the group's catalog fragment may conflict, and
-keeping both sides' rows resolves it.
+them and runs the validators on the merged tree. Every case must merge without
+a conflict, including two RBD registrations and two four-OSD registrations.
+The proof requires Git to create each merge without repairs.
 
 ## Catalog and planner
 
 The catalog is the directory [`catalog.d`](catalog.d/). `_catalog.json` holds the
-catalog version and the fixed check suites. Every row group has its own
+catalog version and the fixed check suites. Existing row groups have their own
 `<group>.json`, `{"scenarios": [...]}`, holding that group's rows, and each row
-keeps its `group` field. A new row goes into its group's file only; a new group
-is a new file. `tools/scenario_catalog.py` composes the directory for every
+keeps its `group` field. New registrations use `<group>.<subject>.json`,
+with the same JSON shape and group field. Each filename component has 1–64
+lowercase alphanumeric or hyphen characters and starts with an alphanumeric.
+A subject is chosen by its author, without allocating a name in a shared list.
+`tools/scenario_catalog.py` composes the directory for every
 reader (the planner, the change planner, the coverage map check and the
 fixture's Go tests use it or its Go counterpart `ciLoadCatalog`). The composed
 rows are in file-name order of the fragments and in file order within each
 fragment. A duplicate identifier in any two fragments, a row whose `group` is
-not its file's name, an empty fragment and any other file or directory are
-refused.
+not the filename before the first dot, an empty fragment and any other file
+or directory are refused.
+
+Subject fragments remove the same-group shared edit while retaining the
+existing catalog data. The longer-term direction of declarations beside the
+native tests remains separate. A trusted default-branch planner must contain
+this loader before a PR can request rows using the new filename form.
 
 ### Fixture capabilities
 

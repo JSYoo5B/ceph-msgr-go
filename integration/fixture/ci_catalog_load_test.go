@@ -17,7 +17,7 @@ const ciCatalogPath = ".github/scenarios/catalog.d"
 
 const ciCatalogIndex = "_catalog.json"
 
-var ciCatalogFragment = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}\.json$`)
+var ciCatalogFragment = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}(\.[a-z0-9][a-z0-9-]{0,63})?\.json$`)
 
 // ciLoadCatalog returns the scenario rows of a fragment directory, in file
 // name order and file order within a fragment, or of a single catalog file.
@@ -74,7 +74,7 @@ func ciLoadCatalog(path string) ([]ciScenario, error) {
 	var scenarios []ciScenario
 	owner := map[string]string{}
 	for _, name := range fragments {
-		group := strings.TrimSuffix(name, ".json")
+		group, _, _ := strings.Cut(name, ".")
 		object, err := ciCatalogObject(filepath.Join(path, name), "scenarios")
 		if err != nil {
 			return nil, err
@@ -175,10 +175,25 @@ func TestCICatalogLoaderRefusesInconsistentFragments(t *testing.T) {
 	if want := []string{"mon-mgr.a", "osd.b", "osd.a"}; !slices.Equal(ids, want) {
 		t.Fatalf("composed order = %v, want %v", ids, want)
 	}
+	dir := setup(t)
+	ciCatalogWrite(t, dir, "osd.subject.json", `{"scenarios":[`+row("osd.extra", "osd")+`]}`)
+	subjectRows, err := ciLoadCatalog(dir)
+	if err != nil || len(subjectRows) != len(rows)+1 || subjectRows[len(subjectRows)-1].ID != "osd.extra" {
+		t.Fatalf("subject fragment rows = %#v, error = %v", subjectRows, err)
+	}
 	for _, tc := range []struct {
 		name, want string
 		change     func(t *testing.T, dir string)
 	}{
+		{"subject duplicate", "duplicate identifier osd.a", func(t *testing.T, dir string) {
+			ciCatalogWrite(t, dir, "osd.subject.json", `{"scenarios":[`+row("osd.a", "osd")+`]}`)
+		}},
+		{"subject wrong group", `osd.subject.json: rbd.new is not in group "osd"`, func(t *testing.T, dir string) {
+			ciCatalogWrite(t, dir, "osd.subject.json", `{"scenarios":[`+row("rbd.new", "rbd")+`]}`)
+		}},
+		{"multiple subjects", "unknown catalog file osd.a.b.json", func(t *testing.T, dir string) {
+			ciCatalogWrite(t, dir, "osd.a.b.json", `{}`)
+		}},
 		{"duplicate across fragments", "duplicate identifier osd.a in osd.json and rbd.json", func(t *testing.T, dir string) {
 			ciCatalogWrite(t, dir, "rbd.json", `{"scenarios":[`+row("osd.a", "rbd")+`]}`)
 		}},
