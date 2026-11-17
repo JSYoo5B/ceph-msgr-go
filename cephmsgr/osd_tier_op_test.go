@@ -302,3 +302,63 @@ func TestOSDTierOperationSuccessRequiresOnDisk(t *testing.T) {
 		}
 	}
 }
+
+// TestOSDTierFlushDeferredSuccessKeepsItsPerOpResult accepts the dedup
+// TIER_FLUSH reply shape observed live (aggregate 0, per-op -EAGAIN, ONDISK
+// echoed) and keeps the raw per-op result. The same per-op result on another
+// tier operation, another per-op error, or the same shape without ONDISK
+// leaves the outcome unknown without resend.
+func TestOSDTierFlushDeferredSuccessKeepsItsPerOpResult(t *testing.T) {
+	type result struct {
+		r OSDReply
+		e error
+	}
+	for _, profile := range []OSDProfile{OSDProfileObjectHash, OSDProfileReplicatedPGReplyV8, OSDProfileReplicatedPGRequestV9ReplyV8} {
+		for _, tc := range []struct {
+			name  string
+			code  OSDOpcode
+			perOp int32
+			flags uint64
+			ok    bool
+		}{
+			{"flush-eagain-ondisk", OSDTierFlush, -11, OSDReplyOnDisk, true},
+			{"flush-eagain-ack-only", OSDTierFlush, -11, OSDReplyAck, false},
+			{"flush-ebusy", OSDTierFlush, -16, OSDReplyOnDisk, false},
+			{"evict-eagain", OSDTierEvict, -11, OSDReplyOnDisk, false},
+			{"promote-eagain", OSDTierPromote, -11, OSDReplyOnDisk, false},
+		} {
+			t.Run(profileNameForCacheTest(profile)+"/"+tc.name, func(t *testing.T) {
+				o, peer, ctx, _, input, _ := tierTestOpen(t, profile, tc.code)
+				done := make(chan result, 1)
+				go func() { r, e := o.Request(ctx, input); done <- result{r, e} }()
+				sent := peer.next(t)
+				reply := tierTestReply(t, profile, input, tc.perOp, 0, tc.flags)
+				reply.Transaction = sent.Transaction
+				if err := osdMapsWrite(peer, reply); err != nil {
+					t.Fatal(err)
+				}
+				var got result
+				select {
+				case got = <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("tier reply did not complete locally")
+				}
+				var unknown *OutcomeUnknownError
+				if tc.ok {
+					if got.e != nil || got.r.Code != 0 || len(got.r.Operations) != 1 || got.r.Operations[0].Result != tc.perOp {
+						t.Fatal("deferred dedup flush success refused or lost its per-op result", got.r.Operations, got.e)
+					}
+					return
+				}
+				if !errors.As(got.e, &unknown) || got.r.Submission.Transaction != sent.Transaction {
+					t.Fatal("contradictory tier success accepted", got.r.Operations, got.e)
+				}
+				select {
+				case extra := <-peer.requests:
+					t.Fatal("tier operation was resent", extra.Transaction)
+				default:
+				}
+			})
+		}
+	}
+}

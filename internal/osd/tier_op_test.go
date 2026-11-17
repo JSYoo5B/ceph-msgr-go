@@ -139,3 +139,29 @@ func TestTierOperationRefusalsBeforeEncoding(t *testing.T) {
 		t.Fatal("IgnoreCache READ admitted without the cache-pool capability", err)
 	}
 }
+
+func TestTierFlushDeferredSuccessIsNarrow(t *testing.T) {
+	flush := []Operation{{Code: TierFlush}}
+	if !TierFlushDeferredSuccess(flush, 0, -11) {
+		t.Fatal("observed dedup flush success refused")
+	}
+	for name, c := range map[string]struct {
+		ops              []Operation
+		aggregate, perOp int32
+	}{
+		"evict":           {[]Operation{{Code: TierEvict}}, 0, -11},
+		"promote":         {[]Operation{{Code: TierPromote}}, 0, -11},
+		"cache flush":     {[]Operation{{Code: CacheFlush}}, 0, -11},
+		"other per-op":    {flush, 0, -16},
+		"positive":        {flush, 1, -11},
+		"refusal":         {flush, -22, -11},
+		"compound":        {[]Operation{{Code: TierFlush}, {Code: Stat}}, 0, -11},
+		"zero per-op":     {flush, 0, 0},
+		"no operation":    {nil, 0, -11},
+		"in-progress hit": {flush, 0, -115},
+	} {
+		if TierFlushDeferredSuccess(c.ops, c.aggregate, c.perOp) {
+			t.Error("contradictory tier reply accepted:", name)
+		}
+	}
+}

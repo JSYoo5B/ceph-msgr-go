@@ -22,9 +22,11 @@ package osd
 // object (EINVAL). TIER_FLUSH on a dirty or plain object runs the dedup flush
 // configured on the pool (EINVAL without it); its reply is sent when the
 // chunk references are taken, right after the OSD submits the transaction
-// that records the new manifest and clears dirty. Successful replies require
-// ONDISK without changing their wire mode; that bit identifies no state
-// transition. A lost reply leaves an unknown outcome that is never replayed.
+// that records the new manifest and clears dirty, and it keeps the per-op
+// EAGAIN the handler stored before the flush blocked the object. Successful
+// replies require ONDISK without changing their wire mode; that bit
+// identifies no state transition. A lost reply leaves an unknown outcome that
+// is never replayed.
 const (
 	TierPromote uint16 = 0x2229
 	TierFlush   uint16 = 0x822b
@@ -99,4 +101,19 @@ func ValidateTierRequest(r Request) error {
 		}
 	}
 	return ErrRequest
+}
+
+// tierFlushDeferred is the per-op result (-EAGAIN) the TIER_FLUSH handler
+// stores in the request's own operation before the dedup flush blocks the
+// object. finish_set_dedup later answers with reply_op_error, which copies
+// the request's operations, so the reply carries this result beside the
+// aggregate code (observed live with aggregate 0).
+const tierFlushDeferred int32 = -11
+
+// TierFlushDeferredSuccess reports a successful dedup TIER_FLUSH reply: a
+// standalone TIER_FLUSH whose aggregate is 0 and whose per-op result is the
+// retained -EAGAIN. Any other negative per-op result in a successful reply
+// stays contradictory.
+func TierFlushDeferredSuccess(ops []Operation, aggregate, perOp int32) bool {
+	return len(ops) == 1 && ops[0].Code == TierFlush && aggregate == 0 && perOp == tierFlushDeferred
 }
