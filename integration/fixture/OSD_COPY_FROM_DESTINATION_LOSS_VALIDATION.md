@@ -1,8 +1,8 @@
 # COPY_FROM and COPY_FROM2 with the destination primary lost after staging
 
 Issue #7, checkpoint 3: the destination primary dies after the copy finished
-reading its source and staged its final transaction, before the destination
-commit. This is the interval left open by the post-ONDISK SIGKILL test, by the
+reading its source and the primary committed locally, while at least one
+replica commit was still outstanding. This is the interval left open by the post-ONDISK SIGKILL test, by the
 destination SIGKILL while the source read was blocked
 ([earlier record](OSD_COPY_FROM_VALIDATION.md)) and by the primary-change
 cells, which move the primary without losing a daemon
@@ -123,7 +123,7 @@ outcome's identity and the class of its cause, never the error text,
 native digests, log and replay versions, the resubmission reply)
 are written with `testcluster.WritePublicEvidence` to
 `osd-copyfrom-destination-loss-results.json`, which the fixture archives
-with its diagnostics.
+with its diagnostics. A cell skipped at placement selection has no receipt.
 
 ## Results
 

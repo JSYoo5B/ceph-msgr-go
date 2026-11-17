@@ -24,8 +24,8 @@ import (
 )
 
 // Destination primary loss after a COPY_FROM or COPY_FROM2 finished reading
-// its source and staged its final transaction, before the destination
-// commit. The pinned source (Ceph v20.2.4) gives the barrier its meaning:
+// its source and committed locally, while the primary still awaited replica
+// commits. The pinned source (Ceph v20.2.4) gives the barrier its meaning:
 //
 //   - src/osd/PrimaryLogPG.cc:344-368 (CopyFromCallback::finish) runs the
 //     client's op context again with execute_ctx once the source read is
@@ -43,8 +43,7 @@ import (
 //
 // A destination replica that is paused before the copy is sent therefore
 // holds the client op at that point: the source read is complete and the
-// transaction is staged on the primary (and on any replica not paused), but
-// not committed. The destination primary is then SIGKILLed.
+// primary has committed locally and still awaits at least one replica commit. The destination primary is then SIGKILLed.
 
 // copyLossCell is one opcode and the number of replicas that commit before
 // the loss: one (one replica paused) or none (both paused).
@@ -257,6 +256,9 @@ func TestCephOSDCopyFromStagedDestinationLossIntegration(t *testing.T) {
 				t.Cleanup(func() { recovery.restore(t) })
 				receipt := copyLossReceipt{Cell: cell.label(), Commits: commits}
 				defer func() {
+					if t.Skipped() {
+						return
+					}
 					mu.Lock()
 					receipts = append(receipts, receipt)
 					mu.Unlock()
