@@ -12,7 +12,7 @@ checks and advisory structural PR reports. These do not select native scenarios.
 
 This document owns scenario selection, the result gate and the inventories.
 Which native path a scenario covers, and where its retained record is, is in
-the [native path coverage map](../../integration/fixture/NATIVE_PATH_COVERAGE.md).
+the [native path coverage map](../../integration/fixture/coverage/README.md).
 The path from a feature's contract through its scenario to the observed
 result is in [Tracing one feature](../../DOCUMENTATION.md#tracing-one-feature).
 

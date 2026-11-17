@@ -34,7 +34,7 @@ criteria are in [SPEC.md](SPEC.md).
 
 ### Fixture and CI contributors
 
-Start with the [native path coverage map](integration/fixture/NATIVE_PATH_COVERAGE.md):
+Start with the [native path coverage map](integration/fixture/coverage/README.md):
 one row per native path of the
 [final test-environment scope](SPEC.md#final-test-environment-scope), with its
 setup, independent observation, fault, cleanup, catalog scenario and retained
@@ -65,7 +65,7 @@ must follow the owner.
 | Join of a wire row to its unit selector and native receipt; attribution category of each receipt | [PROTOCOL_EVIDENCE.md](cephmsgr/PROTOCOL_EVIDENCE.md) | `python3 tools/protocol_evidence.py` |
 | Provenance of retained native codec vectors | the `testdata/*README.md` files and provenance records beside each package's vectors | the native-vector tests of that package |
 | Scenario definitions and required rows | [catalog.d](.github/scenarios/catalog.d/); rules in the [scenario README](.github/scenarios/README.md) | `python3 tools/scenario_plan.py validate`, `TestCICatalogInventory` |
-| Classification of native recipes per path, and where each record is | [NATIVE_PATH_COVERAGE.md](integration/fixture/NATIVE_PATH_COVERAGE.md) | `python3 tools/native_path_coverage.py` |
+| Classification of native recipes per path, and where each record is | the [coverage map index](integration/fixture/coverage/README.md) and one area file per path beside it | `python3 tools/native_path_coverage.py` |
 | Reproducible fixture setup and control | `integration/fixture/*_FIXTURE.md`, `*_RECIPE.md` and `*_ORACLE.md` | review |
 | An observed native result: tested source, image, profile, outcome and what was not verified | the `integration/fixture/*_VALIDATION.md` record of that run | review; records are not rewritten by later changes |
 | Successful native evidence bundle format | [NATIVE_EVIDENCE.md](.github/scenarios/NATIVE_EVIDENCE.md) | its validation record beside it |
@@ -94,8 +94,8 @@ answer.
    client feature bit is declared or withheld per profile in
    [CLIENT_EXTENSION_DECISIONS.md](internal/mds/CLIENT_EXTENSION_DECISIONS.md).
    The row also names the unit or native-vector selector.
-4. **Scenario.** Find the path in
-   [NATIVE_PATH_COVERAGE.md](integration/fixture/NATIVE_PATH_COVERAGE.md). Its
+4. **Scenario.** Find the path's row in its area file of the
+   [native path coverage map](integration/fixture/coverage/README.md). Its
    Evidence column names the catalog scenario ID or group and the Go test;
    its Visibility column says whether a dedicated row requires the test or a
    broad row may skip it. The scenario itself is defined in
@@ -109,9 +109,9 @@ answer.
    encoder vectors, and the entry says so. A receipt belongs to the source
    and profile it names and to no other.
 6. **Remaining limits.** Read the "Not verified" section of the validation
-   record and the limits of the wire contract. Product gaps across areas are
-   listed under
-   [Product wire gaps](integration/fixture/NATIVE_PATH_COVERAGE.md#product-wire-gaps-separate-from-environment-completeness).
+   record and the limits of the wire contract. Product gaps are listed in
+   the Product wire gaps section of their area file; the index says
+   [which areas have one](integration/fixture/coverage/README.md#product-wire-gaps-separate-from-environment-completeness).
 
 Two distinctions apply at every step:
 
@@ -161,7 +161,7 @@ No. The path that establishes this:
    [EVENT_CONTRACT.md](internal/osd/EVENT_CONTRACT.md) states that
    replication, recovery, peering and heartbeat messages are fixture
    requirements, not client codecs.
-4. [NATIVE_PATH_COVERAGE.md](integration/fixture/NATIVE_PATH_COVERAGE.md#daemon-to-daemon):
+4. [Daemon-to-daemon coverage](integration/fixture/coverage/D2D.md):
    rows D2D-10 and D2D-11 show how peering between real OSDs is observed
    (outcome only locally; per-step peering has no recipe).
 
@@ -186,7 +186,7 @@ No. The path that establishes this:
    [set-chunk-native-README.md](internal/osd/testdata/set-chunk-native-README.md))
    and `TestSetChunkRefusalsBeforeEncoding`, native receipt R27.
 4. **Scenario.** Row OSD-26 under
-   [CLIENT to OSD](integration/fixture/NATIVE_PATH_COVERAGE.md#client-to-osd):
+   [CLIENT to OSD](integration/fixture/coverage/OSD.md):
    scenario
    `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdsetchunkgo`,
    test `TestCephOSDSetChunkGoIntegration`, a dedicated row. Row OSD-24 beside
@@ -209,8 +209,8 @@ No. The path that establishes this:
 ## Keeping summaries consistent
 
 - Change the owning document first, then every summary of it. The README,
-  the SPEC evidence table and the "Product wire gaps" list of the coverage map
-  are summaries.
+  the SPEC evidence table and the "Product wire gaps" sections of the coverage
+  map's area files are summaries.
 - Keep the attribution of a native result when summarizing it: the tested
   commit or historical source label, the profile and the scenario. Do not
   merge observations from different profiles into one claim.
