@@ -149,5 +149,7 @@ killed after the copy's source read completed, EC, and host runtime profiles.
 A later [primary-change checkpoint](OSD_COPY_FROM_PRIMARY_CHANGE_VALIDATION.md)
 moves the destination primary without killing it, after a lost reply and
 while a copy is held before its source read, with explicit resubmission to
-the new primary. The in-OSD copy of a source in another PG is
+the new primary. A later [destination-loss checkpoint](OSD_COPY_FROM_DESTINATION_LOSS_VALIDATION.md)
+SIGKILLs the destination primary after the source read completed and the
+final transaction was staged. The in-OSD copy of a source in another PG is
 exercised only incidentally by the 8-PG profile.

@@ -77,6 +77,16 @@ func (p profile) daemonControlAdmitted(kind, action string) bool {
 }
 
 func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) error {
+	// Cleanup publishes this separate request after abandoning a timed-out
+	// pause or resume. Claim it before reading those original requests,
+	// then reconcile the lease after the ordinary actions have run.
+	recovery, err := c.request(out, "recover-paused-osd")
+	if err != nil {
+		return err
+	}
+	if recovery != nil && len(recovery) != 2 {
+		return errors.New("invalid OSD pause recovery request")
+	}
 	for _, kind := range daemonControlKinds {
 		for _, action := range []string{"pause", "resume", "stop", "start", "kill"} {
 			fields, err := c.request(out, action+"-"+kind)
@@ -143,6 +153,16 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 				return err
 			}
 		}
+	}
+	if recovery != nil {
+		key := "osd." + recovery[1]
+		if lease := c.pauses[key]; lease != nil {
+			if err := lease.Resume(ctx); err != nil {
+				return err
+			}
+			delete(c.pauses, key)
+		}
+		return publishAck(out, "osd-pause-recovered."+recovery[0])
 	}
 	return nil
 }

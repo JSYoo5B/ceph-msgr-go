@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -151,19 +153,12 @@ func boundedRaw(encoded string) string {
 	return string(raw)
 }
 
-// checkCopyHeld judges the phase barrier of the in-flight cell from two
-// snapshots of the destination primary taken while pauserd is set: its op
-// tracker holds exactly one op of the copying client entity and incarnation,
-// for the route's PG at the route's epoch, and its internal Objecter holds
-// exactly one op of the owned source, paused and never sent, that is a
-// single copy-get. The Objecter counts every prepared send in attempts
-// (src/osdc/Objecter.cc:3385-3400 clears paused and increments it) and
-// pauses an op already sent when a later map calls for it
-// (Objecter.cc:3081), so a copy-get sent once and waiting to be sent again
-// is paused too; only attempts 0 shows that the source read never left the
-// OSD. Both snapshots answered for the route's primary between identical
-// placement records of the route. It returns both ops.
-func checkCopyHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot, route osdFixtureOracle, gid uint64, incarnation int32) (opsInFlightOp, objecterRequestsOp, error) {
+// checkCopyClientOp is the part every copy barrier shares: both snapshots
+// are complete and were answered by the route's primary for the route's PG
+// between identical placement records of the route, and the op tracker holds
+// exactly one op of the copying client entity and incarnation, for the
+// route's PG at the route's epoch. It returns that op.
+func checkCopyClientOp(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot, route osdFixtureOracle, gid uint64, incarnation int32) (opsInFlightOp, error) {
 	for name, s := range map[string]struct {
 		complete bool
 		failures []string
@@ -177,23 +172,43 @@ func checkCopyHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot, r
 		"objecter":   {objecter.Complete, objecter.Failures, objecter.Code, objecter.Before, objecter.After, objecter.OSD, objecter.PGID},
 	} {
 		if !s.complete || len(s.failures) != 0 || s.code != 0 {
-			return opsInFlightOp{}, objecterRequestsOp{}, fmt.Errorf("incomplete %s snapshot: code %d, %q", name, s.code, s.failures)
+			return opsInFlightOp{}, fmt.Errorf("incomplete %s snapshot: code %d, %q", name, s.code, s.failures)
 		}
 		if !reflect.DeepEqual(s.before, s.after) || !samePlacement(s.before, route) || s.before.Epoch < route.Epoch {
-			return opsInFlightOp{}, objecterRequestsOp{}, fmt.Errorf("the %s snapshot is not bracketed by the route's placement: %+v vs %+v", name, s.before, route)
+			return opsInFlightOp{}, fmt.Errorf("the %s snapshot is not bracketed by the route's placement: %+v vs %+v", name, s.before, route)
 		}
 		if s.osd != route.PrimaryID || s.osd != route.ID || s.pgid != route.PGID {
-			return opsInFlightOp{}, objecterRequestsOp{}, fmt.Errorf("the %s snapshot of osd.%d for %s is not the route's primary osd.%d for %s", name, s.osd, s.pgid, route.ID, route.PGID)
+			return opsInFlightOp{}, fmt.Errorf("the %s snapshot of osd.%d for %s is not the route's primary osd.%d for %s", name, s.osd, s.pgid, route.ID, route.PGID)
 		}
 	}
 	if want := fmt.Sprintf("client.%d.%d", gid, incarnation); ops.Client != want || len(ops.Ops) != 1 {
-		return opsInFlightOp{}, objecterRequestsOp{}, fmt.Errorf("%d in-flight ops of %s (want 1 of %s)", len(ops.Ops), ops.Client, want)
+		return opsInFlightOp{}, fmt.Errorf("%d in-flight ops of %s (want 1 of %s)", len(ops.Ops), ops.Client, want)
 	}
 	op := ops.Ops[0]
 	// A legacy-v6 request names the raw PG of its object hash, a replicated
 	// PG request the actual PG (tools/osd_ops_in_flight_oracle.py).
 	if op.TID == 0 || op.Reqid != fmt.Sprintf("client.%d.%d:%d", gid, incarnation, op.TID) || (op.PGID != route.PGID && op.PGID != route.RawPGID) || op.Epoch != route.Epoch {
-		return op, objecterRequestsOp{}, fmt.Errorf("in-flight op %s for %s at epoch %d; want the route's %s or %s at epoch %d", op.Reqid, op.PGID, op.Epoch, route.PGID, route.RawPGID, route.Epoch)
+		return op, fmt.Errorf("in-flight op %s for %s at epoch %d; want the route's %s or %s at epoch %d", op.Reqid, op.PGID, op.Epoch, route.PGID, route.RawPGID, route.Epoch)
+	}
+	return op, nil
+}
+
+// checkCopyHeld judges the phase barrier of the in-flight cell from two
+// snapshots of the destination primary taken while pauserd is set: its op
+// tracker holds exactly one op of the copying client entity and incarnation,
+// for the route's PG at the route's epoch, and its internal Objecter holds
+// exactly one op of the owned source, paused and never sent, that is a
+// single copy-get. The Objecter counts every prepared send in attempts
+// (src/osdc/Objecter.cc:3385-3400 clears paused and increments it) and
+// pauses an op already sent when a later map calls for it
+// (Objecter.cc:3081), so a copy-get sent once and waiting to be sent again
+// is paused too; only attempts 0 shows that the source read never left the
+// OSD. Both snapshots answered for the route's primary between identical
+// placement records of the route. It returns both ops.
+func checkCopyHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot, route osdFixtureOracle, gid uint64, incarnation int32) (opsInFlightOp, objecterRequestsOp, error) {
+	op, err := checkCopyClientOp(ops, objecter, route, gid, incarnation)
+	if err != nil {
+		return op, objecterRequestsOp{}, err
 	}
 	if objecter.AbsenceEstablished || ops.AbsenceEstablished {
 		return op, objecterRequestsOp{}, errors.New("a snapshot claims absence")
@@ -254,16 +269,35 @@ func checkPrimaryReturned(original, now osdFixtureOracle) error {
 	return nil
 }
 
-// copyPrimaryRecovery undoes the OSDMap changes of the primary-change tests:
-// every OSD marked out is marked in again and pauserd is unset. restore
-// attempts every command before one native flag check and one clean check,
-// so a failed command does not keep the others from running; it is
+// checkPrimaryRestarted is checkPrimaryReturned for an original primary that
+// was killed and started again: everything but the address must be the
+// original placement, because the restarted daemon binds a new address.
+func checkPrimaryRestarted(original, now osdFixtureOracle) error {
+	if now.Address == "" {
+		return fmt.Errorf("placement %+v has no address", now)
+	}
+	original.Address = now.Address
+	return checkPrimaryReturned(original, now)
+}
+
+// copyPrimaryRecovery undoes the cluster changes of the primary-change and
+// destination-loss tests: every paused OSD is resumed and restarted, every
+// killed OSD is started again, every OSD marked out is marked in again and
+// pauserd is unset. restore attempts every command before one native flag
+// check and one clean check, so a failed command does not keep the others
+// from running; after a restart it republishes the fixture's routing. It is
 // idempotent and runs from t.Cleanup of each subtest and of the test.
 type copyPrimaryRecovery struct {
 	c       *cephmsgr.Client
 	base    osdFixtureOracle
+	dir     string
 	out     map[int32]bool
 	pauserd bool
+	// frozen OSDs are paused (docker pause); killed ones are SIGKILLed and
+	// not started yet; restarted says routing must be republished.
+	frozen    map[int32]bool
+	killed    map[int32]bool
+	restarted bool
 }
 
 func copyMonCommand(ctx context.Context, c *cephmsgr.Client, command string) error {
@@ -277,6 +311,81 @@ func (r *copyPrimaryRecovery) markOut(t *testing.T, ctx context.Context, osd int
 	r.out[osd] = true
 	if err := copyMonCommand(ctx, r.c, fmt.Sprintf(`{"prefix":"osd out","ids":["%d"]}`, osd)); err != nil {
 		t.Fatal("mark the destination primary out", err)
+	}
+}
+
+// freeze pauses one OSD through the fixture's daemon control. It is recorded
+// first, so an uncertain pause is still resumed.
+func (r *copyPrimaryRecovery) freeze(t *testing.T, ctx context.Context, osd int32) {
+	t.Helper()
+	r.frozen[osd] = true
+	if err := testcluster.ControlDaemon(ctx, r.dir, "pause", "osd", strconv.Itoa(int(osd))); err != nil {
+		t.Fatal("pause", osd, err)
+	}
+}
+
+// thaw resumes a paused OSD in place, which the tests do while it is well
+// inside its heartbeat grace.
+func (r *copyPrimaryRecovery) thaw(ctx context.Context, osd int32, deadline time.Time) error {
+	thaw, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	if err := thaw.Err(); err != nil {
+		return err
+	}
+	if err := testcluster.ControlDaemon(thaw, r.dir, "resume", "osd", strconv.Itoa(int(osd))); err != nil {
+		return err
+	}
+	if !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	delete(r.frozen, osd)
+	return nil
+}
+
+// recoverFrozen asks the controller to settle the original pause and resume
+// before killing the replica. Its original resume may already have applied.
+func (r *copyPrimaryRecovery) recoverFrozen(ctx context.Context, osd int32) error {
+	name := strconv.Itoa(int(osd))
+	if err := testcluster.RequestControl(ctx, r.dir, "recover-paused-osd", "osd-pause-recovered", name); err != nil {
+		return fmt.Errorf("recover pause of osd.%d: %w", osd, err)
+	}
+	delete(r.frozen, osd)
+	r.killed[osd] = true
+	if err := testcluster.ControlDaemon(ctx, r.dir, "kill", "osd", name); err != nil {
+		return fmt.Errorf("kill thawed osd.%d: %w", osd, err)
+	}
+	return nil
+}
+
+// kill SIGKILLs one OSD and returns the fixture's receipt of its exit code,
+// which must be 137 and not an orderly shutdown or OOM.
+func (r *copyPrimaryRecovery) kill(t *testing.T, ctx context.Context, osd int32) int {
+	t.Helper()
+	r.killed[osd] = true
+	if err := testcluster.ControlDaemon(ctx, r.dir, "kill", "osd", strconv.Itoa(int(osd))); err != nil {
+		t.Fatal("kill", osd, err)
+	}
+	var crash struct {
+		Daemon    string `json:"daemon"`
+		ExitCode  *int   `json:"exit_code"`
+		OOMKilled *bool  `json:"oom_killed"`
+	}
+	data, err := os.ReadFile(filepath.Join(r.dir, "osd-crash-state.json"))
+	if err == nil {
+		err = json.Unmarshal(data, &crash)
+	}
+	if err != nil || crash.Daemon != fmt.Sprintf("osd.%d", osd) || crash.ExitCode == nil || *crash.ExitCode != 137 || crash.OOMKilled == nil || *crash.OOMKilled {
+		t.Fatalf("expected SIGKILL evidence for osd.%d: %+v %v", osd, crash, err)
+	}
+	return *crash.ExitCode
+}
+
+// markDown marks a killed OSD down instead of waiting for failure reports.
+// Starting the OSD again brings it back up; nothing else undoes it.
+func (r *copyPrimaryRecovery) markDown(t *testing.T, ctx context.Context, osd int32) {
+	t.Helper()
+	if err := copyMonCommand(ctx, r.c, fmt.Sprintf(`{"prefix":"osd down","ids":["%d"]}`, osd)); err != nil {
+		t.Fatal("mark the killed OSD down", err)
 	}
 }
 
@@ -304,14 +413,40 @@ func (r *copyPrimaryRecovery) clearPauseReads(t *testing.T, ctx context.Context)
 	}
 }
 
+func sortedOSDs(set map[int32]bool) []int32 {
+	return slices.Sorted(func(yield func(int32) bool) {
+		for osd := range set {
+			if !yield(osd) {
+				return
+			}
+		}
+	})
+}
+
 func (r *copyPrimaryRecovery) restore(t *testing.T) {
 	t.Helper()
-	if !r.pauserd && len(r.out) == 0 {
+	if !r.pauserd && len(r.out) == 0 && len(r.frozen) == 0 && len(r.killed) == 0 && !r.restarted {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 	var failed []error
+	// An OSD still paused here may have been frozen past its heartbeat grace
+	// (a test failed before thawing it), so it is restarted rather than
+	// thawed in place, as in the source failover test.
+	for _, osd := range sortedOSDs(r.frozen) {
+		if err := r.recoverFrozen(ctx, osd); err != nil {
+			failed = append(failed, err)
+		}
+	}
+	for _, osd := range sortedOSDs(r.killed) {
+		if err := testcluster.ControlDaemon(ctx, r.dir, "start", "osd", strconv.Itoa(int(osd))); err != nil {
+			failed = append(failed, fmt.Errorf("start osd.%d: %w", osd, err))
+		} else {
+			delete(r.killed, osd)
+			r.restarted = true
+		}
+	}
 	if r.pauserd {
 		if err := copyMonCommand(ctx, r.c, `{"prefix":"osd unset","key":"pause"}`); err != nil {
 			failed = append(failed, fmt.Errorf("osd unset pause: %w", err))
@@ -319,13 +454,7 @@ func (r *copyPrimaryRecovery) restore(t *testing.T) {
 			r.pauserd = false
 		}
 	}
-	for _, osd := range slices.Sorted(func(yield func(int32) bool) {
-		for osd := range r.out {
-			if !yield(osd) {
-				return
-			}
-		}
-	}) {
+	for _, osd := range sortedOSDs(r.out) {
 		if err := copyMonCommand(ctx, r.c, fmt.Sprintf(`{"prefix":"osd in","ids":["%d"]}`, osd)); err != nil {
 			failed = append(failed, fmt.Errorf("osd in %d: %w", osd, err))
 		} else {
@@ -340,7 +469,14 @@ func (r *copyPrimaryRecovery) restore(t *testing.T) {
 		t.Errorf("native OSDMap still carries a pause flag at epoch %d: %v", flags.Epoch, flags.OSDMapFlags)
 	}
 	waitOSDFixtureClean(t, ctx, r.base)
-	t.Log("restored: every OSD in, pause unset, osd-ready clean")
+	if r.restarted {
+		// A restarted OSD has a new address; later tests route by the
+		// fixture's published routing, as after the crash tests.
+		fresh := nativeMutation(t, ctx, map[string]any{"compare": false, "placement": true}).Placement
+		publishReplicaOSDRouting(t, r.dir, adoptMutationPlacement(t, r.base, fresh))
+		r.restarted = false
+	}
+	t.Log("restored: every OSD running and in, pause unset, osd-ready clean")
 }
 
 // copyPrimaryChangeCase is one opcode of a primary-change cell.
@@ -374,6 +510,9 @@ type copyPrimaryChangeRun struct {
 	dest     string
 	srcRoute osdFixtureOracle
 	dstRoute osdFixtureOracle
+	// restartedPrimary says the original destination primary was killed and
+	// started again, so it returns under a new address.
+	restartedPrimary bool
 }
 
 const (
@@ -536,7 +675,11 @@ func (r *copyPrimaryChangeRun) waitReturned() osdFixtureOracle {
 	var last osdFixtureOracle
 	for {
 		now := poolPlace(r.t, r.ctx, 2, r.dest, "")
-		err := checkPrimaryReturned(r.dstRoute, now)
+		check := checkPrimaryReturned
+		if r.restartedPrimary {
+			check = checkPrimaryRestarted
+		}
+		err := check(r.dstRoute, now)
 		if err == nil && reflect.DeepEqual(now, last) {
 			return now
 		}
@@ -580,7 +723,7 @@ func (r *copyPrimaryChangeRun) finish(want nativeXattrSnapshot, last uint64, cop
 
 // copyPrimaryChangeFixture starts the three-BlueStore fixture, two owned
 // pools and the run-level recovery.
-func copyPrimaryChangeFixture(t *testing.T) (context.Context, ownedPools, *copyPrimaryRecovery) {
+func copyPrimaryChangeFixture(t *testing.T, bound time.Duration) (context.Context, ownedPools, *copyPrimaryRecovery) {
 	t.Helper()
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("a destination primary change needs three BlueStore replicas")
@@ -590,10 +733,10 @@ func copyPrimaryChangeFixture(t *testing.T) (context.Context, ownedPools, *copyP
 		fixture = replicatedPGFixture
 	}
 	c, _, base, _ := fixture(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	t.Cleanup(cancel)
 	waitOSDFixtureClean(t, ctx, base)
-	recovery := &copyPrimaryRecovery{c: c, base: base, out: map[int32]bool{}}
+	recovery := &copyPrimaryRecovery{c: c, base: base, dir: os.Getenv("CEPH_MSGR_CONTROL_DIR"), out: map[int32]bool{}, frozen: map[int32]bool{}, killed: map[int32]bool{}}
 	// Registered after the pools, so it runs before their removal.
 	pools := createOwnedPools(t, ctx, base, 1, 2)
 	t.Cleanup(func() { recovery.restore(t) })
@@ -615,7 +758,7 @@ func copyPrimaryChangeFixture(t *testing.T) (context.Context, ownedPools, *copyP
 //
 //fixture:isolated marks OSDs out and in, waits osd-ready clean without a pg_temp proof
 func TestCephOSDCopyFromLostReplyPrimaryChangeIntegration(t *testing.T) {
-	ctx, pools, recovery := copyPrimaryChangeFixture(t)
+	ctx, pools, recovery := copyPrimaryChangeFixture(t, 900*time.Second)
 	for _, tc := range copyPrimaryChangeCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(func() { recovery.restore(t) })
@@ -722,7 +865,7 @@ func TestCephOSDCopyFromLostReplyPrimaryChangeIntegration(t *testing.T) {
 //
 //fixture:isolated sets pause and marks OSDs out, restored checked, waits osd-ready clean without pg_temp proof
 func TestCephOSDCopyFromInFlightPrimaryChangeIntegration(t *testing.T) {
-	ctx, pools, recovery := copyPrimaryChangeFixture(t)
+	ctx, pools, recovery := copyPrimaryChangeFixture(t, 900*time.Second)
 	for _, tc := range copyPrimaryChangeCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(func() { recovery.restore(t) })

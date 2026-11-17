@@ -226,7 +226,8 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
         frozen = {
             frozenset({"TestCephOSDObjectBackoffFailoverIntegration"}),
             frozenset({"TestCephOSDUpmapIntegration"}),
-            frozenset({"TestCephOSDCopyFromLostReplyPrimaryChangeIntegration", "TestCephOSDCopyFromInFlightPrimaryChangeIntegration"}),
+            frozenset({"TestCephOSDCopyFromLostReplyPrimaryChangeIntegration", "TestCephOSDCopyFromInFlightPrimaryChangeIntegration",
+                       "TestCephOSDCopyFromStagedDestinationLossIntegration"}),
         }
         observed = {}
         for row in rows:

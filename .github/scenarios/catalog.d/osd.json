@@ -615,7 +615,7 @@
     "osd_store": "bluestore",
     "osd_replicas": "3",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDCopyFrom(LostReply|InFlight)PrimaryChangeIntegration$"
+    "test_run": "^TestCephOSDCopyFrom((LostReply|InFlight)PrimaryChange|StagedDestinationLoss)Integration$"
    }
   },
   {
@@ -631,7 +631,7 @@
     "osd_store": "bluestore",
     "osd_replicas": "3",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDCopyFrom(LostReply|InFlight)PrimaryChangeIntegration$"
+    "test_run": "^TestCephOSDCopyFrom((LostReply|InFlight)PrimaryChange|StagedDestinationLoss)Integration$"
    }
   },
   {
