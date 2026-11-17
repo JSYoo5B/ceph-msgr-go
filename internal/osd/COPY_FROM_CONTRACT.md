@@ -56,7 +56,8 @@ plus continued use of the same public connection after rejection.
 
 The reply must echo the original union with zero padding and carry no output
 and no extent; signed server results (ENOENT for a missing source, ERANGE for a
-a lower requested source version, EOVERFLOW for a higher one, EINVAL) are preserved raw. A successful vector
+lower requested source version, EOVERFLOW for a higher one, EINVAL) are
+preserved raw. A successful vector
 requires ONDISK, like every mutation; ACK alone is an unknown outcome. Local
 cancellation after send keeps an unknown outcome and nothing is replayed or
 routed again.

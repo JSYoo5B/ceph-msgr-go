@@ -42,7 +42,24 @@ Catalog row:
 
 ## Execution record
 
-Native execution pending. No result is claimed by this recipe alone.
+On 2026-11-18, Linux amd64, Docker 29.9.1, Go 1.26.9, the catalog row above
+passed at source `f8b133b` against the pinned v20.2.4 image digest
+`6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`.
+The required parent passed in 12.97 s, with all 16 nested cells PASS and no
+skip or missing-test gate problems. The source clone was snapshot 2 at user
+version 2; the later head was version 4. Both opcodes returned 0/0 on
+zero/exact versions, -34/-115 on lower versions, and -75/-115 on higher
+versions (aggregate/per-op). All 15 public local refusals preserved TID
+continuity and native destination state. Three heads and one snapshot were
+removed; native clone/whiteout trim completed in 602 ms and active+clean was
+confirmed. Eight fixture containers terminated and a subsequent inventory
+contained no testcontainers containers.
+
+That initial execution did not archive the new JSON filename because it was
+missing from the diagnostic collector allowlist. Its assertions and text
+results passed, but it is not a retained raw-receipt claim. The follow-up
+adds that explicit filename and re-executes the row to retain the receipt.
+Exact-SHA hosted CI remains distinct from these local Linux executions.
 
 ## Boundaries
 

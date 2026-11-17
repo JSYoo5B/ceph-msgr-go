@@ -90,7 +90,7 @@ func TestCephOSDCopyFromClassificationIntegration(t *testing.T) {
 			t.Fatal("native version precondition", s)
 		}
 	}
-	if receipt.Clone.Version >= receipt.Head.Version || bytes.Equal(receipt.Clone.Operations[1].Data, receipt.Head.Operations[1].Data) {
+	if receipt.Clone.ObjectInfo.OID.Snap < 1 || receipt.Head.ObjectInfo.OID.Snap != -2 || receipt.Clone.Version >= receipt.Head.Version || bytes.Equal(receipt.Clone.Operations[1].Data, receipt.Head.Operations[1].Data) {
 		t.Fatal("clone and head must differ")
 	}
 	observe := func(name string) omapWriteState {
@@ -187,7 +187,7 @@ func TestCephOSDCopyFromClassificationIntegration(t *testing.T) {
 								t.Fatal("refused copy changed populated destination")
 							}
 						} else {
-							if reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || after.Code != 0 || after.Version != source.state.Version || reply.UserVersion != after.Version || !bytes.Equal(after.Data, source.state.Operations[1].Data) || !reflect.DeepEqual(xattrInventory(after.nativeXattrSnapshot), stringXattrs(source.state.Xattrs())) {
+							if reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || after.Code != 0 || after.Version != source.state.Version || reply.UserVersion != after.Version || !bytes.Equal(after.Data, source.state.Operations[1].Data) || !reflect.DeepEqual(xattrInventory(after.nativeXattrSnapshot), copyClassificationXattrs(source.state.Xattrs())) {
 								t.Fatal("native copy state", after, reply)
 							}
 							// The native pre-copy source observation and post-copy destination
@@ -211,7 +211,7 @@ func TestCephOSDCopyFromClassificationIntegration(t *testing.T) {
 	}
 }
 
-func stringXattrs(input map[string][]byte) map[string]string {
+func copyClassificationXattrs(input map[string][]byte) map[string]string {
 	out := make(map[string]string, len(input))
 	for k, v := range input {
 		out[k] = string(v)
