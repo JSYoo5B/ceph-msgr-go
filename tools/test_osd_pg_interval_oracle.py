@@ -596,5 +596,79 @@ class ModeTest(unittest.TestCase):
         self.assertEqual((self.rados.sent, self.rados.queries), ([], []))
 
 
+
+# The PG with the members of acting positions 1 and 3 down: two of four
+# shards, below min_size 3, so the primary reports it peered and not active.
+PEERED = [3, interval.NONE, 1, interval.NONE]
+
+
+class StateModeTest(ModeTest):
+    def run_state(self, **request):
+        request = dict({"slot": 2, "object": "ec-partial-write-history"}, **request)
+        with patch.object(oracle.mutation, "collect_placement", side_effect=self.place):
+            return oracle.mode_pgstate(self.rados, None, request, None, clock=lambda: self.now)["pg_state"]
+
+    def test_pgstate_observes_once_without_a_command_or_judgement(self):
+        placement = dict(ORIGIN, epoch=30, up=PEERED, acting=PEERED)
+        self.placements = [placement]
+        self.replies = [query(state="undersized+degraded+peered", epoch=30, up=PEERED, acting=PEERED, interval_since=30, started=27)]
+        seen = self.run_state()
+        self.assertEqual((seen["before"], seen["after"], seen["code"], self.rados.sent), (placement, placement, 0, []))
+        self.assertEqual((seen["query"]["state"], seen["query"]["acting"], seen["query"]["same_interval_since"]), ("undersized+degraded+peered", PEERED, 30))
+        self.assertNotIn("failures", seen)
+        self.assertEqual(self.rados.queries, [(3, {"prefix": "pg", "pgid": PGID, "cmd": "query", "format": "json"}, interval.MAX_QUERY_BYTES)])
+
+    def test_pgstate_without_a_placement_sends_no_query(self):
+        self.placements = [ValueError("invalid native placement acting set")]
+        seen = self.run_state()
+        self.assertEqual((seen["before"], seen["after"], seen["code"]), (None, None, None))
+        self.assertIn("invalid native placement acting set", seen["placement_failure"])
+        self.assertEqual((self.rados.sent, self.rados.queries), ([], []))
+
+    def test_pgstate_refuses_unknown_fields(self):
+        for request in ({"action": "show"}, {"origin": ORIGIN}, {"osd": 1}):
+            with self.subTest(request=request), self.assertRaises(ValueError):
+                self.run_state(**request)
+        self.assertEqual((self.rados.sent, self.rados.queries), ([], []))
+
+
+class Completed:
+    def __init__(self, returncode, stdout, stderr=b""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+class WatchersModeTest(unittest.TestCase):
+    def run_mode(self, result, **request):
+        calls = []
+
+        def run(args, **options):
+            calls.append((args, options["timeout"]))
+            return result
+
+        rados = type("R", (), {"root": pathlib.Path("/fixture")})()
+        request = dict({"slot": 1, "object": "ec-watch"}, **request)
+        return oracle.mode_watchers(rados, None, request, None, run=run)["watchers"], calls
+
+    def test_lists_every_pinned_watcher_line(self):
+        listed, calls = self.run_mode(Completed(0, b"watcher=v2:192.0.2.4:0/123 client.4170 cookie=94000000000001\n"
+                                                   b"watcher=v2:192.0.2.5:0/7 client.4180 cookie=1\n"))
+        self.assertEqual(listed, {"pool": "ceph-msgr-owned-pool-1", "object": "ec-watch", "namespace": "",
+                                  "entries": [{"address": "v2:192.0.2.4:0/123", "global_id": 4170, "cookie": 94000000000001},
+                                              {"address": "v2:192.0.2.5:0/7", "global_id": 4180, "cookie": 1}]})
+        self.assertEqual(calls, [(["rados", "-c", "/fixture/ceph.conf", "-n", "client.test", "--keyring", "/fixture/keyring",
+                                   "-p", "ceph-msgr-owned-pool-1", "listwatchers", "ec-watch"], 30)])
+        listed, calls = self.run_mode(Completed(0, b""), namespace="ns")
+        self.assertEqual((listed["entries"], calls[0][0][-4:]), ([], ["-N", "ns", "listwatchers", "ec-watch"]))
+
+    def test_refuses_failures_other_shapes_and_unbounded_output(self):
+        for name, result in (("exit code", Completed(2, b"")), ("another line", Completed(0, b"watcher=v2:192.0.2.4:0/1 osd.1 cookie=1\n")),
+                             ("long output", Completed(0, b"x" * 65537)), ("long stderr", Completed(0, b"", b"e" * 4097))):
+            with self.subTest(name=name), self.assertRaises((RuntimeError, ValueError)):
+                self.run_mode(result)
+        for request in ({"slot": 3}, {"object": ""}, {"osd": 1}):
+            with self.subTest(request=request), self.assertRaises(ValueError):
+                self.run_mode(Completed(0, b""), **request)
+
+
 if __name__ == "__main__":
     unittest.main()

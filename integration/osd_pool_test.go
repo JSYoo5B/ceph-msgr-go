@@ -60,6 +60,10 @@ type poolReceipt struct {
 	ShardHistory shardHistorySnapshot `json:"shard_history"`
 	// pginterval mode: one owned interval change of a PG and its judgement.
 	PGInterval pgIntervalReceipt `json:"pg_interval"`
+	// pgstate mode: one read-only observation of a PG, without judgement.
+	PGState pgIntervalObservation `json:"pg_state"`
+	// watchers mode: the native watcher list of one owned object.
+	Watchers *poolWatcherList `json:"watchers"`
 
 	Epochs      map[string]uint64 `json:"epochs"`
 	PoolType    int               `json:"pool_type"`
@@ -102,6 +106,19 @@ type poolReceipt struct {
 	} `json:"pool_snaps"`
 	RemovedSnaps      string            `json:"removed_snaps"`
 	RemovedSnapsQueue []json.RawMessage `json:"removed_snaps_queue"`
+}
+
+// poolWatcherList is the pinned `rados listwatchers` output for one owned
+// object (tools/osd_pool_oracle.py mode_watchers).
+type poolWatcherList struct {
+	Pool      string `json:"pool"`
+	Object    string `json:"object"`
+	Namespace string `json:"namespace"`
+	Entries   []struct {
+		Address  string `json:"address"`
+		GlobalID uint64 `json:"global_id"`
+		Cookie   uint64 `json:"cookie"`
+	} `json:"entries"`
 }
 
 type nativeScrubList struct {

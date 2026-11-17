@@ -175,6 +175,41 @@ parity shard's OSD, more than one write while a member is away, and a write
 during the recovery itself were not observed with this capture, and nothing
 here is a replay or deduplication claim.
 
+## Watch, snapshot and backoff state across EC epoch changes
+
+[Three controls](../../integration/fixture/OSD_EC_EPOCH_STATE_VALIDATION.md)
+on the optimized isa k=2,m=2 pool (one replicated-PG profile) carry other
+state across the epoch changes of lost OSDs. Nothing follows the map on its
+own; the caller re-derives placement and decides what to send.
+
+- A watch registered at the shard-0 primary stayed in the object's state
+  after that primary's OSD was killed: the replacement primary, the first
+  parity shard's OSD under a primary-first pg_temp, listed it before any
+  RECONNECT. `ReconnectWatch` through the replacement, with
+  `PrimaryFirst`, kept the cookie and advanced the generation, and a
+  notification from another client completed with the ACK. After the
+  original primary returned, a second RECONNECT, without primary-first
+  numbering, did the same. The client opened only the connections the
+  caller asked for.
+- A self-managed clone made through the shard-0 primary and one made
+  through the replacement primary, with the newer SnapContext while shard 0
+  was absent, read back the same through Go and natively, with the same
+  LIST_SNAPS result and head user version, under the replacement and after
+  the return.
+- With two OSDs of the PG down, below `min_size`, the shard-0 primary
+  answered a Go APPEND with a PG-wide BLOCK for the PG's whole range on its
+  actual shard and dropped the APPEND. After the explicit ACK, requests for
+  the PG on that connection were refused locally, including one naming
+  another shard with primary-first numbering. The return of one OSD ended
+  the interval, and the primary, which had stayed up, sent the matching
+  UNBLOCK at the new epoch. The dropped APPEND kept its unknown outcome; one
+  caller resubmission under its original identity applied it once.
+
+Not covered by these controls: a BLOCK from a primary that leads under a
+primary-first pg_temp, native reception of the ACK on an EC PG, object-level
+backoffs on an EC pool, notification delivery while a registration is
+disconnected, snapshot trimming or removal, and the nonoptimized pool.
+
 ## Optimized EC pools (`allow_ec_optimizations`)
 
 Tentacle's optimized EC (`OSDMonitor::enable_pool_ec_optimizations`, Ceph
@@ -212,7 +247,9 @@ primary-eligible shards first; the fixture oracle does the same.
 
 The writer-side backoff gate cannot undo the renumbering from the encoded
 request, so a BLOCK on an EC PG gates requests for its object range on every
-shard of that PG on the connection (over-refusal, never a bypass). Self-managed snapshots, watch/notify and a write during one
+shard of that PG on the connection (over-refusal, never a bypass). A live
+PG-wide BLOCK on the optimized k=2,m=2 pool confirmed that refusal for a
+request naming another shard (see the section above). Self-managed snapshots, watch/notify and a write during one
 shard's absence were verified on optimized k=2,m=1 and k=2,m=2 pools. On
 k=2,m=1 the read after recovery with another OSD down decodes from the
 returned shard and the primary only. On k=2,m=2 three shards remain, so
