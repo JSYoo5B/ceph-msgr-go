@@ -28,6 +28,9 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	if err := ValidateSetChunkRequest(r); err != nil {
 		return msgr.MessageData{}, err
 	}
+	if err := ValidateTierRequest(r); err != nil {
+		return msgr.MessageData{}, err
+	}
 	if err := ValidateChecksumCompoundRequest(r); err != nil {
 		return msgr.MessageData{}, err
 	}

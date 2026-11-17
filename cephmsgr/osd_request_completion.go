@@ -42,7 +42,9 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 		// A contradictory success is not an execution/durability receipt.
 		// https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/PrimaryLogPG.cc#L8205
 		// https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/PrimaryLogPG.cc#L9188
-		if !redirect && reply.Result >= 0 && op.Result < 0 && requested.Flags&osd.OpFailOK == 0 {
+		// A successful dedup TIER_FLUSH is answered through reply_op_error
+		// and keeps the handler's per-op EAGAIN (TierFlushDeferredSuccess).
+		if !redirect && reply.Result >= 0 && op.Result < 0 && requested.Flags&osd.OpFailOK == 0 && !osd.TierFlushDeferredSuccess(input.Operations, reply.Result, op.Result) {
 			return errors.New("OSD successful vector contains a failed ordinary operation")
 		}
 		success := !redirect && reply.Result >= 0 && op.Result >= 0

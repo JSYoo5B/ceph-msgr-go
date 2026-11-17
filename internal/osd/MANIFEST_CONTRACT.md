@@ -17,8 +17,9 @@ chunked object that still holds its own bytes keeps them, and the OSD drops
 that object's chunk references after the source commit, without a completion
 back to the caller (observed live on one profile; see the SET_CHUNK record
 below). Both are
-standalone and flagless here; reference-counted redirects and the tier
-operations are not implemented. SET_CHUNK has its own bounded contract below.
+standalone and flagless here; reference-counted redirects are not
+implemented. SET_CHUNK and the TIER_PROMOTE, TIER_FLUSH and TIER_EVICT
+operations have their own bounded contracts below.
 
 `OSDRequest.IgnoreRedirect` sets CEPH_OSD_FLAG_IGNORE_REDIRECT so the OSD
 serves the manifest object itself (maybe_handle_manifest returns early);
@@ -41,9 +42,9 @@ Verification: [OSD_REDIRECT_VALIDATION.md](../../integration/fixture/OSD_REDIREC
 
 Source audit of the pinned commit for issue #8. This repository emits
 SET_CHUNK under the bounded contract in
-[Go SET_CHUNK contract](#go-set_chunk-contract) and none of the TIER_*
-opcodes. Line numbers refer to `src/osd/PrimaryLogPG.cc` unless another file
-is named.
+[Go SET_CHUNK contract](#go-set_chunk-contract) and the TIER_* opcodes under
+the [Go tier operation contract](#go-tier-operation-contract). Line numbers
+refer to `src/osd/PrimaryLogPG.cc` unless another file is named.
 
 ### SET_CHUNK (0x8228)
 
@@ -103,22 +104,90 @@ The native client may resend an uncertain request.
 
 ### TIER_PROMOTE, TIER_FLUSH and TIER_EVICT
 
-All three are inputless client primitives on a non-tier pool, and each refuses
-an absent object with -ENOENT.
+All three are inputless client primitives
+([v20.2.4 handlers](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc#L7402-L7526)).
+Each handler checks, in order, a tier pool (-EINVAL), an absent object
+(-ENOENT) and a `require_osd_release` older than the operation (-EOPNOTSUPP,
+unreachable on a Tentacle cluster). None is a user-visible modification
+(6066-6081): the user version moves only where noted below, and
+`maybe_handle_manifest` never proxies them (2588-2598). A CACHE-mode request
+for an absent object is answered with -ENOENT before the handler, from the
+object-context lookup (2443-2455); TIER_PROMOTE is a write and reaches its
+handler, whose -ENOENT is logged as an error entry.
 
-- TIER_PROMOTE (0x2229, `ObjectWriteOperation::tier_promote`, `rados
-  tier-promote`, 7402): a plain object is a no-op success. A chunked manifest
-  copies its missing chunks back from itself; a redirect copies its target into
-  the object.
-- TIER_FLUSH (0x822b, `ObjectReadOperation::tier_flush`, `rados tier-flush`
-  with IGNORE_CACHE and IGNORE_OVERLAY, 7460): a dirty or non-manifest object
-  starts a blocking dedup flush, and its in-progress result is returned as
-  -EAGAIN; a clean manifest returns 0. The dedup path refuses a pool without
-  `fingerprint_algorithm` or `dedup_tier` with -EINVAL (`start_dedup`), so this
-  operation needs a dedup pool configuration that SET_CHUNK does not.
-- TIER_EVICT (0x822c, `ObjectReadOperation::tier_evict`, `rados tier-evict`
-  with the same flags, 7488): a non-manifest object is refused with -EINVAL;
-  otherwise every chunk is marked missing and its local range is punched.
+Native construction (`osdc/Objecter.h:1615-1629`, `tools/rados/rados.cc`
+3991-4071): `rados tier-promote` submits an `ObjectWriteOperation` through
+`IoCtx::operate` (WRITE and the client's mtime); `rados tier-flush` and
+`rados tier-evict` submit an `ObjectReadOperation` through `aio_operate` with
+`OPERATION_IGNORE_CACHE|OPERATION_IGNORE_OVERLAY` (READ, IGNORE_CACHE `0x8000`
+and IGNORE_OVERLAY `0x20000`, no SKIPRWLOCKS and no mtime). IGNORE_CACHE only
+skips the cache-pool path, which returns early on a pool without a cache mode
+(2724-2735); IGNORE_OVERLAY is read by the native Objecter when it chooses a
+target. The OSD checks OSD_CACHEPOOL only for pools in a cache-tier relation
+(1942-1945), and a base pool with a dedup tier is not one.
+
+- **TIER_PROMOTE** (0x2229, mode WR). A plain object has no manifest: result 0
+  with no transaction, so the write is recorded as a log-only entry and the
+  object's bytes, user version and mtime stay (`prepare_transaction`,
+  9001-9009). For a manifest the handler starts a copy (`start_copy`, 9488)
+  through the OSD's own client with IGNORE_CACHE, IGNORE_OVERLAY,
+  MAP_SNAP_CLONE and RWORDERED, returns -EINPROGRESS and is executed again
+  when the copy completes (`PromoteManifestCallback`, 4053). A chunked
+  manifest reads **every** chunk from its chunk target
+  (`_copy_some_manifest`, 9602) and writes those bytes into the object at the
+  chunk offsets in a PROMOTE transaction that clears each chunk's MISSING flag
+  (`process_copy_chunk_manifest`, 9893-10007); the chunk map and its
+  references stay. Because SET_CHUNK does not compare bytes, the object's
+  local range then holds the target's bytes even if it held other bytes
+  before. That transaction is created with the OSD's clock as mtime
+  (`simple_opc_create`, 11615) and keeps the user version. A redirect reads
+  the target with COPY_GET and `finish_promote` (10171) writes its bytes,
+  size, user version and mtime into the object and clears the manifest
+  (10310-10320); a later UNSET_MANIFEST is then refused. A failed read of a
+  chunk or redirect target is answered with that error by
+  `reply_op_error`. The client's reply follows the re-executed log-only entry.
+- **TIER_FLUSH** (0x822b, mode CACHE). A clean manifest returns 0 without a
+  transaction. A dirty object, or any object without a manifest, starts a
+  blocking flush with forced dedup (`start_flush`, 10896): an empty object
+  returns 0, and otherwise `start_dedup` (10593) refuses a pool without a
+  `fingerprint_algorithm` or a positive `dedup_tier` with -EINVAL. Configured,
+  it chunks the whole object with the pool's `dedup_chunk_algorithm` and
+  `dedup_cdc_chunk_size` (`do_cdc`, 10670; `fixed` cuts chunks of the size,
+  `fastcdc` by content), names each chunk object by its fingerprint in the
+  dedup pool, keeping the source's locator key and namespace
+  (`get_fpoid_from_chunk`, 10726), and has its own client call
+  `cas.chunk_create_or_get_ref` for each chunk (`cls/cas/cls_cas.cc`): an
+  absent chunk object is created with the chunk bytes and a by_object
+  reference to the source. The handler maps -EINPROGRESS to -EAGAIN, which
+  `execute_ctx` consumes without a reply (4281-4285). When every reference
+  is answered, `finish_set_dedup` (10762) submits a CLEAN transaction that
+  installs the new chunk map, sets the manifest, clears dirty and releases
+  the references of the previous chunk map after commit, then answers the
+  retained request with `reply_op_error(op, r)` (10860) without waiting for
+  that commit. `reply_op_error` copies the request's operations
+  (`OSD.cc:1635-1649`, `messages/MOSDOpReply.h:143-166`), and the handler had
+  stored -EAGAIN in the request's own operation (8206), so the reply carries
+  the aggregate code (0 on success) beside a per-op -EAGAIN (-11), no user
+  version, and the request's own ACK/ONDISK bits as its completion flags. The
+  object's bytes and user version stay; the CLEAN transaction moves its mtime
+  to the OSD's clock. A failed reference is answered with its code the same
+  way.
+- **TIER_EVICT** (0x822c, mode CACHE). A plain object is refused with -EINVAL.
+  A chunked manifest marks every chunk MISSING, zeroes its local range, clears
+  the data digest and clears dirty, in a cache transaction that keeps the
+  size, user version and mtime (the request carries none) and drops no
+  reference (`finish_ctx`, 9054-9064, skips cache operations). A redirect
+  manifest has no chunks: result 0 without a transaction, so nothing changes.
+  After eviction a READ whose extent lies wholly inside missing chunks is
+  proxied to the chunk targets (`can_proxy_chunked_read`, 3905); any other
+  data read or write of the object promotes it first (2650-2656), which is a
+  separate path from TIER_PROMOTE.
+
+A dedup configuration is a property of the source pool (`osd pool set`
+`dedup_tier`, `fingerprint_algorithm`, `dedup_chunk_algorithm`,
+`dedup_cdc_chunk_size`; `mon/OSDMonitor.cc`). It is unrelated to cache-mode
+configuration and is not a prerequisite for SET_CHUNK, TIER_PROMOTE or
+TIER_EVICT.
 
 COPY_GET stays daemon-originated: its only caller is the OSD's own copy and
 promote path (see [UNSUPPORTED_OPCODES.md](UNSUPPORTED_OPCODES.md)). The cache
@@ -190,6 +259,70 @@ Evidence:
   UNSET_MANIFEST is refused. Other profiles and a live lost reply remain
   unverified (the lost-reply boundary is synthetic).
 
+### Go tier operation contract
+
+`OSDTierPromote`, `OSDTierFlush` and `OSDTierEvict` (`internal/osd/tier_op.go`)
+are admitted as one standalone, inputless head operation on replicated
+placement, with exactly the native request flags:
+
+| Opcode | Request mode | Required request inputs | Refused |
+| --- | --- | --- | --- |
+| TIER_PROMOTE | WRITE (optional mtime, as any write) | none | IgnoreCache, IgnoreOverlay |
+| TIER_FLUSH, TIER_EVICT | READ | IgnoreCache, IgnoreOverlay | mtime |
+
+No feature bit, `EnableOSDCachePools` or other opt-in is required; the
+default client sends these requests with its ordinary features. IgnoreCache and
+IgnoreOverlay keep their existing refusals for every other request.
+
+Refused before a request slot, monitor readiness or TID is used: per-op flags
+(including WITH_REFERENCE), extent, data, version, chunk, copy or other union
+inputs, compound vectors, snapshot reads or context, ORDERSNAP,
+ENFORCE_SNAPC, replica-read, IGNORE_REDIRECT, RWORDERED, SKIPRWLOCKS,
+FULL_TRY/FULL_FORCE, nonzero retry, explicit resubmission and erasure-coded
+placement (the dedup flush cannot read an erasure-coded object, and no native
+caller targets a shard).
+
+Signed aggregate and per-op results pass through unchanged: ENOENT for an
+absent object, EINVAL for TIER_EVICT on a plain object and for TIER_FLUSH of a
+non-empty object without a dedup configuration, and a target read's error for
+a failed promote. On a pool in a cache-tier relation (a tier, or a base pool
+with tiers) the OSD answers a session without OSD_CACHEPOOL with EOPNOTSUPP
+before any handler (1942-1945); with that capability negotiated a tier pool's
+handler returns EINVAL, and a base pool's handler runs. Neither path was
+exercised live. A successful reply carries no output and must carry ONDISK,
+as the state-changing SET_CHUNK and cache operations do
+([CONTRACT.md](CONTRACT.md)); ACK-only and ONNVRAM-only successes fail the
+session and are returned as `OutcomeUnknownError`. The dedup TIER_FLUSH success
+is the one successful reply with a negative per-op result: aggregate 0 with
+the retained per-op -EAGAIN (`TierFlushDeferredSuccess`) is accepted and
+returned as received; any other negative per-op result in a successful reply
+is malformed. Its ONDISK is the request's own bit echoed by `reply_op_error`
+before the CLEAN transaction commits, so it establishes neither that the new
+manifest is on disk nor crash persistence; equal flags on the other paths do
+not identify a state change either. A lost reply after transmission is an
+unknown outcome and is never replayed. Choosing objects to promote, flush or
+evict, chunking and fingerprint policy, dedup pool configuration, snapshot
+clones and the reference arithmetic they change remain caller or later work.
+
+Evidence:
+
+- The [fresh native vectors](testdata/tier-op-native-README.md) cover the
+  three request shapes on v6, v8 and untraced v9; the Go encoder matches each
+  header, front, middle and data byte for byte.
+- Synthetic public transport tests send each operation on three request/reply
+  profiles without the cache-pool capability, keep signed refusals, accept the
+  deferred dedup flush shape only for TIER_FLUSH, refuse ACK-only and
+  ONNVRAM-only success, and keep a sent request whose connection is lost
+  unknown with its transaction, without redial or resend.
+- [OSD_TIER_OP_GO_VALIDATION.md](../../integration/fixture/OSD_TIER_OP_GO_VALIDATION.md)
+  records `TestCephOSDTierOpGoIntegration`: Go-originated TIER_PROMOTE,
+  TIER_FLUSH and TIER_EVICT, each paired with the same operation issued once
+  by a native librados twin on its own object, against two owned plain pools
+  on one secure/aes256k IPv6 container legacy-v6 single-BlueStore profile,
+  judged by native observations that never promote. Other profiles, a live
+  lost reply, snapshot clones, scoped identities, fastcdc chunking and a
+  failed dedup reference remain unverified.
+
 ### Native-only evidence and remaining stages
 
 [OSD_SET_CHUNK_NATIVE_VALIDATION.md](../../integration/fixture/OSD_SET_CHUNK_NATIVE_VALIDATION.md)
@@ -197,5 +330,7 @@ records `TestCephOSDSetChunkNativeIntegration`: a closed native librados oracle
 issues the refusals above and two disjoint chunks, and observes bytes,
 versions, the target's `chunk_refs` and the source's own reference count before
 and after, including the reference release on source deletion. Scoped-identity
-refusals, snapshot reference accounting, a non-zero source offset from the Go
-client, the TIER_* operations and dedup pools remain separate follow-up stages.
+refusals, snapshot reference accounting and a non-zero source offset from the
+Go client remain separate follow-up stages; the TIER_* operations and one
+fixed-chunk dedup pool configuration are covered by the Go tier operation
+evidence above.

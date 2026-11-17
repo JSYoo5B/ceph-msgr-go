@@ -328,7 +328,11 @@ fixture. It needs no opt-in parameter: the checkpoint uses the ordinary OSD
 fixture's owned plain pools, so the test also belongs to the broad legacy OSD
 selection. A second such row selects only `TestCephOSDSetChunkGoIntegration`,
 the Go-originated SET_CHUNK acceptance with native observation, on the same
-fixture and likewise without an opt-in parameter.
+fixture and likewise without an opt-in parameter. A third selects only
+`TestCephOSDTierOpGoIntegration`, the Go-originated TIER_PROMOTE, TIER_FLUSH
+and TIER_EVICT acceptance against a native twin, on the same fixture and
+also without an opt-in parameter: it configures the dedup options of its own
+owned pool only.
 Two `mds-cephfs-multi-reconnect` rows select only
 `TestCephMDSCephFSMultiReconnectIntegration`, reusing the completion opt-in
 for a fresh, isolated fixture in each selected MDS profile with

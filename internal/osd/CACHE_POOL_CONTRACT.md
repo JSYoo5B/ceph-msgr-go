@@ -76,7 +76,10 @@ takes exactly the request flags its native caller sends
 | CACHE_PIN, CACHE_UNPIN | WRITE | optional IgnoreCache | IgnoreOverlay, SkipRWLocks |
 
 `IgnoreOverlay` (`CEPH_OSD_FLAG_IGNORE_OVERLAY`, `0x20000`) is refused on every
-other request. The native Objecter reads it when it chooses a target; the
+other request except TIER_FLUSH and TIER_EVICT, whose native callers send it
+together with IgnoreCache on a pool that is not a cache tier and which
+therefore need no cache-pool capability
+([MANIFEST_CONTRACT.md](MANIFEST_CONTRACT.md#go-tier-operation-contract)). The native Objecter reads it when it chooses a target; the
 pinned OSD request path does not consult it. Because the caller already
 supplies the tier pool, PG and primary, the flag is sent only so the request
 matches the native one; it does not route anything. SKIPRWLOCKS selects the
@@ -106,8 +109,8 @@ commit paths can both return ACK+ONDISK, so those bits do not identify a state
 transition or establish crash durability. Operation-specific independent
 observations are required; see the [completion table and native evidence](../../integration/fixture/OSD_CACHE_COMPLETION_VALIDATION.md).
 Choosing which objects to flush or evict, promotion, the tier agent, hit sets
-and overlays remain caller or later work. SET_CHUNK is not a cache-tier
-operation; its bounded contract is in
+and overlays remain caller or later work. SET_CHUNK and the TIER_*
+operations are not cache-tier operations; their bounded contracts are in
 [MANIFEST_CONTRACT.md](MANIFEST_CONTRACT.md#go-set_chunk-contract).
 
 The [fresh native vectors](testdata/cache-op-native-README.md) cover all seven
