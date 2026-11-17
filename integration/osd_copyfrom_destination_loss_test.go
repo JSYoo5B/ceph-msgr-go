@@ -381,6 +381,8 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 		recovery.thaw(t, ctx, osd, thawDeadline)
 	}
 	receipt.PausedFor = time.Since(paused).Round(10 * time.Millisecond).String()
+	// Release the old endpoint before reconnecting to the restarted OSD.
+	o.Close()
 	t.Logf("osd.%d killed (exit %d) at the barrier; the copy ended unknown (%s, %s): %v; osd %v resumed after %s",
 		primary, receipt.KillExit, receipt.Unknown.Ended, receipt.Unknown.Cause, lost.err, frozen, receipt.PausedFor)
 	recovery.markDown(t, ctx, primary)
