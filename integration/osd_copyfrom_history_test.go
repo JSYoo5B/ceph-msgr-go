@@ -72,7 +72,7 @@ func copyFromDestinationBinding(copyKey, sourceKey []pgHistoryLocation, want cop
 // injector stays off. This is a positive control past the destination commit:
 // it times no crash and claims nothing about absence, replicas or replay.
 //
-//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
+//fixture:shareable copies between two owned pools only; checked owned-pool cleanup removes them and restores the config it changed
 func TestCephOSDCopyFromDestinationHistoryIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

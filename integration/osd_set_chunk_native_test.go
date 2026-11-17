@@ -155,7 +155,7 @@ func setChunkRefsEncoding(count int, name string, hash uint32, pool int64) []byt
 // count before and after; deleting the source releases both references and
 // the target. No product client sends SET_CHUNK.
 //
-//fixture:isolated owned-pool cleanup leaves mon_allow_pool_delete config set; its native checkpoint runs once per fixture
+//fixture:isolated its native SET_CHUNK checkpoint is selectable once per fixture and its receipt is never overwritten
 func TestCephOSDSetChunkNativeIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

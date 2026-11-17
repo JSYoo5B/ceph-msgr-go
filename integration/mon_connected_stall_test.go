@@ -22,7 +22,7 @@ import (
 // client's next allocation follows whatever the native pool then holds (the
 // frozen MON may still deliver the request it had buffered).
 //
-//fixture:isolated pauses and recycles a MON; owned-pool cleanup leaves mon/mon_allow_pool_delete set in config
+//fixture:isolated pauses and recycles a MON; a known open issue leaves an OSD on an old OSDMap afterwards (MON_FREEZE_FIXTURE_ISSUE.md)
 func TestCephMonPoolOpConnectedStallIntegration(t *testing.T) {
 	requireMonFreezeOptIn(t)
 	fixture := osdFixture
@@ -171,7 +171,7 @@ func TestCephMonPoolOpConnectedStallIntegration(t *testing.T) {
 // requests from the remaining quorum, and its next allocation follows the
 // native snap_seq whatever happened to the held one.
 //
-//fixture:isolated pauses the leader and stops a MON; owned-pool cleanup leaves mon/mon_allow_pool_delete set in config
+//fixture:isolated pauses the leader and stops a MON; a known open issue leaves an OSD on an old OSDMap (MON_FREEZE_FIXTURE_ISSUE.md)
 func TestCephMonPoolOpConnectedStopIntegration(t *testing.T) {
 	requireMonFreezeOptIn(t)
 	fixture := osdFixture

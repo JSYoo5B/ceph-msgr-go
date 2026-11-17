@@ -15,7 +15,7 @@ import (
 // attribute equals the value; rejected objects still advance the cursor. The
 // expected set comes from native xattr observation of every seeded object.
 //
-//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
+//fixture:shareable filtered PG listing of seeded objects in one owned pool; checked owned-pool cleanup removes it
 func TestCephOSDPGListFilterIntegration(t *testing.T) {
 	fixture := osdFixture
 	modern := isReplicatedPGFixtureProfile()
