@@ -293,6 +293,10 @@ def mode_create(rados, cluster, request, out):
         raise ValueError("hashpspool must be boolean")
     if find_pool(rados.dump(cluster), name):
         raise RuntimeError("owned pool already exists")
+    if erasure and name in crush_rules(rados, cluster):
+        # The MON names an erasure-coded pool's own rule after the pool; the
+        # cleanup removes that rule only because no earlier one existed.
+        raise RuntimeError("CRUSH rule %s already exists; refusing to reuse it for the owned pool" % name)
     if erasure:
         # OSD failure domain; overwrites need BlueStore. The MON derives the
         # pool's size (k+m) and min_size itself; neither is lowered here.
@@ -1082,11 +1086,36 @@ def mode_inconsistent(rados, cluster, request, out):
     return result
 
 
-def mode_cleanup(rados, cluster, request, out):
-    removed = []
-    code, _ = rados.mon(cluster, {"prefix": "config set", "who": "mon", "name": "mon_allow_pool_delete", "value": "true"})
+# The central entry the cleanup opens for pool removal. It is restored to the
+# state it had before (absent, or its earlier value), never left behind.
+POOL_DELETE_SECTION, POOL_DELETE_OPTION = "mon", "mon_allow_pool_delete"
+
+
+def json_mon(rados, cluster, command, label):
+    code, text = rados.mon(cluster, dict(command, format="json"))
     if code < 0:
-        raise RuntimeError("native pool deletion could not be enabled: %d" % code)
+        raise RuntimeError("native %s failed: %d" % (label, code))
+    return json.loads(text)
+
+
+def pool_delete_entry(rados, cluster):
+    """The MON section's unmasked mon_allow_pool_delete entry, or None."""
+    entries = json_mon(rados, cluster, {"prefix": "config dump"}, "config dump")
+    found = [e for e in entries if isinstance(e, dict) and e.get("section") == POOL_DELETE_SECTION
+             and e.get("name") == POOL_DELETE_OPTION and not e.get("mask")]
+    if len(found) > 1:
+        raise RuntimeError("native config dump lists %s twice" % POOL_DELETE_OPTION)
+    return found[0].get("value") if found else None
+
+
+def crush_rules(rados, cluster):
+    rules = json_mon(rados, cluster, {"prefix": "osd crush rule ls"}, "crush rule ls")
+    if not isinstance(rules, list) or not all(type(r) is str for r in rules):
+        raise ValueError("invalid native CRUSH rule list")
+    return rules
+
+
+def remove_owned_pools(rados, cluster, removed):
     for slot in SLOTS:
         name = pool_name(slot)
         if find_pool(rados.dump(cluster), name) is None:
@@ -1096,6 +1125,36 @@ def mode_cleanup(rados, cluster, request, out):
         if code < 0:
             raise RuntimeError("native pool removal failed: %d" % code)
         removed.append({"pool": name, "existed": True})
+
+
+def mode_cleanup(rados, cluster, request, out):
+    """Remove every owned pool, the CRUSH rule the MON created for an owned
+    erasure-coded pool (named after the pool, which mode_create refuses to
+    reuse) and every owned erasure-code profile, and restore the central
+    mon_allow_pool_delete entry to its prior state. Only owned names are
+    removed; a survivor is reported, not retried."""
+    removed = []
+    prior = pool_delete_entry(rados, cluster)
+    try:
+        if prior != "true":
+            code, _ = rados.mon(cluster, {"prefix": "config set", "who": POOL_DELETE_SECTION, "name": POOL_DELETE_OPTION, "value": "true"})
+            if code < 0:
+                raise RuntimeError("native pool deletion could not be enabled: %d" % code)
+        remove_owned_pools(rados, cluster, removed)
+    finally:
+        if prior is None:
+            code, _ = rados.mon(cluster, {"prefix": "config rm", "who": POOL_DELETE_SECTION, "name": POOL_DELETE_OPTION})
+        elif prior != "true":
+            code, _ = rados.mon(cluster, {"prefix": "config set", "who": POOL_DELETE_SECTION, "name": POOL_DELETE_OPTION, "value": prior})
+        else:
+            code = 0
+        # The restore is confirmed by an independent read, not by its code.
+        restored = code >= 0 and pool_delete_entry(rados, cluster) == prior
+    gone = all(find_pool(rados.dump(cluster), pool_name(slot)) is None for slot in SLOTS)
+    owned_rules = {pool_name(slot) for slot in SLOTS}
+    for rule in sorted(owned_rules & set(crush_rules(rados, cluster))):
+        rados.mon(cluster, {"prefix": "osd crush rule rm", "name": rule})
+    rules_remaining = sorted(owned_rules & set(crush_rules(rados, cluster)))
     # Every owned erasure-code profile is unused once its pools are gone.
     # Removal is not retried; a profile still readable afterwards is reported.
     remaining = []
@@ -1104,8 +1163,9 @@ def mode_cleanup(rados, cluster, request, out):
         code, _ = ec_profile_get(rados, cluster, profile)
         if code != -2:
             remaining.append(profile)
-    gone = all(find_pool(rados.dump(cluster), pool_name(slot)) is None for slot in SLOTS)
-    return {"removed": removed, "pools_removed": gone, "ec_profiles_remaining": remaining}
+    return {"removed": removed, "pools_removed": gone, "ec_profiles_remaining": remaining,
+            "crush_rules_remaining": rules_remaining, "pool_delete_config_restored": restored,
+            "pool_delete_config_prior": prior}
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory, "opsinflight": mode_opsinflight, "shardhistory": mode_shardhistory, "pginterval": mode_pginterval,

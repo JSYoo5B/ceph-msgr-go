@@ -314,6 +314,9 @@ class FakeErasureRados:
         self.pools, self.commands, self.last_status = [], [], ""
         self.min_size, self.overwrites, self.rule_op, self.profile_override = min_size, overwrites, rule_op, profile_override
         self.removable, self.optimized, self.nonprimary_override = True, False, nonprimary_override
+        # The central configuration as `config dump` lists it, and the CRUSH
+        # rules by name: the start state has the replicated default only.
+        self.config, self.rules, self.rule_removable, self.config_removable = [], ["replicated_rule"], True, True
         self.native = Mock()
         self.lib = Mock()
 
@@ -344,6 +347,10 @@ class FakeErasureRados:
         if prefix == "osd pool create":
             profile = self.profiles[command["erasure_code_profile"]]
             k, m = int(profile["k"]), int(profile["m"])
+            # Pinned OSDMonitor: an erasure pool created without a rule name
+            # gets a rule named after the pool.
+            if command["pool"] not in self.rules:
+                self.rules.append(command["pool"])
             self.pools.append({"pool": 5, "pool_name": command["pool"], "flags": 1, "flags_names": "hashpspool",
                                "type": 3, "size": k + m, "pg_num": command["pg_num"], "crush_rule": 2,
                                "min_size": self.min_size or k + min(1, m - 1),
@@ -365,7 +372,23 @@ class FakeErasureRados:
         if prefix == "osd crush rule dump":
             return 0, json.dumps([{"rule_id": 2, "type": 3, "steps": [{"op": "take", "item_name": "default"},
                                                                         {"op": self.rule_op, "num": 0, "type": "osd"}, {"op": "emit"}]}]).encode()
-        if prefix in ("config set", "osd pool rm"):
+        if prefix == "config dump":
+            return 0, json.dumps(self.config).encode()
+        if prefix == "config set":
+            self.config = [e for e in self.config if (e["section"], e["name"]) != (command["who"], command["name"])]
+            self.config.append({"section": command["who"], "name": command["name"], "value": command["value"], "mask": ""})
+            return 0, b""
+        if prefix == "config rm":
+            if self.config_removable:
+                self.config = [e for e in self.config if (e["section"], e["name"]) != (command["who"], command["name"])]
+            return 0, b""
+        if prefix == "osd crush rule ls":
+            return 0, json.dumps(self.rules).encode()
+        if prefix == "osd crush rule rm":
+            if self.rule_removable and not any(p["pool_name"] == command["name"] for p in self.pools):
+                self.rules.remove(command["name"])
+            return 0, b""
+        if prefix == "osd pool rm":
             if prefix == "osd pool rm":
                 self.pools = [p for p in self.pools if p["pool_name"] != command["pool"]]
             return 0, b""
@@ -461,6 +484,68 @@ class ErasureWidthTest(unittest.TestCase):
         stuck.removable = False
         self.assertEqual(oracle.mode_cleanup(stuck, None, {}, None)["ec_profiles_remaining"], list(oracle.EC_PROFILES))
         self.assertEqual(oracle.EC_PROFILES, ("ceph-msgr-owned-ec", "ceph-msgr-owned-ec-k2m2"))
+
+    def test_cleanup_restores_the_pool_delete_entry_it_found(self):
+        unrelated = {"section": "osd", "name": "osd_recovery_sleep", "value": "0.25", "mask": ""}
+        for prior in (None, "false", "true"):
+            with self.subTest(prior=prior):
+                rados = FakeErasureRados()
+                create(rados, width="k2m2", plugin="isa")
+                rados.config = [dict(unrelated)] + ([{"section": "mon", "name": "mon_allow_pool_delete", "value": prior, "mask": ""}]
+                                                    if prior is not None else [])
+                before = [dict(e) for e in rados.config]
+                result = oracle.mode_cleanup(rados, None, {}, None)
+                self.assertTrue(result["pools_removed"])
+                self.assertTrue(result["pool_delete_config_restored"])
+                self.assertEqual(result["pool_delete_config_prior"], prior)
+                self.assertEqual(rados.config, before)
+                # Deletion was enabled before the pool was removed, unless it already was.
+                prefixes = [c["prefix"] for c in rados.commands]
+                if prior != "true":
+                    self.assertLess(prefixes.index("config set"), prefixes.index("osd pool rm"))
+                else:
+                    self.assertNotIn("config set", prefixes)
+
+    def test_cleanup_reports_a_pool_delete_entry_it_could_not_restore(self):
+        rados = FakeErasureRados()
+        rados.config_removable = False
+        self.assertFalse(oracle.mode_cleanup(rados, None, {}, None)["pool_delete_config_restored"])
+
+    def test_cleanup_restores_the_entry_when_pool_removal_fails(self):
+        rados = FakeErasureRados()
+        create(rados, width="k2m2", plugin="isa")
+        original = rados.mon
+        def refuse(cluster, command):
+            if command["prefix"] == "osd pool rm":
+                rados.commands.append(command)
+                return -1, b""
+            return original(cluster, command)
+        rados.mon = refuse
+        with self.assertRaises(RuntimeError):
+            oracle.mode_cleanup(rados, None, {}, None)
+        self.assertEqual(rados.config, [])
+        self.assertEqual([c["prefix"] for c in rados.commands][-2:], ["config rm", "config dump"])
+
+    def test_cleanup_removes_only_the_rules_of_owned_pools(self):
+        rados = FakeErasureRados()
+        create(rados, width="k2m2", plugin="isa")
+        rados.rules.append("someone-elses-rule")
+        self.assertIn(oracle.pool_name(1), rados.rules)
+        result = oracle.mode_cleanup(rados, None, {}, None)
+        self.assertEqual(result["crush_rules_remaining"], [])
+        self.assertEqual(rados.rules, ["replicated_rule", "someone-elses-rule"])
+        self.assertEqual([c["name"] for c in rados.commands if c["prefix"] == "osd crush rule rm"], [oracle.pool_name(1)])
+        stuck = FakeErasureRados()
+        create(stuck, width="k2m2", plugin="isa")
+        stuck.rule_removable = False
+        self.assertEqual(oracle.mode_cleanup(stuck, None, {}, None)["crush_rules_remaining"], [oracle.pool_name(1)])
+
+    def test_create_refuses_an_existing_rule_named_after_the_owned_pool(self):
+        rados = FakeErasureRados()
+        rados.rules.append(oracle.pool_name(1))
+        with self.assertRaises(RuntimeError):
+            create(rados, width="k2m2", plugin="isa")
+        self.assertFalse(any(c["prefix"] in ("osd erasure-code-profile set", "osd pool create") for c in rados.commands))
 
 
 class PoolOracleTest(unittest.TestCase):

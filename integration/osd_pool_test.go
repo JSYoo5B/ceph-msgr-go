@@ -71,8 +71,12 @@ type poolReceipt struct {
 	ErasureCodeProfile string            `json:"erasure_code_profile"`
 	ECProfile          map[string]string `json:"ec_profile"`
 	ECOverwrites       *bool             `json:"ec_overwrites"`
-	// cleanup mode: owned erasure-code profiles still readable afterwards.
-	ECProfilesRemaining []string `json:"ec_profiles_remaining"`
+	// cleanup mode: owned erasure-code profiles and CRUSH rules still readable
+	// afterwards, and whether the central mon_allow_pool_delete entry the
+	// cleanup opened is back in its prior state (confirmed by a fresh read).
+	ECProfilesRemaining      []string `json:"ec_profiles_remaining"`
+	CrushRulesRemaining      []string `json:"crush_rules_remaining"`
+	PoolDeleteConfigRestored bool     `json:"pool_delete_config_restored"`
 	// fullratios mode.
 	NearfullRatio     float64           `json:"nearfull_ratio"`
 	BackfillfullRatio float64           `json:"backfillfull_ratio"`
@@ -142,6 +146,16 @@ func nativePool(t *testing.T, ctx context.Context, mode string, input any) poolR
 	const source = "7f793731f1b39eb4f465e960113d2363c311b964"
 	if receipt.Schema != 1 || receipt.Commit != source || receipt.Mode != mode || !strings.Contains(receipt.DaemonVersion, source) {
 		t.Fatal("pool oracle receipt provenance differs", receipt)
+	}
+	if mode == "cleanup" {
+		// Every caller's cleanup owes the start state these leftovers would
+		// break: the central configuration, CRUSH rules and EC profiles.
+		if !receipt.PoolDeleteConfigRestored {
+			t.Error("owned-pool cleanup did not restore the central mon_allow_pool_delete entry")
+		}
+		if len(receipt.CrushRulesRemaining) != 0 || len(receipt.ECProfilesRemaining) != 0 {
+			t.Error("owned-pool cleanup left owned CRUSH rules", receipt.CrushRulesRemaining, "or erasure-code profiles", receipt.ECProfilesRemaining)
+		}
 	}
 	return receipt
 }
