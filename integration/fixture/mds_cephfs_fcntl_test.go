@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -66,6 +67,65 @@ func TestMDSCephFSHeldFcntlCapabilityAdmission(t *testing.T) {
 	if p, err := loadProfile(func(k string) string { return env[k] }); err == nil {
 		t.Fatal("the FCNTL capability was admitted without the metadata fixture", p)
 	}
+}
+
+// The capability mds-held-fcntl came after the capability migration, so the
+// legacy admission proof does not cover it; this is its own proof over the
+// whole catalog. Only the FCNTL acceptance's rows declare it. Over every row
+// topology combined with every row's selector, with its declaration and
+// without one, the FCNTL probe is admitted exactly where mds-held-fcntl is
+// declared on a fresh metadata fixture, and then only for the exact test
+// selected; the declaration on any other topology is refused.
+func TestMDSCephFSHeldFcntlAdmissionOverTheCatalog(t *testing.T) {
+	bindings := ciWorkflowBindings(t)
+	rows := ciRepositoryCatalog(t)
+	declares := func(capabilities string) bool {
+		return slices.Contains(strings.Split(capabilities, ","), capMDSHeldFcntl.name)
+	}
+	type selection struct{ selector, capabilities string }
+	selections := map[selection]bool{{"", ""}: true}
+	declaring := 0
+	for _, row := range rows {
+		s := selection{row.Params["test_run"], row.Params["capabilities"]}
+		selections[s], selections[selection{s.selector, ""}] = true, true
+		if declares(s.capabilities) {
+			if s.selector != mdsCephFSHeldFcntlSelector || s.capabilities != capMDSHeldFcntl.name {
+				t.Errorf("%s declares %s for %s", row.ID, s.capabilities, s.selector)
+			}
+			declaring++
+		}
+	}
+	if declaring == 0 {
+		t.Fatal("no catalog row declares", capMDSHeldFcntl.name)
+	}
+	admitted, refused := 0, 0
+	for _, row := range rows {
+		metadata := row.Params["mds_fresh"] == "1" && row.Params["mds_cephfs"] == "1"
+		for s := range selections {
+			params := maps.Clone(row.Params)
+			params["test_run"], params["capabilities"] = s.selector, s.capabilities
+			env := rowEnvironment(params, bindings)
+			p, err := loadProfile(func(k string) string { return env[k] })
+			probe := err == nil && admitMDSCephFSHeldFcntl("fcntl-probe", p) == nil
+			switch {
+			case declares(s.capabilities) && metadata && (!probe || p.testRun != s.selector):
+				t.Errorf("%s with %s [%s]: the FCNTL acceptance was not admitted alone with its probe: %v", row.ID, s.selector, s.capabilities, err)
+			case declares(s.capabilities) && !metadata && err == nil:
+				t.Errorf("%s with %s [%s]: the FCNTL capability was admitted off the metadata fixture", row.ID, s.selector, s.capabilities)
+			case !declares(s.capabilities) && probe:
+				t.Errorf("%s with %s [%s]: the FCNTL probe was admitted without its capability", row.ID, s.selector, s.capabilities)
+			}
+			if probe {
+				admitted++
+			} else if declares(s.capabilities) {
+				refused++
+			}
+		}
+	}
+	if admitted == 0 || refused == 0 {
+		t.Fatal("the catalog no longer exercises both the admission and the refusal", admitted, refused)
+	}
+	t.Logf("%d rows declare %s; %d topology and selector combinations admit its probe, %d declarations refused", declaring, capMDSHeldFcntl.name, admitted, refused)
 }
 
 func TestMDSCephFSFcntlProbeRequestAndArguments(t *testing.T) {
