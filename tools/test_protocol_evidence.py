@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import protocol_evidence as evidence
+from test_go_test_list import REPEATED, SHAPES, WRONG_FILE, module, tests_file
 
 
 class ProtocolEvidenceTests(unittest.TestCase):
@@ -102,6 +103,37 @@ class ProtocolEvidenceTests(unittest.TestCase):
         self.assertIn("message 2: missing top-level Go test TestInventedPass", self.check(text))
         text = self.text.replace("[TestMonPingRejectsMalformedReply](mon_ping_test.go)", "none")
         self.assertIn("message 2: missing unit test link", self.check(text))
+
+    def test_linked_test_must_be_one_go_lists_for_that_file(self):
+        root = module(self, dict(SHAPES, **WRONG_FILE))
+        package = root / "integration"
+        # Literal expectation: the bare Test, the aliased-import test and the
+        # blank parameter are tests; TestMain, the method, the lowercase helper
+        # and the build-constrained test are not.
+        for name, file in (("Test", "shapes_test.go"), ("TestX", "shapes_test.go"), ("TestAlias", "alias_test.go")):
+            self.assertTrue(evidence.listed_test(root, package / file, name), name)
+        for name, file in (("TestMain", "shapes_test.go"), ("TestY", "shapes_test.go"), ("Testable", "shapes_test.go"),
+                           ("TestIgnored", "ignored_test.go"), ("TestAlias", "shapes_test.go"),
+                           ("TestActual", "wrong_test.go")):
+            self.assertFalse(evidence.listed_test(root, package / file, name), name)
+        self.assertTrue(evidence.listed_test(root, package / "right_test.go", "TestActual"))
+
+    def test_linked_test_of_a_nested_module_is_listed_by_that_module(self):
+        root = module(self, {})
+        nested = root / "fixture"
+        (nested / "sub").mkdir(parents=True)
+        (nested / "go.mod").write_text("module example.com/nested\n\ngo 1.24\n", encoding="utf-8")
+        (nested / "sub" / "a_test.go").write_text(tests_file("func TestNested(t *testing.T) {}", package="sub"),
+                                                  encoding="utf-8")
+        self.assertEqual(evidence.module_dir(root, nested / "sub" / "a_test.go"), nested.resolve())
+        self.assertTrue(evidence.listed_test(root, nested / "sub" / "a_test.go", "TestNested"))
+        self.assertFalse(evidence.listed_test(root, nested / "sub" / "a_test.go", "TestOther"))
+
+    def test_repeated_init_functions_do_not_hide_a_linked_test(self):
+        root = module(self, REPEATED)
+        package = root / "integration"
+        self.assertTrue(evidence.listed_test(root, package / "right_test.go", "TestActual"))
+        self.assertFalse(evidence.listed_test(root, package / "wrong_test.go", "TestActual"))
 
     def test_product_source_or_integration_selector_is_not_unit_evidence(self):
         text = self.text.replace("(mon_ping_test.go)", "(mon_ping.go)")

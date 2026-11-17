@@ -112,7 +112,8 @@ long as any native test is.
 
 The fixture derives the row values: `TestCatalogRowsDeclareFixtureSharing`
 in [`sharing_test.go`](sharing_test.go) reads the declarations with
-`go/parser`, passes every row through the fixture's `loadProfile` as the
+`go/parser` from the test files the build context selects (the same files as
+the native inventory of `ci_catalog_test.go`), passes every row through the fixture's `loadProfile` as the
 native workflow forwards it, and reports
 
 - a native test without a declaration, with two, or with an invalid value or
