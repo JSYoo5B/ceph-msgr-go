@@ -127,8 +127,11 @@ primary's op tracker (waiting for sub ops after its own commit) with no
 source read left in its Objecter, and then SIGKILLs that primary. The caller
 keeps an unknown outcome with the original identity. Native state under the
 new primary decides the result before any resubmission: with one replica
-commit the full copy must survive; with none, the run records whether the
-copy or the seed remained (every observed run kept the copy). One explicit
+commit the full copy must survive. With none committed, the paused replicas
+were already sent the repop and resume before the map marks the primary
+down; in every observed run the copy survived through them. That shows
+survival of a delivered, uncommitted repop, not the loss of a transaction
+staged on the primary alone, which remains unverified. One explicit
 resubmission is then answered from the PG log when the copy survived, and
 must execute once otherwise. Multi-chunk temporary-object staging remains
 unverified. A committed copy

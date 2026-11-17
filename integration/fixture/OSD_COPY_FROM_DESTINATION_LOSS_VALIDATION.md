@@ -72,7 +72,9 @@ For each cell:
 5. The destination primary is SIGKILLed (exit 137 recorded by the fixture).
    The Go call must end as an `OutcomeUnknownError` carrying the barrier
    op's transaction, the client's global ID and incarnation and the
-   request's map epoch, without a reply. The paused replicas are resumed, the
+   request's map epoch, without a reply. The wait is bounded at 8 s, well
+   inside the paused replicas' heartbeat grace; the receipt records whether
+   the connection or that bound ended it. The paused replicas are resumed, the
    time they were paused is recorded, and the dead OSD is marked down with
    `osd down`. The test waits for two equal placements a second apart under
    a new primary whose up set omits the dead one.
@@ -117,7 +119,8 @@ The test is `//fixture:isolated`: the clean wait does not prove pg_temp
 absence, and the owned-pool cleanup leaves `mon_allow_pool_delete`.
 
 The cell receipts (barrier op and events, raw snapshot digests, the unknown
-outcome, native digests, log and replay versions, the resubmission reply)
+outcome's identity and the class of its cause, never the error text,
+native digests, log and replay versions, the resubmission reply)
 are written with `testcluster.WritePublicEvidence` to
 `osd-copyfrom-destination-loss-results.json`, which the fixture archives
 with its diagnostics.
@@ -150,7 +153,13 @@ transaction. A replica commit can be recorded before the primary's own
 commit, as in the COPY_FROM2 replica-committed cell; the test accepts either
 order. In both primary-only cells the copy survived: the new primary, chosen
 while the killed OSD was down, held the full copy and its log entry, so at
-least one formerly paused replica applied the repop it had been sent. Every
+least one formerly paused replica applied the repop it had been sent. That
+is the expected course, not chance: the barrier shows the repops were sent,
+so their bytes were already delivered to the paused replicas, and with both
+of the dead OSD's peers paused nothing reported it, so no map had changed
+when they resumed. These cells therefore show survival through a delivered
+but uncommitted repop, not the loss of a transaction staged on the primary
+alone. Every
 resubmission was answered from the log with ONDISK, RETRY and WRITE without
 ACK, and the returned original primary held the copy once. These flags are
 recorded as observed; the test does not require them.
@@ -169,10 +178,11 @@ No product change was needed.
 
 ## Not claimed
 
-- That a copy staged on the primary only always survives. The barrier does
-  not decide that result; the observed survivals show only what the cluster
-  did in these runs. The kept-seed branch is implemented and unit-checked
-  but was not observed.
+- The loss of a transaction staged on the primary alone. In the
+  primary-only cells the repops were already delivered and the replicas
+  resume before the map marks the primary down, so the kept-seed branch is
+  close to unreachable in this order. Its judgement (`judgeCopyLoss`,
+  `judgeCopyResubmission`) is unit-tested but was never observed live.
 - Which paused replica applied the copy, or when. The test observes the new
   primary's object and log after the loss, not the replicas' processing.
 - Multi-chunk copies and their temporary objects. Every cell copies one
@@ -186,5 +196,7 @@ No product change was needed.
   compound copy/xattr vectors, MemStore, the complete broad legacy-v6
   three-replica rows, and automatic routing or replay. The client never
   resubmits on its own.
+- Rows not listed under Results, in particular the `legacy-v6` skip of a
+  primary-only cell when the one-PG pools have different primaries.
 - Exact-SHA hosted CI. These are worker-tree native runs, separate from CI
   on the pull request head.
