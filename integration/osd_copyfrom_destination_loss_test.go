@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -79,7 +81,11 @@ type copyLossReceipt struct {
 		GlobalID    uint64 `json:"global_id"`
 		Incarnation uint32 `json:"incarnation"`
 		Epoch       uint32 `json:"epoch"`
-		Error       string `json:"error"`
+		// Ended says whether the connection or the test's cancel ended
+		// the wait; Cause is the error class only, never its text, which
+		// can carry endpoints.
+		Ended string `json:"ended"`
+		Cause string `json:"cause"`
 	} `json:"unknown_outcome"`
 	PausedFor   string `json:"paused_for"`
 	NewPrimary  int32  `json:"new_primary"`
@@ -219,7 +225,9 @@ func copyLossFrozen(acting []int32, primary, sourcePrimary int32, commits int) (
 // once, bound to the source write. With no replica committed the barrier does
 // not decide the result, so the test records which complete state native
 // readback shows, the seed or the full copy, requires the PG log to agree,
-// and refuses anything else. A second Go write then changes the source and
+// and refuses anything else. The paused replicas were already sent the
+// repops and resume before the map marks the primary down, so the copy is
+// expected to survive through them; a kept seed is accepted, not expected. A second Go write then changes the source and
 // one explicit resubmission goes to the new primary: it must be answered
 // from the log if the copy survived and must execute once, copying the
 // second source, if it did not. After recovery the original primary must lead
@@ -344,12 +352,16 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	pending("at the barrier")
 
 	receipt.KillExit = recovery.kill(t, ctx, primary)
+	// The killed daemon's connection ends the wait; a bound well inside the
+	// paused replicas' heartbeat grace keeps them from being marked down.
 	var lost outcome
 	select {
 	case lost = <-done:
-	case <-time.After(60 * time.Second):
+		receipt.Unknown.Ended = "connection"
+	case <-time.After(8 * time.Second):
 		cancel()
 		lost = <-done
+		receipt.Unknown.Ended = "cancelled"
 	}
 	var unknown *cephmsgr.OutcomeUnknownError
 	if !errors.As(lost.err, &unknown) || lost.reply.Transaction != 0 || lost.reply.Submission.Transaction != staged.TID ||
@@ -357,13 +369,14 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 		t.Fatalf("lost copy metadata (barrier tid %d): %+v %v", staged.TID, lost.reply, lost.err)
 	}
 	receipt.Unknown.TID, receipt.Unknown.GlobalID = lost.reply.Submission.Transaction, lost.reply.Submission.GlobalID
-	receipt.Unknown.Incarnation, receipt.Unknown.Epoch, receipt.Unknown.Error = lost.reply.Submission.ClientIncarnation, lost.reply.Submission.MapEpoch, lost.err.Error()
+	receipt.Unknown.Incarnation, receipt.Unknown.Epoch, receipt.Unknown.Cause = lost.reply.Submission.ClientIncarnation, lost.reply.Submission.MapEpoch, outcomeCause(lost.err)
 	o.Close()
 	for _, osd := range frozen {
 		recovery.thaw(t, ctx, osd)
 	}
 	receipt.PausedFor = time.Since(paused).Round(10 * time.Millisecond).String()
-	t.Logf("osd.%d killed (exit %d) at the barrier; the copy ended unknown: %v; osd %v resumed after %s", primary, receipt.KillExit, lost.err, frozen, receipt.PausedFor)
+	t.Logf("osd.%d killed (exit %d) at the barrier; the copy ended unknown (%s, %s): %v; osd %v resumed after %s",
+		primary, receipt.KillExit, receipt.Unknown.Ended, receipt.Unknown.Cause, lost.err, frozen, receipt.PausedFor)
 	recovery.markDown(t, ctx, primary)
 	r.restartedPrimary = true
 	moved := r.waitMoved()
@@ -378,37 +391,19 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	copyKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryCopyIncarnation, TID: staged.TID}
 	firstKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryWriteIncarnation, TID: first.Transaction}
 	s := r.history(moved, copyKey, firstKey)
-	survived := native.Code == 0 && bytes.Equal(native.Data, firstSource.Data)
-	var binding copyFromHistoryWant
-	switch {
-	case survived:
+	in := copyLossInputs{commits: cell.commits, object: hobjectHead(moved), seeded: seeded, firstSource: firstSource, firstUser: first.UserVersion}
+	survived, logVersion, err := judgeCopyLoss(in, native, s.Targets[0].Locations, s.Targets[1].Locations)
+	if err != nil {
+		t.Fatalf("after losing osd.%d, new primary osd.%d: %v", primary, moved.ID, err)
+	}
+	receipt.Outcome, receipt.LogVersion = "seed kept", logVersion
+	if survived {
 		receipt.Outcome = "copy survived"
-		// A copy gives the destination the source's user version and mtime
-		// (src/osd/PrimaryLogPG.cc:355-356 and finish_copyfrom).
-		if !reflect.DeepEqual(attrNames(native), attrNames(firstSource)) || native.Version != first.UserVersion || native.Seconds != firstSource.Seconds || native.Nanos != firstSource.Nanos {
-			t.Fatalf("partial copy after the loss: %s; source %s", nativeDigest(native), nativeDigest(firstSource))
-		}
-		if len(s.Targets[0].Locations) != 1 {
-			t.Fatalf("the surviving copy is in the new primary's PG log %d times: %+v", len(s.Targets[0].Locations), s.Targets[0].Locations)
-		}
-		receipt.LogVersion = s.Targets[0].Locations[0].Version
-		binding = copyFromHistoryWant{object: hobjectHead(moved), version: receipt.LogVersion, sourceUserVersion: first.UserVersion}
-		if err := copyFromDestinationBinding(s.Targets[0].Locations, s.Targets[1].Locations, binding); err != nil {
-			t.Fatalf("new primary osd.%d: %v", moved.ID, err)
-		}
-	case cell.commits > 0:
-		t.Fatalf("a replica committed the copy before the loss, yet the destination is %s", nativeDigest(native))
-	case sameNative(native, seeded):
-		receipt.Outcome = "seed kept"
-		if len(s.Targets[0].Locations) != 0 || len(s.Targets[1].Locations) != 0 {
-			t.Fatalf("the seeded destination's new primary names the copy: %+v %+v", s.Targets[0].Locations, s.Targets[1].Locations)
-		}
-	default:
-		t.Fatalf("the destination after the loss is neither the seed nor the copy: %s; seed %s", nativeDigest(native), nativeDigest(seeded))
 	}
 	t.Logf("%s after losing osd.%d: new primary osd.%d at epoch %d; destination %s", receipt.Outcome, primary, moved.ID, moved.Epoch, receipt.Native)
 
 	second, secondSource := r.writeSource("second source write", 1700009200, []byte("copy-loss second source bytes, longer"), []byte{6, 0xfe})
+	in.secondSource, in.secondUser = secondSource, second.UserVersion
 	secondKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryWriteIncarnation, TID: second.Transaction}
 	again := r.copyRequest(cell.code, moved)
 	again.Resubmit, again.RetryAttempt = &lost.reply.Submission, 1
@@ -421,20 +416,12 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	}
 	time.Sleep(500 * time.Millisecond)
 	after := poolObserve(t, ctx, 2, r.dest, "", "")
+	binding, err := judgeCopyResubmission(in, survived, logVersion, native, after, answered.UserVersion, replayVersion(answered))
+	if err != nil {
+		t.Fatal(err)
+	}
 	bound, unbound := firstKey, secondKey
-	if survived {
-		// Answered from the log: the first source stays on the destination.
-		if answered.UserVersion != first.UserVersion || replayVersion(answered) != receipt.LogVersion || !sameNative(after, native) {
-			t.Fatalf("the resubmission was not answered from the log: user %d (want %d) replay %s (want %s); destination %s",
-				answered.UserVersion, first.UserVersion, replayVersion(answered), receipt.LogVersion, nativeDigest(after))
-		}
-	} else {
-		// Executed once: the destination is the second source.
-		if answered.UserVersion != second.UserVersion || after.Code != 0 || !bytes.Equal(after.Data, secondSource.Data) || !reflect.DeepEqual(attrNames(after), attrNames(secondSource)) ||
-			after.Version != answered.UserVersion || after.Seconds != secondSource.Seconds || after.Nanos != secondSource.Nanos {
-			t.Fatalf("the resubmission did not copy the second source once: user %d (source %d); destination %s", answered.UserVersion, second.UserVersion, nativeDigest(after))
-		}
-		binding = copyFromHistoryWant{object: hobjectHead(moved), version: replayVersion(answered), sourceUserVersion: second.UserVersion}
+	if !survived {
 		bound, unbound = secondKey, firstKey
 	}
 	s = r.history(moved, copyKey, bound, unbound)
@@ -446,6 +433,93 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	}
 	r.finish(after, answered.Transaction, copyKey, bound, binding)
 	receipt.Final = nativeDigest(after)
+}
+
+// outcomeCause is the class of an unknown outcome's cause for the receipt.
+func outcomeCause(err error) string {
+	switch {
+	case errors.Is(err, io.EOF):
+		return "EOF"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline"
+	case errors.Is(err, syscall.ECONNRESET):
+		return "connection reset"
+	default:
+		return "other"
+	}
+}
+
+// copyLossInputs is what the post-loss judgements compare against: the
+// cell's replica commits, the destination head's hobject, the seeded
+// destination, both source writes and their user versions.
+type copyLossInputs struct {
+	commits                   int
+	object                    string
+	seeded                    nativeXattrSnapshot
+	firstSource, secondSource nativeXattrSnapshot
+	firstUser, secondUser     uint64
+}
+
+// sameCopy says whether a native destination is a complete copy of source:
+// its bytes, xattrs, mtime and the source write's user version (a copy gives
+// the destination the source's user version and mtime,
+// src/osd/PrimaryLogPG.cc:355-356 and finish_copyfrom).
+func sameCopy(dest, source nativeXattrSnapshot, user uint64) bool {
+	return dest.Code == 0 && bytes.Equal(dest.Data, source.Data) && reflect.DeepEqual(attrNames(dest), attrNames(source)) &&
+		dest.Version == user && dest.Seconds == source.Seconds && dest.Nanos == source.Nanos
+}
+
+// judgeCopyLoss decides the native result of the loss, before any
+// resubmission, from the destination's native readback and the new
+// primary's PG-log positions of the copy and of the first source write. The
+// copy survived when the destination is a complete copy of the first source
+// and the log holds the copy once, bound to that write; it returns the log
+// entry's version. The seed was kept when the destination is the unchanged
+// seed and the log names neither identity, which a cell with a replica
+// commit refuses. Anything else is refused.
+func judgeCopyLoss(in copyLossInputs, native nativeXattrSnapshot, copyLocs, firstLocs []pgHistoryLocation) (bool, string, error) {
+	switch {
+	case sameCopy(native, in.firstSource, in.firstUser):
+		if len(copyLocs) != 1 {
+			return true, "", fmt.Errorf("the surviving copy is in the PG log %d times: %+v", len(copyLocs), copyLocs)
+		}
+		version := copyLocs[0].Version
+		if err := copyFromDestinationBinding(copyLocs, firstLocs, copyFromHistoryWant{object: in.object, version: version, sourceUserVersion: in.firstUser}); err != nil {
+			return true, version, err
+		}
+		return true, version, nil
+	case in.commits > 0:
+		return false, "", fmt.Errorf("a replica committed the copy before the loss, yet the destination is %s", nativeDigest(native))
+	case sameNative(native, in.seeded):
+		if len(copyLocs) != 0 || len(firstLocs) != 0 {
+			return false, "", fmt.Errorf("the seeded destination's PG log names the copy: %+v %+v", copyLocs, firstLocs)
+		}
+		return false, "", nil
+	default:
+		return false, "", fmt.Errorf("the destination is neither the seed nor a complete copy: %s; seed %s", nativeDigest(native), nativeDigest(in.seeded))
+	}
+}
+
+// judgeCopyResubmission checks the explicit resubmission after the loss,
+// sent once the second source write replaced the source: if the copy
+// survived it must be answered from the log (the first source's user
+// version, the log entry's replay version, an unchanged destination); if the
+// seed was kept it must execute once and copy the second source. It returns
+// the PG-log binding the destination must then show.
+func judgeCopyResubmission(in copyLossInputs, survived bool, logVersion string, before, after nativeXattrSnapshot, user uint64, replay string) (copyFromHistoryWant, error) {
+	if survived {
+		if user != in.firstUser || replay != logVersion || !sameNative(after, before) {
+			return copyFromHistoryWant{}, fmt.Errorf("the resubmission was not answered from the log: user %d (want %d) replay %s (want %s); destination %s",
+				user, in.firstUser, replay, logVersion, nativeDigest(after))
+		}
+		return copyFromHistoryWant{object: in.object, version: logVersion, sourceUserVersion: in.firstUser}, nil
+	}
+	if user != in.secondUser || !sameCopy(after, in.secondSource, user) {
+		return copyFromHistoryWant{}, fmt.Errorf("the resubmission did not copy the second source once: user %d (source %d); destination %s", user, in.secondUser, nativeDigest(after))
+	}
+	return copyFromHistoryWant{object: in.object, version: replay, sourceUserVersion: in.secondUser}, nil
 }
 
 func TestCopyFromDestinationLossJudgements(t *testing.T) {
@@ -512,6 +586,9 @@ func TestCopyFromDestinationLossJudgements(t *testing.T) {
 		"local commit too soon": func(o *opsInFlightSnapshot, _ *objecterRequestsSnapshot) {
 			o.Ops[0].Events = edited(func(e []string) []string { e[8], e[9] = e[9], e[8]; return e })
 		},
+		"replica commit before the sub-ops": func(o *opsInFlightSnapshot, _ *objecterRequestsSnapshot) {
+			o.Ops[0].Events = edited(func(e []string) []string { return append(append(e[:8:8], "sub_op_commit_rec"), e[8:10]...) })
+		},
 		"two replica commits": func(o *opsInFlightSnapshot, _ *objecterRequestsSnapshot) {
 			o.Ops[0].Events = append(o.Ops[0].Events, "sub_op_commit_rec")
 		},
@@ -543,6 +620,84 @@ func TestCopyFromDestinationLossJudgements(t *testing.T) {
 		got, err := copyLossFrozen(tc.acting, tc.primary, tc.source, tc.commits)
 		if (err != nil) != tc.refused || !slices.Equal(got, tc.want) {
 			t.Errorf("copyLossFrozen(%v, %d, %d, %d) = %v, %v; want %v refused %t", tc.acting, tc.primary, tc.source, tc.commits, got, err, tc.want, tc.refused)
+		}
+	}
+
+	attr := func(name string, value byte) []nativeXattrEntry {
+		return []nativeXattrEntry{{Name: []byte(name), Value: []byte{value}}}
+	}
+	seed := nativeXattrSnapshot{Version: 2, Seconds: 1700000001, Data: []byte("seed"), Attributes: attr("seed-attr", 7)}
+	src1 := nativeXattrSnapshot{Version: 1, Seconds: 1700009000, Data: []byte("first"), Attributes: attr("copy-primary-attr", 5)}
+	src2 := nativeXattrSnapshot{Version: 3, Seconds: 1700009200, Data: []byte("second"), Attributes: attr("copy-primary-attr", 6)}
+	in := copyLossInputs{commits: 0, object: "4:e7854363:::dst:head", seeded: seed, firstSource: src1, secondSource: src2, firstUser: 1, secondUser: 3}
+	zero, one := 0, uint64(1)
+	copyAt := func(version string) []pgHistoryLocation {
+		return []pgHistoryLocation{{Tier: "log", Index: 4, Version: version, Op: "modify", Object: in.object, ReturnCode: &zero}}
+	}
+	extraAt := func(version string, user uint64) []pgHistoryLocation {
+		return []pgHistoryLocation{{Tier: "extra_reqids", Index: 4, ExtraIndex: &zero, Version: version, Op: "modify", Object: in.object, UserVersion: &user}}
+	}
+	if survived, version, err := judgeCopyLoss(in, src1, copyAt("28'3"), extraAt("28'3", 1)); err != nil || !survived || version != "28'3" {
+		t.Fatal("surviving copy refused:", survived, version, err)
+	}
+	if survived, _, err := judgeCopyLoss(in, seed, nil, nil); err != nil || survived {
+		t.Fatal("kept seed refused:", survived, err)
+	}
+	committed := in
+	committed.commits = 1
+	if _, _, err := judgeCopyLoss(committed, seed, nil, nil); err == nil {
+		t.Error("a kept seed accepted after a replica commit")
+	}
+	partial := src1
+	partial.Attributes = nil
+	newer := src1
+	newer.Version = 2
+	touched := src1
+	touched.Nanos = 1
+	for name, c := range map[string]struct {
+		native      nativeXattrSnapshot
+		copy, first []pgHistoryLocation
+	}{
+		"copy without its xattr":    {partial, copyAt("28'3"), extraAt("28'3", 1)},
+		"copy at another version":   {newer, copyAt("28'3"), extraAt("28'3", 1)},
+		"copy with another mtime":   {touched, copyAt("28'3"), extraAt("28'3", 1)},
+		"copy not in the log":       {src1, nil, nil},
+		"copy twice in the log":     {src1, append(copyAt("28'3"), copyAt("28'4")...), extraAt("28'3", 1)},
+		"copy bound to nothing":     {src1, copyAt("28'3"), nil},
+		"copy bound elsewhere":      {src1, copyAt("28'3"), extraAt("28'4", 1)},
+		"copy of another version":   {src1, copyAt("28'3"), extraAt("28'3", 3)},
+		"seed with the copy logged": {seed, copyAt("28'3"), nil},
+		"seed with the write bound": {seed, nil, extraAt("28'3", 1)},
+		"neither seed nor copy":     {src2, nil, nil},
+		"absent destination":        {nativeXattrSnapshot{Code: -2}, nil, nil},
+	} {
+		if _, _, err := judgeCopyLoss(in, c.native, c.copy, c.first); err == nil {
+			t.Error("post-loss state accepted:", name)
+		}
+	}
+
+	if want, err := judgeCopyResubmission(in, true, "28'3", src1, src1, 1, "28'3"); err != nil || want.version != "28'3" || want.sourceUserVersion != one {
+		t.Fatal("answer from the log refused:", want, err)
+	}
+	executed := src2
+	if want, err := judgeCopyResubmission(in, false, "", seed, executed, 3, "40'2"); err != nil || want.version != "40'2" || want.sourceUserVersion != 3 {
+		t.Fatal("single execution refused:", want, err)
+	}
+	for name, c := range map[string]struct {
+		survived      bool
+		before, after nativeXattrSnapshot
+		user          uint64
+		replay        string
+	}{
+		"survived but executed again":  {true, src1, src2, 3, "40'2"},
+		"survived, another replay":     {true, src1, src1, 1, "40'2"},
+		"survived, another user":       {true, src1, src1, 3, "28'3"},
+		"seed kept, nothing executed":  {false, seed, seed, 2, "28'3"},
+		"seed kept, first source":      {false, seed, src1, 1, "40'2"},
+		"seed kept, reply version off": {false, seed, src2, 1, "40'2"},
+	} {
+		if _, err := judgeCopyResubmission(in, c.survived, "28'3", c.before, c.after, c.user, c.replay); err == nil {
+			t.Error("resubmission accepted:", name)
 		}
 	}
 
