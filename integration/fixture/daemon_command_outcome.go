@@ -71,7 +71,7 @@ import (
 // capMDSAppliedCommand admits one further test on the owned MDS command
 // fixture (profile.go): the applied-command outcome cell, which must keep its
 // MDS running, so the MDS stop control is withheld (control_daemon.go).
-var capMDSAppliedCommand = defineCapability("mds-applied-command",
+var capMDSAppliedCommand = defineExclusiveCapability(fixtureMDSCommands, "mds-applied-command",
 	"run one test alone on the owned MDS command fixture, without the MDS stop control",
 	"MDS_FRESH=1 MDS_COMMANDS=1", nil)
 

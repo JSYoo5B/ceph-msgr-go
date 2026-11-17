@@ -92,14 +92,14 @@ var mdsCephFSCompletionRuntimeKinds = map[string]struct {
 // capExclusiveMDSCephFSCompletion admits one test alone on a fresh
 // completion fixture in place of its default suite (the split reconnect),
 // with only the actions the completion fixture already admits.
-var capExclusiveMDSCephFSCompletion = defineCapability("exclusive-mds-cephfs-completion",
+var capExclusiveMDSCephFSCompletion = defineExclusiveCapability(fixtureMDSCephFSCompletion, "exclusive-mds-cephfs-completion",
 	"run one test alone on a fresh MDS CephFS completion fixture",
 	"MDS_FRESH=1 MDS_CEPHFS_COMPLETION=1", nil)
 
 // capMDSHeldFlockSplit admits one test alone on a fresh completion fixture
 // with the held-FLOCK split reconnect controls: its split-file lock probe,
 // level-15 debug window and per-capability log read.
-var capMDSHeldFlockSplit = defineCapability("mds-held-flock-split",
+var capMDSHeldFlockSplit = defineExclusiveCapability(fixtureMDSCephFSCompletion, "mds-held-flock-split",
 	"run one test alone on a fresh MDS CephFS completion fixture with the held-FLOCK split reconnect controls",
 	"MDS_FRESH=1 MDS_CEPHFS_COMPLETION=1", nil)
 

@@ -105,6 +105,15 @@ therefore needs the fixture module's Go toolchain (1.26 or later). A new
 control adds its `defineCapability` call beside its own code and the
 declaration to its own row; it edits no shared selector list.
 
+A fixture with its own default selection (the MDS command, CephFS metadata,
+completion and data fixtures, the RBD fixture, the cache-pool fixture and the
+four-OSD erasure-capacity topology) runs one further exact test only when a
+capability defined for it with `defineExclusiveCapability` admits that test.
+`loadProfile` asks whether any declared capability of that fixture admits the
+run, so a new one is defined beside its mode without editing `loadProfile`.
+At most one such capability of a fixture may be declared for a run, so these
+capabilities never exclude each other by name.
+
 A documented reproduction runs a row (scenario identifier `ID`) with the
 environment the catalog gives it, so the declaration and the topology cannot
 drift from the row:

@@ -287,7 +287,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 			selected = "^TestCephMDSCommandsIntegration$"
 			// The applied-command outcome cell shares the owned command
 			// fixture and is admitted only by its capability.
-			admitted = p.admits(capMDSAppliedCommand)
+			admitted = p.admitsExclusive(fixtureMDSCommands)
 		}
 		if p.mdsSessions == "1" {
 			selected = "^TestCephMDSSessionsIntegration$"
@@ -297,7 +297,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 			// The shared and the FCNTL held-lock variants of the recovery
 			// acceptance own a fresh metadata fixture and are admitted only by
 			// a capability.
-			admitted = p.admits(capExclusiveMDSCephFS) || p.admits(capMDSHeldFcntl)
+			admitted = p.admitsExclusive(fixtureMDSCephFS)
 		}
 		if p.mdsCephFSRanks == "1" {
 			selected = "^TestCephMDSCephFSRanksIntegration$"
@@ -309,13 +309,13 @@ func loadProfile(getenv func(string) string) (profile, error) {
 			selected = "^TestCephMDSCephFSCompletionIntegration$"
 			// The split reconnect and its held-lock variants each own a fresh
 			// completion fixture and are admitted only by a capability.
-			admitted = p.admits(capExclusiveMDSCephFSCompletion) || p.admits(capMDSHeldFlockSplit)
+			admitted = p.admitsExclusive(fixtureMDSCephFSCompletion)
 		}
 		if p.mdsCephFSData == "1" {
 			selected = "^TestCephMDSCephFSDataIntegration$"
 			// The cap-send recovery and writeback-fence variants share the
 			// owned data fixture and are admitted only by a capability.
-			admitted = p.admits(capExclusiveMDSCephFSData) || p.admits(capMDSWritebackFence)
+			admitted = p.admitsExclusive(fixtureMDSCephFSData)
 		}
 		if p.osd != "1" || !p.mdsFreshOSDAllowed() || p.osdReplicas != "1" || (p.sparseReadOracle != "" || p.mapExtOracle != "") ||
 			!ownSelection(p.testRun, selected, admitted) {
@@ -335,7 +335,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		// BlueStore OSDs; no other RBD selection is admitted on that topology,
 		// and that one on no other. Each runs alone on a fresh fixture and is
 		// admitted only by its capability.
-		admitted := p.admits(capRBDJournalLostAppend) || p.admits(capRBDLockOwnerLoss) || p.admits(capRBDJournalPrimaryChange)
+		admitted := p.admitsExclusive(fixtureRBD)
 		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != p.rbdReplicas() || p.osdReplicas == "3" && p.osdStore != "bluestore" || p.mdsFresh != "0" ||
 			(p.sparseReadOracle != "" || p.mapExtOracle != "") || !ownSelection(p.testRun, selected, admitted) {
 			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s or one capability-admitted test, the single-OSD legacy-v6 fixture (three BlueStore OSDs for capability %s alone) and no MDS profile", selected, capRBDJournalPrimaryChange.name)
@@ -351,7 +351,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		selected = "^TestCephOSDIgnoreCacheIntegration$"
 		// The Go cache-tier and cache-operation acceptances reuse the live
 		// cache-pool fixture alone and are admitted only by its capability.
-		if p.mgrCount != "2" || !ownSelection(p.testRun, selected, p.admits(capExclusiveOSDCachePools)) {
+		if p.mgrCount != "2" || !ownSelection(p.testRun, selected, p.admitsExclusive(fixtureOSDCachePools)) {
 			return profile{}, fmt.Errorf("cache-pool acceptance requires two MGRs and its exclusive selector %s or one test with capability %s", selected, capExclusiveOSDCachePools.name)
 		}
 		checked := p
@@ -386,7 +386,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if p.osd != "1" || (p.osdProfile != "legacy-v6" && p.osdProfile != "replicated-pg-v8") || p.osdSoak != "" || p.monFreeze != "" ||
 			p.osdCachePools != "0" || p.mgrService != "0" || p.mdsFresh != "0" || p.rbdBase != "0" ||
 			p.sparseReadOracle != "" || p.mapExtOracle != "" || p.u64XattrOracle != "" || p.writeSameOracle != "" ||
-			!ownSelection(p.testRun, selected, p.admits(capOSDErasureWidth)) {
+			!ownSelection(p.testRun, selected, p.admitsExclusive(fixtureOSDErasureCapacity)) {
 			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires its default selector %s or one test with capability %s, BlueStore and the legacy-v6 or replicated-pg-v8 profile", selected, capOSDErasureWidth.name)
 		}
 	}
@@ -427,7 +427,7 @@ type osdTopology struct {
 
 // capOSDErasureWidth admits one exact test other than the default k=2,m=2
 // baseline on the four-OSD erasure-capacity topology.
-var capOSDErasureWidth = defineCapability("osd-erasure-width",
+var capOSDErasureWidth = defineExclusiveCapability(fixtureOSDErasureCapacity, "osd-erasure-width",
 	"run one test other than the default k=2,m=2 baseline on the four-OSD erasure-capacity topology",
 	"OSD=1 OSD_REPLICAS=4", nil)
 
