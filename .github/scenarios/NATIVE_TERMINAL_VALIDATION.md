@@ -59,3 +59,17 @@ The first tooling check failed because the transfer omitted Git metadata and
 the merge-proof regression suite requires a tracked-file inventory. This was
 a validation harness error. The corrected Linux checkout initializes its own
 Git inventory from the source revision's tracked paths.
+
+## Later local attempt
+
+A fresh owned fixture ran the same row as attempt `2` of local run
+`2026111802`. It exited 0 after 285.755 seconds. The required parent PASS,
+result gate and reviewed successful-bundle collection all passed. Its terminal
+record retained `test_result=passed`, `test_evidence=completed`,
+`evidence_collection=success` and `native_cleanup=verified`.
+
+No artifact service was used for either local attempt. Accordingly the second
+record retained `evidence_upload=unobserved`, `evidence_result=incomplete`
+and `accepted=false`. The upload-dependent workflow acceptance rule was
+exercised without inventing an upload success. The first result's bytes and
+SHA-256 remained unchanged after the second record was written.
