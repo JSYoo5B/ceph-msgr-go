@@ -25,7 +25,7 @@ var metadataFiles = []string{
 	"osd-set-chunk-input.json", "osd-set-chunk-result.json", "osd-set-chunk-command.json", "osd-set-chunk-results.json", "osd-set-chunk-go-results.json",
 	"osd-cache-op-go-native.json", "osd-cache-op-go-command.json", "osd-cache-op-go-results.json",
 	"osd-ignore-cache-probe.json", "osd-ignore-cache-plan.json", "osd-ignore-cache-attached.json", "osd-ignore-cache-detached.json", "osd-ignore-cache-native.json", "osd-ignore-cache-command.json",
-	"fixture-manifest.json", "fixture-ownership.json", "daemon-version", "relay.log", "native-oracles.log", "native-oracles.error", "osd-map-control.log", "peers.json", "pool-policy.json", "provider.error", "provider.cleanup.error",
+	"fixture-manifest.json", "fixture-ownership.json", sequenceRecordFile, "daemon-version", "relay.log", "native-oracles.log", "native-oracles.error", "osd-map-control.log", "peers.json", "pool-policy.json", "provider.error", "provider.cleanup.error",
 	"mapped-oracle-status.json", "mapped-oracle-mon.json", "mapped-oracle-mgr.json", "mapped-oracle-pg.json", "mapped-oracle-summary.json",
 	"tell-oracle-mon.json", "tell-oracle-mgr.json", "tell-oracle-mgr-map.json", "named-mon-b.json",
 	"mon-ping-native-a.json", "mon-ping-native-b.json", "mon-ping-native-c.json", "mon-ping-results.json",

@@ -234,30 +234,20 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 	if err != nil {
 		return err
 	}
-	// The client package's final recovery test leaves MON a down. Preserve the
-	// public API -> client suite ordering within each disposable fixture.
-	for _, name := range []string{"api", "client"} {
-		if err := c.checkControl(); err != nil {
+	if p.sequence != "" {
+		if err := runSequence(ctx, p, sequenceRunner(c, out, proxy, p)); err != nil {
 			return err
 		}
-		fmt.Printf("Running Ceph test suite: %s\n", name)
-		args := []string{"-test.run", p.testRun, "-test.v", "-test.timeout", p.testTimeout}
-		if p.runtime == "host" {
-			cmd := exec.CommandContext(ctx, filepath.Join(out, name+".test"), args...)
-			cmd.Env = environment(p.testEnvironment(out, proxy), true)
-			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("%s native suite: %w", name, err)
+	} else {
+		// The client package's final recovery test leaves MON a down. Preserve the
+		// public API -> client suite ordering within each disposable fixture.
+		for _, name := range suiteNames {
+			if err := c.checkControl(); err != nil {
+				return err
 			}
-		} else {
-			args = append([]string{"/out/" + name + ".test"}, args...)
-			code, output, err := c.Exec(ctx, args, containerexec.WithEnv(envList(p.testEnvironment("/out", ""))), containerexec.Multiplexed())
-			if output != nil {
-				_, copyErr := io.Copy(os.Stdout, output)
-				err = errors.Join(err, copyErr)
-			}
-			if err != nil || code != 0 {
-				return fmt.Errorf("%s container suite exit=%d: %w", name, code, errors.Join(err, errors.New("Ceph suite failed")))
+			fmt.Printf("Running Ceph test suite: %s\n", name)
+			if err := c.runSuite(ctx, out, proxy, p, name, []string{"-test.run", p.testRun, "-test.v", "-test.timeout", p.testTimeout}, os.Stdout); err != nil {
+				return err
 			}
 		}
 	}
@@ -274,6 +264,32 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 		return err
 	}
 	return saveMetadata(out, p.diagnostics)
+}
+
+// suiteNames are the native suites in the order every fixture runs them.
+var suiteNames = []string{"api", "client"}
+
+// runSuite runs one native suite binary with args, its output to w.
+func (c *fixtureCluster) runSuite(ctx context.Context, out, proxy string, p profile, name string, args []string, w io.Writer) error {
+	if p.runtime == "host" {
+		cmd := exec.CommandContext(ctx, filepath.Join(out, name+".test"), args...)
+		cmd.Env = environment(p.testEnvironment(out, proxy), true)
+		cmd.Stdout, cmd.Stderr = w, os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("%s native suite: %w", name, err)
+		}
+		return nil
+	}
+	args = append([]string{"/out/" + name + ".test"}, args...)
+	code, output, err := c.Exec(ctx, args, containerexec.WithEnv(envList(p.testEnvironment("/out", ""))), containerexec.Multiplexed())
+	if output != nil {
+		_, copyErr := io.Copy(w, output)
+		err = errors.Join(err, copyErr)
+	}
+	if err != nil || code != 0 {
+		return fmt.Errorf("%s container suite exit=%d: %w", name, code, errors.Join(err, errors.New("Ceph suite failed")))
+	}
+	return nil
 }
 
 func serve(ctx context.Context, project, out string, p profile) (result error) {
