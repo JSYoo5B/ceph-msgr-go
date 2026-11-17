@@ -8,7 +8,9 @@ observe cross-pool, namespace and pool-snapshot behavior independently of the
 Go client. create also makes an erasure-coded pool of a closed width: k2m1
 (profile ceph-msgr-owned-ec) or k2m2 (its own ceph-msgr-owned-ec-k2m2 profile,
 isa, never overwritten, optionally optimized with its nonprimary shards read
-back); cleanup removes both profiles.
+back); cleanup removes only what create recorded as created in this run
+(osd-pool-claims.json in the output directory): the pools, the CRUSH rule the
+MON made with an owned erasure-coded pool and the profiles.
 Modes: create, seed, observe, place, pghistory, opsinflight, shardhistory, pginterval, pgstate, watchers, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
 pghistory takes one bounded primary PG-history snapshot for an owned object:
 placement before, the PG `log` command to that primary OSD, placement after,
@@ -297,18 +299,23 @@ def mode_create(rados, cluster, request, out):
     if find_pool(rados.dump(cluster), name):
         raise RuntimeError("owned pool already exists")
     if erasure and name in crush_rules(rados, cluster):
-        # The MON names an erasure-coded pool's own rule after the pool; the
-        # cleanup removes that rule only because no earlier one existed.
+        # The MON names an erasure-coded pool's own rule after the pool. A
+        # rule of that name that predates the pool is not this run's.
         raise RuntimeError("CRUSH rule %s already exists; refusing to reuse it for the owned pool" % name)
+    profile_absent = False
     if erasure:
         # OSD failure domain; overwrites need BlueStore. The MON derives the
         # pool's size (k+m) and min_size itself; neither is lowered here.
         size, minimum = width["k"] + width["m"], None
+        code, _ = ec_profile_get(rados, cluster, width["profile"])
+        profile_absent = code == -2
         if not width["force"]:
-            code, _ = ec_profile_get(rados, cluster, width["profile"])
-            if code != -2:
+            if not profile_absent:
                 raise RuntimeError("owned erasure-code profile %s already exists (%d); refusing to overwrite it" % (width["profile"], code))
             minimum = ec_min_size(width["k"], width["m"])
+        elif not profile_absent and width["profile"] not in read_claims(out)["ec_profiles"]:
+            # The forced set may only replace a profile this run created.
+            raise RuntimeError("erasure-code profile %s exists and this run did not create it (%d); refusing to overwrite it" % (width["profile"], code))
         profile = ["k=%d" % width["k"], "m=%d" % width["m"], "crush-failure-domain=osd"] + (["plugin=" + plugin] if plugin else [])
         setter = {"prefix": "osd erasure-code-profile set", "name": width["profile"], "profile": profile}
         if width["force"]:
@@ -329,7 +336,20 @@ def mode_create(rados, cluster, request, out):
                  {"prefix": "osd pool set", "pool": name, "var": "min_size", "val": str(minimum)}]
     ec_profile = None
     for command in steps:
-        code, _ = rados.mon(cluster, command)
+        # What this step may create was absent just before it; whatever of
+        # it exists afterwards is claimed for the cleanup, even when the
+        # step reports a failure, and nothing else is.
+        may_create = []
+        if command["prefix"] == "osd erasure-code-profile set" and profile_absent:
+            may_create.append(("ec_profiles", width["profile"]))
+        if command["prefix"] == "osd pool create":
+            may_create += [("pools", name)] + ([("crush_rules", name)] if erasure else [])
+        try:
+            code, _ = rados.mon(cluster, command)
+        finally:
+            for kind, item in may_create:
+                if claim_present(rados, cluster, kind, item):
+                    record_claim(out, kind, item)
         if code < 0:
             raise RuntimeError("native pool step %s failed: %d %s" % (command["prefix"], code, rados.last_status))
         if command["prefix"] == "osd erasure-code-profile set":
@@ -1180,57 +1200,132 @@ def crush_rules(rados, cluster):
     return rules
 
 
-def remove_owned_pools(rados, cluster, removed):
+# The objects mode_create created, by kind. mode_create records each one
+# only after it observed the object present where it had been absent just
+# before the step that created it; mode_cleanup removes only these. The
+# record lives in the fixture output directory, which every oracle run of
+# the fixture shares.
+CLAIMS_FILE = "osd-pool-claims.json"
+CLAIM_KINDS = ("pools", "crush_rules", "ec_profiles")
+MAX_CLAIMS = 4 << 10
+
+
+def claimable(kind):
+    """The owned names a claim of each kind may hold."""
+    return set(EC_PROFILES) if kind == "ec_profiles" else {pool_name(slot) for slot in SLOTS}
+
+
+def read_claims(out):
+    path = pathlib.Path(out) / CLAIMS_FILE
+    try:
+        with path.open("rb") as file:
+            data = file.read(MAX_CLAIMS + 1)
+    except FileNotFoundError:
+        return {kind: [] for kind in CLAIM_KINDS}
+    if len(data) > MAX_CLAIMS:
+        raise ValueError("owned-pool claims exceed 4 KiB")
+    claims = json.loads(data)
+    # A record that is not exactly this shape removes nothing.
+    if (not isinstance(claims, dict) or set(claims) != set(CLAIM_KINDS)
+            or not all(isinstance(claims[k], list) and all(type(n) is str and n in claimable(k) for n in claims[k]) for k in CLAIM_KINDS)):
+        raise ValueError("invalid owned-pool claims")
+    return claims
+
+
+def write_claims(out, claims):
+    temporary = pathlib.Path(out) / (CLAIMS_FILE + ".tmp")
+    temporary.write_bytes(json.dumps(claims).encode() + b"\n")
+    os.replace(temporary, pathlib.Path(out) / CLAIMS_FILE)
+
+
+def record_claim(out, kind, name):
+    claims = read_claims(out)
+    if name not in claims[kind]:
+        claims[kind].append(name)
+        write_claims(out, claims)
+
+
+def take_claims(out):
+    """Read the claims and drop the record before anything is removed, so a
+    later cleanup never removes what an earlier test's run left behind."""
+    claims = read_claims(out)
+    try:
+        os.remove(pathlib.Path(out) / CLAIMS_FILE)
+    except FileNotFoundError:
+        pass
+    return claims
+
+
+def claim_present(rados, cluster, kind, name):
+    if kind == "pools":
+        return find_pool(rados.dump(cluster), name) is not None
+    if kind == "crush_rules":
+        return name in crush_rules(rados, cluster)
+    return ec_profile_get(rados, cluster, name)[0] != -2
+
+
+def remove_owned_pools(rados, cluster, claimed, removed):
     for slot in SLOTS:
         name = pool_name(slot)
-        if find_pool(rados.dump(cluster), name) is None:
-            removed.append({"pool": name, "existed": False})
+        existed = find_pool(rados.dump(cluster), name) is not None
+        removed.append({"pool": name, "existed": existed, "claimed": name in claimed})
+        if not existed or name not in claimed:
             continue
         code, _ = rados.mon(cluster, {"prefix": "osd pool rm", "pool": name, "pool2": name, "yes_i_really_really_mean_it": True})
         if code < 0:
             raise RuntimeError("native pool removal failed: %d" % code)
-        removed.append({"pool": name, "existed": True})
 
 
 def mode_cleanup(rados, cluster, request, out):
-    """Remove every owned pool, the CRUSH rule the MON created for an owned
-    erasure-coded pool (named after the pool, which mode_create refuses to
-    reuse) and every owned erasure-code profile, and restore the central
-    mon_allow_pool_delete entry to its prior state. Only owned names are
-    removed; a survivor is reported, not retried."""
+    """Remove what mode_create claimed in this run and nothing else: the
+    owned pools it created, the CRUSH rule the MON created with an owned
+    erasure-coded pool and the owned erasure-code profiles it created. Pool
+    removal enables the central mon_allow_pool_delete entry only while a
+    claimed pool is removed and restores its prior state on every path. An
+    owned name present without a claim is reported, never removed; a
+    survivor is reported, not retried."""
+    claims = take_claims(out)
     removed = []
     prior = pool_delete_entry(rados, cluster)
-    try:
-        if prior != "true":
-            code, _ = rados.mon(cluster, {"prefix": "config set", "who": POOL_DELETE_SECTION, "name": POOL_DELETE_OPTION, "value": "true"})
-            if code < 0:
-                raise RuntimeError("native pool deletion could not be enabled: %d" % code)
-        remove_owned_pools(rados, cluster, removed)
-    finally:
-        if prior is None:
-            code, _ = rados.mon(cluster, {"prefix": "config rm", "who": POOL_DELETE_SECTION, "name": POOL_DELETE_OPTION})
-        elif prior != "true":
-            code, _ = rados.mon(cluster, {"prefix": "config set", "who": POOL_DELETE_SECTION, "name": POOL_DELETE_OPTION, "value": prior})
-        else:
-            code = 0
-        # The restore is confirmed by an independent read, not by its code.
-        restored = code >= 0 and pool_delete_entry(rados, cluster) == prior
-    gone = all(find_pool(rados.dump(cluster), pool_name(slot)) is None for slot in SLOTS)
-    owned_rules = {pool_name(slot) for slot in SLOTS}
-    for rule in sorted(owned_rules & set(crush_rules(rados, cluster))):
+    claimed_pools = [p for p in claims["pools"] if find_pool(rados.dump(cluster), p) is not None]
+    restored = True
+    if claimed_pools:
+        try:
+            if prior != "true":
+                code, _ = rados.mon(cluster, {"prefix": "config set", "who": POOL_DELETE_SECTION, "name": POOL_DELETE_OPTION, "value": "true"})
+                if code < 0:
+                    raise RuntimeError("native pool deletion could not be enabled: %d" % code)
+            remove_owned_pools(rados, cluster, set(claimed_pools), removed)
+        finally:
+            if prior is None:
+                code, _ = rados.mon(cluster, {"prefix": "config rm", "who": POOL_DELETE_SECTION, "name": POOL_DELETE_OPTION})
+            elif prior != "true":
+                code, _ = rados.mon(cluster, {"prefix": "config set", "who": POOL_DELETE_SECTION, "name": POOL_DELETE_OPTION, "value": prior})
+            else:
+                code = 0
+            # The restore is confirmed by an independent read, not by its code.
+            restored = code >= 0 and pool_delete_entry(rados, cluster) == prior
+    else:
+        remove_owned_pools(rados, cluster, set(), removed)
+    gone = all(find_pool(rados.dump(cluster), p) is None for p in claims["pools"])
+    present_rules = set(crush_rules(rados, cluster))
+    for rule in sorted(set(claims["crush_rules"]) & present_rules):
         rados.mon(cluster, {"prefix": "osd crush rule rm", "name": rule})
-    rules_remaining = sorted(owned_rules & set(crush_rules(rados, cluster)))
-    # Every owned erasure-code profile is unused once its pools are gone.
-    # Removal is not retried; a profile still readable afterwards is reported.
-    remaining = []
+    present_rules = set(crush_rules(rados, cluster))
+    rules_remaining = sorted(set(claims["crush_rules"]) & present_rules)
+    # A claimed profile is unused once the claimed pools are gone. Removal
+    # is not retried; a profile still readable afterwards is reported.
     for profile in EC_PROFILES:
-        rados.mon(cluster, {"prefix": "osd erasure-code-profile rm", "name": profile})
-        code, _ = ec_profile_get(rados, cluster, profile)
-        if code != -2:
-            remaining.append(profile)
-    return {"removed": removed, "pools_removed": gone, "ec_profiles_remaining": remaining,
-            "crush_rules_remaining": rules_remaining, "pool_delete_config_restored": restored,
-            "pool_delete_config_prior": prior}
+        if profile in claims["ec_profiles"]:
+            rados.mon(cluster, {"prefix": "osd erasure-code-profile rm", "name": profile})
+    present_profiles = {profile for profile in EC_PROFILES if ec_profile_get(rados, cluster, profile)[0] != -2}
+    remaining = sorted(present_profiles & set(claims["ec_profiles"]))
+    unclaimed = {"pools": sorted(p["pool"] for p in removed if p["existed"] and not p["claimed"]),
+                 "crush_rules": sorted(claimable("crush_rules") & present_rules - set(claims["crush_rules"])),
+                 "ec_profiles": sorted(present_profiles - set(claims["ec_profiles"]))}
+    return {"removed": removed, "claimed": claims, "unclaimed_present": unclaimed, "pools_removed": gone,
+            "ec_profiles_remaining": remaining, "crush_rules_remaining": rules_remaining,
+            "pool_delete_config_restored": restored, "pool_delete_config_prior": prior}
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory, "opsinflight": mode_opsinflight, "shardhistory": mode_shardhistory, "pginterval": mode_pginterval, "pgstate": mode_pgstate, "watchers": mode_watchers,

@@ -81,6 +81,9 @@ type poolReceipt struct {
 	ECProfilesRemaining      []string `json:"ec_profiles_remaining"`
 	CrushRulesRemaining      []string `json:"crush_rules_remaining"`
 	PoolDeleteConfigRestored bool     `json:"pool_delete_config_restored"`
+	// cleanup mode: owned names present that this test's create did not
+	// make; the cleanup leaves them, and the start-state check reports them.
+	UnclaimedPresent map[string][]string `json:"unclaimed_present"`
 	// fullratios mode.
 	NearfullRatio     float64           `json:"nearfull_ratio"`
 	BackfillfullRatio float64           `json:"backfillfull_ratio"`
@@ -166,12 +169,18 @@ func nativePool(t *testing.T, ctx context.Context, mode string, input any) poolR
 	}
 	if mode == "cleanup" {
 		// Every caller's cleanup owes the start state these leftovers would
-		// break: the central configuration, CRUSH rules and EC profiles.
+		// break: the central configuration, CRUSH rules and EC profiles. It
+		// removes only what this test's create recorded as made by it.
 		if !receipt.PoolDeleteConfigRestored {
 			t.Error("owned-pool cleanup did not restore the central mon_allow_pool_delete entry")
 		}
 		if len(receipt.CrushRulesRemaining) != 0 || len(receipt.ECProfilesRemaining) != 0 {
 			t.Error("owned-pool cleanup left owned CRUSH rules", receipt.CrushRulesRemaining, "or erasure-code profiles", receipt.ECProfilesRemaining)
+		}
+		for kind, names := range receipt.UnclaimedPresent {
+			if len(names) != 0 {
+				t.Log("owned-pool cleanup left", kind, names, "that this test did not create")
+			}
 		}
 	}
 	return receipt

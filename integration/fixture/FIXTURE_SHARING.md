@@ -255,14 +255,23 @@ including every four-OSD erasure-capacity control:
   creates a CRUSH rule named after the pool, and nothing removed it; the
   `crush-rule` condition failed afterwards.
 
-#180 removed both. The cleanup reads the entry first, enables deletion only
+#180 removed both. The cleanup removes only what the same test's `create`
+made. `create` records an owned pool, the CRUSH rule the MON made with an
+erasure-coded owned pool and an owned erasure-code profile in
+`osd-pool-claims.json` of the fixture output directory, each only after it
+saw the object present where it was absent just before the step, also when
+that step reports a failure. It refuses an existing pool, an existing rule of
+the pool's name and an existing profile it did not create, so it never takes
+over or overwrites an earlier object. The cleanup reads and drops that record
+before it removes anything, so a later test's cleanup never removes what an
+earlier test left; it reports owned names present without a claim and leaves
+them to the start-state check. It changes `mon_allow_pool_delete` only while
+it removes a claimed pool: it reads the entry first, enables deletion only
 when it is not already enabled, restores the prior state on every path
 (removes the entry it added, or sets the earlier value back) and confirms it
-with a fresh `config dump`. It removes the CRUSH rules named after the owned
-pools; creating an erasure-coded owned pool refuses an existing rule of that
-name, so that rule is always the one the pool's creation made. `nativePool`
-fails the calling test unless the receipt confirms the restored entry and
-lists no remaining owned rule or erasure-code profile. Of the 57 tests whose
+with a fresh `config dump`. `nativePool` fails the calling test unless the
+receipt confirms the restored entry and lists no remaining claimed rule or
+erasure-code profile. Of the 57 tests whose
 reason named a leftover, 26 became `shareable`. The other 31 keep `isolated`
 with their remaining reason: they kill or pause daemons and wait only for
 `osd-ready clean` (no pg_temp proof), inject data errors, remove an auth

@@ -163,8 +163,8 @@ oracle's `k2m2` width uses its own profile `ceph-msgr-owned-ec-k2m2` (isa,
 `crush-failure-domain=osd`). It never force-sets that profile and refuses to
 create a pool if the profile already exists. After setting the profile it
 reads it back, and after creating the pool it verifies the pool, overwrite
-flag and rule. Cleanup removes both owned profiles and reports any that are
-still readable.
+flag and rule. Cleanup removes the owned profiles that create made in the
+same test and reports any of them that are still readable.
 
 `TestCephOSDErasureK2M2Integration` takes size, min_size, owned OSDs,
 nonprimary shards and the control shard from the oracle receipt
