@@ -47,6 +47,13 @@ const (
 	legacyOSDSoakSelector                          = "^TestCephOSDSoak(Failover)?Integration$"
 )
 
+// legacyOwnedPoolModes are the owned-pool modes of the native oracle at
+// e2d4b01, in sorted order. The proof compares these modes only: a mode the
+// oracle gained later had no old admission, and its own tests prove where it
+// is admitted (osd_epoch_state_admission_test.go).
+var legacyOwnedPoolModes = []string{"cleanup", "clusterstat", "create", "fullratios", "inconsistent", "mgrstate", "observe", "opsinflight", "osdflags", "pghistory",
+	"pginterval", "place", "poolinfo", "quota", "seed", "selfmanaged", "service", "servicecompare", "servicemetadata", "servicewatch", "shardhistory", "snapshot", "versions"}
+
 var legacyOsdErasureWidthSelectors = []string{
 	"^TestCephOSDErasureK2M2Integration$",
 	"^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$",
@@ -118,7 +125,7 @@ func legacyPoolModeAllowed(p profile, mode string) bool {
 	if mode == "pginterval" && !(legacyShardHistory(p) && slices.Contains(legacyPGIntervalSelectors, legacyRun(p))) {
 		return false
 	}
-	return nativeOwnedPoolModes[mode] && (p.osd == "1" || legacyMgrColdBootstrap(p) && (mode == "mgrstate" || mode == "servicewatch"))
+	return slices.Contains(legacyOwnedPoolModes, mode) && (p.osd == "1" || legacyMgrColdBootstrap(p) && (mode == "mgrstate" || mode == "servicewatch"))
 }
 
 func legacyJournalActions(run string) []string {
@@ -602,7 +609,7 @@ func capabilityModes(p profile, err error) admissionModes {
 			daemon = append(daemon, p.daemonControlAdmitted(kind, action))
 		}
 	}
-	for _, mode := range slices.Sorted(maps.Keys(nativeOwnedPoolModes)) {
+	for _, mode := range legacyOwnedPoolModes {
 		pool = append(pool, nativePoolModeAllowed(p, mode))
 	}
 	for _, action := range heldFlockActions() {
@@ -648,7 +655,7 @@ func legacyModes(p profile, err error) admissionModes {
 			}
 		}
 	}
-	for _, mode := range slices.Sorted(maps.Keys(nativeOwnedPoolModes)) {
+	for _, mode := range legacyOwnedPoolModes {
 		pool = append(pool, legacyPoolModeAllowed(p, mode))
 	}
 	for _, action := range heldFlockActions() {
