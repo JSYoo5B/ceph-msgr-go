@@ -1,9 +1,15 @@
-# COPY_FROM snapshot/version classification
+# OSD-copy-classification
 
-| Path | Fixture/control | Oracle and receipt | Boundary |
-| --- | --- | --- | --- |
-| COPY_FROM/COPY_FROM2 from clone/head with version zero/exact/lower/higher | Single BlueStore replicated-pg-reply-v8 CRC/AES IPv4 host, self-managed snapshot | `TestCephOSDCopyFromClassificationIntegration`; native source clone/head and destination state; [record](../../OSD_COPY_FROM_CLASSIFICATION_VALIDATION.md) | Unsupported copy flags remain known-unsent; no new fault or cache-tier claims |
+This file holds one OSD row of the [native path coverage map](../README.md).
 
-2026-11-18: added a bounded classification recipe; execution status is in the
-linked validation record. Owned objects/snapshots are removed with native
-clone-trim and active+clean confirmation.
+## Rows
+
+| ID | Path | Class | Setup and control | Independent observation | Fault and cleanup | Evidence | Visibility |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| OSD-copy-classification | COPY_FROM/COPY_FROM2 clone/head source versions and local flag restrictions | `released` | Single BlueStore CRC/AES IPv4 host replicated-pg-reply-v8; self-managed clone and later head | Native oracle: source clone/head reads and destination bytes/xattrs/OMAP/header/version/mtime; server result: signed aggregate/per-op reply | No injected fault; remove owned heads/snapshot, wait for native clone trimming and active+clean | `TestCephOSDCopyFromClassificationIntegration`; [record](../../OSD_COPY_FROM_CLASSIFICATION_VALIDATION.md) | dedicated row; unsupported copy flags only have known-unsent encoder evidence |
+
+## Updates
+
+2026-11-18: added the snapshot/version cross-product and individual copy-flag
+classification. The record separates native execution from local admission;
+no cache-tier or fault result is inferred.
