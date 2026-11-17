@@ -319,15 +319,20 @@ Two `osd` rows,
 `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange`
 and
 `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange`,
-select only `TestCephOSDCopyFromLostReplyPrimaryChangeIntegration` and
-`TestCephOSDCopyFromInFlightPrimaryChangeIntegration` on three BlueStore
-replicas. Both move the destination primary with `osd out` around a
+select only `TestCephOSDCopyFromLostReplyPrimaryChangeIntegration`,
+`TestCephOSDCopyFromInFlightPrimaryChangeIntegration` and
+`TestCephOSDCopyFromStagedDestinationLossIntegration` on three BlueStore
+replicas. The first two move the destination primary with `osd out` around a
 COPY_FROM and a COPY_FROM2 and resubmit explicitly to the new primary. The
-in-flight test also holds the copy's source read with `osd set pause`. They need no
-fixture capability: every change is a MON command of the test, which a single
-run-level recovery undoes before one clean check. The broad legacy-v6
-three-replica rows select them too
-([validation](../../integration/fixture/OSD_COPY_FROM_PRIMARY_CHANGE_VALIDATION.md)).
+in-flight test also holds the copy's source read with `osd set pause`. The
+third pauses destination replicas so that the copy is staged after its
+source read, SIGKILLs the destination primary and resubmits explicitly to the
+new one. They need no fixture capability: every change is a MON command of
+the test or the daemon pause, kill and start every OSD row admits, and a
+single run-level recovery undoes them before one clean check. The broad
+legacy-v6 three-replica rows select them too
+([primary change](../../integration/fixture/OSD_COPY_FROM_PRIMARY_CHANGE_VALIDATION.md),
+[destination loss](../../integration/fixture/OSD_COPY_FROM_DESTINATION_LOSS_VALIDATION.md)).
 One dedicated `osd` row selects only `TestCephMsgrCompressionOfferIntegration`
 on CRC/AES client and service cipher, IPv4 host runtime, one BlueStore OSD,
 replica/min-size one and legacy-v6. Its ID is

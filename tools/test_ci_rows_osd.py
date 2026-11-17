@@ -220,7 +220,8 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
         acceptances = {
             frozenset({"TestCephOSDObjectBackoffFailoverIntegration"}),
             frozenset({"TestCephOSDUpmapIntegration"}),
-            frozenset({"TestCephOSDCopyFromLostReplyPrimaryChangeIntegration", "TestCephOSDCopyFromInFlightPrimaryChangeIntegration"}),
+            frozenset({"TestCephOSDCopyFromLostReplyPrimaryChangeIntegration", "TestCephOSDCopyFromInFlightPrimaryChangeIntegration",
+                       "TestCephOSDCopyFromStagedDestinationLossIntegration"}),
         }
         for acceptance in acceptances:
             self.assertTrue(acceptance <= self.declared)
