@@ -21,12 +21,14 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ("ci.yml", "platform-checks.yml", "native-scenarios.yml")
 
 
-def declared_tests(directory):
-    """The Go test functions declared in the *_test.go files of a directory."""
-    names = set()
-    for source in (ROOT / directory).glob("*_test.go"):
-        names.update(re.findall(r"^func (Test\w+)\(", source.read_text(encoding="utf-8"), re.MULTILINE))
-    return names
+def declared_tests(directory, root=ROOT):
+    """The names of the top-level tests Go lists for one native suite package
+    (integration or cephmsgr), each once.
+
+    The row tests compare names only. A row that selects a name Go lists more
+    than once is refused by scenario_plan.selector_problems (validate) and by
+    the result gate's snapshot, so these lookups need no count."""
+    return set(scenario_plan.suite_tests(root)[directory])
 
 
 def dedicated_legacy_selectors():

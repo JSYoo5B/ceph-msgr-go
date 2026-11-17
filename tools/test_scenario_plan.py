@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 import scenario_plan as plan
+from test_go_test_list import SHAPES, module, tests_file
 
 
 def entry(sid, group="mon-mgr", **params):
@@ -30,9 +31,14 @@ class CatalogTests(unittest.TestCase):
         document = plan.load_catalog_document()
         scenarios = document["scenarios"]
         self.assertEqual(plan.validate_catalog(scenarios), [])
-        self.assertEqual(plan.mandatory_problems(scenarios, plan.load_mandatory()), [])
+        # Default coverage is every catalog row: the periodic run selects
+        # `all`, and `all` leaves no row out.
+        chosen, _ = plan.select(scenarios, ["all"])
+        self.assertEqual(chosen, scenarios)
+        periodic = (plan.ROOT / ".github" / "workflows" / "periodic.yml").read_text(encoding="utf-8")
+        self.assertIn("scenario_plan.py plan --select all", periodic)
         self.assertEqual(plan.fixed_job_problems(document, plan.CHECKS_WORKFLOW.read_text(encoding="utf-8")), [])
-        self.assertEqual(plan.selector_problems(scenarios, plan.integration_tests()), [])
+        self.assertEqual(plan.selector_problems(scenarios, plan.suite_tests()), [])
 
     def test_workflows_use_the_planner_and_the_reusable_runtime(self):
         root = plan.ROOT / ".github" / "workflows"
@@ -360,14 +366,6 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue(any("scenario_plan.py env " in text for _, text in documents))
         self.assertEqual(plan.reproduction_problems(documents, plan.load_catalog()), [])
 
-    def test_mandatory_list_detects_silent_omission_in_both_directions(self):
-        scenarios = [entry("a"), entry("b")]
-        self.assertEqual(plan.mandatory_problems(scenarios, ["a", "b"]), [])
-        text = "\n".join(plan.mandatory_problems(scenarios, ["a", "c", "c"]))
-        self.assertIn("missing from catalog: c", text)
-        self.assertIn("not in the mandatory list: b", text)
-        self.assertIn("duplicates", text)
-
     def test_fixed_jobs_must_exist_in_the_workflow(self):
         document = {"fixed_jobs": [{"id": "unit", "job": "unit"}, {"id": "fuzz", "job": "fuzz"}]}
         self.assertEqual(plan.fixed_job_problems(document, "jobs:\n  unit:\n    x: 1\n  fuzz:\n"), [])
@@ -384,7 +382,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_selector_that_matches_no_test_is_reported(self):
         scenarios = [entry("a", test_run="^TestNothing$"), entry("b", test_run="^TestReal$"), entry("c")]
-        problems = plan.selector_problems(scenarios, {"TestReal"})
+        problems = plan.selector_problems(scenarios, {"integration": {"TestReal": 1}, "cephmsgr": {}})
         self.assertEqual(len(problems), 1)
         self.assertIn("a: selector", problems[0])
 
@@ -392,6 +390,44 @@ class CatalogTests(unittest.TestCase):
         tests = plan.integration_tests()
         self.assertIn("TestCephMonPingIntegration", tests)  # API suite
         self.assertIn("TestCephMonServiceMapLifecycleFailedMonHoldIntegration", tests)  # client suite
+
+    def test_selectors_resolve_against_the_tests_go_lists(self):
+        root = module(self, SHAPES)
+        client = root / "cephmsgr"
+        client.mkdir()
+        (client / "client_test.go").write_text(tests_file("func TestClient(t *testing.T) {}", package="cephmsgr"),
+                                               encoding="utf-8")
+        tests = plan.integration_tests(root)
+        # Literal expectation: the bare Test, the aliased-import test and the
+        # blank parameter are tests; TestMain, the method, the lowercase helper
+        # and the build-constrained test are not.
+        self.assertEqual(tests, {"Test", "TestAlias", "TestX", "TestClient"})
+        scenarios = [entry("bare", test_run="^Test$"), entry("alias", test_run="^TestAlias$"),
+                     entry("main", test_run="^TestMain$"), entry("ignored", test_run="^TestIgnored$"),
+                     entry("method", test_run="^TestY$")]
+        problems = plan.selector_problems(scenarios, plan.suite_tests(root))
+        self.assertEqual([problem.split(":")[0] for problem in problems], ["main", "ignored", "method"])
+
+    def test_selector_of_a_name_listed_twice_is_refused(self):
+        # The reviewer's case: the internal and the external test package both
+        # declare TestActual, so go test lists it twice for integration.
+        root = module(self, {"internal_test.go": tests_file("func TestActual(t *testing.T) {}"),
+                             "external_test.go": tests_file("func TestActual(t *testing.T) {}",
+                                                            package="integration_test"),
+                             "other_test.go": tests_file("func TestOther(t *testing.T) {}")})
+        (root / "cephmsgr").mkdir()
+        (root / "cephmsgr" / "client_test.go").write_text(
+            tests_file("func TestActual(t *testing.T) {}", package="cephmsgr"), encoding="utf-8")
+        listing = plan.suite_tests(root)
+        self.assertEqual(dict(listing["integration"]), {"TestActual": 2, "TestOther": 1})
+        scenarios = [entry("dup", test_run="^TestActual$"), entry("broad", test_run="^Test"),
+                     entry("other", test_run="^TestOther$")]
+        problems = plan.selector_problems(scenarios, listing)
+        self.assertEqual([problem.split(":")[0] for problem in problems], ["dup", "broad"])
+        self.assertIn("TestActual is listed 2 times for integration", problems[0])
+        # The same name once in each suite is two tests the gate tells apart.
+        self.assertEqual(plan.selector_problems([entry("client", test_run="^TestActual$")],
+                                                {"integration": {"TestActual": 1}, "cephmsgr": {"TestActual": 1}}), [])
 
     def test_pr_catalog_cannot_silently_add_a_trusted_runner_parameter(self):
         from unittest.mock import patch
