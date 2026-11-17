@@ -56,6 +56,37 @@ quality matrix jobs retain their expanded check names and report that work was
 not executed by policy. A policy skip is not test/scan success evidence. Weekly
 vulnerability scans still execute. Branch protection settings are not modified.
 
+## Adding a native test
+
+A pull request that adds a native test edits only the files below. It edits
+no list, count or file of another area:
+
+- `integration/<name>_test.go`: the native test `TestCeph<Name>Integration`
+  with its `//fixture:shareable` or `//fixture:isolated` line (see
+  [Fixture sharing](#fixture-sharing)) and any cluster-free helper test.
+  Neither is registered anywhere; the tools list them with `go test -list`.
+- `.github/scenarios/catalog.d/<group>.json`: the row, after the last row of
+  its group's fragment, or a new fragment for a new group. A row with a
+  `test_run` has an identifier that ends in `.t-<name>`.
+- `integration/fixture/<name>.go`: the capability of a test-specific fixture
+  mode, `defineCapability` beside the mode, or `defineExclusiveCapability`
+  when the test runs alone on a fixture with its own default selection (see
+  [Fixture capabilities](#fixture-capabilities)). The row declares it in
+  `capabilities`.
+- `integration/fixture/coverage/<AREA>.md`: the row of the
+  [coverage map](../../integration/fixture/coverage/README.md) in the area's
+  Rows table and a dated note under its Updates section.
+- `tools/test_ci_rows_<group>_<name>.py`: the row's own checks, when it needs
+  more than `validate`, as a module of its own on
+  `ci_row_catalog.RowsTestCase`.
+
+A row's description belongs in its fixture record and its coverage row, not
+in this document. `tools/test_merge_proof.py` makes two such pull requests in
+a temporary Git repository, once in two areas and once in one area, merges
+them and runs the validators on the merged tree. The two areas merge without
+a conflict. In one area, only the area's catalog fragment and coverage file
+may conflict, and keeping both sides' rows resolves them.
+
 ## Catalog and planner
 
 The catalog is the directory [`catalog.d`](catalog.d/). `_catalog.json` holds the
