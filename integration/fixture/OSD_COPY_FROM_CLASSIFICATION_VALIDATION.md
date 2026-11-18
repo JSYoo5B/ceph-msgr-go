@@ -109,5 +109,36 @@ cross-product support is claimed.
 Review found that a preceding successful copy made later case preconditions
 indistinguishable from the source. The corrected test seeds all sixteen cases
 independently and retains each seed reply alongside its native before/after
-states. Native revalidation and a negative control are pending for this
-correction; the historical results above are not substituted for them.
+states. On 2026-11-19, source
+`25f804e6eb79315b47312955b3d919fc7879bee2` (tree
+`45f5b2e4cd6b65907654814c12de1a08985ff081`) passed the same pinned-image
+CRC/AES IPv4 row on Linux amd64, Go 1.26.9 and Docker 29.9.1. The parent
+passed in 13.18 s and all 16 children passed without skips. The archived
+130,791-byte JSON has SHA-256
+`00d2abe8ba86489852ca0f6c70b5f1026f56e69b54dfa97193df0a67da9b77b9`.
+Direct inspection confirmed 16 distinct sentinel byte strings, 8 successful
+replacements, 8 complete before/after preservations, each seed reply's version
+matching its native before state, all 15 local refusals and cleanup true.
+
+| Opcode | Source | Disabled: before → after version | Exact: before → after version | Older: preserved version | Newer: preserved version |
+| --- | --- | --- | --- | --- | --- |
+| COPY_FROM | Clone | 3 → 2 | 5 → 2 | 7 | 8 |
+| COPY_FROM | Head | 9 → 4 | 11 → 4 | 13 | 14 |
+| COPY_FROM2 | Clone | 16 → 2 | 18 → 2 | 20 | 21 |
+| COPY_FROM2 | Head | 22 → 4 | 24 → 4 | 26 | 27 |
+
+Both lower-version refusals retain aggregate/per-op -34/-115, and both
+higher-version refusals retain -75/-115. Success retains 0/0 and ONDISK.
+All three owned heads and the snapshot were removed; native clone/whiteout
+trim took 603 ms and active+clean was confirmed. Eight fixture containers
+terminated and the final testcontainers inventory was empty.
+
+An uncommitted test-only observation mutation then substituted the sentinel
+state for each successful post-copy observation, and source bytes for each
+refused post-copy observation. All eight success assertions and all eight
+preservation assertions failed at the intended checks (16 failed children,
+nonzero test exit), including both exact-version cases for each opcode.
+This is an oracle sensitivity control, not an observed daemon defect or fault
+injection. Native cleanup and active+clean still completed; eight containers
+terminated. The mutation was removed and a clean tracked diff confirmed before
+prepush. Final validation-record-only edits do not change the executed test.
