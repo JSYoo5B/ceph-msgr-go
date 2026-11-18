@@ -201,8 +201,9 @@ type OSDOperation struct {
 // the OSD computes the source PG and fetches it with its own connection, so
 // the caller supplies no source placement. SourceSnapshot zero is the head;
 // 1 through OSDMaxSnapshot names a snapshot the OSD resolves to a clone. The
-// source must differ from the target. SourceVersion zero accepts any source version, otherwise the OSD
-// refuses a different one (ERANGE). TruncateSequence selects COPY_FROM2's
+// source must differ from the target. SourceVersion zero accepts any source
+// version; otherwise the OSD refuses a lower requested version with ERANGE
+// and a higher one with EOVERFLOW. TruncateSequence selects COPY_FROM2's
 // TRUNCATE_SEQ form: the destination gets TruncateSequence (nonzero) and
 // TruncateSize instead of the source's values; it is refused on OSDCopyFrom.
 // SourceFadvise carries FADVISE hints for the source read; cache-tier copy

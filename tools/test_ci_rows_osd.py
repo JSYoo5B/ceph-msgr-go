@@ -25,6 +25,12 @@ OSD_COMMAND_OUTCOME_SELECTOR = "^TestCephOSDCommand(s|Crash)Integration$"
 
 
 class OSDRowsTest(ci_row_catalog.RowsTestCase):
+    def modern_suite_rows(self):
+        # These checks own the paired suites, not every dedicated test that
+        # uses the same request/reply profile. Preserve their six-row gate.
+        return [entry["params"] for entry in self.entries
+                if entry["group"] == "osd" and ".t-suite-" in entry["id"]]
+
     def test_applied_osd_and_pg_command_rows_require_both_client_tests(self):
         # The broad legacy OSD selection never matches these names, so one
         # CRC and one secure single-BlueStore legacy-v6 row select both cells
@@ -157,7 +163,7 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
     def test_v8_rows_cover_both_security_store_and_address_profiles(self):
         for profile in ("replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8"):
             with self.subTest(profile=profile):
-                rows = [row for row in self.rows if row.get("osd_profile") == profile and row.get("mds_fresh", "0") == "0"
+                rows = [row for row in self.modern_suite_rows() if row.get("osd_profile") == profile and row.get("mds_fresh", "0") == "0"
                         and row.get("osd_replicas") == "1"]
                 self.assertEqual(len(rows), 2)
                 observed = set()
@@ -184,7 +190,7 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
         added = {"TestCephOSDEnforceSnapContextIntegration", "TestCephOSDChecksumCompoundIntegration"}
         self.assertTrue(common | {reply_v8} | added <= self.declared)
         checked_rows = 0
-        for row in self.rows:
+        for row in self.modern_suite_rows():
             profile = row.get("osd_profile")
             if (profile not in {"replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8"} or row.get("mds_fresh", "0") != "0"
                     or row.get("osd_replicas") != "1"):

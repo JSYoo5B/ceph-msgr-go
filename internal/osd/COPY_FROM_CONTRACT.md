@@ -56,7 +56,8 @@ plus continued use of the same public connection after rejection.
 
 The reply must echo the original union with zero padding and carry no output
 and no extent; signed server results (ENOENT for a missing source, ERANGE for a
-source version mismatch, EINVAL) are preserved raw. A successful vector
+lower requested source version, EOVERFLOW for a higher one, EINVAL) are
+preserved raw. A successful vector
 requires ONDISK, like every mutation; ACK alone is an unknown outcome. Local
 cancellation after send keeps an unknown outcome and nothing is replayed or
 routed again.
@@ -159,3 +160,53 @@ header are copied in these tests. This is server-copy behavior, not a Go
 encoder correction or a promise of complete OMAP preservation. The product
 returns the raw result without inspecting source OMAP or emulating lost keys.
 See the [first failures, independent baseline and bounded acceptance](../../integration/fixture/OSD_COPY_FROM_COMPOUND_VALIDATION.md).
+
+
+## Flag, snapshot and version classification
+
+The byte `copy_from.flags`, the operation's `flags` and `src_fadvise_flags`
+are separate fields. The public API exposes no arbitrary copy-flag byte;
+nonzero `TruncateSequence` selects bit 32 for COPY_FROM2. It cannot request
+cache-tier behavior by putting those bits in `SourceFadvise` or operation flags.
+
+| Copy flag | Local classification and native scope |
+| --- | --- |
+| 0 | Both opcodes admitted; native state evidence in the records above |
+| 1 FLUSH | Refused; internal cache-tier flush protocol is outside this API |
+| 2 IGNORE_OVERLAY | Refused; overlay bypass is not an admitted source-routing policy |
+| 4 IGNORE_CACHE | Refused; cache bypass is not admitted |
+| 8 MAP_SNAP_CLONE | Refused; direct clone identity differs from ordinary snapshot resolution |
+| 16 RWORDERED | Refused; internal source write-ordering mode is not admitted |
+| 32 TRUNCATE_SEQ | COPY_FROM2 only, nonzero sequence; the normalized `(1, UINT64_MAX)` pair is refused |
+| 64, 128 | Undefined in the pinned mask and refused locally |
+| Mixed flags | Refused unless exactly 32 on COPY_FROM2 with valid truncate input |
+
+`TestCopyFromFlagClassification` checks every byte for both opcodes through
+all three encoders (v6/v8/v9), requiring no message on refusal. These are
+local-policy tests, not native executions of the refused modes. The pinned
+handler rejects unknown bits on COPY_FROM2; that check is conditional on the
+opcode and must not be generalized to COPY_FROM. Its `_copy_some` propagates
+the five supported internal bits to the source request, which does not prove
+that this public client can safely offer them. References:
+[rados.h flags](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/include/rados.h#L518-L533),
+[copy handler](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/PrimaryLogPG.cc#L8106-L8197),
+[source request](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/PrimaryLogPG.cc#L9540-L9575).
+
+Source snapshot zero normalizes to NOSNAP; explicit NOSNAP also selects head.
+IDs 1 through MAXSNAP encode ordinary snapshot resolution, not an assertion
+that an allocated snapshot or clone exists. SNAPDIR is refused locally.
+Destination `ReadSnapshot` is refused for either writing opcode; a destination
+write SnapContext is separate. A source version is an unsigned 64-bit value:
+zero disables the initial assertion, while any nonzero value pins the source
+version. Numeric admission does not promise that version exists.
+`TestCopyFromSnapshotVersionClassification` checks these numeric boundaries
+without claiming native acceptance of the extreme values.
+
+For the selected source clone or head, pinned `ASSERT_VER` returns ERANGE
+(-34) if the requested version is lower, EOVERFLOW (-75) if higher, and success
+if equal. Version zero skips that assertion. A source version is not the
+snapshot ID, destination version or PG replay version.
+[Native snapshot/version classification](../../integration/fixture/OSD_COPY_FROM_CLASSIFICATION_VALIDATION.md)
+records the independent source observation, known server errors versus local
+known-unsent refusals, populated destination preservation and cleanup. These
+checks do not admit any new flags, arbitrary vectors or automatic resubmission.

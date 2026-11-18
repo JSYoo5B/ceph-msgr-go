@@ -408,7 +408,9 @@ class MergeTests(unittest.TestCase):
         return result.stdout
 
     def write(self, name, text):
-        (self.root / coverage.COVERAGE / name).write_text(text, encoding="utf-8", newline="\n")
+        path = self.root / coverage.COVERAGE / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8", newline="\n")
 
     def branch(self, name, area):
         self.run_git("checkout", "-q", "-b", name, "base")
