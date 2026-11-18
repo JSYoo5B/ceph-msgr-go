@@ -74,11 +74,13 @@ testcontainers inventory was empty. The archived public JSON is 46,360 bytes;
 SHA-256 `c002958ccf5004827617bcf3cf9029dbdd1d82914f68920faac91d932ae0a8b8`.
 It retains the raw signed per-op results (including -115), complete public
 replies and before/after native destination observations. The executed
-validation copy had the exact source tree above. That earlier implementation did not re-seed every version case: exact-version
+validation copy had the exact source tree above. That earlier implementation
+did not re-seed every version case: exact-version
 success and subsequent version refusals could begin with source-equivalent
 destination state. Its PASS therefore does not establish distinguishable
 replacement/preservation for those cases. The per-case sentinel correction
-below supersedes that aspect of the historical evidence. Exact-SHA hosted CI remains
+below supersedes that aspect of the historical evidence. Exact-SHA hosted CI
+remains
 distinct from these local Linux executions.
 
 The initial prepush attempt found an invalid new coverage-row format and

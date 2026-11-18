@@ -95,7 +95,7 @@ func TestCephOSDCopyFromClassificationIntegration(t *testing.T) {
 		t.Fatal("clone and head must differ")
 	}
 	observe := func(name string) omapWriteState {
-		return nativeOmapWrite(t, ctx, base, "observe", omapWriteInput{Object: name}).State
+		return nativeOmapWrite(t, ctx, base, "observe", omapWriteInput{Object: name, InventoryKeys: [][]byte{[]byte("sentinel")}}).State
 	}
 	for index, code := range []cephmsgr.OSDOpcode{cephmsgr.OSDCopyFrom, cephmsgr.OSDCopyFrom2} {
 		t.Run(fmt.Sprintf("opcode-%x", code), func(t *testing.T) {
