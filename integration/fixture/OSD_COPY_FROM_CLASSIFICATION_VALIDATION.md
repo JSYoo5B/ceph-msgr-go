@@ -12,7 +12,12 @@ must verify that representation; a CLI exit status is not a wire errno.
 of both copy opcodes, a real snapshot clone versus a later head, and source
 version zero/exact/lower/higher. Existing `TestCephOSDCopyFromIntegration`
 already tests head-version mismatches and an unpinned snapshot separately.
-The new test deliberately uses a populated destination for all 16 cells.
+Before each of the 16 cells, the test writes and independently observes a
+case-specific populated sentinel: distinct bytes, marker and destination-only
+xattrs, OMAP entry/header and mtime. Its native version must match the seed
+receipt. Success must replace that state with the selected source; refusal
+must preserve the complete native sentinel state. The preceding copy is never
+used as the next version case's precondition.
 It does not inject faults or change product admission.
 
 Native librados snapshot reads (including decoded object_info) establish
@@ -60,7 +65,7 @@ missing from the diagnostic collector allowlist. Its assertions and text
 results passed, but it is not a retained raw-receipt claim. The follow-up
 adds that explicit filename and re-executes the row to retain the receipt.
 
-The retained run at `522ada1dc5a42c7d1a4e0a9b7869da2b795b3d99` (tree
+The historical retained run at `522ada1dc5a42c7d1a4e0a9b7869da2b795b3d99` (tree
 `7eb07caf8e00d224d916417444510f57e63d5cff`) passed the same row in 13.16 s.
 All 16 cells passed with the same version/result classification above, 15
 known-unsent refusals and `cleaned: true`. Native trim took 603 ms and the
@@ -69,8 +74,11 @@ testcontainers inventory was empty. The archived public JSON is 46,360 bytes;
 SHA-256 `c002958ccf5004827617bcf3cf9029dbdd1d82914f68920faac91d932ae0a8b8`.
 It retains the raw signed per-op results (including -115), complete public
 replies and before/after native destination observations. The executed
-validation copy had the exact source tree above. Subsequent changes to this
-record do not alter the test implementation. Exact-SHA hosted CI remains
+validation copy had the exact source tree above. That earlier implementation did not re-seed every version case: exact-version
+success and subsequent version refusals could begin with source-equivalent
+destination state. Its PASS therefore does not establish distinguishable
+replacement/preservation for those cases. The per-case sentinel correction
+below supersedes that aspect of the historical evidence. Exact-SHA hosted CI remains
 distinct from these local Linux executions.
 
 The initial prepush attempt found an invalid new coverage-row format and
@@ -92,3 +100,12 @@ numeric encoder evidence. Destination SnapContext/ORDERSNAP, removed snapshots,
 nonexistent-source snapshots, snapshot plus TRUNCATE_SEQ, additional profiles,
 and fault timing are separate cells. No universal snapshot/flag/version
 cross-product support is claimed.
+
+
+## Per-case sentinel correction
+
+Review found that a preceding successful copy made later case preconditions
+indistinguishable from the source. The corrected test seeds all sixteen cases
+independently and retains each seed reply alongside its native before/after
+states. Native revalidation and a negative control are pending for this
+correction; the historical results above are not substituted for them.

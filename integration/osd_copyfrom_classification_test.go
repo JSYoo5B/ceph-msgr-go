@@ -31,11 +31,12 @@ func TestCephOSDCopyFromClassificationIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 	type cell struct {
-		Name   string                    `json:"name"`
-		Input  cephmsgr.OSDCopyFromInput `json:"input"`
-		Reply  cephmsgr.OSDReply         `json:"reply"`
-		Before omapWriteState            `json:"before"`
-		After  omapWriteState            `json:"after"`
+		Name      string                    `json:"name"`
+		Input     cephmsgr.OSDCopyFromInput `json:"input"`
+		Reply     cephmsgr.OSDReply         `json:"reply"`
+		SeedReply cephmsgr.OSDReply         `json:"seed_reply"`
+		Before    omapWriteState            `json:"before"`
+		After     omapWriteState            `json:"after"`
 	}
 	receipt := struct {
 		Clone    snapOracleRead `json:"clone"`
@@ -156,12 +157,43 @@ func TestCephOSDCopyFromClassificationIntegration(t *testing.T) {
 						op := good
 						op.CopyFrom.SourceSnapshot = source.snap
 						op.CopyFrom.SourceVersion = version.value
+						// Every version case starts with its own native-verified sentinel.
+						// Reusing the preceding copy would hide a successful no-op or a
+						// refused copy that incorrectly installed the same source again.
+						label := fmt.Sprintf("sentinel-%x-%s-%s", code, source.name, version.name)
+						sentinel := []byte(label)
+						header := []byte("header-" + label)
+						seed := request(route,
+							cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(sentinel)), Data: sentinel},
+							cephmsgr.OSDOperation{Code: cephmsgr.OSDSetXattr, Xattr: cephmsgr.OSDXattrInput{Name: "marker"}, Data: sentinel},
+							cephmsgr.OSDOperation{Code: cephmsgr.OSDSetXattr, Xattr: cephmsgr.OSDXattrInput{Name: "destination-only"}, Data: sentinel},
+							cephmsgr.OSDOperation{Code: cephmsgr.OSDSetOmapHeader, Omap: cephmsgr.OSDOmapInput{Header: header}},
+							cephmsgr.OSDOperation{Code: cephmsgr.OSDSetOmapValues, Omap: cephmsgr.OSDOmapInput{Entries: []cephmsgr.OSDOmapEntry{{Key: "sentinel", Value: sentinel}}}})
+						seed.ModificationTime = cephmsgr.OSDTime{Seconds: 1700030000, Nanoseconds: uint32(len(receipt.Cells) + 1)}
+						seedReply, seedErr := o.Request(ctx, seed)
+						if seedErr != nil || seedReply.Flags&cephmsgr.OSDReplyOnDisk == 0 {
+							t.Fatal("destination sentinel setup", seedReply, seedErr)
+						}
 						before := observe(dst)
+						wantAttrs := map[string]string{"marker": label, "destination-only": label}
+						if before.Code != 0 || !bytes.Equal(before.Data, sentinel) ||
+							!reflect.DeepEqual(xattrInventory(before.nativeXattrSnapshot), wantAttrs) ||
+							before.Header == nil || !bytes.Equal(*before.Header, header) ||
+							!equalOmapModel(omapWriteInventory(t, before), map[string][]byte{"sentinel": sentinel}) ||
+							before.Seconds != int64(seed.ModificationTime.Seconds) || before.Nanos != int64(seed.ModificationTime.Nanoseconds) ||
+							before.Version == 0 || before.Version != seedReply.UserVersion {
+							t.Fatal("native destination sentinel differs from setup", before, seedReply)
+						}
+						if bytes.Equal(before.Data, source.state.Operations[1].Data) ||
+							reflect.DeepEqual(wantAttrs, copyClassificationXattrs(source.state.Xattrs())) ||
+							bytes.Equal(*before.Header, []byte("header")) {
+							t.Fatal("destination sentinel is not distinguishable from the selected source")
+						}
 						r := request(route, op)
 						r.ModificationTime = cephmsgr.OSDTime{Seconds: 1700020000}
 						reply, err := o.Request(ctx, r)
 						after := observe(dst)
-						receipt.Cells = append(receipt.Cells, cell{Name: fmt.Sprintf("%x/%s/%s", code, source.name, version.name), Input: op.CopyFrom, Reply: reply, Before: before, After: after})
+						receipt.Cells = append(receipt.Cells, cell{Name: fmt.Sprintf("%x/%s/%s", code, source.name, version.name), Input: op.CopyFrom, Reply: reply, SeedReply: seedReply, Before: before, After: after})
 						var server *cephmsgr.OSDError
 						var unknown *cephmsgr.OutcomeUnknownError
 						if version.code == 0 && err != nil || version.code != 0 && (!errors.As(err, &server) || server.Code != version.code || errors.As(err, &unknown)) {
