@@ -236,10 +236,13 @@ Every native test declares beside its function whether a later test may use
 the fixture it ran on: `//fixture:shareable <reason>` or
 `//fixture:isolated <reason>` as the last line of its doc comment. A row has
 no field of its own: it is shareable only when every test its effective
-selector selects is. The fixture derives each row's value
-(`TestCatalogRowsDeclareFixtureSharing`), and `scenario_plan.py validate`
-runs it and refuses a native test without a valid declaration, a misplaced
-declaration and a row without a value. `scenario_plan.py sharing` lists the
+selector selects is. [`tools/fixture_sharing.py`](../../tools/fixture_sharing.py)
+is the only reader of these lines; the fixture never reads them and reports
+only each row's effective selector (from
+`TestCatalogRowsAreAdmittedByTheFixture`), from which the reader derives the
+row's value. `scenario_plan.py validate` refuses a native test without a
+valid declaration, a misplaced declaration, a native test that Go does not
+list and a row without a value. `scenario_plan.py sharing` lists the
 shareable and isolated rows of each fixture configuration (a row's
 parameters without `test_run`) and the job count of the default coverage.
 `plan` runs the selected shareable rows of one configuration that have an

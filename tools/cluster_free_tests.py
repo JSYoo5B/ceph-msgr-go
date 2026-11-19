@@ -26,8 +26,8 @@ import sys
 
 import go_test_list
 
-# ASCII \w, as the fixture's Go native-name rule (ci_catalog_test.go,
-# sharing_test.go): a name Go does not treat as native must be cluster-free.
+# ASCII \w, as the fixture's Go native-name rule (ci_catalog_test.go): a name
+# Go does not treat as native must be cluster-free.
 NATIVE = re.compile(r"TestCeph\w*Integration", re.ASCII)
 
 

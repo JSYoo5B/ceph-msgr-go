@@ -111,21 +111,24 @@ fixture's own default selection when the row has none (`loadProfile`). A
 broad row, whose default selects the whole suite, is therefore `isolated` as
 long as any native test is.
 
-The fixture derives the row values: `TestCatalogRowsDeclareFixtureSharing`
-in [`sharing_test.go`](sharing_test.go) reads the declarations with
-`go/parser` from the test files the build context selects (the same files as
-the native inventory of `ci_catalog_test.go`), passes every row through the fixture's `loadProfile` as the
-native workflow forwards it, and reports
+The declarations have one reader,
+[`tools/fixture_sharing.py`](../../tools/fixture_sharing.py), which reads them
+as text. This module never reads them. It supplies the one fact only it
+knows: `TestCatalogRowsAreAdmittedByTheFixture` passes every row through
+`loadProfile` as the native workflow forwards it and logs each admitted row's
+effective selector. The reader derives each row's value from that selector
+and the declarations, and `python3 tools/scenario_plan.py validate` reports
 
-- a native test without a declaration, with two, or with an invalid value or
-  reason;
+- a native test without a declaration, with two, with one that is not the
+  last line of its doc comment, or with an invalid value or reason;
 - a `//fixture:` comment that is not on a native test's doc comment;
+- a native test the reader finds that Go does not list (a build-excluded
+  file), or one Go lists that the reader does not find;
 - a row the fixture refuses, a row whose selector selects no native test and
   a row that selects a test without a valid declaration (that row has no
   value).
 
-`python3 tools/scenario_plan.py validate` runs it and fails on every problem
-and on every row without a value. `python3 tools/scenario_plan.py sharing`
+`validate` fails on every problem and on every row without a value. `python3 tools/scenario_plan.py sharing`
 prints each configuration with its shareable and isolated rows and the job
 count of the default coverage if each configuration's shareable rows shared
 one fixture. Both need the fixture module's Go toolchain.
@@ -144,12 +147,11 @@ parameters, so `/ci run <row>` runs exactly that row. Because `plan` also
 plans a pull request's declarations for `/ci run`, it does not build that
 revision: [`tools/fixture_sharing.py`](../../tools/fixture_sharing.py) reads
 the declarations above as text, from the working tree or from the tested
-revision's test-file blobs. It calls a row shareable only if every top-level
-test its selector matches in `integration` and `cephmsgr` has a
-`//fixture:shareable` declaration directly above its function, and
-`validate` requires that reading to agree with
-`TestCatalogRowsDeclareFixtureSharing` for every row with an explicit
-`test_run`. The scenario rows and these sharing lines come from the same
+revision's test-file blobs, and groups a row by the same rule as the row
+values above, applied to its `test_run`: every native test it matches in
+`integration` and `cephmsgr` must be `shareable`. `validate` requires the
+fixture's effective selector of every row with an explicit `test_run` to be
+that `test_run`, so the grouping and the row value cannot differ. The scenario rows and these sharing lines come from the same
 sources, so `plan` always has both.
 `validate` also passes every sequence job it plans of the default coverage
 through the fixture's `loadProfile`, as the workflow forwards it.

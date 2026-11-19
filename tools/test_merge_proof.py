@@ -422,7 +422,7 @@ class MergeProofTest(unittest.TestCase):
                                  env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=TIMEOUT)
         self.assertEqual(fixture.returncode, 0, "fixture module tests failed:\n" + (fixture.stdout + fixture.stderr)[-6000:])
         for test in ("TestFixtureCapabilityDefinitions", "TestCatalogRowsAreAdmittedByTheFixture",
-                     "TestCatalogRowsDeclareFixtureSharing", "TestCICatalogInventory",
+                     "TestCICatalogInventory",
                      "TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture",
                      "TestOwnedPoolOracleModesAreDeclaredBesideTheirHandlers", "TestDiagnosticFilesAreDeclaredBesideTheirControls",
                      "TestSaveMetadataCopiesOnlyDeclaredFiles"):

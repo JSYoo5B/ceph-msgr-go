@@ -172,6 +172,15 @@ func TestFixtureRefusesCapabilityOutsideItsDeclaration(t *testing.T) {
 // capability admitted on the row's topology. A capability's requirement terms
 // are only part of what loadProfile checks, so no reading of those terms can
 // stand in for this.
+// ciSelectorLine is the selectorRowMark line of one admitted row.
+func ciSelectorLine(id string, p profile) string {
+	routed := "0"
+	if p.rgwNative == "1" {
+		routed = "1"
+	}
+	return fmt.Sprintf("%s %s %s", id, routed, p.testRun)
+}
+
 func catalogAdmissionProblems(rows []ciScenario, bindings map[string]ciBinding) []string {
 	var problems []string
 	for _, row := range rows {
@@ -197,12 +206,27 @@ func catalogAdmissionProblems(rows []ciScenario, bindings map[string]ciBinding) 
 	return problems
 }
 
+// selectorRowMark marks the line that reports one admitted row's effective
+// selector: "<id> <routed 0|1> <selector>". The fixture is the only authority
+// on a row's effective selector (its own default when the row has no
+// test_run); tools/fixture_sharing.py derives each row's fixture sharing
+// value from it and from the //fixture: declarations, which this module
+// never reads.
+const selectorRowMark = "catalog selector row: "
+
 // tools/scenario_plan.py validate runs this test and reports each line marked
 // "catalog admission: " as a catalog problem, so a row the fixture refuses
-// fails validation with the fixture's own error.
+// fails validation with the fixture's own error. It reads every admitted
+// row's effective selector from the lines marked selectorRowMark.
 func TestCatalogRowsAreAdmittedByTheFixture(t *testing.T) {
 	rows := ciRepositoryCatalog(t)
-	for _, problem := range catalogAdmissionProblems(rows, ciWorkflowBindings(t)) {
+	bindings := ciWorkflowBindings(t)
+	for _, row := range rows {
+		if p, err := ciProfile(row, bindings); err == nil {
+			t.Log(selectorRowMark + ciSelectorLine(row.ID, p))
+		}
+	}
+	for _, problem := range catalogAdmissionProblems(rows, bindings) {
 		t.Error("catalog admission: " + problem)
 	}
 	if !slices.ContainsFunc(rows, func(row ciScenario) bool { return row.Params["capabilities"] != "" }) {

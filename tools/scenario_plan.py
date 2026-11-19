@@ -69,20 +69,23 @@ environment, and the subshell keeps one row's environment from the next.
 Every native test declares whether it may share a fixture with the tests
 after it, beside its function (//fixture:shareable <reason> or
 //fixture:isolated <reason>; integration/fixture/FIXTURE_SHARING.md). A row is
-shareable only when every test its effective selector selects is. The fixture
-derives each row's value (TestCatalogRowsDeclareFixtureSharing); validate and
-sharing run that test and refuse a row without a value, a test without a
-declaration and a misplaced declaration. A fixture configuration is a row's
-parameters without test_run.
+shareable only when every test its effective selector selects is. The
+declarations have one reader, fixture_sharing.py; the fixture reports each
+row's effective selector (its own default when the row has no test_run) from
+the admission test, and fixture_sharing.row_values derives the row's value.
+validate and sharing refuse a row without a value, a test without a
+declaration, a misplaced declaration and a native test that Go does not list.
+A fixture configuration is a row's parameters without test_run.
 
 plan groups the selected rows: the shareable rows of one configuration with
 an explicit test_run, in catalog (identifier) order, run as one job of at most
 MAX_SEQUENCE_ROWS rows, a fixture sequence (integration/fixture/sequence.go).
 Every other selected row, and a configuration with one such row selected,
 keeps a job of its own, exactly as before; a request of one row is therefore
-never grouped. The plan reads the declarations as text (fixture_sharing.py)
-because it may plan another revision, and validate requires that reading to
-agree with the fixture's for every row with an explicit test_run. A sequence
+never grouped. The plan reads the declarations with the same reader, as text,
+because it may plan another revision, and groups by a row's test_run;
+validate requires the fixture's effective selector of every row with an
+explicit test_run to be that test_run. A sequence
 job carries the rows' selectors in test_sequence (CEPH_MSGR_TEST_SEQUENCE),
 their union in test_run, the row identifiers in scenarios and its first row in
 scenario. sharing lists, per configuration, the shareable and isolated rows
@@ -124,12 +127,10 @@ CAPABILITY_NAME = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 # mark of each problem line it reports (capability_test.go).
 ADMISSION_TEST = "TestCatalogRowsAreAdmittedByTheFixture"
 ADMISSION_MARK = "catalog admission: "
-# The fixture test that derives every row's fixture sharing value, the mark of
-# each problem line and the mark of each row's value (sharing_test.go).
-SHARING_TEST = "TestCatalogRowsDeclareFixtureSharing"
-SHARING_MARK = "fixture sharing: "
-SHARING_ROW_MARK = "fixture sharing row: "
-SHARING_VALUES = ("shareable", "isolated")
+# The mark of the line on which the same test reports an admitted row's
+# effective selector: "<id> <routed 0|1> <selector>" (capability_test.go).
+SELECTOR_ROW_MARK = "catalog selector row: "
+SHARING_VALUES = sharing_sources.VALUES
 # A documented assignment of one exact test selector, and a documented
 # reproduction through `env` (reproduction_problems).
 DOCUMENTED_RUN = re.compile(r"CEPH_MSGR_TEST_RUN=['\"]?(\^Test[A-Za-z0-9_]+\$)")
@@ -389,8 +390,10 @@ def planned_rows(scenarios):
     return [{"id": row["id"], "params": row["params"]} for row in scenarios]
 
 
-def fixture_admission_problems(run=subprocess.run, directory=FIXTURE, planned=(), rows=()):
-    """The rows of this tree's catalog that its fixture refuses.
+def fixture_admission(run=subprocess.run, directory=FIXTURE, planned=(), rows=()):
+    """(problems, {row: (routed, effective selector)}): the rows of this
+    tree's catalog that its fixture refuses, and the effective selector of
+    every row it admits, on lines marked SELECTOR_ROW_MARK.
 
     Runs the fixture's TestCatalogRowsAreAdmittedByTheFixture on rows (the
     rows this planner read, in CEPH_MSGR_PLANNED_ROWS), which passes every
@@ -411,8 +414,8 @@ def fixture_admission_problems(run=subprocess.run, directory=FIXTURE, planned=()
                                                                CEPH_MSGR_PLANNED_ROWS=str(declared)),
                          capture_output=True, text=True, timeout=1200)
         except (OSError, subprocess.SubprocessError) as error:
-            return ["the fixture admission check (%s) did not run: %s" % (ADMISSION_TEST, error)]
-    problems, actions = [], []
+            return ["the fixture admission check (%s) did not run: %s" % (ADMISSION_TEST, error)], {}
+    problems, selectors, actions = [], {}, []
     for line in result.stdout.splitlines():
         try:
             event = json.loads(line)
@@ -425,55 +428,50 @@ def fixture_admission_problems(run=subprocess.run, directory=FIXTURE, planned=()
         output = event.get("Output") or ""
         if ADMISSION_MARK in output:
             problems.append(output.split(ADMISSION_MARK, 1)[1].rstrip())
+        elif SELECTOR_ROW_MARK in output:
+            fields = output.split(SELECTOR_ROW_MARK, 1)[1].split()
+            if len(fields) != 3 or fields[1] not in ("0", "1") or fields[0] in selectors:
+                problems.append("the fixture admission check reported an unreadable selector line %r" % output.strip())
+            else:
+                selectors[fields[0]] = (fields[1] == "1", fields[2])
     if result.returncode == 0 and actions == ["pass"] and not problems:
-        return []
+        return [], selectors
     if not problems:
         tail = " | ".join((result.stderr or result.stdout).strip().splitlines()[-5:])
         problems.append("the fixture admission check (%s) reported %s with exit status %d and no row: %s"
                         % (ADMISSION_TEST, ",".join(actions) or "no result", result.returncode, tail))
-    return problems
+    return problems, selectors
 
 
-def fixture_sharing(run=subprocess.run, directory=FIXTURE):
-    """(problems, {row: value}) as this tree's fixture derives them.
+def fixture_values(scenarios, selectors, tests, listing, routed_listing):
+    """(problems, {row: value}): every row's fixture sharing value, derived
+    from the fixture's effective selectors and the //fixture: declarations
+    (fixture_sharing.py, their one reader), and the inventory check.
 
-    Runs the fixture's TestCatalogRowsDeclareFixtureSharing, which reads the
-    declaration beside every native test and derives each row's value from
-    the tests the row's effective selector selects. A problem line is marked
-    SHARING_MARK, a row's value SHARING_ROW_MARK. A check that does not run or
-    does not pass is a problem as well, never a silent pass."""
-    command = ["go", "test", "-mod=readonly", "-count=1", "-json", "-run", "^%s$" % SHARING_TEST, "."]
-    try:
-        result = run(command, cwd=str(directory), env=dict(os.environ, GOWORK="off"),
-                     capture_output=True, text=True, timeout=1200)
-    except (OSError, subprocess.SubprocessError) as error:
-        return ["the fixture sharing check (%s) did not run: %s" % (SHARING_TEST, error)], {}
-    problems, values, actions = [], {}, []
-    for line in result.stdout.splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(event, dict) or event.get("Test") != SHARING_TEST:
-            continue
-        if event.get("Action") in ("pass", "fail", "skip"):
-            actions.append(event["Action"])
-        output = event.get("Output") or ""
-        if SHARING_MARK in output:
-            problems.append(output.split(SHARING_MARK, 1)[1].rstrip())
-        elif SHARING_ROW_MARK in output:
-            fields = output.split(SHARING_ROW_MARK, 1)[1].split()
-            if len(fields) < 2 or fields[1] not in SHARING_VALUES or fields[0] in values:
-                problems.append("the fixture sharing check reported an unreadable row line %r" % output.strip())
-            else:
-                values[fields[0]] = fields[1]
-    if result.returncode == 0 and actions == ["pass"] and not problems:
-        return [], values
-    if not problems:
-        tail = " | ".join((result.stderr or result.stdout).strip().splitlines()[-5:])
-        problems.append("the fixture sharing check (%s) reported %s with exit status %d and no problem line: %s"
-                        % (SHARING_TEST, ",".join(actions) or "no result", result.returncode, tail))
-    return problems, values
+    tests is fixture_sharing.test_declarations of this tree. A native test
+    that the reader finds but Go does not list (a file the build excludes),
+    or that Go lists but the reader does not find, is a problem: the reader
+    must see exactly the tests that exist."""
+    problems = []
+    read = {key.split("/", 1)[1] for key in tests if not key.startswith("fixture/")}
+    listed = {name for names in listing.values() for name in names
+              if sharing_sources.SUITES[0][2].fullmatch(name)}
+    routed_read = {key.split("/", 1)[1] for key in tests if key.startswith("fixture/")}
+    routed = {name for names in (routed_listing or {}).values() for name in names
+              if sharing_sources.SUITES[2][2].fullmatch(name)}
+    for name in sorted(read - listed):
+        problems.append("native test %s is declared in a file Go does not list (build-excluded?)" % name)
+    for name in sorted(listed - read):
+        problems.append("native test %s is listed by Go but not found by the fixture sharing reader" % name)
+    for name in sorted(routed_read ^ routed):
+        problems.append("RGW checkpoint %s: Go and the fixture sharing reader disagree on whether it exists" % name)
+    values, derived = sharing_sources.row_values(scenarios, selectors, tests)
+    for entry in scenarios:
+        selector = entry["params"].get("test_run")
+        if selector and entry["id"] in selectors and selectors[entry["id"]] != (entry["params"].get("rgw_native") == "1", selector):
+            problems.append("%s: the fixture's effective selector %r is not the row's test_run %r, by which plan groups it"
+                            % (entry["id"], selectors[entry["id"]][1], selector))
+    return problems + derived, values
 
 
 def sharing_problems(scenarios, values):
@@ -505,28 +503,12 @@ def sharing_groups(scenarios, values):
     return [groups[key] for key in order]
 
 
-def sequence_problems(scenarios, values, declared):
-    """The planner's text reading of the declarations (declared, from
-    fixture_sharing.declarations) agrees with the fixture's values for every
-    row with an explicit test_run, so plan groups exactly the rows the fixture
-    calls shareable."""
-    problems = []
-    for entry in scenarios:
-        if not entry["params"].get("test_run") or values.get(entry["id"]) not in SHARING_VALUES:
-            continue
-        planner = sharing_sources.shareable_row(entry["params"], declared)
-        if planner != (values[entry["id"]] == "shareable"):
-            problems.append("%s: the planner reads it as %s, the fixture as %s" % (
-                entry["id"], "shareable" if planner else "isolated", values[entry["id"]]))
-    return problems
-
-
 def jobs(entries, declared):
     """[[entry]] in order: the shareable rows of one configuration with an
     explicit test_run (fixture_sharing.shareable_row) form one job of at most
     MAX_SEQUENCE_ROWS rows, placed where its first row is; every other row is
-    a job of its own. declared is None when the sources are unknown, and then
-    nothing is grouped."""
+    a job of its own. declared is fixture_sharing.test_declarations of the
+    planned sources; None means unknown sources, and then nothing is grouped."""
     result, open_jobs = [], {}
     for entry in entries:
         params = entry["params"]
@@ -662,14 +644,14 @@ def matrix(entries, declared=None):
 
 
 def plan_sources(revision=None):
-    """The fixture sharing declarations plan and env group by: this tree's,
-    or a revision's from its Git objects."""
+    """The native tests' fixture sharing declarations plan and env group by:
+    this tree's, or a revision's from its Git objects."""
     if revision:
         try:
-            return sharing_sources.declarations(sharing_sources.revision_sources(revision, Path.cwd()))
+            return sharing_sources.test_declarations(sharing_sources.revision_sources(revision, Path.cwd()))[0]
         except scenario_catalog.CatalogError as error:
             raise PlanError("test sources of %s: %s" % (revision, error)) from None
-    return sharing_sources.declarations(sharing_sources.tree_sources(ROOT))
+    return sharing_sources.test_declarations(sharing_sources.tree_sources(ROOT))[0]
 
 
 def fixed_entries(document):
@@ -702,16 +684,17 @@ def main(argv=None):
                     print(problem, file=sys.stderr)
                 return 1
             scenarios = document["scenarios"]
+            listing, routed_listing = suite_tests(), routed_tests()
+            tests, declared = sharing_sources.test_declarations(sharing_sources.tree_sources(ROOT))
+            admitted, selectors = fixture_admission(planned=[job for job in matrix(
+                scenarios, tests)["include"] if "test_sequence" in job], rows=scenarios)
+            shared, values = fixture_values(scenarios, selectors, tests, listing, routed_listing)
             problems += (validate_catalog(scenarios)
                          + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
-                         + selector_problems(scenarios, suite_tests(), routed_tests())
+                         + selector_problems(scenarios, listing, routed_listing)
                          + reproduction_problems([(str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
                                                   for path in documentation_files()], scenarios)
-                         + fixture_admission_problems(planned=[job for job in matrix(
-                             scenarios, plan_sources())["include"] if "test_sequence" in job], rows=scenarios))
-            shared, values = fixture_sharing()
-            problems += shared + sharing_problems(scenarios, values)
-            problems += sequence_problems(scenarios, values, plan_sources())
+                         + admitted + declared + shared + sharing_problems(scenarios, values))
             for problem in problems:
                 print(problem, file=sys.stderr)
             if problems:
@@ -722,14 +705,16 @@ def main(argv=None):
             print(json.dumps(planned_rows(load_catalog())))
         elif args.command == "sharing":
             scenarios = load_catalog()
-            problems, values = fixture_sharing()
-            problems += sharing_problems(scenarios, values)
+            tests, problems = sharing_sources.test_declarations(sharing_sources.tree_sources(ROOT))
+            admitted, selectors = fixture_admission(rows=scenarios)
+            shared, values = fixture_values(scenarios, selectors, tests, suite_tests(), routed_tests())
+            problems += admitted + shared + sharing_problems(scenarios, values)
             if problems:
                 for problem in problems:
                     print(problem, file=sys.stderr)
                 return 1
             groups = sharing_groups(scenarios, values)
-            planned = jobs(scenarios, plan_sources())
+            planned = jobs(scenarios, tests)
             for params, shareable, isolated in groups:
                 print("configuration %s" % json.dumps(params, sort_keys=True))
                 for sid in shareable:
