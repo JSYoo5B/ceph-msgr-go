@@ -40,6 +40,7 @@ const serviceMapLifecycleHoldSelector = "^TestCephMonServiceMapLifecycleFailedMo
 // delay deterministic. It runs only when exclusively selected, so broad rows
 // keep the unmodified lifecycle as their only lifecycle cell.
 //
+//scenario:row mon-mgr.aes256k.ip4.t-monservicemaplifecyclefailedmonhold key=aes256k service=aes256k family=4 stress=
 //fixture:isolated cleanup kills live holders without proving their service map entries are gone; the service map is not checked
 func TestCephMonServiceMapLifecycleFailedMonHoldIntegration(t *testing.T) {
 	if selected := flag.Lookup("test.run"); selected == nil || selected.Value.String() != serviceMapLifecycleHoldSelector {

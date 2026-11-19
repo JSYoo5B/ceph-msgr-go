@@ -147,6 +147,8 @@ func (o *securityModeObserver) check() (int, error) {
 	return len(o.conns), nil
 }
 
+//scenario:suite mon-mgr.aes.ip4.mode-rejection-mgr key=aes service=aes family=4 stress= mode_rejection=mgr
+//scenario:suite mon-mgr.aes256k.ip6.mode-rejection-mon key=aes256k service=aes256k family=6 stress= mode_rejection=mon
 //fixture:isolated its MGR variant restarts both MGRs into secure mode; the CRC-only start state is not restored
 func TestCephConnectionModeRejectionIntegration(t *testing.T) {
 	mode := os.Getenv("CEPH_MSGR_TEST_MODE_REJECTION")

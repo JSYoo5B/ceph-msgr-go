@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+//scenario:suite mon-mgr.aes256k.ip4.managers-0 key=aes256k service=aes256k family=4 stress= managers=0
 //fixture:isolated creates and starts both MGR daemons on a fixture that began with no MGR; they are left running
 func TestCephManagerAvailabilityIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MGR_COUNT") != "0" {

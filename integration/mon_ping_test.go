@@ -39,6 +39,8 @@ type monPingObservation struct {
 	} `json:"mon_status"`
 }
 
+//scenario:row mon-ping.aes.ip4.crc.host.t-monping key=aes service=aes mode=crc family=4 stress= runtime=host mon_ping=1
+//scenario:row mon-ping.aes256k.ip6.container.t-monping key=aes256k service=aes256k family=6 stress= runtime=container mon_ping=1
 //fixture:isolated appends a cluster log entry and reads log history from version 1; the start-state check omits the log
 func TestCephMonPingIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MON_PING") != "1" {

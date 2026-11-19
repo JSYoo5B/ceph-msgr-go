@@ -62,6 +62,8 @@ func waitGoManager(t *testing.T, ctx context.Context, c *Client, want nativeMgrT
 // native overwrite B then makes any replay of A visible, and the caller keeps
 // its unknown outcome. The command schema stays in test files.
 //
+//scenario:row mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell key=aes service=aes mode=crc family=4 stress= runtime=host
+//scenario:row mon-mgr.aes256k.ip4.host.t-suite-e9be0b key=aes256k service=aes256k family=4 stress= runtime=host test_run=^TestCephApplied(Named|Current)ManagerTellIsNotReplayedIntegration$
 //fixture:shareable sets an active MGR runtime override; cleanup restores it and a fresh read shows the baseline
 func TestCephAppliedNamedManagerTellIsNotReplayedIntegration(t *testing.T) {
 	appliedManagerTellIsNotReplayed(t, false)
@@ -71,6 +73,7 @@ func TestCephAppliedNamedManagerTellIsNotReplayedIntegration(t *testing.T) {
 // client's MgrMap rather than a name the caller supplies. The native observer
 // is bound to the manager whose connection actually carried the command.
 //
+//scenario:row mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell key=aes service=aes mode=crc family=4 stress= runtime=host
 //fixture:shareable sets an active MGR runtime override; cleanup restores it and a fresh read shows the baseline
 func TestCephAppliedCurrentManagerTellIsNotReplayedIntegration(t *testing.T) {
 	appliedManagerTellIsNotReplayed(t, true)

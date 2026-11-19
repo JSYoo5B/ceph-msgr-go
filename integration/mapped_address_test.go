@@ -35,6 +35,7 @@ func mappedOracleEndpoints(t *testing.T, role string, endpoints []string, names 
 	return seen
 }
 
+//scenario:suite mon-mgr.aes256k.ip6.mapped-1 key=aes256k service=aes256k family=6 stress= mapped=1
 //fixture:isolated its lifecycle subtest runs mgr fail; the active MGR is not restored
 func TestCephMappedAddressIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")

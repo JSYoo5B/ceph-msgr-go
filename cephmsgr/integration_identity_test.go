@@ -57,6 +57,7 @@ func fixtureRejectsOldProof(ctx context.Context, options Options, initial *cephx
 	return true, nil
 }
 
+//scenario:suite mon-mgr.aes256k.ip4.expiry-1 key=aes256k service=aes256k family=4 stress= expiry=1
 //fixture:isolated stops all MONs until tickets expire; start waits for quorum only, MGR and daemon re-auth not proven
 func TestCephExpiredTicketRecoveryIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
