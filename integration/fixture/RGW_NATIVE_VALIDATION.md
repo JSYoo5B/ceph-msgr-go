@@ -4,8 +4,9 @@
 `TestRGWNativeMultiStripeIntegration` (multi-stripe object, manifest and
 garbage collection, described [below](#multi-stripe-manifest-and-gc-checkpoint))
 are dedicated development-fixture tests using released
-ceph-testcontainers-go v0.3.0. They add no product API, S3 SDK, native runtime
-dependency, fixture profile, or comment-selected CI command.
+ceph-testcontainers-go v0.3.0. They add no product API, S3 SDK or native
+runtime dependency. Each has one catalog row that the trusted native workflow
+routes to it ([Trusted catalog selection](#trusted-catalog-selection)).
 Issue [#13](https://github.com/JSYoo5B/ceph-msgr-go/issues/13) remains open for
 the remaining service-induced paths and failure campaigns.
 
@@ -125,10 +126,10 @@ no direct Go RGW operation or server-role implementation is introduced.
 This small-object checkpoint does not cover large objects, multipart,
 multisite, service-registration messages, MGR/OSD faults, compression or
 arbitrary security/address profiles. Manifest-ordered tail reconstruction and
-deferred GC belong to the multi-stripe checkpoint below. Neither adds
-catalog/workflow propagation or a trusted comment selector. Those require
-their own actual-PASS gates and native evidence before SVC-1 or issue #13 can
-be described as complete.
+deferred GC belong to the multi-stripe checkpoint below. The trusted catalog
+rows below select both checkpoints; they add no fault, profile or path to
+either checkpoint, so backend OSD/MGR faults and broader profiles remain open
+before SVC-1 or issue #13 can be described as complete.
 
 ## Multi-stripe manifest and GC checkpoint
 
@@ -185,8 +186,7 @@ client instances and are not counted as gateway reception. `radosgw-admin gc
 process` removes the tails as its own client, so tail removal is established by
 independent absence, not by gateway attribution. A `reached_pg` entry
 establishes reception only, not a result code or durability. No restart is
-repeated in this checkpoint, and MGR/OSD faults, multipart and the trusted
-selector remain open.
+repeated in this checkpoint, and MGR/OSD faults and multipart remain open.
 
 ### Running and retaining the evidence
 
@@ -217,6 +217,50 @@ python3 tools/rgw_native_gate.py --jsonl rgw-multistripe.jsonl \
 
 Native results for a specific commit are recorded in the pull request, not in
 this file, so the recorded commit is the tested one.
+
+### Trusted catalog selection
+
+Each checkpoint has one row of group `rgw` in the scenario catalog:
+`rgw.aes256k.ip4.container.t-rgwcheckpoint` and
+`rgw.aes256k.ip4.container.t-rgwmultistripe`, in
+`.github/scenarios/catalog.d/rgw.checkpoint.json` and
+`rgw.multistripe.json`. A reviewer requests them with `/ci run group:rgw` or
+by identifier, and the weekly periodic run selects them with the rest of the
+default coverage. The row parameter `rgw_native: "1"` routes the trusted
+native workflow (`.github/workflows/native-scenarios.yml`) to the fixture
+controller's closed RGW route (`rgw_native_route.go`): it admits only these
+two exact tests at the checkpoints' own fixed inputs, starts no fixture of
+its own, runs the selected test with `go test -json` in this module and keeps
+the raw stream as `rgw-native.jsonl` in the diagnostics directory. The
+trusted result gate (`tools/native_test_results.py --backend rgw-fixture`)
+binds the run to the tested revision and a clean fixture module, and requires
+both the checkpoint's verbose PASS line and this file's RGW gate
+(`tools/rgw_native_gate.py`) on the stream. The planner, fixture and gate
+rules are described in
+[the scenario README](../../.github/scenarios/README.md#routed-rgw-checkpoint-rows).
+A row reproduces as the workflow runs it from a clean checkout of the tested
+commit on an authorized Linux runner, with a result directory beside the
+checkout that does not exist yet (the stream must be new):
+
+```sh
+mkdir ../rgw-run &&
+(
+  env_lines=$(python3 tools/scenario_plan.py env rgw.aes256k.ip4.container.t-rgwmultistripe) &&
+  eval "$env_lines" &&
+  export CEPH_MSGR_TEST_DIAGNOSTICS="$(cd ../rgw-run && pwd)/diagnostics" &&
+  python3 tools/native_test_results.py snapshot --backend rgw-fixture \
+    --revision "$(git rev-parse HEAD)" --stream "$CEPH_MSGR_TEST_DIAGNOSTICS/rgw-native.jsonl" \
+    --selector "$CEPH_MSGR_TEST_RUN" --output ../rgw-run/expected-tests.json &&
+  sh integration/run.sh > ../rgw-run/ceph-tests.log
+)
+python3 tools/native_test_results.py verify --expected ../rgw-run/expected-tests.json \
+  --log ../rgw-run/ceph-tests.log --output ../rgw-run/native-tests.json
+```
+
+The development workflow above remains: it runs both checkpoints
+automatically for pull requests that change the RGW fixture files and keeps
+its source-archive manifest, while a catalog row runs only on request or
+weekly.
 
 ## Selected run and first failures
 

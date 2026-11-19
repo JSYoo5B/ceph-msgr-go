@@ -658,12 +658,75 @@ Unknown selectors fail rather than silently matching nothing. Validation rejects
 duplicate identifiers, unsupported releases, missing parameters, bad or empty
 test selectors, selectors matching no test and missing suite definitions.
 
+### Routed RGW checkpoint rows
+
+Two rows of group `rgw` run a dedicated RGW checkpoint of the nested fixture
+module instead of the controller's own fixture:
+`rgw.aes256k.ip4.container.t-rgwcheckpoint`
+(`TestRGWNativeCheckpointIntegration`) and
+`rgw.aes256k.ip4.container.t-rgwmultistripe`
+(`TestRGWNativeMultiStripeIntegration`). Their recipes, receipts and limits
+are in [the RGW record](../../integration/fixture/RGW_NATIVE_VALIDATION.md).
+A row routes with the parameter `rgw_native: "1"`, which the native workflow
+forwards as `CEPH_MSGR_TEST_RGW_NATIVE`; every other row keeps the fallback
+`0`. The routing is closed at each step:
+
+- The trusted planner refuses a routed row whose `test_run` is not exactly
+  `^TestRGWNativeCheckpointIntegration$` or
+  `^TestRGWNativeMultiStripeIntegration$` (the tests
+  `tools/rgw_native_gate.py` verifies), a routed row with capabilities and
+  any other `rgw_native` value, on every catalog it reads, a pull request's
+  included. `validate` requires Go to list the routed test exactly once in the
+  fixture module's root package and never resolves a routed row against the
+  product suites, nor another row against the fixture module.
+- The fixture's `loadProfile` admits a routed row only with one of those two
+  selectors, no capability or sequence, and every other input at the value
+  the checkpoint itself uses (pinned image, aes256k, secure, IPv4, container
+  runtime, no OSD, MDS, RBD, MON-ping, cache-pool, MGR-service,
+  authentication, stress or soak mode). The controller
+  (`integration/fixture/rgw_native_route.go`) then starts no fixture and runs
+  `go test -json -count=1 -timeout=20m -run ^Name$ .` in the fixture module
+  with `CEPH_MSGR_TEST_RGW_NATIVE=1`. It writes the raw test2json stream to
+  `rgw-native.jsonl` in `CEPH_MSGR_TEST_DIAGNOSTICS`, refusing an existing
+  file, and prints the events' output after `Running Ceph test suite:
+  fixture`.
+- The native workflow's snapshot passes `--backend rgw-fixture`, the tested
+  revision and the stream path. The trusted result gate refuses another
+  selector, a test Go does not list once, a checkout whose HEAD is not the
+  tested revision or whose fixture module has a modified or untracked file,
+  and an existing stream. Its verdict requires the checkpoint's
+  `--- PASS` line under the `fixture` suite and no other result, HEAD still
+  at the tested revision, and the RGW gate's verdict on the stream: exactly
+  one PASS of the test and a PASS of the fixture package, no skip or failure,
+  the receipt (for the multi-stripe test also the recomputed payload hash and
+  layout) and the independent owned-resource removal record, every event
+  attributed to the fixture package. A fixture result in a product-suite
+  request is refused. A later step fails the job when any container other
+  than the Testcontainers reaper remains.
+
+Both rows are in the default coverage, like every row: `all`, `group:rgw` and
+the weekly periodic run select them, each as a job of its own (the checkpoints
+declare `//fixture:isolated`, and the planner never groups a row outside the
+product suites). The repository has no request-only rows; heavier rows (four
+BlueStore OSDs, the four-minute soak, MDS multi-rank) are in `all` as well, and
+one checkpoint takes about 35 seconds of test time on its own one-MON,
+one-MGR, one-OSD, one-gateway cluster. The development workflow
+[`rgw-native.yml`](../workflows/rgw-native.yml) still runs both checkpoints
+automatically for pull requests that change the RGW fixture files, with its
+source-archive manifest; a catalog row runs only on request or weekly. A
+routed row's job name shows `RGW-native-fixture`; the controller-profile
+fields of that name (MGR count, OSD, store) are the unused fallbacks, not the
+checkpoint's cluster.
+
 ## Test inventory and selection evidence
 
 Basic CI verifies two inventories without starting a cluster:
 
 - The native test inventory is every top-level `TestCeph...Integration` declared
-  in `integration` and `cephmsgr`; there is no list to edit. Fixture tests parse
+  in `integration` and `cephmsgr`, and every `TestRGWNative...Integration`
+  declared in the fixture module, which only a routed row selects; there is no
+  list to edit. The fixture's routed targets must equal the declared RGW
+  checkpoints. Fixture tests parse
   Go declarations, reject duplicate names, and compare the source set with the
   compiled `go test -json -list` result. The current check requires these tests
   in the default build; adding platform-constrained tests needs an explicit
