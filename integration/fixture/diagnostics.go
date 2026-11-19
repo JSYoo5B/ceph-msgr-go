@@ -54,6 +54,7 @@ var metadataFiles = []string{
 	"osd-omap-write-results.json", "osd-omap-compare-results.json",
 	"osd-copyfrom-compound-results.json",
 	"osd-copyfrom-classification-results.json",
+	"osd-copyfrom-snap-truncate-results.json",
 	"osd-copyfrom-error-option.json", "osd-copyfrom-late-error-results.json",
 	"rbd-mirror-receipt.json", "rbd-mirror-results.json",
 	"osd-copyfrom-staging-history.json", "osd-copyfrom-staging-list.json", "osd-copyfrom-multichunk-results.json",

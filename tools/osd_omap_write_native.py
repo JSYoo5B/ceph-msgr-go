@@ -100,7 +100,7 @@ MAX_SNAP_JSON = 64 << 10
 SNAPS = "osd-omap-write-snaps"
 SNAP_MODES = ("snapcreate", "snapwrite", "snapread", "snaprollback", "listsnaps")
 OBJECT_INFO_FIELDS = ("oid", "version", "prior_version", "user_version", "size", "mtime", "flags",
-                      "expected_object_size", "expected_write_size", "alloc_hint_flags")
+                      "truncate_seq", "truncate_size", "expected_object_size", "expected_write_size", "alloc_hint_flags")
 
 
 def binary(text, limit=MAX_BINARY):

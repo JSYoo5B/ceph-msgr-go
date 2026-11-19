@@ -1,0 +1,21 @@
+{
+ "scenarios": [
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdcopyfromsnaptruncate",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "replicated-pg-reply-v8",
+    "test_run": "^TestCephOSDCopyFromSnapTruncateIntegration$"
+   }
+  }
+ ]
+}
