@@ -714,9 +714,11 @@ one-MGR, one-OSD, one-gateway cluster. The development workflow
 [`rgw-native.yml`](../workflows/rgw-native.yml) still runs both checkpoints
 automatically for pull requests that change the RGW fixture files, with its
 source-archive manifest; a catalog row runs only on request or weekly. A
-routed row's job name shows `RGW-native-fixture`; the controller-profile
-fields of that name (MGR count, OSD, store) are the unused fallbacks, not the
-checkpoint's cluster.
+routed row's job has a name of its own: `RGW-native-fixture`, the row ID and
+the checkpoint's fixed cluster (pinned 20.2.4 image, aes256k, secure, IPv4,
+one MON, one MGR, one BlueStore OSD, one gateway). It omits the
+controller-profile fields of the ordinary name (MGR count, OSD, store,
+profile), which a checkpoint never uses.
 
 ## Test inventory and selection evidence
 

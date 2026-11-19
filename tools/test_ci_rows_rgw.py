@@ -8,6 +8,7 @@ and the planner's refusal of every other routed row shape.
 import contextlib
 import io
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,6 +57,21 @@ class RGWRowsTest(ci_row_catalog.RowsTestCase):
         # Without the fixture listing a routed row has no test, and the
         # product suites never stand in for it.
         self.assertEqual(len(plan.selector_problems(routed, plan.suite_tests())), 2)
+
+    def test_routed_job_name_shows_the_checkpoint_cluster(self):
+        # The controller-profile fields of the ordinary job name (MGR count,
+        # OSD, store, profile) fall back to controller defaults that a routed
+        # checkpoint never uses, so a routed job gets its own name: the row
+        # and the fixed cluster rgwNativeStartFixture starts.
+        match = re.search(r"^    name: \$\{\{ matrix\.rgw_native == '1' && format\('([^']*)', ([^)]*)\) \|\| format\('([^']*)', ", self.workflow, re.M)
+        self.assertIsNotNone(match)
+        routed, args, ordinary = match.groups()
+        self.assertEqual(args.split(", "), ["matrix.scenario", "matrix.key", "matrix.service", "matrix.family"])
+        self.assertIn("MON=1, MGR=1, OSD=1 BlueStore, gateway=1", routed)
+        self.assertIn("secure", routed)
+        for unused in ("MGR={", "OSD={", "store=", "profile=", "replicas="):
+            self.assertNotIn(unused, routed)
+        self.assertNotIn("RGW", ordinary)
 
     def test_env_exports_the_routing_flag(self):
         for sid, value in ((CHECKPOINT, "1"), ("mon-ping.aes.ip4.crc.host.t-monping", "0")):
