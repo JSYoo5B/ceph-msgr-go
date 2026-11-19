@@ -26,6 +26,7 @@ const rgwNativeImage = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946
 // rgw_native=1 routes the trusted native workflow to this test
 // (rgw_native_route.go).
 //
+//scenario:row rgw.aes256k.ip4.container.t-rgwcheckpoint key=aes256k service=aes256k family=4 stress= rgw_native=1
 //fixture:isolated starts its own owned RGW cluster and restarts its gateway
 func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_RGW_NATIVE") == "" {

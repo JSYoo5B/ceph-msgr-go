@@ -29,6 +29,7 @@ const (
 // No product API or S3 SDK is introduced. A catalog row with rgw_native=1
 // routes the trusted native workflow to this test (rgw_native_route.go).
 //
+//scenario:row rgw.aes256k.ip4.container.t-rgwmultistripe key=aes256k service=aes256k family=4 stress= rgw_native=1
 //fixture:isolated starts its own owned RGW cluster and runs one explicit GC process on it
 func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_RGW_NATIVE") == "" {
