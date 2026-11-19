@@ -98,9 +98,11 @@ prepush/tooling failures, not failed daemon cells.
 Cache-tier FLUSH/IGNORE_OVERLAY/IGNORE_CACHE/RWORDERED, direct clone mapping,
 unknown copy bits and invalid truncate forms remain locally refused; they
 were not sent to a daemon. Version UINT64_MAX and snapshot MAXSNAP only have
-numeric encoder evidence. Destination SnapContext/ORDERSNAP, removed snapshots,
-nonexistent-source snapshots, snapshot plus TRUNCATE_SEQ, additional profiles,
-and fault timing are separate cells. No universal snapshot/flag/version
+numeric encoder evidence. Destination SnapContext/ORDERSNAP and snapshot plus
+TRUNCATE_SEQ are covered by the separate
+[snapshot/truncate record](OSD_COPY_FROM_SNAP_TRUNCATE_VALIDATION.md); removed
+snapshots, nonexistent-source snapshots, additional profiles and fault timing
+are separate cells. No universal snapshot/flag/version
 cross-product support is claimed.
 
 

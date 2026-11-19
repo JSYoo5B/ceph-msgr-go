@@ -210,3 +210,20 @@ snapshot ID, destination version or PG replay version.
 records the independent source observation, known server errors versus local
 known-unsent refusals, populated destination preservation and cleanup. These
 checks do not admit any new flags, arbitrary vectors or automatic resubmission.
+
+## Truncated sources, TRUNCATE_SEQ and destination SnapContexts
+
+Without `TRUNCATE_SEQ` the destination receives the selected source
+object's truncate pair with its bytes; a clone taken before a sequenced
+TRUNCATE keeps its earlier pair. With `TRUNCATE_SEQ` the destination gets the
+caller's pair unconditionally, even below the source's sequence, and its data
+is not truncated. The destination SnapContext and ORDERSNAP apply to the
+destination head like any write: a newer context clones the pre-copy head
+without overlap, current and older contexts write without a clone, and
+ORDERSNAP refuses an older one with -85 before the copy starts (per-op 0, not
+-115). The source snapset is not copied. A truncate in the same vector and
+an invalid SnapContext are refused before submission. The
+[native record](../../integration/fixture/OSD_COPY_FROM_SNAP_TRUNCATE_VALIDATION.md)
+covers both opcodes on one single-BlueStore CRC/AES IPv4 replicated-pg-reply-v8
+profile; removed snapshots, self-clone sources and other profiles remain
+unverified.
