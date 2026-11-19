@@ -317,6 +317,8 @@ type mdsCephFSResumeEvidence struct {
 	HeldIncomingAtClose bool `json:",omitempty"`
 }
 
+//scenario:row mds-cephfs.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-1c00e7 key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs=1 test_run=^TestCephMDSCephFS(Push|Recovery)?Integration$
+//scenario:row mds-cephfs.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-suite-1c00e7 key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs=1 test_run=^TestCephMDSCephFS(Push|Recovery)?Integration$
 //fixture:isolated removes its CephFS dir and files only in a final subtest; CephFS state is not in the start-state check
 func TestCephMDSCephFSIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS") != "1" {

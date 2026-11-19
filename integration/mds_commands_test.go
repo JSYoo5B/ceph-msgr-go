@@ -214,6 +214,8 @@ type mdsCommandCase struct {
 	WriteChunksBefore, WriteChunksAfter uint64                    `json:",omitempty"`
 }
 
+//scenario:row mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscommands key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_commands=1
+//scenario:row mds-commands.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscommands key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_commands=1
 //fixture:isolated stops the owned MDS daemon through fixture control and never restarts it
 func TestCephMDSCommandsIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_COMMANDS") != "1" {

@@ -486,6 +486,8 @@ type completionSnapEvidence struct {
 	SnapshotRemoved     *nativeMDSCephFSOutput
 }
 
+//scenario:row mds-cephfs-completion.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscompletion key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1
+//scenario:row mds-cephfs-completion.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscompletion key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1
 //fixture:isolated mds fail restarts the owned MDS, evicts a session, force-readonly and runtime overrides; start state not proven
 func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION") != "1" {

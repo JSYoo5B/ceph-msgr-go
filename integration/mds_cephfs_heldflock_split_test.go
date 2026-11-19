@@ -28,6 +28,8 @@ import (
 // owner and one explicit release on the replacement incarnation. The locked
 // file is the first split file, whose capability a nonfinal fragment carries.
 //
+//scenario:row mds-cephfs-heldflock-split-reconnect.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsheldflocksplitreconnect key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=mds-held-flock-split
+//scenario:row mds-cephfs-heldflock-split-reconnect.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsheldflocksplitreconnect key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=mds-held-flock-split
 //fixture:isolated restarts the owned MDS via mds fail and sets debug overrides; leaves files in the fixture filesystem
 func TestCephMDSCephFSHeldFlockSplitReconnectIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION") != "1" {
@@ -43,6 +45,8 @@ func TestCephMDSCephFSHeldFlockSplitReconnectIntegration(t *testing.T) {
 // so lock blobs travel in more than one MClientReconnect. After the restart
 // both locks must be restored independently and released one at a time.
 //
+//scenario:row mds-cephfs-heldflock-split-fragments.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsheldflocksplitfragments key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=mds-held-flock-split,mds-held-flock-split-fragments
+//scenario:row mds-cephfs-heldflock-split-fragments.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsheldflocksplitfragments key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=mds-held-flock-split,mds-held-flock-split-fragments
 //fixture:isolated restarts the owned MDS via mds fail and sets debug overrides; leaves files in the fixture filesystem
 func TestCephMDSCephFSHeldFlockSplitFragmentsIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION") != "1" {

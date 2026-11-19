@@ -42,6 +42,8 @@ var fcntlHeldLocks = heldFlockRecipe{Name: "fcntl-ranges-and-flock", Results: "m
 // fixture's only owned MDS restart. See
 // integration/fixture/MDS_FILELOCK_FCNTL_RESTART_VALIDATION.md.
 //
+//scenario:row mds-cephfs-fcntl-recovery.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsfcntlrangerecovery key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs=1 capabilities=mds-held-fcntl
+//scenario:row mds-cephfs-fcntl-recovery.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsfcntlrangerecovery key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs=1 capabilities=mds-held-fcntl
 //fixture:isolated pauses the MDS journal, fails the owned rank-0 MDS and evicts a session (blocklist entry); no restore proof
 func TestCephMDSCephFSFcntlRangeRecoveryIntegration(t *testing.T) {
 	runCephFSRecovery(t, fcntlHeldLocks)

@@ -273,6 +273,8 @@ func waitMDSSession(ctx context.Context, s *cephmsgr.MDSSession, limit time.Dura
 	}
 }
 
+//scenario:row mds-sessions.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdssessions key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_sessions=1
+//scenario:row mds-sessions.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdssessions key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_sessions=1
 //fixture:isolated evicts sessions natively, by autoclose and by reclaim, adding OSDMap blocklist entries it does not remove
 func TestCephMDSSessionsIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_SESSIONS") != "1" {

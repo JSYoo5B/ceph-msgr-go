@@ -595,6 +595,8 @@ func TestCephAppliedPGCommandIsNotReplayedIntegration(t *testing.T) {
 // One applied MDSConnection.Command whose reply is withheld: the daemon-local
 // runtime option of the explicitly targeted active MDS process.
 //
+//scenario:row mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_commands=1 capabilities=mds-applied-command
+//scenario:row mds-commands.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_commands=1 capabilities=mds-applied-command
 //fixture:shareable sets an MDS runtime override; cleanup restores it natively and a fresh read shows the baseline
 func TestCephAppliedMDSCommandIsNotReplayedIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")

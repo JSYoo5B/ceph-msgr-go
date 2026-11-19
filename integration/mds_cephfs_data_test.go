@@ -981,6 +981,8 @@ const (
 	cephfsDataMixedWritebackRestart
 )
 
+//scenario:row mds-cephfs-data.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsdata key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1
+//scenario:row mds-cephfs-data.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsdata key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1
 //fixture:isolated pauses the MDS log, blackholes acks and fails the owned MDS (mds fail); no restored-state proof
 func TestCephMDSCephFSDataIntegration(t *testing.T) {
 	runCephMDSCephFSDataAcceptance(t, cephfsDataCapSnapRestart)
@@ -989,6 +991,8 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 // TestCephMDSCephFSCapSendRecoveryIntegration runs the same owned data
 // fixture with the cap-send recovery restart instead of the cap-snap one.
 //
+//scenario:row mds-cephfs-capsend.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscapsendrecovery key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=exclusive-mds-cephfs-data
+//scenario:row mds-cephfs-capsend.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscapsendrecovery key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=exclusive-mds-cephfs-data
 //fixture:isolated restarts the owned rank-0 MDS with mds fail and leaves a new incarnation, a blocklist entry and data
 func TestCephMDSCephFSCapSendRecoveryIntegration(t *testing.T) {
 	runCephMDSCephFSDataAcceptance(t, cephfsDataCapSendRestart)
@@ -998,6 +1002,8 @@ func TestCephMDSCephFSCapSendRecoveryIntegration(t *testing.T) {
 // with the interrupted-writeback, revoke, restart and eviction recipe instead
 // of the cap-snap restart.
 //
+//scenario:row mds-cephfs-writeback.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfswritebackfence key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence
+//scenario:row mds-cephfs-writeback.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfswritebackfence key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence
 //fixture:isolated restarts the owned MDS with mds fail and evicts a client session, adding a blocklist entry that stays
 func TestCephMDSCephFSWritebackFenceIntegration(t *testing.T) {
 	runCephMDSCephFSDataAcceptance(t, cephfsDataWritebackFenceRestart)
@@ -1008,6 +1014,8 @@ func TestCephMDSCephFSWritebackFenceIntegration(t *testing.T) {
 // unknown gap and a confirmed extent beyond it, a metadata flush of the prefix
 // only and an owned MDS restart.
 //
+//scenario:row mds-cephfs-mixed-writeback.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsmixedwritebackrecovery key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence,mds-writeback-mixed
+//scenario:row mds-cephfs-mixed-writeback.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsmixedwritebackrecovery key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence,mds-writeback-mixed
 //fixture:isolated restarts the owned rank-0 MDS with mds fail and leaves a new incarnation and object data beyond the file size
 func TestCephMDSCephFSMixedWritebackRecoveryIntegration(t *testing.T) {
 	runCephMDSCephFSDataAcceptance(t, cephfsDataMixedWritebackRestart)
