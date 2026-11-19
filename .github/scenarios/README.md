@@ -660,26 +660,30 @@ test selectors, selectors matching no test and missing suite definitions.
 
 ### Routed RGW checkpoint rows
 
-Two rows of group `rgw` run a dedicated RGW checkpoint of the nested fixture
+Three rows of group `rgw` run a dedicated RGW checkpoint of the nested fixture
 module instead of the controller's own fixture:
 `rgw.aes256k.ip4.container.t-rgwcheckpoint`
-(`TestRGWNativeCheckpointIntegration`) and
+(`TestRGWNativeCheckpointIntegration`),
 `rgw.aes256k.ip4.container.t-rgwmultistripe`
-(`TestRGWNativeMultiStripeIntegration`). Their recipes, receipts and limits
+(`TestRGWNativeMultiStripeIntegration`) and
+`rgw.aes256k.ip4.container.t-rgwbackendfault`
+(`TestRGWNativeBackendFaultIntegration`, which stops and restarts the
+checkpoint cluster's own OSD and manager). Their recipes, receipts and limits
 are in [the RGW record](../../integration/fixture/RGW_NATIVE_VALIDATION.md).
 A row routes with the parameter `rgw_native: "1"`, which the native workflow
 forwards as `CEPH_MSGR_TEST_RGW_NATIVE`; every other row keeps the fallback
 `0`. The routing is closed at each step:
 
 - The trusted planner refuses a routed row whose `test_run` is not exactly
-  `^TestRGWNativeCheckpointIntegration$` or
-  `^TestRGWNativeMultiStripeIntegration$` (the tests
+  `^TestRGWNativeCheckpointIntegration$`,
+  `^TestRGWNativeMultiStripeIntegration$` or
+  `^TestRGWNativeBackendFaultIntegration$` (the tests
   `tools/rgw_native_gate.py` verifies), a routed row with capabilities and
   any other `rgw_native` value, on every catalog it reads, a pull request's
   included. `validate` requires Go to list the routed test exactly once in the
   fixture module's root package and never resolves a routed row against the
   product suites, nor another row against the fixture module.
-- The fixture's `loadProfile` admits a routed row only with one of those two
+- The fixture's `loadProfile` admits a routed row only with one of those three
   selectors, no capability or sequence, and every other input at the value
   the checkpoint itself uses (pinned image, aes256k, secure, IPv4, container
   runtime, no OSD, MDS, RBD, MON-ping, cache-pool, MGR-service,
@@ -699,19 +703,21 @@ forwards as `CEPH_MSGR_TEST_RGW_NATIVE`; every other row keeps the fallback
   at the tested revision, and the RGW gate's verdict on the stream: exactly
   one PASS of the test and a PASS of the fixture package, no skip or failure,
   the receipt (for the multi-stripe test also the recomputed payload hash and
-  layout) and the independent owned-resource removal record, every event
-  attributed to the fixture package. A fixture result in a product-suite
+  layout, for the backend-fault test the recomputed object hashes and the
+  fault, outcome, reception and reconnection relations) and the independent
+  owned-resource removal record, every event attributed to the fixture
+  package. A fixture result in a product-suite
   request is refused. A later step fails the job when any container other
   than the Testcontainers reaper remains.
 
-Both rows are in the default coverage, like every row: `all`, `group:rgw` and
-the weekly periodic run select them, each as a job of its own (the checkpoints
+Every routed row is in the default coverage, like every row: `all`,
+`group:rgw` and the weekly periodic run select them, each as a job of its own (the checkpoints
 declare `//fixture:isolated`, and the planner never groups a row outside the
 product suites). The repository has no request-only rows; heavier rows (four
 BlueStore OSDs, the four-minute soak, MDS multi-rank) are in `all` as well, and
-one checkpoint takes about 35 seconds of test time on its own one-MON,
-one-MGR, one-OSD, one-gateway cluster. The development workflow
-[`rgw-native.yml`](../workflows/rgw-native.yml) still runs both checkpoints
+one checkpoint takes about 35 to 50 seconds of test time on its own
+one-MON, one-MGR, one-OSD, one-gateway cluster. The development workflow
+[`rgw-native.yml`](../workflows/rgw-native.yml) still runs every checkpoint
 automatically for pull requests that change the RGW fixture files, with its
 source-archive manifest; a catalog row runs only on request or weekly. A
 routed row's job has a name of its own: `RGW-native-fixture`, the row ID and
