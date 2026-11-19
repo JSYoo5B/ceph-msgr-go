@@ -410,15 +410,16 @@ class MergeProofTest(unittest.TestCase):
         for test in ("TestFixtureCapabilityDefinitions", "TestCatalogRowsAreAdmittedByTheFixture",
                      "TestCatalogRowsDeclareFixtureSharing", "TestCICatalogInventory",
                      "TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture",
-                     "TestOwnedPoolOracleModesAreDeclaredBesideTheirHandlers", "TestDiagnosticFilesAreDeclaredBesideTheirControls"):
+                     "TestOwnedPoolOracleModesAreDeclaredBesideTheirHandlers", "TestDiagnosticFilesAreDeclaredBesideTheirControls",
+                     "TestSaveMetadataCopiesOnlyDeclaredFiles"):
             self.assertRegex(fixture.stdout, r"(?m)^--- PASS: %s \(" % test)
         # The fixture admits both branches' modes from their own modules and
         # collects both branches' receipts, though neither edited a list.
         admitted = set(re.search(r"declared owned-pool oracle modes: ([a-z0-9 ]+)", fixture.stdout).group(1).split())
         collected = set(re.search(r"declared diagnostic files: (\S+(?: \S+)*)", fixture.stdout).group(1).split())
         for author in authors:
-            self.assertIn(author.mode, admitted)
-            self.assertIn(author.receipt, collected)
+            self.assertTrue(author.mode in admitted, "the merged fixture does not admit mode " + author.mode)
+            self.assertTrue(author.receipt in collected, "the merged fixture does not collect " + author.receipt)
         # The oracle itself registers both modes, and its own tests pass.
         registered = repo.run(python, "-c", "import osd_pool_oracle as o; print(' '.join(sorted(o.HANDLERS)))",
                               cwd=repo.path / "tools").stdout.split()
