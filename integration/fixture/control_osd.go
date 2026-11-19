@@ -142,3 +142,73 @@ func (c *fixtureCluster) controlOSDEpochRequest(ctx context.Context, out string)
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts when they
+// exist: the OSD map control's, and those of OSD tests on the ordinary OSD
+// fixture that have no control of their own.
+var _ = collectDiagnosticFiles(
+	"osd-alloc-hint-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-call-compound-results.json",
+	"osd-call-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-copyfrom-classification-results.json",
+	"osd-copyfrom-compound-results.json",
+	"osd-copyfrom-snap-truncate-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-crash-state.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-full-failover-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-history-query.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-map-applied.json",
+	"osd-map-control.log",
+	"osd-map-epoch.json",
+	"osd-map-manifest.json",
+	"osd-map-native-oracle.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-native-read.bin",
+	"osd-native-stat.txt",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-object.bin",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-oracle.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-replicated-pg-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-reply-v8-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-request-v9-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-snap-checksum-results.json",
+	"osd-snap-mapext-results.json",
+	"osd-snap-results.json",
+	"osd-snap-sparse-read-results.json",
+)

@@ -1126,3 +1126,24 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	}
 	return c.rbdBaseFinish(m, nil)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"rbd-journal-change-primary.json",
+	"rbd-journal-checkpoint.json",
+	"rbd-journal-inspect.json",
+	"rbd-journal-lost-append-outcome.json",
+	"rbd-journal-lost-append-results.json",
+	"rbd-journal-observe-committed.json",
+	"rbd-journal-observe-locked.json",
+	"rbd-journal-observe-recorded.json",
+	"rbd-journal-observe-registered.json",
+	"rbd-journal-observe-resubmitted.json",
+	"rbd-journal-primary-change-outcome.json",
+	"rbd-journal-primary-change-results.json",
+	"rbd-journal-replay.json",
+	"rbd-journal-results.json",
+	"rbd-journal-setup.json",
+	"rbd-journal-write.json",
+)

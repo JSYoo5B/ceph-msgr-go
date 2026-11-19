@@ -882,3 +882,15 @@ func (c *fixtureCluster) rbdCloneControl(ctx context.Context, out string, fields
 	result["native"] = native
 	return c.rbdBaseFinish(m, nil)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"rbd-clone-flatten.json",
+	"rbd-clone-observe-copyup.json",
+	"rbd-clone-observe-snapshot.json",
+	"rbd-clone-results.json",
+	"rbd-clone-setup.json",
+	"rbd-clone-snapshot.json",
+	"rbd-clone-write.json",
+)

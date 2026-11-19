@@ -482,3 +482,12 @@ func (c *fixtureCluster) finishOSDCachePools(ctx context.Context) (result error)
 	x.Finished = true
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-cache-pools-command.json",
+	"osd-cache-pools-fixture.json",
+	"osd-cache-pools-native.json",
+	"osd-cache-pools-results.json",
+)

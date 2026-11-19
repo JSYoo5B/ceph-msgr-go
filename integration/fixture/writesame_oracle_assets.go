@@ -61,3 +61,9 @@ func stageWriteSameOracle(project, out string, p profile) error {
 	}
 	return os.WriteFile(filepath.Join(out, "writesame-oracle-provenance.json"), proof, 0600)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"writesame-oracle-provenance.json",
+)

@@ -1205,3 +1205,13 @@ func (c *fixtureCluster) finishMDSCephFSData(ctx context.Context) error {
 	}
 	return errors.Join(errors.Join(errs...), writeMDSFreshJSON(x.out, "mds-cephfs-data-cleanup.json", receipt))
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mds-cephfs-data-cleanup.json",
+	"mds-cephfs-data-oracle.json",
+	"mds-cephfs-data-owned.json",
+	"mds-cephfs-data-result.json",
+	"mds-cephfs-data-results.json",
+)

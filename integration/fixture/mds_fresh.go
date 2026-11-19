@@ -677,3 +677,14 @@ func removeOwnedFilesystem(ctx context.Context, cluster *ceph.Container, name st
 	}
 	return fmt.Errorf("no owned filesystem %q", name)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mds-fresh-cleanup.json",
+	"mds-fresh-oracle.json",
+	"mds-fresh-owned.json",
+	"mds-fresh-pool-policy.json",
+	"mds-fresh-results.json",
+	"mds-fresh-session-result.json",
+)

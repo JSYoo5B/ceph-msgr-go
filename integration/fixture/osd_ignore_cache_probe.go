@@ -347,3 +347,6 @@ func saveIgnoreCacheEvidence(out, diagnostics string) error {
 }
 
 var ignoreCacheProbeEvidence = []string{"osd-ignore-cache-probe.json", "osd-ignore-cache-plan.json", "osd-ignore-cache-attached.json", "osd-ignore-cache-detached.json", "osd-ignore-cache-native.json", "osd-ignore-cache-command.json"}
+
+// saveMetadata (diagnostics.go) collects the probe evidence above.
+var _ = collectDiagnosticFiles(ignoreCacheProbeEvidence...)

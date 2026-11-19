@@ -23,3 +23,13 @@ func (c *fixtureCluster) setChunkNative(ctx context.Context, out string) error {
 	args := []string{"python3", "/out/osd_set_chunk_oracle.py", "/tmp/ceph-msgr-test", "/out"}
 	return c.runOracleCommandWithTimeout(ctx, out, args, "osd-set-chunk-command.json", "closed native SET_CHUNK checkpoint", 3*time.Minute)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-set-chunk-command.json",
+	"osd-set-chunk-go-results.json",
+	"osd-set-chunk-input.json",
+	"osd-set-chunk-result.json",
+	"osd-set-chunk-results.json",
+)

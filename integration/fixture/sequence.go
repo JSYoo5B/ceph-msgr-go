@@ -240,3 +240,9 @@ func sequenceRunner(c *fixtureCluster, out, proxy string, p profile) sequenceSte
 		stdout: os.Stdout,
 	}
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	sequenceRecordFile,
+)

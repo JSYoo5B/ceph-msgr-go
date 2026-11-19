@@ -121,3 +121,9 @@ func (c *fixtureCluster) classifyControlFailure(out string, cause error) error {
 	}
 	return classifyNativeCrash(cause, crashes)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"native-crash.json",
+)

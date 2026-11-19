@@ -228,3 +228,11 @@ func (c *fixtureCluster) nativeMDSCommands(ctx context.Context, out string, fiel
 	receipt.Complete = true
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mds-commands-native-result.json",
+	"mds-commands-oracle.json",
+	"mds-commands-results.json",
+)

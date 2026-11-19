@@ -501,3 +501,123 @@ func (c *fixtureCluster) controlOSDXattrRequest(ctx context.Context, out string)
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-checksum-command.json",
+	"osd-checksum-compound-command.json",
+	"osd-checksum-compound-input.json",
+	"osd-checksum-compound-result.json",
+	"osd-checksum-compound-results.json",
+	"osd-checksum-input.json",
+	"osd-checksum-result.json",
+	"osd-checksum-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-command-command.json",
+	"osd-command-result.json",
+	"osd-command-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-compound-result.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-enforce-snap-context-command.json",
+	"osd-enforce-snap-context-input.json",
+	"osd-enforce-snap-context-native-write.json",
+	"osd-enforce-snap-context-result.json",
+	"osd-enforce-snap-context-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-mapext-command.json",
+	"osd-mapext-input.json",
+	"osd-mapext-range-command.json",
+	"osd-mapext-range-input.json",
+	"osd-mapext-range-result.json",
+	"osd-mapext-result.json",
+	"osd-mapext-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-mutation-command.json",
+	"osd-mutation-result.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-omap-command.json",
+	"osd-omap-compare-results.json",
+	"osd-omap-owned.json",
+	"osd-omap-range-results.json",
+	"osd-omap-read-results.json",
+	"osd-omap-result.json",
+	"osd-omap-write-command.json",
+	"osd-omap-write-owned.json",
+	"osd-omap-write-result.json",
+	"osd-omap-write-results.json",
+	"osd-omap-write-snaps.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-pg-list-command.json",
+	"osd-pg-list-input.json",
+	"osd-pg-list-result.json",
+	"osd-pg-list-results.json",
+	"osd-pg-list-v8-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-sparse-read-command.json",
+	"osd-sparse-read-input.json",
+	"osd-sparse-read-result.json",
+	"osd-sparse-read-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-u64-xattr-command.json",
+	"osd-u64-xattr-input.json",
+	"osd-u64-xattr-result.json",
+	"osd-u64-xattr-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-watch-notify-command.json",
+	"osd-watch-notify-input.json",
+	"osd-watch-notify-result.json",
+	"osd-watch-notify-results.json",
+	"osd-watch-notify-status.json",
+	"osd-watch-notify-worker.log",
+	"osd-watch-reconnect-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-watchers-command.json",
+	"osd-watchers-result.json",
+	"osd-watchers-results.json",
+	"osd-watchers-status.json",
+	"osd-watchers-worker.log",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-writesame-command.json",
+	"osd-writesame-input.json",
+	"osd-writesame-result.json",
+	"osd-writesame-results.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-xattr-command.json",
+	"osd-xattr-limits.json",
+	"osd-xattr-native-command.json",
+	"osd-xattr-native.json",
+	"osd-xattr-permission-go-remove.json",
+	"osd-xattr-permission-go-set.json",
+	"osd-xattr-permission-list.json",
+	"osd-xattr-permission-remove.json",
+	"osd-xattr-permission-set.json",
+	"osd-xattr-result.json",
+)

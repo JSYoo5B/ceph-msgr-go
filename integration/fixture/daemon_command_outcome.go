@@ -562,3 +562,12 @@ func (c *fixtureCluster) controlDaemonCommandRequest(ctx context.Context, out st
 	}
 	return publishAck(out, "daemon-command-observed."+fields[0])
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"daemon-command-outcome-identity-mds.json",
+	"daemon-command-outcome-identity-osd.json",
+	"daemon-command-outcome-identity-pg.json",
+	"daemon-command-outcome-native.jsonl",
+)

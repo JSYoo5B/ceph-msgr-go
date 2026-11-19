@@ -573,3 +573,25 @@ func addManagerOwnership(owned map[string]string, managers ...*ceph.ManagerConta
 		}
 	}
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of the
+// fixture run when they exist.
+var _ = collectDiagnosticFiles(
+	"daemon-version",
+)
+
+var _ = collectDiagnosticFiles(
+	"fixture-manifest.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"fixture-ownership.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"fixture-unusable.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"provider.cleanup.error",
+)

@@ -113,7 +113,7 @@ func TestOSDEpochStateControlsRefuseNonExactSelections(t *testing.T) {
 // its own two modes, so a mode another change adds needs no edit here.
 func TestOSDEpochStateOracleModesAdmission(t *testing.T) {
 	for _, mode := range legacyOwnedPoolModes {
-		if !nativeOwnedPoolModes[mode] {
+		if !oracleModes[mode] {
 			t.Fatal("a mode of the legacy admission proof is gone from the oracle", mode)
 		}
 	}
@@ -122,7 +122,7 @@ func TestOSDEpochStateOracleModesAdmission(t *testing.T) {
 	}
 	added := []string{"pgstate", "watchers"}
 	for _, mode := range added {
-		if !nativeOwnedPoolModes[mode] || slices.Contains(legacyOwnedPoolModes, mode) {
+		if !oracleModes[mode] || slices.Contains(legacyOwnedPoolModes, mode) {
 			t.Fatal("the epoch-state oracle mode is not a mode added after the migration", mode)
 		}
 	}
@@ -138,10 +138,10 @@ func TestOSDEpochStateOracleModesAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, mode := range added {
-		if !nativePoolModeAllowed(widthProfile, mode) {
+		if !nativePoolModeAllowed(widthProfile, oracleModes, mode) {
 			t.Fatal("the epoch-state control was refused its oracle mode", mode)
 		}
-		if nativePoolModeAllowed(coldProfile, mode) || nativePoolModeAllowed(profile{osd: "0"}, mode) {
+		if nativePoolModeAllowed(coldProfile, oracleModes, mode) || nativePoolModeAllowed(profile{osd: "0"}, oracleModes, mode) {
 			t.Fatal("a fixture without OSDs was admitted the oracle mode", mode)
 		}
 	}

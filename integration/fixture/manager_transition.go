@@ -395,3 +395,9 @@ func (c *fixtureCluster) restartManagersWithReceipt(ctx context.Context, out, id
 	}
 	return write(awaitTransition(ctx, backend, &receipt, transitionDeadline))
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mgr-transition-receipt.json",
+)

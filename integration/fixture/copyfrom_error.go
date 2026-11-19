@@ -301,3 +301,12 @@ func (c *fixtureCluster) copyFromErrorControl(ctx context.Context, out string, f
 	}
 	return publishAck(out, "osd-copyfrom-error."+fields[0])
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-copyfrom-destination-loss-results.json",
+	"osd-copyfrom-error-option.json",
+	"osd-copyfrom-late-error-results.json",
+	"osd-copyfrom-multichunk-results.json",
+)

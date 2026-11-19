@@ -296,3 +296,9 @@ func (c *fixtureCluster) controlAuthBundleRequest(ctx context.Context, out strin
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"manager-native-auth.json",
+)

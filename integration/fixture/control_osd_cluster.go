@@ -99,3 +99,36 @@ func (c *fixtureCluster) controlOSDSplitRequest(ctx context.Context, out string)
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-backoff-ack-input.json",
+	"osd-backoff-ack-receipt.json",
+	"osd-backoff-command.json",
+	"osd-backoff-input.json",
+	"osd-backoff-late-ack-results.json",
+	"osd-backoff-result.json",
+	"osd-backoff-results.json",
+	"osd-backoff-status.json",
+	"osd-backoff-worker.log",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-object-backoff-command.json",
+	"osd-object-backoff-input.json",
+	"osd-object-backoff-result.json",
+	"osd-object-backoff-results.json",
+	"osd-object-backoff-state.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"osd-split-command.json",
+	"osd-split-input.json",
+	"osd-split-result.json",
+	"osd-split-results.json",
+	"osd-split-stale-input.json",
+	"osd-split-stale-receipt.json",
+	"osd-split-status.json",
+	"osd-split-worker.log",
+)

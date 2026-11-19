@@ -61,3 +61,9 @@ func stageU64XattrOracle(project, out string, p profile) error {
 	}
 	return os.WriteFile(filepath.Join(out, "u64-xattr-oracle-provenance.json"), proof, 0600)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"u64-xattr-oracle-provenance.json",
+)

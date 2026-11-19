@@ -728,3 +728,9 @@ func (c *fixtureCluster) collectAuthBundleControl(ctx context.Context, out, id, 
 	}
 	return os.Rename(temporary, filepath.Join(out, authBundleFile))
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"auth-first-failure-bundle.json",
+)

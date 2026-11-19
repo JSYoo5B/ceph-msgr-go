@@ -610,7 +610,7 @@ func capabilityModes(p profile, err error) admissionModes {
 		}
 	}
 	for _, mode := range legacyOwnedPoolModes {
-		pool = append(pool, nativePoolModeAllowed(p, mode))
+		pool = append(pool, nativePoolModeAllowed(p, oracleModes, mode))
 	}
 	for _, action := range heldFlockActions() {
 		held = append(held, admitMDSCephFSHeldFlockSplit(action, p) == nil)

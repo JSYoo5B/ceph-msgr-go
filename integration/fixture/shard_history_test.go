@@ -253,10 +253,10 @@ func TestShardHistoryCaptureAdmission(t *testing.T) {
 		if want {
 			intervals++
 		}
-		if p.pgIntervalSelected() != want || nativePoolModeAllowed(p, "pginterval") != want {
+		if p.pgIntervalSelected() != want || nativePoolModeAllowed(p, oracleModes, "pginterval") != want {
 			t.Error("interval mode admission differs for", selector)
 		}
-		if !nativePoolModeAllowed(p, "shardhistory") || !nativePoolModeAllowed(p, "place") {
+		if !nativePoolModeAllowed(p, oracleModes, "shardhistory") || !nativePoolModeAllowed(p, oracleModes, "place") {
 			t.Error("other oracle modes refused for", selector)
 		}
 		for name, change := range map[string]func(*profile){
@@ -274,14 +274,14 @@ func TestShardHistoryCaptureAdmission(t *testing.T) {
 			changed := p
 			change(&changed)
 			if changed.shardHistorySelected() || changed.testEnvironment("/out", "")[shardHistoryMarker] != "" ||
-				changed.pgIntervalSelected() || nativePoolModeAllowed(changed, "pginterval") {
+				changed.pgIntervalSelected() || nativePoolModeAllowed(changed, oracleModes, "pginterval") {
 				t.Error("capture or interval mode admitted for", name, selector)
 			}
 		}
 		// The interval mode needs the capture it extends.
 		alone := p
 		alone.capabilities = "osd-erasure-width,osd-pg-interval"
-		if alone.pgIntervalSelected() || nativePoolModeAllowed(alone, "pginterval") {
+		if alone.pgIntervalSelected() || nativePoolModeAllowed(alone, oracleModes, "pginterval") {
 			t.Error("interval mode admitted without the capture for", selector)
 		}
 	}

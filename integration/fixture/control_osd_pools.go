@@ -259,3 +259,9 @@ func (c *fixtureCluster) poolPolicy(ctx context.Context) (poolPolicy, error) {
 	}
 	return decodeLegacyPoolPolicy(observation.Stdout, c.profile.fsid)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"pool-policy.json",
+)

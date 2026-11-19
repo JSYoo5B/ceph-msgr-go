@@ -1003,3 +1003,15 @@ func (x *rbdBaseScope) removePool(ctx context.Context, cluster *ceph.Container) 
 	}
 	return pool.Remove(ctx)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"rbd-base-cleanup.json",
+	"rbd-base-oracle.json",
+	"rbd-base-owned.json",
+	"rbd-base-result.json",
+	"rbd-base-results.json",
+	"rbd-base-setup.json",
+	"rbd-base-watch-state.json",
+)

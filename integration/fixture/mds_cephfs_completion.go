@@ -1989,3 +1989,17 @@ func (c *fixtureCluster) mdsCephFSCompletionRestoreBlocklist(ctx context.Context
 	owner := func(entry mdsSessionsBlock) (string, error) { return x.blockOwner(entry, gone) }
 	receipt.restore(ctx, "MDS CephFS completion", owner, c.mdsCephFSBlocklistOps(), fail)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mds-cephfs-completion-cleanup.json",
+	"mds-cephfs-completion-oracle.json",
+	"mds-cephfs-completion-owned.json",
+	"mds-cephfs-completion-result.json",
+	"mds-cephfs-completion-results.json",
+	"mds-cephfs-completion-target.json",
+	"mds-cephfs-heldflock-split-fragments-results.json",
+	"mds-cephfs-heldflock-split-reconnect-results.json",
+	"mds-cephfs-multi-reconnect-results.json",
+)

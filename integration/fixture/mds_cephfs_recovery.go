@@ -1007,3 +1007,12 @@ func (c *fixtureCluster) mdsCephFSHistoricOps(ctx context.Context, gid uint64, r
 func ownedGoAuthID(token, authID string) bool {
 	return authID == "mds-cephfs-"+token || authID == "mds-cephfs-recovery-"+token
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mds-cephfs-fcntl-recovery-results.json",
+	"mds-cephfs-recovery-results.json",
+	"mds-cephfs-sharedflock-recovery-results.json",
+	"mds-cephfs-target.json",
+)

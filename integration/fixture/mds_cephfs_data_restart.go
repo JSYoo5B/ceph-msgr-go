@@ -235,3 +235,9 @@ func validateMDSCephFSDataAdoption(base, current mdsFreshOracle, armed mdsFreshD
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mds-cephfs-data-target.json",
+)
