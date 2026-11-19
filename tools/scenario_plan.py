@@ -98,6 +98,7 @@ from pathlib import Path
 
 import fixture_sharing as sharing_sources
 import go_test_list
+import rgw_native_gate
 import scenario_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -210,6 +211,43 @@ def validate_catalog(scenarios):
                     problems.append("%s has an invalid test selector: %s" % (sid, error))
         if "capabilities" in params:
             problems.extend(declaration_problems(sid, params))
+        problems.extend(routing_problems(sid, params))
+    return problems
+
+
+# The row parameter that routes a row to one RGW checkpoint of the fixture
+# module (integration/fixture/rgw_native_route.go) instead of the
+# controller's fixture, and the closed set of tests it may route to: the
+# tests the trusted RGW result gate verifies.
+ROUTING_PARAM = "rgw_native"
+ROUTED_SUITE = "integration/fixture"
+
+
+def routed(params):
+    """Whether a row runs an RGW checkpoint of the fixture module."""
+    return params.get(ROUTING_PARAM) == "1"
+
+
+def routing_problems(sid, params):
+    """A routed row names exactly one known RGW checkpoint and nothing else.
+
+    The trusted planner checks this on every catalog it reads, a pull
+    request's included, so a row can never route the native workflow to
+    another test of the fixture module or to a union of checkpoints."""
+    if ROUTING_PARAM not in params:
+        return []
+    value = params[ROUTING_PARAM]
+    if value not in ("0", "1"):
+        return ["%s: %s must be 0 or 1, not %r" % (sid, ROUTING_PARAM, value)]
+    if value == "0":
+        return []
+    allowed = ["^%s$" % name for name in rgw_native_gate.TESTS]
+    problems = []
+    if params.get("test_run") not in allowed:
+        problems.append("%s: %s=1 requires a test_run of exactly one of %s, not %r"
+                        % (sid, ROUTING_PARAM, ", ".join(allowed), params.get("test_run")))
+    if params.get("capabilities"):
+        problems.append("%s: %s=1 admits no capabilities" % (sid, ROUTING_PARAM))
     return problems
 
 
@@ -522,7 +560,13 @@ def integration_tests(root=ROOT):
     return set().union(*suite_tests(root).values())
 
 
-def selector_problems(scenarios, listing):
+def routed_tests(root=ROOT):
+    """{".": {top-level test: count}} that Go lists for the fixture module's
+    root package, where the routed RGW checkpoints are declared."""
+    return go_test_list.list_tests(Path(root) / ROUTED_SUITE, ["."])
+
+
+def selector_problems(scenarios, listing, routed_listing=None):
     """A row's test selector must select at least one listed test, each of
     them listed once.
 
@@ -530,10 +574,22 @@ def selector_problems(scenarios, listing):
     run nothing. A selected name that Go lists more than once in one suite
     package (the internal and the external test package both declare it)
     cannot be selected alone, and the result gate refuses it before the run
-    (go_test_list.selected_tests), so the row is refused here already."""
+    (go_test_list.selected_tests), so the row is refused here already.
+
+    A routed row (rgw_native=1) runs its one test in the fixture module
+    instead; `routed_listing` is routed_tests(), and the row's test must be
+    listed there exactly once. A routed row is never checked against the
+    product suites, nor any other row against the fixture module."""
     problems = []
     for entry in scenarios:
         pattern = entry["params"].get("test_run")
+        if routed(entry["params"]):
+            names = (routed_listing or {}).get(".", {})
+            name = pattern[1:-1] if pattern else ""
+            if names.get(name) != 1:
+                problems.append("%s: routed selector %s is listed %d times in %s, not once"
+                                % (entry["id"], pattern, names.get(name, 0), ROUTED_SUITE))
+            continue
         if not pattern:
             continue
         def chosen(package, name):
@@ -628,7 +684,7 @@ def main(argv=None):
             document = load_catalog_document()
             problems = (validate_catalog(scenarios)
                         + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
-                        + selector_problems(scenarios, suite_tests())
+                        + selector_problems(scenarios, suite_tests(), routed_tests())
                         + reproduction_problems([(str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
                                                  for path in documentation_files()], scenarios)
                         + fixture_admission_problems(planned=[job for job in matrix(

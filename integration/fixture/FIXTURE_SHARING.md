@@ -8,7 +8,8 @@ one fixture sequence (#180, [below](#fixture-sequences)).
 
 ## Declaration
 
-Every native test (`TestCeph...Integration` in `integration` and `cephmsgr`)
+Every native test (`TestCeph...Integration` in `integration` and `cephmsgr`,
+and the routed RGW checkpoints `TestRGWNative...Integration` of this module)
 declares its value beside its function, as the last line of its doc comment:
 
 ```go

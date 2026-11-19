@@ -37,9 +37,8 @@ const (
 )
 
 var (
-	sharingNativeTest = regexp.MustCompile(`^TestCeph\w*Integration$`)
-	sharingDirective  = regexp.MustCompile(`^//fixture:(shareable|isolated) (\S.*)$`)
-	sharingReason     = regexp.MustCompile(`^[ -~]+$`)
+	sharingDirective = regexp.MustCompile(`^//fixture:(shareable|isolated) (\S.*)$`)
+	sharingReason    = regexp.MustCompile(`^[ -~]+$`)
 )
 
 // testSharing is one native test's declaration. Value is empty when the test
@@ -47,20 +46,20 @@ var (
 type testSharing struct{ Value, Reason, Source string }
 
 // nativeTestSharing reads the declaration of every native test of the
-// integration and cephmsgr suites under root, keyed by "package/TestName",
+// suites of ciNativeSuites under root, keyed by "label/TestName",
 // and reports each missing, repeated, invalid or misplaced declaration. The
 // files are the ones the build context selects (ciSuiteTestFiles), the same
 // as ciNativeSources, so a build-excluded file neither adds a native test nor
 // a declaration.
 func nativeTestSharing(root string) (map[string]testSharing, []string, error) {
 	tests, problems := map[string]testSharing{}, []string{}
-	for _, pkg := range []string{"integration", "cephmsgr"} {
-		paths, err := ciSuiteTestFiles(root, pkg)
+	for _, suite := range ciNativeSuites {
+		paths, err := ciSuiteTestFiles(root, suite.dir)
 		if err != nil {
 			return nil, nil, err
 		}
 		for _, path := range paths {
-			source := pkg + "/" + filepath.Base(path)
+			source := suite.dir + "/" + filepath.Base(path)
 			fset := token.NewFileSet()
 			file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 			if err != nil {
@@ -69,10 +68,10 @@ func nativeTestSharing(root string) (map[string]testSharing, []string, error) {
 			attached := map[*ast.Comment]bool{}
 			for _, decl := range file.Decls {
 				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv != nil || !sharingNativeTest.MatchString(fn.Name.Name) {
+				if !ok || fn.Recv != nil || !suite.native.MatchString(fn.Name.Name) {
 					continue
 				}
-				key := pkg + "/" + fn.Name.Name
+				key := suite.label + "/" + fn.Name.Name
 				if _, exists := tests[key]; exists {
 					return nil, nil, fmt.Errorf("duplicate native test %s", key)
 				}
@@ -126,7 +125,8 @@ type rowSharing struct {
 }
 
 // catalogSharing derives every row's value from the tests its effective
-// selector selects in both suites. A row that the fixture refuses, that
+// selector selects in the suites the row runs (ciSelection): the product
+// suites, or the RGW checkpoints for a row with rgw_native=1. A row that the fixture refuses, that
 // selects no native test or that selects a test without a valid declaration
 // has no value and is reported instead.
 func catalogSharing(rows []ciScenario, bindings map[string]ciBinding, tests map[string]testSharing) ([]rowSharing, []string) {
@@ -147,7 +147,8 @@ func catalogSharing(rows []ciScenario, bindings map[string]ciBinding, tests map[
 		value := rowSharing{ID: row.ID, Value: "shareable"}
 		var undeclared []string
 		for _, name := range names {
-			if !selector.MatchString(strings.SplitN(name, "/", 2)[1]) {
+			label, test, _ := strings.Cut(name, "/")
+			if ciRoutedSuite(label) != (p.rgwNative == "1") || !selector.MatchString(test) {
 				continue
 			}
 			value.Selected++

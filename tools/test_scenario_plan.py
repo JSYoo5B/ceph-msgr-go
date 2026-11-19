@@ -38,7 +38,7 @@ class CatalogTests(unittest.TestCase):
         periodic = (plan.ROOT / ".github" / "workflows" / "periodic.yml").read_text(encoding="utf-8")
         self.assertIn("scenario_plan.py plan --select all", periodic)
         self.assertEqual(plan.fixed_job_problems(document, plan.CHECKS_WORKFLOW.read_text(encoding="utf-8")), [])
-        self.assertEqual(plan.selector_problems(scenarios, plan.suite_tests()), [])
+        self.assertEqual(plan.selector_problems(scenarios, plan.suite_tests(), plan.routed_tests()), [])
 
     def test_workflows_use_the_planner_and_the_reusable_runtime(self):
         root = plan.ROOT / ".github" / "workflows"

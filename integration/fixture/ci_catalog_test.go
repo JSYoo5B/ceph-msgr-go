@@ -92,7 +92,12 @@ func ciProfile(row ciScenario, bindings map[string]ciBinding) (profile, error) {
 func ciSuiteTestFiles(root, pkg string) ([]string, error) {
 	ctx := build.Default
 	ctx.CgoEnabled = false
-	dir := filepath.Join(root, pkg)
+	dir := filepath.Join(root, filepath.FromSlash(pkg))
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		// A synthetic tree may lack a suite; the repository's suites are
+		// paired with go test -list (TestCINativeCompiledInventory).
+		return nil, nil
+	}
 	info, err := ctx.ImportDir(dir, 0)
 	var none *build.NoGoError
 	if err != nil && !errors.As(err, &none) {
@@ -105,15 +110,40 @@ func ciSuiteTestFiles(root, pkg string) ([]string, error) {
 	return paths, nil
 }
 
+// ciNativeSuite is one package whose native tests catalog rows select, keyed
+// "label/TestName". The product's API (integration) and client (cephmsgr)
+// suites run on the controller's own fixture; the RGW checkpoints of this
+// module (label fixture) start their own cluster, and only a row with
+// rgw_native=1 routes to them (rgw_native_route.go).
+type ciNativeSuite struct {
+	label, dir string
+	native     *regexp.Regexp
+	routed     bool
+}
+
+var (
+	ciProductNativeTest = regexp.MustCompile(`^TestCeph\w*Integration$`)
+	ciRGWNativeTest     = regexp.MustCompile(`^TestRGWNative\w*Integration$`)
+	ciNativeSuites      = []ciNativeSuite{
+		{"integration", "integration", ciProductNativeTest, false},
+		{"cephmsgr", "cephmsgr", ciProductNativeTest, false},
+		{rgwNativeSuite, "integration/fixture", ciRGWNativeTest, true},
+	}
+)
+
+// ciRoutedSuite reports whether label is the suite of rows with rgw_native=1.
+func ciRoutedSuite(label string) bool {
+	return slices.ContainsFunc(ciNativeSuites, func(suite ciNativeSuite) bool { return suite.label == label && suite.routed })
+}
+
 // ciNativeSources maps each native test to its declaring file. The files are
 // the _test.go files the build context selects (CGO disabled, as the listing
 // in TestCINativeCompiledInventory), parsed by Go's parser; that test pairs
 // the names with go test -list, which decides which tests exist.
 func ciNativeSources(root string) (map[string]string, error) {
 	result := map[string]string{}
-	native := regexp.MustCompile(`^TestCeph\w*Integration$`)
-	for _, pkg := range []string{"integration", "cephmsgr"} {
-		paths, err := ciSuiteTestFiles(root, pkg)
+	for _, suite := range ciNativeSuites {
+		paths, err := ciSuiteTestFiles(root, suite.dir)
 		if err != nil {
 			return nil, err
 		}
@@ -124,14 +154,14 @@ func ciNativeSources(root string) (map[string]string, error) {
 			}
 			for _, decl := range file.Decls {
 				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv != nil || !native.MatchString(fn.Name.Name) {
+				if !ok || fn.Recv != nil || !suite.native.MatchString(fn.Name.Name) {
 					continue
 				}
-				key := pkg + "/" + fn.Name.Name
+				key := suite.label + "/" + fn.Name.Name
 				if _, exists := result[key]; exists {
 					return nil, fmt.Errorf("duplicate native test %s", key)
 				}
-				result[key] = pkg + "/" + filepath.Base(path)
+				result[key] = suite.dir + "/" + filepath.Base(path)
 			}
 		}
 	}
@@ -186,8 +216,10 @@ func ciSelection(sources map[string]string, scenarios []ciScenario, bindings map
 		}
 		matches := 0
 		for index := range rows {
-			name := strings.SplitN(rows[index].Test, "/", 2)[1]
-			if !selector.MatchString(name) {
+			label, name, _ := strings.Cut(rows[index].Test, "/")
+			// A routed row selects only the RGW checkpoints, every other
+			// row only the suites the controller runs on its fixture.
+			if ciRoutedSuite(label) != (p.rgwNative == "1") || !selector.MatchString(name) {
 				continue
 			}
 			matches++
@@ -286,9 +318,51 @@ func TestCINativeCompiledInventory(t *testing.T) {
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
+	compiled = append(compiled, ciCompiledRoutedTests(t)...)
 	slices.Sort(compiled)
 	if problems := ciInventoryProblems(sources, compiled); len(problems) != 0 {
 		t.Fatal(strings.Join(problems, "\n"))
+	}
+}
+
+// ciCompiledRoutedTests lists the RGW checkpoints of this module as go test
+// -list compiles them, keyed like ciNativeSources.
+func ciCompiledRoutedTests(t *testing.T) []string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "test", "-mod=readonly", "-list", "^TestRGWNative.*Integration$", ".")
+	cmd.Env = append(os.Environ(), "GOWORK=off", "CGO_ENABLED=0")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("compiled RGW checkpoint inventory failed: %v", err)
+	}
+	var compiled []string
+	for _, line := range strings.Split(string(output), "\n") {
+		if ciRGWNativeTest.MatchString(line) {
+			compiled = append(compiled, rgwNativeSuite+"/"+line)
+		}
+	}
+	return compiled
+}
+
+// TestCIRoutedTestsAreTheDeclaredRGWCheckpoints keeps the closed routing set
+// (rgwNativeTargets) equal to the RGW checkpoints this module declares: a
+// new checkpoint without a route, or a route to no test, fails.
+func TestCIRoutedTestsAreTheDeclaredRGWCheckpoints(t *testing.T) {
+	sources, err := ciNativeSources(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var declared []string
+	for key := range sources {
+		if label, name, _ := strings.Cut(key, "/"); ciRoutedSuite(label) {
+			declared = append(declared, name)
+		}
+	}
+	slices.Sort(declared)
+	if want := slices.Sorted(slices.Values(rgwNativeTargets)); !slices.Equal(declared, want) {
+		t.Fatalf("declared RGW checkpoints %v, routed targets %v", declared, want)
 	}
 }
 

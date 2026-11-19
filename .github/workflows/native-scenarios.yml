@@ -36,7 +36,7 @@ defaults:
 jobs:
   ceph:
     if: fromJSON(inputs.matrix).include[0] != null
-    name: ${{ matrix.mon_ping == '1' && 'MON-ping ' || '' }}${{ matrix.osd_cache_pools == '1' && 'OSD-cache-pools ' || '' }}${{ matrix.mgr_service == '1' && 'MGR-service ' || '' }}Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }}, OSD=${{ matrix.osd || '0' }}, profile=${{ matrix.osd_profile || 'legacy-v6' }}, store=${{ matrix.osd_store || 'memstore' }}, replicas=${{ matrix.osd_replicas || '1' }}, native-mgr-preparation=${{ matrix.native_mgr_preparation || '0' }}, race=${{ matrix.race || '0' }}${{ matrix.osd_soak && format(', soak={0}', matrix.osd_soak) || '' }})${{ matrix.rbd == '1' && ' RBD-base' || (matrix.mds_cephfs_ranks_replay == '1' && ' MDS-cephfs-ranks-replay' || (matrix.mds_cephfs_ranks == '1' && ' MDS-cephfs-ranks' || (matrix.mds_cephfs_completion == '1' && ' MDS-cephfs-completion' || (matrix.mds_cephfs_data == '1' && ' MDS-cephfs-data' || (matrix.mds_cephfs == '1' && ' MDS-cephfs' || (matrix.mds_sessions == '1' && ' MDS-sessions' || (matrix.mds_commands == '1' && ' MDS-commands' || (matrix.mds_fresh == '1' && ' MDS-fresh' || '')))))))) }}${{ matrix.test_sequence && format(' sequence of {0} rows', matrix.sequence_rows) || '' }}
+    name: ${{ matrix.rgw_native == '1' && format('RGW-native-fixture {0} (Ceph 20.2.4 pinned image, {1}/{2}, secure, IPv{3}, container, fixed checkpoint cluster MON=1, MGR=1, OSD=1 BlueStore, gateway=1)', matrix.scenario, matrix.key, matrix.service, matrix.family) || format('{0}{1}{2}Ceph {3} ({4}/{5}, {6}, IPv{7}, MGR={8}, {9}, expiry={10}, idle={11}, auth-epoch={12}, short-tickets={13}, mode-rejection={14}, mapped={15}, OSD={16}, profile={17}, store={18}, replicas={19}, native-mgr-preparation={20}, race={21}{22}){23}{24}', matrix.mon_ping == '1' && 'MON-ping ' || '', matrix.osd_cache_pools == '1' && 'OSD-cache-pools ' || '', matrix.mgr_service == '1' && 'MGR-service ' || '', matrix.release || '20.2.4', matrix.key, matrix.service, matrix.mode || 'secure', matrix.family, matrix.managers || '2', matrix.runtime || 'container', matrix.expiry || '0', matrix.idle || '0', matrix.auth_epoch || '0', matrix.short_tickets || '0', matrix.mode_rejection || 'none', matrix.mapped || '0', matrix.osd || '0', matrix.osd_profile || 'legacy-v6', matrix.osd_store || 'memstore', matrix.osd_replicas || '1', matrix.native_mgr_preparation || '0', matrix.race || '0', matrix.osd_soak && format(', soak={0}', matrix.osd_soak) || '', matrix.rbd == '1' && ' RBD-base' || (matrix.mds_cephfs_ranks_replay == '1' && ' MDS-cephfs-ranks-replay' || (matrix.mds_cephfs_ranks == '1' && ' MDS-cephfs-ranks' || (matrix.mds_cephfs_completion == '1' && ' MDS-cephfs-completion' || (matrix.mds_cephfs_data == '1' && ' MDS-cephfs-data' || (matrix.mds_cephfs == '1' && ' MDS-cephfs' || (matrix.mds_sessions == '1' && ' MDS-sessions' || (matrix.mds_commands == '1' && ' MDS-commands' || (matrix.mds_fresh == '1' && ' MDS-fresh' || '')))))))), matrix.test_sequence && format(' sequence of {0} rows', matrix.sequence_rows) || '') }}
     runs-on: ubuntu-latest
     # A fixture sequence runs up to eight rows' tests on one fixture.
     timeout-minutes: ${{ matrix.test_sequence && 120 || 45 }}
@@ -63,6 +63,8 @@ jobs:
           cp .trusted-native/tools/native_test_results.py "$RUNNER_TEMP/native_test_results.py"
           # The result gate imports its Go test listing from its own directory.
           cp .trusted-native/tools/go_test_list.py "$RUNNER_TEMP/go_test_list.py"
+          # It verifies a routed RGW checkpoint's stream with this gate.
+          cp .trusted-native/tools/rgw_native_gate.py "$RUNNER_TEMP/rgw_native_gate.py"
           cp .trusted-native/tools/native_terminal.py "$RUNNER_TEMP/native_terminal.py"
           cp .trusted-native/tools/native_evidence.py "$RUNNER_TEMP/native_evidence.py"
           # The soak collector imports this validator from its own directory;
@@ -160,6 +162,11 @@ jobs:
         run: |
           sequence=()
           if test -n "$CEPH_MSGR_TEST_SEQUENCE"; then sequence=(--sequence); fi
+          # A routed RGW checkpoint (rgw_native=1) is bound to the tested
+          # revision and to the test2json stream its run creates.
+          if test "$CEPH_MSGR_TEST_RGW_NATIVE" = 1; then
+            sequence+=(--backend rgw-fixture --revision "$TESTED_SHA" --stream "$CEPH_MSGR_TEST_DIAGNOSTICS/rgw-native.jsonl")
+          fi
           python3 "$RUNNER_TEMP/native_test_results.py" snapshot "${sequence[@]}" \
             --selector "$CEPH_MSGR_TEST_RUN" --output "$RUNNER_TEMP/expected-tests.json"
           result=0
@@ -174,6 +181,7 @@ jobs:
           fi
           exit "$result"
         env:
+          TESTED_SHA: ${{ inputs.ref || github.sha }}
           CEPH_MSGR_TEST_IMAGE: ${{ matrix.image || 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9' }}
           CEPH_MSGR_TEST_KEY_TYPE: ${{ matrix.key }}
           CEPH_MSGR_TEST_SERVICE_CIPHER: ${{ matrix.service }}
@@ -194,6 +202,9 @@ jobs:
           CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}
           CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}
           CEPH_MSGR_TEST_MON_PING: ${{ matrix.mon_ping || '0' }}
+          # A row with rgw_native=1 runs one RGW checkpoint of the fixture
+          # module instead of the controller's fixture (rgw_native_route.go).
+          CEPH_MSGR_TEST_RGW_NATIVE: ${{ matrix.rgw_native || '0' }}
           CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}
           # Several rows of one fixture configuration on one fixture
           # (tools/scenario_plan.py plan, integration/fixture/sequence.go).
@@ -213,6 +224,17 @@ jobs:
           CEPH_MSGR_TEST_CONNECTION_MODE: ${{ matrix.mode || 'secure' }}
           CEPH_MSGR_TEST_MAPPED_IPV6: ${{ matrix.mapped || '0' }}
           CEPH_MSGR_TEST_DIAGNOSTICS: ${{ runner.temp }}/ceph-diagnostics
+      - name: Confirm that a routed RGW checkpoint left no container
+        if: always() && matrix.rgw_native == '1' && steps.ceph.outcome != 'skipped'
+        run: |
+          # The checkpoint independently confirms its own removal; the gate
+          # requires that record. The Testcontainers reaper is the only
+          # container the runner keeps.
+          leftover=$(docker ps -a --format '{{.Image}}' | { grep -v '^testcontainers/ryuk:' || true; })
+          if test -n "$leftover"; then
+            printf 'Containers left after the RGW checkpoint: %s\n' "$leftover"
+            exit 1
+          fi
       - name: Preserve failed Ceph test logs and crash metadata
         if: failure() && steps.ceph.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
