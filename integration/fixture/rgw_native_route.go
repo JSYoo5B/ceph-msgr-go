@@ -31,7 +31,7 @@ const rgwNativeSuite = "fixture"
 // rgwNativeTargets is the closed set of tests a row may route to. Each starts
 // and removes its own owned RGW cluster; the controller starts none. A new
 // target is added here, to tools/rgw_native_gate.py and to a catalog row.
-var rgwNativeTargets = []string{"TestRGWNativeCheckpointIntegration", "TestRGWNativeMultiStripeIntegration"}
+var rgwNativeTargets = []string{"TestRGWNativeCheckpointIntegration", "TestRGWNativeMultiStripeIntegration", "TestRGWNativeBackendFaultIntegration"}
 
 // rgwNativeTimeout bounds one checkpoint's go test process, as the
 // development workflow (.github/workflows/rgw-native.yml) does.

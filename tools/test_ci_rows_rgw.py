@@ -19,6 +19,9 @@ import scenario_plan as plan
 
 CHECKPOINT = "rgw.aes256k.ip4.container.t-rgwcheckpoint"
 MULTISTRIPE = "rgw.aes256k.ip4.container.t-rgwmultistripe"
+BACKEND_FAULT = "rgw.aes256k.ip4.container.t-rgwbackendfault"
+# Rows in the planner's order: catalog fragments in file-name order.
+ROUTED = [BACKEND_FAULT, CHECKPOINT, MULTISTRIPE]
 PROFILE = {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "rgw_native": "1"}
 
 
@@ -30,24 +33,25 @@ class RGWRowsTest(ci_row_catalog.RowsTestCase):
     def test_each_checkpoint_has_one_routed_row(self):
         routed = [entry for entry in self.entries if plan.routed(entry["params"])]
         self.assertEqual(routed, [
+            row(BACKEND_FAULT, test_run="^%s$" % gate.BACKEND_FAULT),
             row(CHECKPOINT, test_run="^%s$" % gate.CHECKPOINT),
             row(MULTISTRIPE, test_run="^%s$" % gate.MULTISTRIPE)])
         # No other row names the routing parameter, so every existing row
         # keeps CEPH_MSGR_TEST_RGW_NATIVE at the workflow's fallback 0.
-        self.assertEqual([entry["id"] for entry in self.entries if "rgw_native" in entry["params"]], [CHECKPOINT, MULTISTRIPE])
+        self.assertEqual([entry["id"] for entry in self.entries if "rgw_native" in entry["params"]], ROUTED)
         self.assertIn("CEPH_MSGR_TEST_RGW_NATIVE: ${{ matrix.rgw_native || '0' }}", self.workflow)
 
     def test_routed_rows_are_default_coverage_and_each_runs_alone(self):
         chosen, _ = plan.select(self.entries, ["all"])
-        self.assertIn(CHECKPOINT, [entry["id"] for entry in chosen])
-        self.assertIn(MULTISTRIPE, [entry["id"] for entry in chosen])
+        for sid in ROUTED:
+            self.assertIn(sid, [entry["id"] for entry in chosen])
         declared = plan.plan_sources(plan.args_with_catalog(plan.CATALOG))
         jobs = plan.matrix(chosen, declared)["include"]
         routed = [job for job in jobs if job.get("rgw_native") == "1"]
-        self.assertEqual([job["scenario"] for job in routed], [CHECKPOINT, MULTISTRIPE])
+        self.assertEqual([job["scenario"] for job in routed], ROUTED)
         self.assertFalse([job for job in routed if "test_sequence" in job])
         selected, _ = plan.select(self.entries, ["group:rgw"])
-        self.assertEqual([job["scenario"] for job in plan.matrix(selected, declared)["include"]], [CHECKPOINT, MULTISTRIPE])
+        self.assertEqual([job["scenario"] for job in plan.matrix(selected, declared)["include"]], ROUTED)
 
     def test_routed_rows_resolve_in_the_fixture_module_only(self):
         listing = plan.routed_tests()
@@ -56,7 +60,7 @@ class RGWRowsTest(ci_row_catalog.RowsTestCase):
         self.assertEqual(plan.selector_problems(routed, plan.suite_tests(), listing), [])
         # Without the fixture listing a routed row has no test, and the
         # product suites never stand in for it.
-        self.assertEqual(len(plan.selector_problems(routed, plan.suite_tests())), 2)
+        self.assertEqual(len(plan.selector_problems(routed, plan.suite_tests())), len(ROUTED))
 
     def test_routed_job_name_shows_the_checkpoint_cluster(self):
         # The controller-profile fields of the ordinary job name (MGR count,
@@ -74,7 +78,7 @@ class RGWRowsTest(ci_row_catalog.RowsTestCase):
         self.assertNotIn("RGW", ordinary)
 
     def test_env_exports_the_routing_flag(self):
-        for sid, value in ((CHECKPOINT, "1"), ("mon-ping.aes.ip4.crc.host.t-monping", "0")):
+        for sid, value in ((CHECKPOINT, "1"), (BACKEND_FAULT, "1"), ("mon-ping.aes.ip4.crc.host.t-monping", "0")):
             output = self.env(sid)
             self.assertIn("export CEPH_MSGR_TEST_RGW_NATIVE=%s" % value, output.splitlines())
 
@@ -102,7 +106,11 @@ class RoutedRowRefusalTest(unittest.TestCase):
             "product test": row(test_run="^TestCephMonPingIntegration$"),
             "unanchored": row(test_run=gate.CHECKPOINT),
             "prefix": row(test_run="^TestRGWNative"),
-            "both checkpoints": row(test_run="^%s$|^%s$" % gate.TESTS),
+            "two checkpoints": row(test_run="^%s$|^%s$" % gate.TESTS[:2]),
+            "every checkpoint": row(test_run="|".join("^%s$" % name for name in gate.TESTS)),
+            "fault checkpoint prefix": row(test_run="^TestRGWNativeBackendFault"),
+            "fault helper unit test": row(test_run="^TestRGWNativeFaultMapParsers$"),
+            "fault capability": row(test_run="^%s$" % gate.BACKEND_FAULT, capabilities="osd-pg-interval"),
             "capability": row(test_run="^%s$" % gate.CHECKPOINT, capabilities="osd-erasure-width"),
             "other value": row(test_run="^%s$" % gate.CHECKPOINT, rgw_native="yes"),
             "value 2": row(test_run="^%s$" % gate.CHECKPOINT, rgw_native="2"),
