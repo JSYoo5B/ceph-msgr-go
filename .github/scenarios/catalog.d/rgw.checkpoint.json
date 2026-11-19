@@ -1,0 +1,16 @@
+{
+ "scenarios": [
+  {
+   "id": "rgw.aes256k.ip4.container.t-rgwcheckpoint",
+   "group": "rgw",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "rgw_native": "1",
+    "test_run": "^TestRGWNativeCheckpointIntegration$"
+   }
+  }
+ ]
+}
