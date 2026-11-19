@@ -641,6 +641,7 @@ func (r *partialWriteRun) partialOverwrite() partialOverwrite {
 // write: it stops before any trimming, peering or resubmission and claims
 // nothing about eviction, loss or replay.
 //
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-shard-history
 //fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
 func TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration(t *testing.T) {
 	startPartialWriteRun(t, 420*time.Second).partialOverwrite()

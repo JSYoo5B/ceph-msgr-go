@@ -46,6 +46,7 @@ type copyGetHistory struct {
 // observed by a bounded poll of a complete native PG enumeration. This does
 // not establish removal timing, destination loss or automatic replay.
 //
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfrommultichunklateerror key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=osd-copy-from-multi-chunk
 //fixture:isolated sets the OSD copy-from injector and max chunk by admin socket; the restore leaves runtime overrides
 func TestCephOSDCopyFromMultiChunkLateErrorIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_COPYFROM_MULTICHUNK_ERROR") != "1" {

@@ -155,6 +155,7 @@ func setChunkRefsEncoding(count int, name string, hash uint32, pool int64) []byt
 // count before and after; deleting the source releases both references and
 // the target. No product client sends SET_CHUNK.
 //
+//scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdsetchunknative key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6
 //fixture:isolated its native SET_CHUNK checkpoint is selectable once per fixture and its receipt is never overwritten
 func TestCephOSDSetChunkNativeIntegration(t *testing.T) {
 	fixture := osdFixture

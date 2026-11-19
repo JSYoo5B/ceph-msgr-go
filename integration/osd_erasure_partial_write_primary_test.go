@@ -400,6 +400,7 @@ func (r *partialWriteRun) primaryBack(o *primaryOutage) pgIntervalReceipt {
 // last entry. This states what each shard's own log holds at capture time;
 // it claims nothing about eviction, loss or replay.
 //
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteprimaryreplacementshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
 //fixture:isolated kills the primary OSD (its PG proven clean without pg_temp) and pauses each acting OSD for a store copy, no clean wait
 func TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration(t *testing.T) {
 	run := startPartialWriteRun(t, 900*time.Second)

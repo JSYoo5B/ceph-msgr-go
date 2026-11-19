@@ -27,6 +27,7 @@ import (
 // worker expects, so no append was lost, duplicated or reordered, and the
 // client's goroutines must return to their starting level.
 //
+//scenario:suite osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3.osd-soak-4m key=aes256k service=aes256k family=4 stress= osd=1 osd_store=bluestore osd_replicas=3 osd_soak=4m
 //fixture:shareable workers write owned UUID objects in the fixture pool; checked cleanup removes them
 func TestCephOSDSoakIntegration(t *testing.T) {
 	value := os.Getenv("CEPH_MSGR_TEST_OSD_SOAK")

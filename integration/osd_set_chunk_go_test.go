@@ -126,6 +126,7 @@ type setChunkGoRecord struct {
 	Unknown bool                `json:"unknown_outcome"`
 }
 
+//scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdsetchunkgo key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6
 //fixture:shareable SET_CHUNK manifests in two owned pools only; checked owned-pool cleanup removes them and restores the config
 func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 	fixture := osdFixture

@@ -533,6 +533,8 @@ func (f osdCommandFixture) cell(kind string) daemonCommandCell {
 // runtime option of the explicitly targeted OSD process, the same reversible
 // command and bound as the MON and MGR Tell cells.
 //
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16 key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 test_run=^TestCephApplied(OSD|PG)CommandIsNotReplayedIntegration$
+//scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16 key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 test_run=^TestCephApplied(OSD|PG)CommandIsNotReplayedIntegration$
 //fixture:shareable sets an OSD runtime override; cleanup restores it natively and a fresh read shows baseline value and provenance
 func TestCephAppliedOSDCommandIsNotReplayedIntegration(t *testing.T) {
 	fixture, ctx := osdCommandOutcomeFixture(t)

@@ -38,6 +38,7 @@ func TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration(t *testing.T
 // of them suffice to decode, so this read does not show which bytes the
 // returned shard holds.
 //
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2snapshotanddegradedwrite key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //fixture:isolated kills two OSDs; restart waits osd-ready clean (second start unchecked), no pg_temp proof
 func TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration(t *testing.T) {
 	erasureSnapshotScenario(t, erasureK2M2, true, "isa")

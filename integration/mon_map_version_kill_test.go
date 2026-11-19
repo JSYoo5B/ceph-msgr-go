@@ -47,6 +47,8 @@ func requireMonKillReceipt(t *testing.T, control, name string) {
 // counterpart of TestCephMonMapVersionConnectedStopIntegration: the MON has
 // answered, the caller is still waiting, and the peer dies without shutdown.
 //
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=mon-forced-kill
+//scenario:row osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill key=aes256k service=aes256k mode=crc family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=mon-forced-kill
 //fixture:shareable kills a peon MON, restarts it and waits for a settled full quorum (cleanup does the same)
 func TestCephMonMapVersionConnectedKillIntegration(t *testing.T) {
 	requireMonForcedKill(t)
@@ -159,6 +161,8 @@ func awaitMonQuorumLossDuringStop(ctx context.Context, stopped <-chan error, int
 // reply exists. Only then is that MON killed with SIGKILL. No reply is
 // withheld by the test and no elapsed-time guess sets the fault phase.
 //
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionunprocessedkill key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=mon-forced-kill
+//scenario:row osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionunprocessedkill key=aes256k service=aes256k mode=crc family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=mon-forced-kill
 //fixture:shareable stops two MONs and kills the third; restarts all and waits for a settled full quorum
 func TestCephMonMapVersionUnprocessedKillIntegration(t *testing.T) {
 	requireMonForcedKill(t)

@@ -756,6 +756,8 @@ func copyPrimaryChangeFixture(t *testing.T, bound time.Duration) (context.Contex
 // recovery the original primary must lead the PG again; a fresh session to it
 // reads the same bytes, nothing changes, and its PG log holds the copy once.
 //
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8 test_run=^TestCephOSDCopyFrom((LostReply|InFlight)PrimaryChange|StagedDestinationLoss)Integration$
+//scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8 test_run=^TestCephOSDCopyFrom((LostReply|InFlight)PrimaryChange|StagedDestinationLoss)Integration$
 //fixture:isolated marks OSDs out and in, waits osd-ready clean without a pg_temp proof
 func TestCephOSDCopyFromLostReplyPrimaryChangeIntegration(t *testing.T) {
 	ctx, pools, recovery := copyPrimaryChangeFixture(t, 900*time.Second)

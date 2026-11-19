@@ -19,6 +19,7 @@ import (
 // fill_in_final_tx. This verifies a late server error, not daemon loss, temporary
 // copy staging, rollback of arbitrary vectors, or automatic mutation replay.
 //
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromlateerror key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=osd-copy-from-late-error
 //fixture:isolated sets the OSD copy-from injector by admin socket; the restore re-sets the value, leaving a runtime override
 func TestCephOSDCopyFromLateErrorIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_COPYFROM_LATE_ERROR") != "1" {

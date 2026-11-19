@@ -225,6 +225,7 @@ func cacheOpGoLostFlushUnknown(reply cephmsgr.OSDReply, err error, globalID uint
 	return nil
 }
 
+//scenario:row osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcacheopgo key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 osd_cache_pools=1 capabilities=exclusive-osd-cache-pools
 //fixture:shareable seeds, pins and flushes its own heads in the cache pools; checked finish deletes them and confirms absence
 func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_CACHE_POOLS") != "1" {

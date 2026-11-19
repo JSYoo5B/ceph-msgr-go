@@ -218,6 +218,7 @@ func tierGoBind(t *testing.T, ctx context.Context, pools ownedPools) {
 	}
 }
 
+//scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdtieropgo key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6
 //fixture:isolated owned-pool cleanup leaves central config mon/mon_allow_pool_delete=true set
 func TestCephOSDTierOpGoIntegration(t *testing.T) {
 	fixture := osdFixture

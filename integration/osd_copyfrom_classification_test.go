@@ -21,6 +21,7 @@ import (
 // with version assertions. This extends the separate head-version and unpinned
 // snapshot cases, without sending any unsupported copy flag to the daemon.
 //
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdcopyfromclassification key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
 //fixture:isolated allocates self-managed snapshots, leaving the fixture pool flag set
 func TestCephOSDCopyFromClassificationIntegration(t *testing.T) {
 	fixture, request := osdFixture, osdObjectRequest

@@ -531,6 +531,7 @@ func (r *ecEpochRun) write(label string, route osdFixtureOracle, data []byte, se
 // UNWATCH, and the client must open no OSD connection the caller did not ask
 // for.
 //
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2watchfailover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
 	r := startECEpochRun(t, 900*time.Second)
@@ -669,6 +670,7 @@ func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
 // clean, the same reads and LIST_SNAPS through it must give the same bytes,
 // clones and user versions.
 //
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2snapshotfailover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 	r := startECEpochRun(t, 900*time.Second)
@@ -809,6 +811,7 @@ func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 // resubmission under the original identity applies it once. After the last
 // OSD returns and every PG is clean, the native state is unchanged.
 //
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2pgbackoff key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2PGBackoffIntegration(t *testing.T) {
 	r := startECEpochRun(t, 900*time.Second)

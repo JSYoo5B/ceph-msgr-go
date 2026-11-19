@@ -44,6 +44,7 @@ func TestCephOSDErasureJerasureIntegration(t *testing.T) {
 // no optimizations and no faults. Size, min_size, acting set, primary shard
 // and control shard all come from the native pool and map, not from k=2,m=1.
 //
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasurek2m2 key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8
 //fixture:shareable own EC pool I/O only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
 func TestCephOSDErasureK2M2Integration(t *testing.T) { erasureScenario(t, erasureK2M2, false, "isa") }
 
@@ -51,6 +52,7 @@ func TestCephOSDErasureK2M2Integration(t *testing.T) { erasureScenario(t, erasur
 // the native map must report nonprimary shard {1} for size 4, and the native
 // primary must hold a primary-eligible shard before any Go I/O.
 //
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2 key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //fixture:shareable own EC pool I/O only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
 func TestCephOSDErasureOptimizedK2M2Integration(t *testing.T) {
 	erasureScenario(t, erasureK2M2, true, "isa")
