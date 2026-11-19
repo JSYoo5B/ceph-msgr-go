@@ -18,7 +18,9 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
-// poolReceipt is the closed result of the owned-pool native oracle.
+// poolReceipt is the closed result of the owned-pool native oracle. A mode
+// added later keeps its own result fields in a type beside its test and
+// reads them with nativePoolResult, so this type gains no field per mode.
 type poolReceipt struct {
 	Schema        int                 `json:"schema_version"`
 	Commit        string              `json:"source_commit"`
@@ -138,6 +140,14 @@ type nativeScrubList struct {
 
 func nativePool(t *testing.T, ctx context.Context, mode string, input any) poolReceipt {
 	t.Helper()
+	return nativePoolResult(t, ctx, mode, input, nil)
+}
+
+// nativePoolResult runs one owned-pool oracle mode like nativePool and also
+// decodes the same bounded result into result, when it is not nil: the
+// fields of a mode that live in the mode's own type.
+func nativePoolResult(t *testing.T, ctx context.Context, mode string, input, result any) poolReceipt {
+	t.Helper()
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	raw, err := json.Marshal(map[string]any{})
 	if input != nil {
@@ -167,6 +177,11 @@ func nativePool(t *testing.T, ctx context.Context, mode string, input any) poolR
 	var receipt poolReceipt
 	if err := json.Unmarshal(data, &receipt); err != nil {
 		t.Fatal(err)
+	}
+	if result != nil {
+		if err := json.Unmarshal(data, result); err != nil {
+			t.Fatal(err)
+		}
 	}
 	const source = "7f793731f1b39eb4f465e960113d2363c311b964"
 	if receipt.Schema != 1 || receipt.Commit != source || receipt.Mode != mode || !strings.Contains(receipt.DaemonVersion, source) {
