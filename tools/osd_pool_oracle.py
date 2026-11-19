@@ -11,59 +11,18 @@ isa, never overwritten, optionally optimized with its nonprimary shards read
 back); cleanup removes only what create recorded as created in this run
 (osd-pool-claims.json in the output directory): the pools, the CRUSH rule the
 MON made with an owned erasure-coded pool and the profiles.
-Modes: create, seed, observe, place, pghistory, opsinflight, objecterrequests, shardhistory, pginterval, pgstate, watchers, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
-pghistory takes one bounded primary PG-history snapshot for an owned object:
-placement before, the PG `log` command to that primary OSD, placement after,
-then the fail-closed parse in osd_pg_history_oracle.py. It reports where exact
-request identities occur on that primary; it never establishes absence.
-opsinflight takes one bounded snapshot of the same primary's op tracker:
-placement before, `dump_ops_in_flight` to that primary OSD, placement after,
-then the fail-closed parse in osd_ops_in_flight_oracle.py. It reports the
-in-flight ops of one client entity and incarnation; it never establishes
-absence.
-objecterrequests takes one bounded snapshot of the same primary's internal
-Objecter, which reads COPY_FROM sources: placement before, `objecter_requests`
-to that primary OSD, placement after, then the fail-closed parse in
-osd_objecter_requests_oracle.py. It reports the ops of one source object; it
-never establishes absence.
-shardhistory brackets the fixture's shard-local capture of the same PG: phase
-before stores the placement the capture reads its PG and acting vector from;
-phase after reads the placement again and judges the capture record and each
-acting shard's offline dumps in osd_shard_history_oracle.py.
-pginterval ends the current interval of the PG of one owned object with one
-`pg repeer` command, which only stores a temporary mapping of that PG that
-the primary asks to drop again, and reads the placement and the primary's
-`pg query` until osd_pg_interval_oracle.py judges the PG settled in a newer
-interval with its original placement. Action show sends no command and
-reports one observation of the same kind; action absent sends none either
-and judges one observation of the PG active without the member of one acting
-position, whose OSD the caller took out through the fixture's daemon control;
-action replaced sends none and judges one observation of the PG active under
-the member the map makes primary after the caller took the primary's own OSD
-out the same way.
-pgstate reads the same two placement records around one `pg query` of the
-primary, judges nothing and sends no command. watchers runs the pinned
-`rados listwatchers` for one owned object and reports its entries.
-servicemetadata prepares/restores the native selftest module and reads only a
-fixed get_metadata expression for the exclusive MGR service fixture.
-servicecompare independently registers a native service with the Go caller's
-fields, observes exact status replacements and confirms removal after shutdown.
-mgrstate projects native MON MgrMap identity and flags without contacting a MGR.
-servicewatch polls the native MON `service dump` and MGR `service status` until a
-named service daemon matches the expected metadata/status/task status, or is
-absent, and reports the last native observation; it registers nothing.
-inconsistent runs the native `rados list-inconsistent-obj` for one owned-pool
-PG and reports its interval and object names.
-fullratios changes the cluster-wide nearfull/backfillfull/full ratios of the
-disposable fixture; the caller restores the values it reported first.
-osdflags sets or unsets only the norecover and nobackfill OSDMap flags; the
-caller unsets them again. Every mode
-reads one bounded JSON input and writes one bounded JSON result; native
-mutations are never retried and credentials/keys are never copied.
+
+Each mode is declared only beside its handler: a function mode_<name>
+marked @oracle_mode, in this file or in its own module
+osd_pool_mode_<name>_oracle.py beside it. A mode's description is the comment
+or docstring of its handler. Every mode reads one bounded JSON input and
+writes one bounded JSON result; native mutations are never retried and
+credentials/keys are never copied.
 """
 import base64
 import ctypes as C
 import errno
+import importlib
 import json
 import os
 import pathlib
@@ -82,7 +41,29 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "pghistory", "opsinflight", "objecterrequests", "shardhistory", "pginterval", "pgstate", "watchers", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
+HANDLERS = {}
+MODE_NAME = re.compile(r"[a-z][a-z0-9]{0,31}")
+MODE_MODULE = re.compile(r"osd_pool_mode_([a-z][a-z0-9]{0,31})_oracle")
+
+
+def oracle_mode(function):
+    """Register function, named mode_<name>, as the handler of mode <name>.
+
+    A mode is declared only beside its handler: the decorator line directly
+    above `def mode_<name>(`, in this file or in its own module
+    osd_pool_mode_<name>_oracle.py next to it. The fixture reads the same
+    two lines from the staged sources to admit a requested mode
+    (integration/fixture/control_native.go), so no list names the modes.
+    """
+    name = function.__name__[len("mode_"):]
+    if not function.__name__.startswith("mode_") or not MODE_NAME.fullmatch(name):
+        raise ValueError("owned-pool oracle mode handler must be named mode_<name>: %r" % function.__name__)
+    if name in HANDLERS:
+        raise ValueError("owned-pool oracle mode declared twice: %s" % name)
+    HANDLERS[name] = function
+    return function
+
+
 RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
@@ -302,6 +283,7 @@ def check_ec_rule(rule):
         raise RuntimeError("native pool rule is not an OSD-domain erasure rule: %r" % (rule,))
 
 
+@oracle_mode
 def mode_create(rados, cluster, request, out):
     name = pool_name(request["slot"])
     pg = integer(request["pg_num"], 1, 32, "pg_num")
@@ -465,6 +447,7 @@ def object_request(request):
     return name, namespace
 
 
+@oracle_mode
 def mode_seed(rados, cluster, request, out):
     pool = pool_name(request["slot"])
     name, namespace = object_request(request)
@@ -484,6 +467,7 @@ def mode_seed(rados, cluster, request, out):
         rados.lib.rados_ioctx_destroy(io)
 
 
+@oracle_mode
 def mode_observe(rados, cluster, request, out):
     pool = pool_name(request["slot"])
     name, namespace = object_request(request)
@@ -502,6 +486,7 @@ def mode_observe(rados, cluster, request, out):
         rados.lib.rados_ioctx_destroy(io)
 
 
+@oracle_mode
 def mode_place(rados, cluster, request, out):
     pool = pool_name(request["slot"])
     name, namespace = object_request(request)
@@ -517,6 +502,12 @@ def mode_place(rados, cluster, request, out):
     return {"placement": mutation.collect_placement(command, pool, request["object"], descriptor["pool"], namespace=namespace, target_osd=target)}
 
 
+# pghistory takes one bounded primary PG-history snapshot for an owned object:
+# placement before, the PG `log` command to that primary OSD, placement after,
+# then the fail-closed parse in osd_pg_history_oracle.py. It reports where
+# exact request identities occur on that primary; it never establishes
+# absence.
+@oracle_mode
 def mode_pghistory(rados, cluster, request, out):
     """Bracketed primary PG-history snapshot; presence calibration only.
 
@@ -562,6 +553,12 @@ def explicit_osd(request):
     return integer(request["osd"], 0, (1 << 31) - 1, "osd")
 
 
+# opsinflight takes one bounded snapshot of the op tracker of an owned
+# object's primary: placement before, `dump_ops_in_flight` to that primary OSD, placement after,
+# then the fail-closed parse in osd_ops_in_flight_oracle.py. It reports the
+# in-flight ops of one client entity and incarnation; it never establishes
+# absence.
+@oracle_mode
 def mode_opsinflight(rados, cluster, request, out):
     """Bracketed snapshot of the primary's in-flight ops; presence only.
 
@@ -597,6 +594,12 @@ def mode_opsinflight(rados, cluster, request, out):
     return {"ops_in_flight": receipt}
 
 
+# objecterrequests takes one bounded snapshot of a primary's internal
+# Objecter, which reads COPY_FROM sources: placement before,
+# `objecter_requests` to that primary OSD, placement after, then the
+# fail-closed parse in osd_objecter_requests_oracle.py. It reports the ops of one
+# source object; it never establishes absence.
+@oracle_mode
 def mode_objecterrequests(rados, cluster, request, out):
     """Bracketed snapshot of the primary's internal Objecter; presence only.
 
@@ -645,6 +648,11 @@ def read_bounded(path, limit):
     return data
 
 
+# shardhistory brackets the fixture's shard-local capture of an owned
+# object's PG: phase before stores the placement the capture reads its PG and acting vector
+# from; phase after reads the placement again and judges the capture record
+# and each acting shard's offline dumps in osd_shard_history_oracle.py.
+@oracle_mode
 def mode_shardhistory(rados, cluster, request, out):
     """Placement brackets and judgement of one shard-local capture.
 
@@ -747,6 +755,9 @@ def pg_observer(rados, cluster, request):
     return descriptor, place, observe
 
 
+# pgstate reads two placement records around one `pg query` of the
+# primary, judges nothing and sends no command.
+@oracle_mode
 def mode_pgstate(rados, cluster, request, out, clock=time.monotonic):
     """One read-only observation of the PG of an owned object.
 
@@ -771,6 +782,9 @@ def mode_pgstate(rados, cluster, request, out, clock=time.monotonic):
 WATCHER_LINE = re.compile(r"watcher=(\S+) client\.([0-9]+) cookie=([0-9]+)")
 
 
+# watchers runs the pinned `rados listwatchers` for one owned object and
+# reports its entries.
+@oracle_mode
 def mode_watchers(rados, cluster, request, out, run=subprocess.run):
     """The native watcher list of one owned object (`rados listwatchers`).
 
@@ -796,6 +810,18 @@ def mode_watchers(rados, cluster, request, out, run=subprocess.run):
     return {"watchers": {"pool": pool, "object": request["object"], "namespace": namespace, "entries": entries}}
 
 
+# pginterval ends the current interval of the PG of one owned object with one
+# `pg repeer` command, which only stores a temporary mapping of that PG that
+# the primary asks to drop again, and reads the placement and the primary's
+# `pg query` until osd_pg_interval_oracle.py judges the PG settled in a newer
+# interval with its original placement. Action show sends no command and
+# reports one observation of the same kind; action absent sends none either
+# and judges one observation of the PG active without the member of one acting
+# position, whose OSD the caller took out through the fixture's daemon
+# control; action replaced sends none and judges one observation of the PG
+# active under the member the map makes primary after the caller took the
+# primary's own OSD out the same way.
+@oracle_mode
 def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=time.sleep):
     """One owned interval change of the PG of an owned object, or one observation of it.
 
@@ -873,6 +899,7 @@ def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=ti
     return {"pg_interval": receipt}
 
 
+@oracle_mode
 def mode_snapshot(rados, cluster, request, out):
     pool = pool_name(request["slot"])
     snap = request["name"]
@@ -894,6 +921,7 @@ def mode_snapshot(rados, cluster, request, out):
         rados.lib.rados_ioctx_destroy(io)
 
 
+@oracle_mode
 def mode_selfmanaged(rados, cluster, request, out):
     pool = pool_name(request["slot"])
     action = request["action"]
@@ -913,6 +941,7 @@ def mode_selfmanaged(rados, cluster, request, out):
         rados.lib.rados_ioctx_destroy(io)
 
 
+@oracle_mode
 def mode_clusterstat(rados, cluster, request, out):
     # rados_cluster_stat uses the same MStatfs request as the Go client's Statfs.
     stat = ClusterStat()
@@ -920,6 +949,7 @@ def mode_clusterstat(rados, cluster, request, out):
     return {"kb": stat.kb, "kb_used": stat.kb_used, "kb_avail": stat.kb_avail, "num_objects": stat.num_objects}
 
 
+@oracle_mode
 def mode_versions(rados, cluster, request, out):
     # Map epochs as the native CLI path reports them: each is the committed
     # version of the MON service MMonGetVersion reads.
@@ -932,6 +962,9 @@ def mode_versions(rados, cluster, request, out):
     return {"epochs": result}
 
 
+# mgrstate projects native MON MgrMap identity and flags without contacting a
+# MGR.
+@oracle_mode
 def mode_mgrstate(rados, cluster, request, out):
     # MON-only observation remains usable while MGR activation is disabled.
     code, text = rados.mon(cluster, {"prefix": "mgr dump", "format": "json"})
@@ -950,6 +983,7 @@ def mode_mgrstate(rados, cluster, request, out):
     return {"manager_map": state}
 
 
+@oracle_mode
 def mode_service(rados, cluster, request, out):
     # Register a service daemon as a native client does (an RGW or mirror
     # daemon uses the same call), keep the connection long enough for the MGR
@@ -987,6 +1021,11 @@ def string_map(value, label):
     return value
 
 
+# servicewatch polls the native MON `service dump` and MGR `service status`
+# until a named service daemon matches the expected metadata/status/task
+# status, or is absent, and reports the last native observation; it registers
+# nothing.
+@oracle_mode
 def mode_servicewatch(rados, cluster, request, out):
     # Observe a service daemon registered by another client (the Go client under
     # test) through the native MON service map and the MGR's service status.
@@ -1057,6 +1096,10 @@ def service_dictionary(value, label):
     return b"".join(k.encode() + b"\0" + value[k].encode() + b"\0" for k in sorted(value)) + b"\0"
 
 
+# servicecompare independently registers a native service with the Go caller's
+# fields, observes exact status replacements and confirms removal after
+# shutdown.
+@oracle_mode
 def mode_servicecompare(rados, cluster, request, out):
     # A separate native registration handle is shut down exactly once. The
     # original handle remains an independent MON/MGR observer of its removal.
@@ -1114,6 +1157,9 @@ def mode_servicecompare(rados, cluster, request, out):
     return {"comparison": result}
 
 
+# servicemetadata prepares/restores the native selftest module and reads only
+# a fixed get_metadata expression for the exclusive MGR service fixture.
+@oracle_mode
 def mode_servicemetadata(rados, cluster, request, out):
     # get_metadata is not exposed by cli_api. The disposable fixture alone
     # enables the upstream selftest module, using only a fixed read expression.
@@ -1171,6 +1217,7 @@ def mode_servicemetadata(rados, cluster, request, out):
         time.sleep(1)
 
 
+@oracle_mode
 def mode_quota(rados, cluster, request, out):
     name = pool_name(request["slot"])
     limit = integer(request["max_objects"], 0, 1 << 20, "max_objects")
@@ -1180,6 +1227,7 @@ def mode_quota(rados, cluster, request, out):
     return {"pool": name, "max_objects": limit}
 
 
+@oracle_mode
 def mode_poolinfo(rados, cluster, request, out):
     name = pool_name(request["slot"])
     dump = rados.dump(cluster)
@@ -1192,6 +1240,9 @@ def mode_poolinfo(rados, cluster, request, out):
             "removed_snaps": pool.get("removed_snaps"), "removed_snaps_queue": pool.get("removed_snaps_queue", [])}
 
 
+# fullratios changes the cluster-wide nearfull/backfillfull/full ratios of the
+# disposable fixture; the caller restores the values it reported first.
+@oracle_mode
 def mode_fullratios(rados, cluster, request, out):
     wanted = request.get("set")
     if wanted is not None:
@@ -1217,6 +1268,9 @@ def mode_fullratios(rados, cluster, request, out):
             "full_ratio": dump["full_ratio"], "epoch": dump["epoch"], "full_osds": full, "owned_flags": owned}
 
 
+# osdflags sets or unsets only the norecover and nobackfill OSDMap flags; the
+# caller unsets them again.
+@oracle_mode
 def mode_osdflags(rados, cluster, request, out):
     action = request.get("action")
     if action not in ("set", "unset", "show"):
@@ -1231,6 +1285,9 @@ def mode_osdflags(rados, cluster, request, out):
     return {"epoch": dump["epoch"], "osdmap_flags": flags}
 
 
+# inconsistent runs the native `rados list-inconsistent-obj` for one
+# owned-pool PG and reports its interval and object names.
+@oracle_mode
 def mode_inconsistent(rados, cluster, request, out):
     pgid = request.get("pgid")
     if not isinstance(pgid, str) or not re.fullmatch(r"[0-9]{1,10}\.[0-9a-f]{1,8}", pgid):
@@ -1363,6 +1420,7 @@ def remove_owned_pools(rados, cluster, claimed, removed):
             raise RuntimeError("native pool removal failed: %d" % code)
 
 
+@oracle_mode
 def mode_cleanup(rados, cluster, request, out):
     """Remove what mode_create claimed in this run and nothing else: the
     owned pools it created, the CRUSH rule the MON created with an owned
@@ -1427,12 +1485,34 @@ def mode_cleanup(rados, cluster, request, out):
             "pool_delete_config_restored": restored, "pool_delete_config_prior": prior}
 
 
-HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory, "opsinflight": mode_opsinflight, "objecterrequests": mode_objecterrequests, "shardhistory": mode_shardhistory, "pginterval": mode_pginterval, "pgstate": mode_pgstate, "watchers": mode_watchers,
-            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "mgrstate": mode_mgrstate, "service": mode_service, "servicewatch": mode_servicewatch, "servicecompare": mode_servicecompare, "servicemetadata": mode_servicemetadata, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
+def load_mode_modules(directory=pathlib.Path(__file__).resolve().parent):
+    """Import every osd_pool_mode_<name>_oracle.py beside this file. Each
+    module declares exactly its own mode <name> with @oracle_mode."""
+    # Run as a script this module is __main__; a mode module's
+    # `import osd_pool_oracle` must register into this same module.
+    this = sys.modules[__name__]
+    sys.modules.setdefault("osd_pool_oracle", this)
+    if sys.modules["osd_pool_oracle"] is not this:
+        raise RuntimeError("owned-pool oracle loaded twice")
+    for path in sorted(directory.glob("osd_pool_mode_*_oracle.py")):
+        match = MODE_MODULE.fullmatch(path.stem)
+        if match is None:
+            raise ValueError("owned-pool oracle mode module name is not osd_pool_mode_<name>_oracle.py: %s" % path.name)
+        if path.stem in sys.modules:
+            # Its own import is in progress (it imported this module first);
+            # its decorator registers the mode when that import continues.
+            continue
+        before = set(HANDLERS)
+        importlib.import_module(path.stem)
+        if set(HANDLERS) - before != {match.group(1)}:
+            raise ValueError("%s must declare exactly its own mode %s" % (path.name, match.group(1)))
+
+
+load_mode_modules()
 
 
 def main(argv):
-    if len(argv) != 4 or argv[1] not in MODES:
+    if len(argv) != 4 or argv[1] not in HANDLERS:
         raise SystemExit("usage: osd_pool_oracle.py MODE ROOT OUT")
     mode, root, out = argv[1], pathlib.Path(argv[2]), pathlib.Path(argv[3])
     request = {} if mode == "cleanup" else read_input(out)

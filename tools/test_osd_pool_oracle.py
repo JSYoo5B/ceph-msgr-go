@@ -1,5 +1,6 @@
 import json
 import pathlib
+import re
 import sys
 import tempfile
 import unittest
@@ -850,6 +851,99 @@ class OwnedClaimTest(unittest.TestCase):
                 self.assertNothingTouched(rados, before)
 
 
+# The rule the fixture reads from the staged sources to admit a mode
+# (ownedPoolOracleModes in integration/fixture/control_native.go).
+DECLARATION = re.compile(r"^@oracle_mode\ndef mode_([a-z][a-z0-9]{0,31})\(", re.M)
+
+
+def declared_modes(directory):
+    """The modes declared in the sources of directory by the textual rule."""
+    modes = {}
+    for path in [directory / "osd_pool_oracle.py"] + sorted(directory.glob("osd_pool_mode_*_oracle.py")):
+        text = path.read_text(encoding="utf-8")
+        found = DECLARATION.findall(text)
+        if len(re.findall(r"(?m)^\s*@", text)) != len(found):
+            raise AssertionError("%s marks a mode outside the declaration rule" % path.name)
+        for mode in found:
+            if mode in modes:
+                raise AssertionError("mode %s declared twice" % mode)
+            modes[mode] = path.name
+    return modes
+
+
+class ModeDeclarationTest(unittest.TestCase):
+    """Modes are declared beside their handlers, not in a list."""
+
+    def setUp(self):
+        self.handlers = dict(oracle.HANDLERS)
+        self.modules = set(sys.modules)
+        self.path = list(sys.path)
+
+    def tearDown(self):
+        oracle.HANDLERS.clear()
+        oracle.HANDLERS.update(self.handlers)
+        for name in set(sys.modules) - self.modules:
+            del sys.modules[name]
+        sys.path[:] = self.path
+
+    def test_registered_modes_are_exactly_the_declared_ones(self):
+        tools = pathlib.Path(oracle.__file__).resolve().parent
+        self.assertEqual(set(declared_modes(tools)), set(oracle.HANDLERS))
+        for name, path in declared_modes(tools).items():
+            module = sys.modules[pathlib.Path(path).stem] if path != "osd_pool_oracle.py" else oracle
+            self.assertIs(oracle.HANDLERS[name], getattr(module, "mode_" + name))
+
+    def test_no_central_mode_list_remains(self):
+        source = pathlib.Path(oracle.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("MODES", source)
+        self.assertEqual(re.findall(r"(?m)^HANDLERS = .*$", source), ["HANDLERS = {}"])
+        # The module docstring enumerated the modes; two adjacent mode
+        # names in an enumeration are an append point again.
+        names = "|".join(sorted(oracle.HANDLERS))
+        self.assertNotRegex(" ".join(oracle.__doc__.split()), r"\b(%s),? (and )?(%s)\b" % (names, names))
+
+    def module(self, directory, file_name, body):
+        (directory / file_name).write_text("import osd_pool_oracle as pool\nfrom osd_pool_oracle import oracle_mode\n\n\n" + body, encoding="utf-8")
+
+    def test_mode_module_registers_its_own_mode(self):
+        with tempfile.TemporaryDirectory() as raw:
+            directory = pathlib.Path(raw)
+            sys.path.insert(0, raw)
+            self.module(directory, "osd_pool_mode_zzown1_oracle.py",
+                        "@oracle_mode\ndef mode_zzown1(rados, cluster, request, out):\n    return {\"slot\": pool.pool_name(1)}\n")
+            oracle.load_mode_modules(directory)
+            self.assertEqual(oracle.HANDLERS["zzown1"](None, None, {}, None), {"slot": "ceph-msgr-owned-pool-1"})
+            self.assertEqual(set(oracle.HANDLERS) - set(self.handlers), {"zzown1"})
+
+    def test_mode_module_is_refused_unless_it_declares_exactly_its_own_mode(self):
+        cases = {
+            "other": ("osd_pool_mode_zzwant_oracle.py", "@oracle_mode\ndef mode_zzother(rados, cluster, request, out):\n    return {}\n"),
+            "none": ("osd_pool_mode_zznone_oracle.py", "def mode_zznone(rados, cluster, request, out):\n    return {}\n"),
+            "two": ("osd_pool_mode_zztwo_oracle.py", "@oracle_mode\ndef mode_zztwo(rados, cluster, request, out):\n    return {}\n\n\n"
+                                                    "@oracle_mode\ndef mode_zzthree(rados, cluster, request, out):\n    return {}\n"),
+            "existing": ("osd_pool_mode_create_oracle.py", "@oracle_mode\ndef mode_create(rados, cluster, request, out):\n    return {}\n"),
+            "name": ("osd_pool_mode_Bad_oracle.py", "@oracle_mode\ndef mode_Bad(rados, cluster, request, out):\n    return {}\n"),
+        }
+        for label, (file_name, body) in cases.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as raw:
+                directory = pathlib.Path(raw)
+                sys.path.insert(0, raw)
+                self.module(directory, file_name, body)
+                with self.assertRaises(ValueError):
+                    oracle.load_mode_modules(directory)
+                oracle.HANDLERS.clear()
+                oracle.HANDLERS.update(self.handlers)
+
+    def test_handler_must_be_named_after_its_mode(self):
+        for name in ("create_mode", "mode_", "mode_Upper", "mode_x-y"):
+            def handler():
+                return {}
+            handler.__name__ = name
+            with self.subTest(name), self.assertRaises(ValueError):
+                oracle.oracle_mode(handler)
+        self.assertEqual(oracle.HANDLERS, self.handlers)
+
+
 class PoolOracleTest(unittest.TestCase):
     def test_only_two_owned_pool_names_exist(self):
         self.assertEqual(oracle.pool_name(1), "ceph-msgr-owned-pool-1")
@@ -859,7 +953,9 @@ class PoolOracleTest(unittest.TestCase):
                 oracle.pool_name(bad)
 
     def test_modes_are_closed_and_have_handlers(self):
-        self.assertEqual(set(oracle.MODES), set(oracle.HANDLERS))
+        self.assertTrue(oracle.HANDLERS)
+        for name, handler in oracle.HANDLERS.items():
+            self.assertEqual(handler.__name__, "mode_" + name)
         with self.assertRaises(SystemExit):
             oracle.main(["x", "delete", "/root", "/out"])
         with self.assertRaises(SystemExit):
