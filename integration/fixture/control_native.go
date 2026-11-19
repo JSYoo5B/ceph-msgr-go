@@ -156,3 +156,12 @@ func nativePoolModeAllowed(p profile, modes map[string]bool, mode string) bool {
 	}
 	return modes[mode] && (p.osd == "1" || p.mgrServiceColdBootstrap() && (mode == "mgrstate" || mode == "servicewatch"))
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-pool-claims.json",
+	"osd-pool-command.json",
+	"osd-pool-input.json",
+	"osd-pool-result.json",
+)

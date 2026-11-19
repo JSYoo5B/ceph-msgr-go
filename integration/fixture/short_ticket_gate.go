@@ -203,3 +203,9 @@ func (c *fixtureCluster) verifyShortTicketGate(ctx context.Context, out, label s
 func sameManagerMap(a, b managerPreparationMap) bool {
 	return a.Epoch == b.Epoch && a.Available == b.Available && a.ActiveName == b.ActiveName && a.ActiveGID == b.ActiveGID && slices.Equal(a.Standbys, b.Standbys)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"manager-keyring-gate.json",
+)

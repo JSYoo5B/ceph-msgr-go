@@ -231,3 +231,9 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects the control loop's failure when it
+// exists.
+var _ = collectDiagnosticFiles(
+	"provider.error",
+)

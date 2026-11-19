@@ -273,3 +273,16 @@ func (c *fixtureCluster) mgrServiceConfigControl(ctx context.Context, out, actio
 	}
 	return s.publish()
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mgr-service-close.json",
+	"mgr-service-cold-bootstrap.json",
+	"mgr-service-comparison.json",
+	"mgr-service-config-native.json",
+	"mgr-service-configuration.json",
+	"mgr-service-metadata.json",
+	"mgr-service-recovery.json",
+	"mgr-service-unavailable.json",
+)

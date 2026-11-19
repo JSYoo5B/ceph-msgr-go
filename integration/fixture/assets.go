@@ -125,3 +125,13 @@ func goBuild(ctx context.Context, project, goos, goarch, cgo string, args ...str
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mapext-range-oracle-provenance.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"sparse-read-oracle-provenance.json",
+)

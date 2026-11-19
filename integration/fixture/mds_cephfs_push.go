@@ -728,3 +728,9 @@ func (c *fixtureCluster) finishMDSCephFSPushConfig(ctx context.Context, receipt 
 		fail(errors.New("MDS CephFS push recall settings left a central entry"))
 	}
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mds-cephfs-push-results.json",
+)

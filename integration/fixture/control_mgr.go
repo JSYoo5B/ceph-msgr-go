@@ -204,3 +204,9 @@ func createManagersWithOwnership(ctx context.Context, add func(context.Context, 
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"manager-preparation.jsonl",
+)

@@ -42,3 +42,11 @@ func (c *fixtureCluster) cacheOpGoNative(ctx context.Context, phase, label strin
 		return c.runOracleCommandWithTimeout(ctx, x.Out, argv, "osd-cache-op-go-command.json", "closed Go cache-op native observer", 3*time.Minute)
 	})
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-cache-op-go-command.json",
+	"osd-cache-op-go-native.json",
+	"osd-cache-op-go-results.json",
+)

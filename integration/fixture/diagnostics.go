@@ -6,103 +6,46 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	ctdiagnostics "github.com/JSYoo5B/ceph-testcontainers-go/ceph/diagnostics"
 )
 
-// Deliberately select public native metadata rather than archiving /out, the
-// Ceph configuration, keyrings, auth databases or process memory.
-var metadataFiles = []string{
-	"osd-readiness.jsonl", "osd-full-failover-results.json",
-	"osd-checksum-compound-input.json", "osd-checksum-compound-result.json", "osd-checksum-compound-command.json", "osd-checksum-compound-results.json",
-	"osd-enforce-snap-context-input.json", "osd-enforce-snap-context-result.json", "osd-enforce-snap-context-command.json", "osd-enforce-snap-context-results.json", "osd-enforce-snap-context-native-write.json",
-	"osd-cache-pools-fixture.json", "osd-cache-pools-native.json", "osd-cache-pools-command.json", "osd-cache-pools-results.json",
-	"osd-cache-tier-ops-native.json", "osd-cache-tier-ops-command.json", "osd-cache-tier-ops-results.json",
-	"osd-set-chunk-input.json", "osd-set-chunk-result.json", "osd-set-chunk-command.json", "osd-set-chunk-results.json", "osd-set-chunk-go-results.json",
-	"osd-cache-op-go-native.json", "osd-cache-op-go-command.json", "osd-cache-op-go-results.json",
-	"osd-tier-op-go-input.json", "osd-tier-op-go-result.json", "osd-tier-op-go-native.json", "osd-tier-op-go-command.json", "osd-tier-op-go-results.json", "osd-tier-evict-lost-reply.json",
-	"osd-ignore-cache-probe.json", "osd-ignore-cache-plan.json", "osd-ignore-cache-attached.json", "osd-ignore-cache-detached.json", "osd-ignore-cache-native.json", "osd-ignore-cache-command.json",
-	"fixture-manifest.json", "fixture-ownership.json", sequenceRecordFile, "daemon-version", "relay.log", "native-oracles.log", "native-oracles.error", "osd-map-control.log", "peers.json", "pool-policy.json", "provider.error", "provider.cleanup.error",
-	"mapped-oracle-status.json", "mapped-oracle-mon.json", "mapped-oracle-mgr.json", "mapped-oracle-pg.json", "mapped-oracle-summary.json",
-	"tell-oracle-mon.json", "tell-oracle-mgr.json", "tell-oracle-mgr-map.json", "named-mon-b.json",
-	"mon-ping-native-a.json", "mon-ping-native-b.json", "mon-ping-native-c.json", "mon-ping-results.json",
-	"named-mgr-oracle-before.json", "named-mgr-oracle-after.json", "named-mgr-results.json", "mgr-service-recovery.json", "mgr-service-close.json", "mgr-service-metadata.json", "mgr-service-comparison.json", "mgr-service-unavailable.json", "mgr-service-cold-bootstrap.json", "mgr-service-config-native.json", "mgr-service-configuration.json",
-	"log-oracle.json", "log-oracle-sentinel.txt", "config-oracle.json", "config-oracle-history.jsonl", "hostname-config-oracle.json",
-	"command-oracle-mon.json", "command-oracle-mgr.json", "command-oracle-summary.json",
-	"mon-command-outcome-native.jsonl", "mon-command-outcome-identity.json", "mgr-command-outcome-native.jsonl", "mgr-command-outcome-identity.json", "mon-tell-outcome-native.jsonl", "mon-tell-outcome-identity.json", "mon-current-tell-outcome-identity.json", "mgr-tell-outcome-native.jsonl", "mgr-tell-outcome-identity.json", "mgr-current-tell-outcome-identity.json", "service-holder-native.jsonl",
-	"daemon-command-outcome-native.jsonl", "daemon-command-outcome-identity-osd.json", "daemon-command-outcome-identity-pg.json", "daemon-command-outcome-identity-mds.json",
-	"tell-command-oracle-mon-a.json", "tell-command-oracle-mon-b.json", "tell-command-oracle-mon-c.json", "tell-command-oracle-mgr.json", "tell-command-oracle-summary.json",
-	"manager-oracle.json", "digest-oracle.json", "monitor-oracle.json", "osd-oracle.json", "osd-map-native-oracle.json", "osd-map-manifest.json",
-	"monitor-election-history.jsonl", "monitor-election-settled.json",
-	"monitor-election-settled-added.json", "monitor-election-settled-removed.json",
-	"osd-mutation-result.json", "osd-compound-result.json", "service-keys-history.jsonl", "manager-preparation.jsonl", "manager-native-auth.json", "manager-keyring-gate.json", "auth-first-failure-bundle.json", "mgr-transition-receipt.json", "fixture-unusable.json", "native-crash.json", "osd-crash-state.json", "osd-map-epoch.json", "osd-map-applied.json", "osd-native-stat.txt", "osd-object.bin", "osd-native-read.bin",
-	"osd-pool-input.json", "osd-pool-result.json", "osd-pool-command.json", "osd-pool-claims.json", "osd-writesame-input.json", "osd-writesame-result.json", "osd-writesame-command.json", "osd-writesame-results.json", "writesame-oracle-provenance.json",
-	"osd-u64-xattr-input.json", "osd-u64-xattr-result.json", "osd-u64-xattr-command.json", "osd-u64-xattr-results.json", "u64-xattr-oracle-provenance.json",
-	"osd-xattr-native.json", "osd-xattr-native-command.json",
-	"osd-xattr-result.json", "osd-xattr-command.json",
-	"osd-xattr-limits.json",
-	"osd-mutation-command.json",
-	"osd-xattr-permission-list.json", "osd-xattr-permission-set.json", "osd-xattr-permission-remove.json",
-	"osd-xattr-permission-go-set.json", "osd-xattr-permission-go-remove.json",
-	"osd-omap-command.json", "osd-omap-result.json", "osd-omap-owned.json",
-	"osd-omap-read-results.json",
-	"osd-omap-write-command.json", "osd-omap-write-result.json", "osd-omap-write-owned.json",
-	"osd-omap-write-results.json", "osd-omap-compare-results.json",
-	"osd-copyfrom-compound-results.json",
-	"osd-copyfrom-classification-results.json",
-	"osd-copyfrom-snap-truncate-results.json",
-	"osd-copyfrom-error-option.json", "osd-copyfrom-late-error-results.json",
-	"rbd-mirror-receipt.json", "rbd-mirror-results.json",
-	"osd-copyfrom-staging-history.json", "osd-copyfrom-staging-list.json", "osd-copyfrom-multichunk-results.json",
-	"osd-copyfrom-destination-loss-results.json",
-	"osd-command-command.json", "osd-command-result.json", "osd-command-results.json",
-	"osd-omap-range-results.json", "osd-call-results.json", "osd-call-compound-results.json", "osd-alloc-hint-results.json",
-	"osd-watch-notify-status.json", "osd-watch-notify-worker.log", "osd-watch-notify-input.json", "osd-watch-notify-result.json", "osd-watch-notify-command.json", "osd-watch-notify-results.json",
-	"osd-watch-reconnect-results.json",
-	"osd-reply-v8-results.json", "osd-request-v9-results.json",
-	"osd-upmap-input.json", "osd-upmap-result.json", "osd-upmap-results.json", "osd-upmap-command.json",
-	"osd-upmap-owned.json", "osd-upmap-state.json", "osd-upmap-commands.json", "osd-upmap-native.json",
-	"osd-upmap-failure.json", "osd-upmap-guard-result.json", "osd-upmap-guard.log", "osd-upmap-seed-items.bin", "osd-upmap-seed-full.bin",
-	"mds-maps-input.json", "mds-maps-owned.json", "mds-maps-result.json", "mds-maps-commands.json", "mds-maps-command.json", "mds-maps-go.json",
-	"mds-fresh-owned.json", "mds-fresh-pool-policy.json", "mds-fresh-oracle.json", "mds-fresh-session-result.json", "mds-fresh-results.json", "mds-fresh-cleanup.json",
-	"mds-commands-oracle.json", "mds-commands-native-result.json", "mds-commands-results.json",
-	"mds-sessions-oracle.json", "mds-sessions-owned.json", "mds-sessions-result.json", "mds-sessions-results.json", "mds-sessions-cleanup.json",
-	"mds-cephfs-oracle.json", "mds-cephfs-owned.json", "mds-cephfs-result.json", "mds-cephfs-results.json", "mds-cephfs-cleanup.json",
-	"mds-cephfs-target.json", "mds-cephfs-recovery-results.json", "mds-cephfs-sharedflock-recovery-results.json", "mds-cephfs-fcntl-recovery-results.json", "mds-cephfs-push-results.json",
-	"mds-cephfs-ranks-oracle.json", "mds-cephfs-ranks-owned.json", "mds-cephfs-ranks-result.json", "mds-cephfs-ranks-results.json", "mds-cephfs-ranks-replay-results.json", "mds-cephfs-ranks-cleanup.json",
-	"mds-cephfs-completion-oracle.json", "mds-cephfs-completion-owned.json", "mds-cephfs-completion-result.json", "mds-cephfs-completion-target.json",
-	"mds-cephfs-completion-results.json", "mds-cephfs-multi-reconnect-results.json", "mds-cephfs-heldflock-split-reconnect-results.json", "mds-cephfs-heldflock-split-fragments-results.json", "mds-cephfs-completion-cleanup.json",
-	"mds-cephfs-data-target.json", "mds-cephfs-data-oracle.json", "mds-cephfs-data-owned.json", "mds-cephfs-data-result.json", "mds-cephfs-data-results.json", "mds-cephfs-data-cleanup.json",
-	"osd-split-input.json", "osd-split-result.json", "osd-split-status.json", "osd-split-command.json", "osd-split-worker.log", "osd-split-results.json",
-	"osd-split-stale-input.json", "osd-split-stale-receipt.json",
-	"osd-history-query.json",
-	"osd-pg-list-input.json", "osd-pg-list-result.json", "osd-pg-list-command.json", "osd-pg-list-results.json",
-	"osd-sparse-read-input.json", "osd-sparse-read-result.json", "osd-sparse-read-command.json", "osd-sparse-read-results.json", "sparse-read-oracle-provenance.json",
-	"osd-checksum-command.json", "osd-checksum-input.json", "osd-checksum-result.json", "osd-checksum-results.json",
-	"osd-mapext-command.json", "osd-mapext-input.json", "osd-mapext-result.json", "osd-mapext-results.json", "osd-snap-mapext-results.json", "mapext-range-oracle-provenance.json", "osd-mapext-range-input.json", "osd-mapext-range-result.json", "osd-mapext-range-command.json",
-	"osd-replicated-pg-results.json", "osd-backoff-input.json", "osd-backoff-result.json", "osd-backoff-status.json", "osd-backoff-command.json", "osd-backoff-worker.log", "osd-backoff-results.json",
-	"osd-pg-list-v8-results.json", "osd-backoff-late-ack-results.json",
-	"osd-backoff-ack-input.json", "osd-backoff-ack-receipt.json",
-	"osd-object-backoff-input.json", "osd-object-backoff-result.json", "osd-object-backoff-state.json", "osd-object-backoff-command.json", "osd-object-backoff-results.json",
-	"osd-watchers-result.json", "osd-watchers-status.json", "osd-watchers-worker.log", "osd-watchers-command.json", "osd-watchers-results.json",
-	"osd-omap-write-snaps.json", "osd-snap-results.json", "osd-snap-sparse-read-results.json", "osd-snap-checksum-results.json",
-	"rbd-base-owned.json", "rbd-base-setup.json", "rbd-base-oracle.json", "rbd-base-result.json", "rbd-base-watch-state.json", "rbd-base-cleanup.json", "rbd-base-results.json",
-	"rbd-write-setup.json", "rbd-write-observe-written.json", "rbd-write-observe-resized.json", "rbd-write-observe-locked.json", "rbd-write-observe-unlocked.json",
-	"rbd-write-watch.json", "rbd-write-watch-state.json", "rbd-write-results.json",
-	"rbd-lock-setup.json", "rbd-lock-lock.json", "rbd-lock-observe-released.json", "rbd-lock-state.json", "rbd-lock-results.json",
-	"rbd-clone-setup.json", "rbd-clone-observe-copyup.json", "rbd-clone-write.json", "rbd-clone-snapshot.json", "rbd-clone-observe-snapshot.json",
-	"rbd-clone-flatten.json", "rbd-clone-results.json",
-	"rbd-journal-setup.json", "rbd-journal-observe-registered.json", "rbd-journal-write.json", "rbd-journal-observe-committed.json",
-	"rbd-journal-inspect.json", "rbd-journal-replay.json", "rbd-journal-results.json",
-	"rbd-journal-observe-locked.json", "rbd-journal-checkpoint.json", "rbd-journal-observe-recorded.json",
-	"rbd-journal-lost-append-outcome.json", "rbd-journal-lost-append-results.json",
-	"rbd-lock-observe-go-owner.json", "rbd-lock-takeover.json", "rbd-lock-observe-go-broke.json", "rbd-lock-final.json", "rbd-lock-owner-loss-results.json",
-	"rbd-lock-advance-map.json", "rbd-lock-observe-answered.json", "rbd-lock-owner-loss-pending-results.json",
-	"rbd-journal-change-primary.json", "rbd-journal-observe-resubmitted.json", "rbd-journal-primary-change-outcome.json", "rbd-journal-primary-change-results.json",
+// diagnosticFiles are the public native metadata files saveMetadata copies
+// from the fixture output directory. Deliberately select public native
+// metadata rather than archiving /out, the Ceph configuration, keyrings, auth
+// databases or process memory. Each name is declared beside the control or
+// fixture code that writes or requests it, with collectDiagnosticFiles; no
+// list names them all.
+var diagnosticFiles = map[string]bool{}
+
+var diagnosticFileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+// collectDiagnosticFiles declares public receipts that saveMetadata copies
+// when they exist. Call it in a package-level declaration beside the code
+// that writes or requests the files:
+//
+//	var _ = collectDiagnosticFiles("osd-example-results.json")
+//
+// A name is one plain file name of the output directory, never a pattern or
+// a path, and is declared once; anything else stops the fixture at start.
+func collectDiagnosticFiles(names ...string) bool {
+	for _, name := range names {
+		if !diagnosticFileName.MatchString(name) {
+			panic(fmt.Sprintf("diagnostic file %q is not a plain file name", name))
+		}
+		if diagnosticFiles[name] {
+			panic(fmt.Sprintf("diagnostic file %q is declared twice", name))
+		}
+		diagnosticFiles[name] = true
+	}
+	return true
 }
 
 func saveMetadata(out, diagnostics string) error {
@@ -116,7 +59,7 @@ func saveMetadata(out, diagnostics string) error {
 	if err != nil {
 		return err
 	}
-	for _, name := range append(append([]string{}, metadataFiles...), soakNames...) {
+	for _, name := range append(slices.Sorted(maps.Keys(diagnosticFiles)), soakNames...) {
 		file, err := os.Open(filepath.Join(out, name))
 		if os.IsNotExist(err) {
 			continue

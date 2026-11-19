@@ -16,10 +16,7 @@ import (
 // host after both suites return. A passing suite must not become a harness
 // failure just because a newly allowlisted public receipt was owner-readable.
 func TestArchivedGoEvidenceIsReadableByHostCollector(t *testing.T) {
-	archived := make(map[string]bool, len(metadataFiles))
-	for _, name := range metadataFiles {
-		archived[name] = true
-	}
+	archived := diagnosticFiles
 	files, err := filepath.Glob("../*_test.go")
 	if err != nil || len(files) == 0 {
 		t.Fatal("integration source inventory", files, err)

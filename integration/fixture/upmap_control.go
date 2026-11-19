@@ -34,3 +34,21 @@ func (c *fixtureCluster) upmapControl(ctx context.Context, out string, fields []
 	}
 	return publishAck(out, "osd-upmap-verify."+fields[0])
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-upmap-command.json",
+	"osd-upmap-commands.json",
+	"osd-upmap-failure.json",
+	"osd-upmap-guard-result.json",
+	"osd-upmap-guard.log",
+	"osd-upmap-input.json",
+	"osd-upmap-native.json",
+	"osd-upmap-owned.json",
+	"osd-upmap-result.json",
+	"osd-upmap-results.json",
+	"osd-upmap-seed-full.bin",
+	"osd-upmap-seed-items.bin",
+	"osd-upmap-state.json",
+)

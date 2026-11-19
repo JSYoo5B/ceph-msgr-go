@@ -328,3 +328,12 @@ func (c *fixtureCluster) settleMonitorElection(ctx context.Context, out, id, inp
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"monitor-election-history.jsonl",
+	"monitor-election-settled-added.json",
+	"monitor-election-settled-removed.json",
+	"monitor-election-settled.json",
+)

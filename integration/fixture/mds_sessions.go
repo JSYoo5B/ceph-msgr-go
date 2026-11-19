@@ -1119,3 +1119,13 @@ func (c *fixtureCluster) mdsSessionsReconcile(ctx context.Context, receipt *mdsS
 		}
 	}
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mds-sessions-cleanup.json",
+	"mds-sessions-oracle.json",
+	"mds-sessions-owned.json",
+	"mds-sessions-result.json",
+	"mds-sessions-results.json",
+)

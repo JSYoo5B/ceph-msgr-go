@@ -336,3 +336,9 @@ func (c *fixtureCluster) osdCleanStatus(ctx context.Context) (osdCleanStatus, er
 	}
 	return s, nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-readiness.jsonl",
+)

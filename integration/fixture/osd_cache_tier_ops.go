@@ -28,3 +28,11 @@ func (c *fixtureCluster) cacheTierOpsNative(ctx context.Context) error {
 		return c.runOracleCommandWithTimeout(ctx, x.Out, []string{"python3", "/out/osd_cache_tier_ops_oracle.py", "/tmp/ceph-msgr-test", "/out"}, "osd-cache-tier-ops-command.json", "closed native cache-tier operation checkpoint", 4*time.Minute)
 	})
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-cache-tier-ops-command.json",
+	"osd-cache-tier-ops-native.json",
+	"osd-cache-tier-ops-results.json",
+)

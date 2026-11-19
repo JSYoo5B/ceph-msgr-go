@@ -28,3 +28,14 @@ func (c *fixtureCluster) controlOSDTierOpRequest(ctx context.Context, out string
 	}
 	return publishAck(out, "osd-tier-op-verify."+fields[0])
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-tier-evict-lost-reply.json",
+	"osd-tier-op-go-command.json",
+	"osd-tier-op-go-input.json",
+	"osd-tier-op-go-native.json",
+	"osd-tier-op-go-result.json",
+	"osd-tier-op-go-results.json",
+)

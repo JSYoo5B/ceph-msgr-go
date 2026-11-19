@@ -611,3 +611,104 @@ func (c *fixtureCluster) launch(ctx context.Context, args ...string) error {
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts when they
+// exist. The native oracle worker (integration/cluster.sh) and the relay that
+// launch starts write them; each oracle's files are declared on their own.
+var _ = collectDiagnosticFiles(
+	"command-oracle-mgr.json",
+	"command-oracle-mon.json",
+	"command-oracle-summary.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"config-oracle-history.jsonl",
+	"config-oracle.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"digest-oracle.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"hostname-config-oracle.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"log-oracle-sentinel.txt",
+	"log-oracle.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"manager-oracle.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"mapped-oracle-mgr.json",
+	"mapped-oracle-mon.json",
+	"mapped-oracle-pg.json",
+	"mapped-oracle-status.json",
+	"mapped-oracle-summary.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"mgr-command-outcome-identity.json",
+	"mgr-command-outcome-native.jsonl",
+)
+
+var _ = collectDiagnosticFiles(
+	"mon-command-outcome-identity.json",
+	"mon-command-outcome-native.jsonl",
+)
+
+var _ = collectDiagnosticFiles(
+	"mon-current-tell-outcome-identity.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"mon-tell-outcome-identity.json",
+	"mon-tell-outcome-native.jsonl",
+)
+
+var _ = collectDiagnosticFiles(
+	"monitor-oracle.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"named-mon-b.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"native-oracles.error",
+	"native-oracles.log",
+)
+
+var _ = collectDiagnosticFiles(
+	"peers.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"relay.log",
+)
+
+var _ = collectDiagnosticFiles(
+	"service-holder-native.jsonl",
+)
+
+var _ = collectDiagnosticFiles(
+	"service-keys-history.jsonl",
+)
+
+var _ = collectDiagnosticFiles(
+	"tell-command-oracle-mgr.json",
+	"tell-command-oracle-mon-a.json",
+	"tell-command-oracle-mon-b.json",
+	"tell-command-oracle-mon-c.json",
+	"tell-command-oracle-summary.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"tell-oracle-mgr-map.json",
+	"tell-oracle-mgr.json",
+	"tell-oracle-mon.json",
+)

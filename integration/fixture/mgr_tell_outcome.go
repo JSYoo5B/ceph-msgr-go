@@ -501,3 +501,14 @@ func mgrTellOutcome(ctx context.Context, out string, fields []string, backend mg
 	}
 	return mgrTellJournal(out, receipt)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mgr-current-tell-outcome-identity.json",
+)
+
+var _ = collectDiagnosticFiles(
+	"mgr-tell-outcome-identity.json",
+	"mgr-tell-outcome-native.jsonl",
+)

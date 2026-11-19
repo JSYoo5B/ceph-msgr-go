@@ -106,3 +106,14 @@ func (c *fixtureCluster) controlMDSMapsRequest(ctx context.Context, out string) 
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mds-maps-command.json",
+	"mds-maps-commands.json",
+	"mds-maps-go.json",
+	"mds-maps-input.json",
+	"mds-maps-owned.json",
+	"mds-maps-result.json",
+)

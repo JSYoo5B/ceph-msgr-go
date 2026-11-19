@@ -1376,3 +1376,21 @@ func rbdLockOwnerAddresses(action string, native rbdLockNative) []string {
 	}
 	return addresses
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"rbd-lock-advance-map.json",
+	"rbd-lock-final.json",
+	"rbd-lock-lock.json",
+	"rbd-lock-observe-answered.json",
+	"rbd-lock-observe-go-broke.json",
+	"rbd-lock-observe-go-owner.json",
+	"rbd-lock-observe-released.json",
+	"rbd-lock-owner-loss-pending-results.json",
+	"rbd-lock-owner-loss-results.json",
+	"rbd-lock-results.json",
+	"rbd-lock-setup.json",
+	"rbd-lock-state.json",
+	"rbd-lock-takeover.json",
+)

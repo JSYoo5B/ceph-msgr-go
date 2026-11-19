@@ -97,3 +97,11 @@ func (c *fixtureCluster) namedManagerOracle(ctx context.Context, out string, fie
 	}
 	return publishAck(out, "named-mgr-observed."+fields[0])
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"named-mgr-oracle-after.json",
+	"named-mgr-oracle-before.json",
+	"named-mgr-results.json",
+)

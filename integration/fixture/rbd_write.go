@@ -604,3 +604,16 @@ func (c *fixtureCluster) rbdWriteControl(ctx context.Context, out string, fields
 	result["native"] = native
 	return c.rbdBaseFinish(m, nil)
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"rbd-write-observe-locked.json",
+	"rbd-write-observe-resized.json",
+	"rbd-write-observe-unlocked.json",
+	"rbd-write-observe-written.json",
+	"rbd-write-results.json",
+	"rbd-write-setup.json",
+	"rbd-write-watch-state.json",
+	"rbd-write-watch.json",
+)

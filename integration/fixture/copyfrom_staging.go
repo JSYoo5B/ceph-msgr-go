@@ -200,3 +200,10 @@ func writeCopyReceipt(out, name string, receipt any) error {
 	}
 	return os.Rename(file.Name(), filepath.Join(out, name))
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"osd-copyfrom-staging-history.json",
+	"osd-copyfrom-staging-list.json",
+)

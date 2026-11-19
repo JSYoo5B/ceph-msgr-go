@@ -2068,3 +2068,14 @@ func (x *mdsCephFSRanksScope) blockOwner(entry mdsSessionsBlock, armedGone bool)
 	}
 	return "", nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mds-cephfs-ranks-cleanup.json",
+	"mds-cephfs-ranks-oracle.json",
+	"mds-cephfs-ranks-owned.json",
+	"mds-cephfs-ranks-replay-results.json",
+	"mds-cephfs-ranks-result.json",
+	"mds-cephfs-ranks-results.json",
+)

@@ -62,3 +62,12 @@ func (c *fixtureCluster) prepareMonPing(ctx context.Context, out string) error {
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects these public receipts of this
+// file's controls when they exist.
+var _ = collectDiagnosticFiles(
+	"mon-ping-native-a.json",
+	"mon-ping-native-b.json",
+	"mon-ping-native-c.json",
+	"mon-ping-results.json",
+)
