@@ -43,6 +43,10 @@ CALL_METHOD = re.compile(r"(?:\[|,)call ([a-z_]+\.[a-z_]+)(?:[ ,\]]|$)")
 # Match rgwNativeWatchReconnect and rgwNativeWrites in integration/fixture.
 WATCH_RECONNECT = re.compile(r"(?:\[|,)watch reconnect cookie [0-9]+ gen [1-9][0-9]*(?:[ ,\]]|$)")
 WRITE = re.compile(r"(?:\[|,)(?:write|writefull)(?:[ ,\]]|$)")
+# Match rgwNativeHeadRead: a complete READ token at offset 0 whose length
+# covers the object.
+READ = re.compile(r"(?:\[|,)read 0~([0-9]+)(?:[ ,\]]|$)")
+NOTIFY = re.compile(r"^notify\.[0-9]+$")
 # The objects of the backend-fault checkpoint and the (multiplier, offset) of
 # rgwNativeFaultPayload that builds each one's 1,031 bytes.
 FAULT_OBJECTS = {"before-fault": (13, 7), "during-osd-fault": (29, 11), "during-mgr-fault": (31, 3)}
@@ -137,6 +141,26 @@ def _calls(op, method):
     return method in CALL_METHOD.findall(op.get("description", ""))[:8]
 
 
+def _head_read(op, key):
+    """A complete READ of the whole head of key (rgwNativeHeadRead)."""
+    return str(op.get("object", "")).endswith("_" + key) and any(
+        int(length) >= FAULT_SIZE for length in READ.findall(op.get("description", ""))[:16])
+
+
+def _put_problems(ops, key, phase):
+    """A complete gateway PUT of key: head WRITE/WRITEFULL and index
+    prepare/complete, and no entry that is none of these."""
+    head = [op for op in ops if str(op.get("object", "")).endswith("_" + key) and WRITE.search(op.get("description", ""))]
+    index = [op for op in ops if str(op.get("object", "")).startswith(".dir.")]
+    if not (head and any(_calls(op, "rgw.bucket_prepare_op") for op in index)
+            and any(_calls(op, "rgw.bucket_complete_op") for op in index)):
+        return ["%s has no complete gateway PUT reception of %s" % (phase, key)]
+    if len(head) + len(index) != len(ops) or not all(
+            _calls(op, "rgw.bucket_prepare_op") or _calls(op, "rgw.bucket_complete_op") for op in index):
+        return ["%s PUT reception holds an entry that is not its head write or index call" % phase]
+    return []
+
+
 def check_backend_fault(receipt):
     problems = []
     if receipt.get("source") != SOURCE or not str(receipt.get("image", "")).endswith("@sha256:" + IMAGE_DIGEST):
@@ -150,8 +174,9 @@ def check_backend_fault(receipt):
         problems.append("receipt has no gateway generation")
     before_fault = receipt.get("before_fault") if isinstance(receipt.get("before_fault"), dict) else {}
     last = before_fault.get("last_tids") if isinstance(before_fault.get("last_tids"), dict) else {}
-    if not _ops(before_fault.get("put_reception")) or not last:
+    if not last:
         problems.append("receipt has no gateway-attributed reception before the fault")
+    problems.extend(_put_problems(_ops(before_fault.get("put_reception")), "before-fault", "pre-fault"))
     osd = receipt.get("osd") if isinstance(receipt.get("osd"), dict) else {}
     states = [osd.get(name) if isinstance(osd.get(name), dict) else {} for name in ("before", "down", "after")]
     before, down, after = states
@@ -168,14 +193,12 @@ def check_backend_fault(receipt):
     if osd.get("pending_at_restart") is not True:
         problems.append("the overlapping requests were not outstanding when the OSD was started")
     put, get, watches = _ops(osd.get("put_reception")), _ops(osd.get("get_reception")), _ops(osd.get("watch_reconnect"))
-    if not (any(WRITE.search(op.get("description", "")) for op in put)
-            and any(_calls(op, "rgw.bucket_prepare_op") for op in put)
-            and any(_calls(op, "rgw.bucket_complete_op") for op in put)):
-        problems.append("restarted OSD has no complete gateway PUT reception")
-    if not get:
-        problems.append("restarted OSD has no gateway GET reception")
-    if not watches or not all(WATCH_RECONNECT.search(op.get("description", "")) for op in watches):
-        problems.append("restarted OSD has no gateway watch reconnect")
+    problems.extend(_put_problems(put, "during-osd-fault", "restarted OSD"))
+    if not get or not all(_head_read(op, "before-fault") for op in get):
+        problems.append("restarted OSD has no gateway GET reception that reads the whole before-fault head")
+    if not watches or not all(WATCH_RECONNECT.search(op.get("description", "")) and NOTIFY.match(str(op.get("object", "")))
+                              for op in watches):
+        problems.append("restarted OSD has no gateway watch reconnect on a control object")
     for op in put + get + watches:
         client, tid, epoch = op.get("client"), op.get("tid"), op.get("map_epoch")
         if client not in generation or not isinstance(tid, int) or not isinstance(epoch, int):

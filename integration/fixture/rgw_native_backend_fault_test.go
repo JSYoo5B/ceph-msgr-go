@@ -272,7 +272,13 @@ func TestRGWNativeBackendFaultIntegration(t *testing.T) {
 			if err != nil {
 				return false, err
 			}
-			reads = append(reads, ops...)
+			// Only a complete READ of the whole original head is the
+			// overlapping GET's backend read; other head operations are not.
+			for _, op := range ops {
+				if rgwNativeHeadRead(op, uint64(len(payloads[keys[0]]))) {
+					reads = append(reads, op)
+				}
+			}
 			watches, err := rgwNativeHistoryMatch(output, client.Client, isControl)
 			if err != nil {
 				return false, err

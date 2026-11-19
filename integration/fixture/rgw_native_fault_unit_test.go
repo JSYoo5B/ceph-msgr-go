@@ -212,6 +212,21 @@ func TestRGWNativeFaultReceptionPredicates(t *testing.T) {
 			t.Errorf("%s: reconnect %t, want %t", description, got, want)
 		}
 	}
+	for description, want := range map[string]bool{
+		"osd_op(client.1.0:813 7.0 7:dc:::m_before-fault:head [call,getxattrs,stat,read 0~1031] snapc 0=[] ondisk+read e24)": true,
+		"osd_op(client.1.0:813 7.0 7:dc:::m_before-fault:head [read 0~4194304] snapc 0=[] ondisk+read e24)":                  true,
+		"osd_op(client.1.0:813 7.0 7:dc:::m_before-fault:head [create,writefull 0~1031] snapc 0=[] ondisk+write e24)":        false,
+		"osd_op(client.1.0:813 7.0 7:dc:::m_before-fault:head [call,getxattrs,stat] snapc 0=[] ondisk+read e24)":             false,
+		"osd_op(client.1.0:813 7.0 7:dc:::m_before-fault:head [call rgw.read 0~1031] snapc 0=[] ondisk+read e24)":            false,
+		"osd_op(client.1.0:813 7.0 7:dc:::m_before-fault:head [sparse-read 0~1031] snapc 0=[] ondisk+read e24)":              false,
+		"osd_op(client.1.0:813 7.0 7:dc:::m_before-fault:head [read 0~1030] snapc 0=[] ondisk+read e24)":                     false,
+		"osd_op(client.1.0:813 7.0 7:dc:::m_before-fault:head [read 1~1031] snapc 0=[] ondisk+read e24)":                     false,
+		"osd_op(client.1.0:813 7.0 7:dc:::m_before-fault:head [setxattr user.read 0~1031 (1)] snapc 0=[] ondisk+write e24)":  false,
+	} {
+		if got := rgwNativeHeadRead(op(description), 1031); got != want {
+			t.Errorf("%s: head read %t, want %t", description, got, want)
+		}
+	}
 	if got := rgwNativeRetryAttempt(op("osd_op(client.1.0:9 7.0 7:ab:::h:head [read 0~1] snapc 0=[] RETRY=2 ondisk+read e24)")); got != 2 {
 		t.Fatalf("retry attempt %d", got)
 	}

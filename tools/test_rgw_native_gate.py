@@ -32,13 +32,16 @@ FAULT = gate.BACKEND_FAULT
 
 def fault_receipt(**changes):
     """A backend-fault receipt with the shape TestRGWNativeBackendFaultIntegration logs."""
-    def op(tid, epoch, description, client="client.12"):
-        return {"client": client, "tid": tid, "map_epoch": epoch, "description": description}
+    def op(tid, epoch, description, obj, client="client.12"):
+        return {"client": client, "tid": tid, "map_epoch": epoch, "description": description, "object": obj}
+    head, index = "m.1_", ".dir.b.1.7"
     value = {
         "image": IMAGE, "source": gate.SOURCE, "bytes": gate.FAULT_SIZE,
         "sha256": {key: hashlib.sha256(gate.fault_payload(*args)).hexdigest() for key, args in gate.FAULT_OBJECTS.items()},
         "gateway_generation": [{"client": "client.11", "nonce": 1}, {"client": "client.12", "nonce": 2}],
-        "before_fault": {"put_reception": [op(799, 20, "[call rgw.bucket_prepare_op in=20b]")],
+        "before_fault": {"put_reception": [op(799, 20, "[stat,call rgw.bucket_prepare_op in=20b]", index),
+                                           op(800, 20, "[create,writefull 0~1031]", head + "before-fault"),
+                                           op(801, 21, "[stat,call rgw.bucket_complete_op in=21b]", index)],
                          "last_tids": {"client.11": 10, "client.12": 811}},
         "osd": {
             "before": {"epoch": 21, "up": True, "up_from": 6, "nonce": 5},
@@ -47,11 +50,11 @@ def fault_receipt(**changes):
             "pending_at_restart": True,
             "outcomes": [{"request": "PUT during-osd-fault", "class": "succeeded", "status": 200},
                          {"request": "GET before-fault", "class": "succeeded", "status": 200}],
-            "put_reception": [op(814, 24, "[stat,call rgw.guard_bucket_resharding in=26b,call rgw.bucket_prepare_op in=20b]"),
-                              op(825, 25, "[create,writefull 0~1031,setxattr user.rgw.etag (32) in=13b]"),
-                              op(827, 25, "[stat,call rgw.guard_bucket_resharding in=26b,call rgw.bucket_complete_op in=21b]")],
-            "get_reception": [op(813, 24, "[call,getxattrs,stat,read 0~1031]")],
-            "watch_reconnect": [op(815, 24, "osd_op(client.12.0:815 4.0 4:f9:::notify.0:head [watch reconnect cookie 1 gen 1] snapc 0=[] e24)")],
+            "put_reception": [op(814, 24, "[stat,call rgw.guard_bucket_resharding in=26b,call rgw.bucket_prepare_op in=20b]", index),
+                              op(825, 25, "[create,writefull 0~1031,setxattr user.rgw.etag (32) in=13b]", head + "during-osd-fault"),
+                              op(827, 25, "[stat,call rgw.guard_bucket_resharding in=26b,call rgw.bucket_complete_op in=21b]", index)],
+            "get_reception": [op(813, 24, "[call,getxattrs,stat,read 0~1031]", head + "before-fault")],
+            "watch_reconnect": [op(815, 24, "osd_op(client.12.0:815 4.0 4:f9:::notify.0:head [watch reconnect cookie 1 gen 1] snapc 0=[] e24)", "notify.0")],
             "gateway_connected": ["client.12"],
         },
         "mgr": {
@@ -242,6 +245,20 @@ class RGWNativeGateTest(unittest.TestCase):
             "no head write": {"osd.put_reception": [osd["put_reception"][0], osd["put_reception"][2]]},
             "prepare suffix": {"osd.put_reception": [dict(osd["put_reception"][0], description="[call rgw.bucket_prepare_op_x in=1b]")] + osd["put_reception"][1:]},
             "no GET reception": {"osd.get_reception": []},
+            # The review mutation: a valid client, epoch and TID whose
+            # operation is not a read of the whole head.
+            "GET entry is a writefull": {"osd.get_reception": [dict(osd["get_reception"][0], description="[create,writefull 0~1031]")]},
+            "GET entry has no read": {"osd.get_reception": [dict(osd["get_reception"][0], description="[call,getxattrs,stat]")]},
+            "GET entry is a class read": {"osd.get_reception": [dict(osd["get_reception"][0], description="[call rgw.read 0~1031]")]},
+            "GET entry is a sparse read": {"osd.get_reception": [dict(osd["get_reception"][0], description="[sparse-read 0~1031]")]},
+            "GET read is short": {"osd.get_reception": [dict(osd["get_reception"][0], description="[read 0~1030]")]},
+            "GET read at another offset": {"osd.get_reception": [dict(osd["get_reception"][0], description="[read 1~1031]")]},
+            "GET read of another object": {"osd.get_reception": [dict(osd["get_reception"][0], object="m.1_during-osd-fault")]},
+            "GET reads plus a write": {"osd.get_reception": osd["get_reception"] + [dict(osd["get_reception"][0], description="[writefull 0~1031]")]},
+            "PUT write on another object": {"osd.put_reception": [osd["put_reception"][0], dict(osd["put_reception"][1], object="m.1_before-fault"), osd["put_reception"][2]]},
+            "PUT reception with an extra entry": {"osd.put_reception": osd["put_reception"] + [dict(osd["put_reception"][0], description="[read 0~1031]")]},
+            "pre-fault PUT incomplete": {"before_fault.put_reception": fault_receipt()["before_fault"]["put_reception"][:1]},
+            "watch reconnect on another object": {"osd.watch_reconnect": [dict(osd["watch_reconnect"][0], object="m.1_before-fault")]},
             "no watch reconnect": {"osd.watch_reconnect": []},
             "fresh watch, not a reconnect": {"osd.watch_reconnect": [dict(osd["watch_reconnect"][0], description="[watch watch cookie 1]")]},
             "reception before the OSD returned": {"osd.get_reception": [dict(osd["get_reception"][0], map_epoch=22)]},

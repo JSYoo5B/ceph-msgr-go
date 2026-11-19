@@ -298,7 +298,25 @@ func rgwNativeParsePeers(raw []byte) ([]rgwNativePeer, error) {
 var (
 	rgwNativeReconnectPattern = regexp.MustCompile(`(?:\[|,)watch reconnect cookie [0-9]+ gen [1-9][0-9]*(?:[ ,\]]|$)`)
 	rgwNativeRetryPattern     = regexp.MustCompile(` RETRY=([1-9][0-9]*) `)
+	rgwNativeReadPattern      = regexp.MustCompile(`(?:\[|,)read 0~([0-9]+)(?:[ ,\]]|$)`)
 )
+
+// rgwNativeHeadRead matches a complete READ opcode token at offset 0 whose
+// printed length covers an object of size bytes. Pinned RGWRados head reads
+// (driver/rados/rgw_rados.cc) request 0~rgw_max_chunk_size, and
+// PrimaryLogPG::do_read rewrites the extent length to the bytes it read, so
+// the history of an executed read of the whole head prints 0~size; a request
+// printed before execution prints the larger requested length. A class call,
+// xattr or stat operation, a shorter read or a read at another offset does
+// not match.
+func rgwNativeHeadRead(operation rgwNativeOperation, size uint64) bool {
+	for _, match := range rgwNativeReadPattern.FindAllStringSubmatch(operation.Description, 16) {
+		if length, err := strconv.ParseUint(match[1], 10, 64); err == nil && length >= size {
+			return true
+		}
+	}
+	return false
+}
 
 // rgwNativeWatchReconnect matches a complete WATCH operation with the
 // RECONNECT sub-operation (pinned Objecter::_send_linger for a registered
