@@ -15,7 +15,7 @@ import (
 // requirements. It never names the test that owns a mode and does not know
 // where the declaration comes from: the row declared beside the test that
 // owns the mode supplies both values (//scenario:row ... capabilities=<name>,
-// ci_declarations_test.go).
+// .github/scenarios/README.md).
 //
 // Each capability is defined once, beside the mode it admits, by one
 // defineCapability call. Those calls are the whole vocabulary. The planner

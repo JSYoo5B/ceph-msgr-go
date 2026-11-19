@@ -201,26 +201,7 @@ func catalogAdmissionProblems(rows []ciScenario, bindings map[string]ciBinding) 
 // "catalog admission: " as a catalog problem, so a row the fixture refuses
 // fails validation with the fixture's own error.
 func TestCatalogRowsAreAdmittedByTheFixture(t *testing.T) {
-	rows, declarations := ciDiscoverScenarios(filepath.Join("..", ".."))
-	for _, problem := range declarations {
-		t.Error("catalog admission: " + problem)
-	}
-	// validate passes the rows its planner read from the same declarations
-	// (CEPH_MSGR_PLANNED_ROWS, a JSON list of {id, params}), so the
-	// planner's text reading and this parser's reading cannot drift apart.
-	if path := os.Getenv("CEPH_MSGR_PLANNED_ROWS"); path != "" {
-		data, err := os.ReadFile(path)
-		var planned []ciScenario
-		if err == nil {
-			err = json.Unmarshal(data, &planned)
-		}
-		if err != nil {
-			t.Fatal("catalog admission: planned rows:", err)
-		}
-		for _, problem := range ciReadingProblems(planned, rows) {
-			t.Error("catalog admission: " + problem)
-		}
-	}
+	rows := ciRepositoryCatalog(t)
 	for _, problem := range catalogAdmissionProblems(rows, ciWorkflowBindings(t)) {
 		t.Error("catalog admission: " + problem)
 	}

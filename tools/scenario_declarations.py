@@ -25,9 +25,10 @@ identifier order, so where a test or its file sits changes no plan.
 
 The reading is text only and builds or runs nothing, because the trusted
 planner reads a pull request's declarations from its Git blobs
-(scenario_catalog.py). The fixture reads the same declarations with Go's
-parser (integration/fixture/ci_declarations_test.go), and `scenario_plan.py
-validate` requires both readings to agree. A directive is refused when it is
+(scenario_catalog.py). This is the only reader of the declarations: the
+fixture's catalog tests take the rows it returns (`scenario_plan.py rows`,
+integration/fixture/ci_rows_test.go) and never parse the directives. A
+directive is refused when it is
 malformed, indented, not in the doc comment of a top-level native test
 function of its suite, duplicates an identifier or a parameter, or breaks the
 rules of its kind above.

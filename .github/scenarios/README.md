@@ -135,10 +135,11 @@ func TestCephOSDCopyFromSnapTruncateIntegration(t *testing.T) {
 `tools/scenario_declarations.py` reads the declarations as text, and
 `tools/scenario_catalog.py` composes them with the fixed check suites for
 every reader (the planner, the change planner and the coverage map check).
-The fixture reads them independently with Go's parser
-(`integration/fixture/ci_declarations_test.go`), and `validate` passes the
-planner's rows to `TestCatalogRowsAreAdmittedByTheFixture`, which reports
-every row the two readings do not find identically. A malformed or indented
+That is the only reader of the declarations: the fixture never parses them.
+Its catalog tests take the rows the planner read (`scenario_plan.py rows`, or
+the file `validate` passes to `TestCatalogRowsAreAdmittedByTheFixture` in
+`CEPH_MSGR_PLANNED_ROWS`), so a change to the declaration format changes one
+reader. A malformed or indented
 declaration, one outside the doc comment of a top-level native test of those
 suites, one in any other Go file, a duplicate identifier or parameter, a suite
 row with a `test_run`, a row whose explicit `test_run` does not select its

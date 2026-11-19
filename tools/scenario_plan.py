@@ -12,9 +12,10 @@ the selected matrix with an explanation. Every row is in the default coverage
 (`all`); there is no separate list of required rows, and rows are planned in
 identifier order. `validate` resolves test selectors against the tests Go
 lists for the native suites (go_test_list.py compiles them and executes no
-test body) and runs the fixture's own reading of the declarations and its
-admission of every row (one cluster-free Go test of integration/fixture, which
-needs the fixture module's Go toolchain); it starts no cluster. `list`, `plan`
+test body) and passes every row it read to the fixture's admission (one
+cluster-free Go test of integration/fixture, which needs the fixture module's
+Go toolchain); the declarations have this one reader, and the fixture takes
+its rows from it (`rows`, CEPH_MSGR_PLANNED_ROWS); it starts no cluster. `list`, `plan`
 and `env` read local files and Git objects only.
 
   scenario_plan.py validate               invariants, fixed jobs, selector targets, documented
@@ -25,6 +26,8 @@ and `env` read local files and Git objects only.
                                           or for the one job that several rows of one fixture share
   scenario_plan.py sharing                every row's fixture sharing value and the jobs of the default
                                           coverage
+  scenario_plan.py rows                   every row as JSON ([{"id", "params"}]), the one reading of the
+                                          declarations that the fixture's catalog tests use
 
 `list`, `plan` and `env` accept --revision SHA to read another revision's
 declarations (a pull request's vocabulary) from its Git objects, without a
@@ -88,9 +91,8 @@ and the default coverage's job count.
 validate refuses a documented `env ID` of an unknown row, a documented `env`
 that is not this checked form, and a hand-written reproduction that selects
 the exact test of a row with capabilities but does not declare them. It also
-refuses a scenario declaration outside the native suites' test files, the
-catalog files of the earlier layout, and a row set that the fixture's own
-reading of the declarations (Go's parser) does not find identically.
+refuses a scenario declaration outside the native suites' test files and the
+catalog files of the earlier layout.
 """
 import argparse
 import json
@@ -382,24 +384,28 @@ def reproduction_problems(documents, scenarios):
     return problems
 
 
+def planned_rows(scenarios):
+    """The rows as the fixture reads them: [{"id", "params"}] in plan order."""
+    return [{"id": row["id"], "params": row["params"]} for row in scenarios]
+
+
 def fixture_admission_problems(run=subprocess.run, directory=FIXTURE, planned=(), rows=()):
     """The rows of this tree's catalog that its fixture refuses.
 
-    Runs the fixture's TestCatalogRowsAreAdmittedByTheFixture, which reads
-    the declarations with Go's parser, passes every row through loadProfile
+    Runs the fixture's TestCatalogRowsAreAdmittedByTheFixture on rows (the
+    rows this planner read, in CEPH_MSGR_PLANNED_ROWS), which passes every
+    row through loadProfile
     with the native workflow's bindings and reports each refusal on a line
     marked ADMISSION_MARK. A check that does not run, does not pass and
     reports no row is a problem as well, never a silent pass. planned are
     matrix entries of fixture sequences the planner makes; the same test
-    passes each of them through loadProfile. rows are the rows this planner
-    read from the declarations (CEPH_MSGR_PLANNED_ROWS); the test reports
-    every row the two readings do not find identically."""
+    passes each of them through loadProfile."""
     command = ["go", "test", "-mod=readonly", "-count=1", "-json", "-run", "^%s$" % ADMISSION_TEST, "."]
     with tempfile.TemporaryDirectory() as scratch:
         jobs = Path(scratch) / "planned-jobs.json"
         jobs.write_text(json.dumps(list(planned)), encoding="utf-8")
         declared = Path(scratch) / "planned-rows.json"
-        declared.write_text(json.dumps([{"id": row["id"], "params": row["params"]} for row in rows]), encoding="utf-8")
+        declared.write_text(json.dumps(planned_rows(rows)), encoding="utf-8")
         try:
             result = run(command, cwd=str(directory), env=dict(os.environ, GOWORK="off", CEPH_MSGR_PLANNED_JOBS=str(jobs),
                                                                CEPH_MSGR_PLANNED_ROWS=str(declared)),
@@ -681,6 +687,7 @@ def main(argv=None):
     plan.add_argument("--select", action="append", required=True)
     plan.add_argument("--revision")
     sub.add_parser("sharing")
+    sub.add_parser("rows")
     env = sub.add_parser("env")
     env.add_argument("id", nargs="+")
     env.add_argument("--revision")
@@ -711,6 +718,8 @@ def main(argv=None):
                 return 1
             print("catalog valid: %d scenarios, all in default coverage, selecting existing tests, admitted by the fixture,"
                   " each with a fixture sharing value" % len(scenarios))
+        elif args.command == "rows":
+            print(json.dumps(planned_rows(load_catalog())))
         elif args.command == "sharing":
             scenarios = load_catalog()
             problems, values = fixture_sharing()
