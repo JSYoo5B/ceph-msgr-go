@@ -561,22 +561,6 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(rows, [{"key": "aes", "service": "aes", "family": "4", "osd": "1", "scenario": "o1"}])
         self.assertEqual(self.scenarios[2]["params"].get("scenario"), None, "planning must not mutate the catalog")
 
-    def test_plan_against_another_revisions_catalog(self):
-        import io
-        import os
-        import tempfile
-        from contextlib import redirect_stderr, redirect_stdout
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "catalog.json")
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump({"version": 1, "scenarios": self.scenarios}, handle)
-            out, err = io.StringIO(), io.StringIO()
-            with redirect_stdout(out), redirect_stderr(err):
-                self.assertEqual(plan.main(["plan", "--catalog", path, "--select", "o1"]), 0)
-            self.assertEqual([r["scenario"] for r in json.loads(out.getvalue())["include"]], ["o1"])
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                self.assertEqual(plan.main(["plan", "--catalog", path, "--select", "m9"]), 2)
-
     def test_cli_exit_codes(self):
         # The fixture's own admission runs in the validate command itself
         # (Basic CI); these unit tests also run with the product's Go 1.25.

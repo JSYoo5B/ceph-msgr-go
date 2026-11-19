@@ -384,7 +384,7 @@ func TestDaemonCommandIdentityProjections(t *testing.T) {
 }
 
 // daemonCommandMDSSelector is the native test that declares
-// mds-applied-command (catalog.d/mds-commands.json).
+// mds-applied-command (its //scenario:row declarations).
 const daemonCommandMDSSelector = "^TestCephAppliedMDSCommandIsNotReplayedIntegration$"
 
 func TestMDSCommandsProfileAdmitsOnlyTheExplicitAppliedCommandSelector(t *testing.T) {

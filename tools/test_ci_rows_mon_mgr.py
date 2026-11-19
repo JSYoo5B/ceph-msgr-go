@@ -37,7 +37,7 @@ class MonMgrCommandRowsTest(ci_row_catalog.RowsTestCase):
         self.assertEqual([row for row in self.rows if row.get("capabilities") == "mon-forced-kill"],
                          [row for row in self.rows if row.get("test_run") in (MON_CONNECTED_KILL_SELECTOR, MON_UNPROCESSED_KILL_SELECTOR)])
         rows = [row for row in self.rows if row.get("test_run") == SERVICE_MAP_LARGE_SELECTOR]
-        self.assertEqual(rows, [
+        self.assertCountEqual(rows, [
             {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "test_run": SERVICE_MAP_LARGE_SELECTOR},
             {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
              "test_run": SERVICE_MAP_LARGE_SELECTOR}])

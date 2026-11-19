@@ -2,8 +2,8 @@
 """Which catalog rows may run on one fixture, read from the test sources only.
 
 The planner groups the shareable rows of one fixture configuration into one
-job (scenario_plan.py plan). It may read another revision's catalog (a pull
-request's), so it must not build or run that revision's code. This module
+job (scenario_plan.py plan). It may plan another revision (a pull request's),
+so it must not build or run that revision's code. This module
 therefore reads the `//fixture:shareable` and `//fixture:isolated`
 declarations (integration/fixture/FIXTURE_SHARING.md) from the Go test
 sources as text: the working tree, or a Git revision's blobs without a
@@ -72,32 +72,6 @@ def tree_sources(root):
             for directory in SUITE_DIRECTORIES for path in sorted((root / directory).glob("*_test.go"))}
 
 
-# A revision whose fixture runs sequences (integration/fixture/sequence.go
-# reads this variable). An older fixture would run a sequence job's union
-# selector in one process without the start-state checks, so the planner
-# groups nothing for it.
-SEQUENCE_RUNNER = (Path("integration") / "fixture", "sequence.go", b"CEPH_MSGR_TEST_SEQUENCE")
-
-
-def runs_sequences(revision, git_dir):
-    directory, name, mark = SEQUENCE_RUNNER
-    for mode, kind, oid, entry in scenario_catalog._tree(git_dir, revision, directory):
-        if entry == name and kind == "blob":
-            return mark in scenario_catalog._git(git_dir, "cat-file", "blob", oid)
-    return False
-
-
 def revision_sources(revision, git_dir):
-    """The suite packages' test files of a Git revision, from its blobs, or
-    None when that revision's fixture does not run sequences."""
-    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision):
-        raise scenario_catalog.CatalogError("revision must be a full commit SHA")
-    if not runs_sequences(revision, git_dir):
-        return None
-    sources = {}
-    for directory in SUITE_DIRECTORIES:
-        for mode, kind, oid, name in scenario_catalog._tree(git_dir, revision, Path(directory)):
-            path = directory + "/" + name
-            if kind == "blob" and mode in ("100644", "100755") and _suite_file(path):
-                sources[path] = scenario_catalog._git(git_dir, "cat-file", "blob", oid).decode("utf-8", "replace")
-    return sources
+    """The suite packages' test files of a Git revision, from its blobs."""
+    return {path: text for path, text in scenario_catalog.revision_sources(revision, git_dir).items() if _suite_file(path)}

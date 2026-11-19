@@ -15,7 +15,7 @@ import (
 )
 
 // rbdMirrorSelector is the native test that declares rbd-mirror
-// (catalog.d/rbd.json).
+// (its //scenario:row declarations).
 const rbdMirrorSelector = "^TestCephRBDMirrorPathRecoveryIntegration$"
 
 func TestRBDMirrorMarkerOnlyReachesExclusiveTestEnvironment(t *testing.T) {

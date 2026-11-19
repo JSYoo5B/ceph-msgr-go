@@ -115,11 +115,11 @@ jobs:
         run: python3 tools/ci_command.py pull
       # The vocabulary comes from the tested revision (a same-repository commit,
       # forks are refused above); the planner that reads it is the trusted one.
-      # scenario_catalog.py extract copies only the revision's catalog blobs
-      # (catalog.d fragments, or the single catalog.json of a pull request
-      # opened before the split) and never checks the revision out. The
-      # planner reads the revision's fixture sharing declarations from its
-      # test-file blobs as text (tools/fixture_sharing.py) to group rows.
+      # plan --revision reads the revision's scenario declarations and fixture
+      # sharing declarations from its test-file blobs as text
+      # (tools/scenario_catalog.py, tools/fixture_sharing.py), never checks the
+      # revision out and runs none of its code. The fixed checks come from this
+      # workflow's own platform-checks.yml, which runs them.
       - name: Resolve the selectors against the tested revision
         id: plan
         if: steps.parse.outputs.command == 'accepted' && (steps.parse.outputs.target == 'main' || steps.pullcheck.outputs.pull == 'accepted')
@@ -128,13 +128,9 @@ jobs:
           SHA: ${{ steps.pull.outputs.sha }}
         run: |
           git fetch --no-tags --depth=1 origin "$SHA"
-          if ! catalog=$(python3 tools/scenario_catalog.py extract --revision "$SHA" --output "$RUNNER_TEMP/tested-catalog" 2> "$RUNNER_TEMP/extract.txt"); then
-            echo "reason=$(sed 's/^scenario_catalog: //' "$RUNNER_TEMP/extract.txt" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           args=()
           for selector in $SELECTORS; do args+=(--select "$selector"); done
-          if matrix=$(python3 tools/scenario_plan.py plan --catalog "$catalog" --sources-revision "$SHA" "${args[@]}" 2> "$RUNNER_TEMP/plan.txt"); then
+          if matrix=$(python3 tools/scenario_plan.py plan --revision "$SHA" "${args[@]}" 2> "$RUNNER_TEMP/plan.txt"); then
             echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           else
             echo "reason=$(tr '\n' ' ' < "$RUNNER_TEMP/plan.txt")" >> "$GITHUB_OUTPUT"

@@ -6,7 +6,8 @@ import (
 	"time"
 )
 
-// The two native tests that declare mon-forced-kill (catalog.d/osd.json).
+// The two native tests that declare mon-forced-kill (their //scenario:row
+// declarations).
 const (
 	monConnectedKillSelector   = "^TestCephMonMapVersionConnectedKillIntegration$"
 	monUnprocessedKillSelector = "^TestCephMonMapVersionUnprocessedKillIntegration$"

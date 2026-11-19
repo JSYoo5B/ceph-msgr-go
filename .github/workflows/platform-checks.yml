@@ -22,7 +22,11 @@ defaults:
 env:
   GOPROXY: 'https://proxy.golang.org|direct'
 
+# Every job whose condition is its own name in the plan's "fixed" list is a
+# fixed check of the scenario catalog (tools/scenario_catalog.py), which
+# `/ci run <job>` and the periodic run select by that name.
 jobs:
+  # Go unit tests on Linux, macOS and Windows with Go 1.25 and 1.27, vet and the pure-Go dependency policy.
   unit:
     if: contains(fromJSON(inputs.matrix).fixed, 'unit')
     strategy:
@@ -86,6 +90,7 @@ jobs:
           retention-days: 14
           compression-level: 9
 
+  # Fixture development tools without a running cluster.
   fixture-tools:
     if: contains(fromJSON(inputs.matrix).fixed, 'fixture-tools')
     name: Fixture development tools (${{ matrix.os }})
@@ -116,6 +121,7 @@ jobs:
       - name: Vet fixture development tools
         run: go -C integration/fixture vet -mod=readonly ./...
 
+  # Race detector with actual Tentacle MON and MGR sessions.
   race:
     if: contains(fromJSON(inputs.matrix).fixed, 'race')
     runs-on: ubuntu-latest
@@ -168,6 +174,7 @@ jobs:
           retention-days: 14
           compression-level: 9
 
+  # Bounded fuzz runs of every registered compiled root-module fuzz target.
   fuzz:
     if: contains(fromJSON(inputs.matrix).fixed, 'fuzz')
     runs-on: ubuntu-latest
@@ -197,6 +204,7 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  # Windows binaries against a real Tentacle MON and MGR (aes256k, secure, IPv4 relay).
   windows-ceph:
     if: contains(fromJSON(inputs.matrix).fixed, 'windows-ceph')
     name: Windows native Ceph 20.2.4 (aes256k, secure, IPv4 relay)

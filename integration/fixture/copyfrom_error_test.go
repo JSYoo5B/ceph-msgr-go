@@ -95,7 +95,7 @@ func TestCopyFromErrorScopeRequiresAnEffectiveRuntimeChange(t *testing.T) {
 }
 
 // The native tests that declare the copy-from capabilities
-// (catalog.d/osd.json).
+// (their //scenario:row declarations).
 const (
 	copyFromLateErrorSelector  = "^TestCephOSDCopyFromLateErrorIntegration$"
 	copyFromMultiChunkSelector = "^TestCephOSDCopyFromMultiChunkLateErrorIntegration$"

@@ -126,7 +126,7 @@ func TestRBDJournalRequestIsClosedAndOrdered(t *testing.T) {
 }
 
 // The native tests that declare the RBD journal and lock capabilities
-// (catalog.d/rbd.json).
+// (their //scenario:row declarations).
 const (
 	rbdJournalLostAppendSelector    = "^TestCephRBDJournalLostAppendReplyIntegration$"
 	rbdJournalPrimaryChangeSelector = "^TestCephRBDJournalPrimaryChangeIntegration$"

@@ -10,7 +10,7 @@ import (
 )
 
 // The native tests that declare the held-FLOCK split capabilities
-// (catalog.d/mds-cephfs-heldflock-split-*.json).
+// (their //scenario:row declarations).
 const (
 	mdsCephFSHeldFlockSplitSelector          = "^TestCephMDSCephFSHeldFlockSplitReconnectIntegration$"
 	mdsCephFSHeldFlockSplitFragmentsSelector = "^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$"

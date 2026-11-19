@@ -8,7 +8,7 @@ import (
 )
 
 // mdsCephFSMixedWritebackSelector is the native test that declares
-// mds-writeback-mixed (catalog.d/mds-cephfs-mixed-writeback.json).
+// mds-writeback-mixed (its //scenario:row declarations).
 const mdsCephFSMixedWritebackSelector = "^TestCephMDSCephFSMixedWritebackRecoveryIntegration$"
 
 func mixedWritebackEnv() map[string]string {

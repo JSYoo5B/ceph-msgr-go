@@ -9,7 +9,7 @@ import (
 )
 
 // mdsCephFSWritebackSelector is the native test that declares
-// mds-writeback-fence (catalog.d/mds-cephfs-writeback.json).
+// mds-writeback-fence (its //scenario:row declarations).
 const mdsCephFSWritebackSelector = "^TestCephMDSCephFSWritebackFenceIntegration$"
 
 // writebackProfile is the data fixture profile of the writeback-fence row.

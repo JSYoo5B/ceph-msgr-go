@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -14,9 +13,11 @@ class ChangePlanTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.git('init', '-q')
         self.write('README.md', 'before\n')
-        self.write('.github/scenarios/catalog.d/_catalog.json', json.dumps({'version':1}))
-        for group in ('mon-mgr', 'osd', 'mds-sessions', 'rbd'):
-            self.write('.github/scenarios/catalog.d/%s.json' % group, json.dumps({'scenarios':[{'group':group}]}))
+        self.write('.github/workflows/platform-checks.yml', "jobs:\n  unit:\n    if: contains(fromJSON(inputs.matrix).fixed, 'unit')\n")
+        # The groups are the identifier prefixes of the rows declared beside the tests.
+        self.write('integration/rows_test.go', ''.join(
+            '//scenario:row %s.aes key=aes\n//fixture:shareable x\nfunc TestCeph%dIntegration(t *testing.T) {}\n' % (group, index)
+            for index, group in enumerate(('mon-mgr', 'osd', 'mds-sessions', 'rbd'))))
         self.base = self.commit()
 
     def git(self, *args):
@@ -72,7 +73,7 @@ class ChangePlanTests(unittest.TestCase):
         self.assertFalse(self.result()['docs_only'])
         self.git('reset','--hard',self.base)
         (self.root/'README.md').unlink()
-        (self.root/'README.md').symlink_to('.github/scenarios/catalog.d/_catalog.json')
+        (self.root/'README.md').symlink_to('integration/rows_test.go')
         self.commit()
         self.assertFalse(self.result()['docs_only'])
 

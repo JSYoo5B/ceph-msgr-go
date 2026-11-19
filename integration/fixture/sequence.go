@@ -18,8 +18,9 @@ import (
 
 // A fixture sequence runs the tests of several catalog rows that share one
 // fixture configuration on one fixture (FIXTURE_SHARING.md). The planner
-// forwards the rows' selectors, in catalog order, as CEPH_MSGR_TEST_SEQUENCE
-// and their union as CEPH_MSGR_TEST_RUN, which the result gate snapshots.
+// forwards the rows' selectors, in catalog (identifier) order, as
+// CEPH_MSGR_TEST_SEQUENCE and their union as CEPH_MSGR_TEST_RUN, which the
+// result gate snapshots.
 // The fixture runs every selected top-level test alone (-test.run ^Name$),
 // in row order, then suite order (api, client), then the suite's listing
 // order, each test once, and requires the start-state check

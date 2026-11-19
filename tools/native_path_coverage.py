@@ -87,7 +87,7 @@ def test_link_problems(root, name, path):
 
 
 def catalog_vocabulary(root):
-    return catalog_from(scenario_catalog.load(root / scenario_catalog.CATALOG))
+    return catalog_from(scenario_catalog.load(root))
 
 
 def spec_paths(root):

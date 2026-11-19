@@ -91,10 +91,12 @@ never read as an accepted path.
 
 ## Reading the evidence column
 
-- `group:<name>` and full scenario IDs refer to
-  [catalog.d](../../../.github/scenarios/catalog.d/); `suite:<id>` refers to
-  its check suites. Every native row of that catalog is in the default
-  coverage.
+- `group:<name>` and full scenario IDs refer to the scenario catalog, the rows
+  declared beside the native tests they select (`//scenario:` lines; see the
+  [scenario README](../../../.github/scenarios/README.md)); `suite:<id>` refers
+  to the fixed check jobs of
+  [platform-checks.yml](../../../.github/workflows/platform-checks.yml). Every
+  native row of that catalog is in the default coverage.
 - A plain `TestCeph...` name is a top-level Go test that `go test -list` reports
   in the product, fixture or quality module.
 - `ctg@v0.3.0:`, `ctg@v0.4.0:` and `ctg@main:` name a native receipt test of

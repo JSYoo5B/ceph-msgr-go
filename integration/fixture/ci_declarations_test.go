@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -159,6 +160,19 @@ func ciDeclaration(text string, column int, owner string, suite ciNativeSuite) (
 	return ciScenario{ID: id, Params: params}, ""
 }
 
+// ciRepositoryCatalog returns the rows declared in the repository.
+func ciRepositoryCatalog(t *testing.T) []ciScenario {
+	t.Helper()
+	rows, problems := ciDiscoverScenarios(filepath.Join("..", ".."))
+	if len(problems) != 0 {
+		t.Fatal("scenario declarations:\n" + strings.Join(problems, "\n"))
+	}
+	if len(rows) == 0 {
+		t.Fatal("no scenario is declared")
+	}
+	return rows
+}
+
 func ciDeclarationWrite(t *testing.T, root, name, text string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(name))
@@ -240,5 +254,57 @@ func TestScenarioDeclarationsRefuseMisplacedAndMalformedRows(t *testing.T) {
 	ciDeclarationWrite(t, root, "cephmsgr/b_test.go", ciDeclaringSource("TestCephYIntegration", row))
 	if _, problems := ciDiscoverScenarios(root); len(problems) != 1 || !strings.Contains(problems[0], "duplicate scenario identifier osd.a") {
 		t.Fatalf("duplicate problems = %q", problems)
+	}
+}
+
+// ciReadingProblems compares the planner's rows with the fixture's reading
+// of the same declarations: the same identifiers, in the same order, with
+// the same parameters.
+func ciReadingProblems(planned, read []ciScenario) []string {
+	var problems []string
+	byID := map[string]ciScenario{}
+	for _, row := range read {
+		byID[row.ID] = row
+	}
+	seen := map[string]bool{}
+	for _, row := range planned {
+		seen[row.ID] = true
+		mine, ok := byID[row.ID]
+		switch {
+		case !ok:
+			problems = append(problems, fmt.Sprintf("%s: the planner reads a declaration the fixture does not", row.ID))
+		case !maps.Equal(mine.Params, row.Params):
+			problems = append(problems, fmt.Sprintf("%s: the planner reads parameters %v, the fixture %v", row.ID, row.Params, mine.Params))
+		}
+	}
+	for _, row := range read {
+		if !seen[row.ID] {
+			problems = append(problems, fmt.Sprintf("%s: the fixture reads a declaration the planner does not", row.ID))
+		}
+	}
+	if len(problems) == 0 && !slices.EqualFunc(planned, read, func(a, b ciScenario) bool { return a.ID == b.ID }) {
+		problems = append(problems, "the planner and the fixture order the declared rows differently")
+	}
+	return problems
+}
+
+func TestPlannerAndFixtureReadingsMustAgree(t *testing.T) {
+	a := ciScenario{"osd.a", map[string]string{"key": "aes"}}
+	b := ciScenario{"osd.b", map[string]string{"key": "aes"}}
+	if problems := ciReadingProblems([]ciScenario{a, b}, []ciScenario{a, b}); len(problems) != 0 {
+		t.Fatal(problems)
+	}
+	for _, tc := range []struct {
+		planned, read []ciScenario
+		want          string
+	}{
+		{[]ciScenario{a}, []ciScenario{a, b}, "osd.b: the fixture reads a declaration the planner does not"},
+		{[]ciScenario{a, b}, []ciScenario{a}, "osd.b: the planner reads a declaration the fixture does not"},
+		{[]ciScenario{a, {"osd.b", map[string]string{"key": "aes256k"}}}, []ciScenario{a, b}, "osd.b: the planner reads parameters"},
+		{[]ciScenario{b, a}, []ciScenario{a, b}, "order the declared rows differently"},
+	} {
+		if problems := ciReadingProblems(tc.planned, tc.read); len(problems) != 1 || !strings.Contains(problems[0], tc.want) {
+			t.Errorf("problems = %q, want %q", problems, tc.want)
+		}
 	}
 }

@@ -34,7 +34,7 @@ func TestCacheOpGoControlIsClosed(t *testing.T) {
 }
 
 // cacheOpGoSelector is a native test that declares exclusive-osd-cache-pools
-// (catalog.d/osd-cache-pools.json).
+// (its //scenario:row declarations).
 const cacheOpGoSelector = "^TestCephOSDCacheOpGoIntegration$"
 
 func TestCacheOpGoSelectorReusesExclusiveCachePoolProfile(t *testing.T) {

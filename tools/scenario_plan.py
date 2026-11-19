@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """Validate the native interoperability scenario catalog and plan a selection.
 
-The catalog (composed by scenario_catalog.py) is the discoverable list of the
-real-daemon scenarios and selectable platform check suites. Each native entry
-has a stable identifier, group and workflow matrix parameters. This tool
-validates the catalog against the reusable check jobs, the tests it selects and
-the fixture, and prints the selected matrix with an explanation. Every catalog
-row is in the default coverage (`all`); there is no separate list of required
-rows. `validate` resolves test selectors against the tests Go lists for the
-native suites (go_test_list.py compiles them and executes no test body) and runs
-the fixture's own admission of every row (one cluster-free Go test of
-integration/fixture, which needs the fixture module's Go toolchain); it starts
-no cluster. `list`, `plan` and `env` read local files only.
+The catalog (scenario_catalog.py) is the discoverable set of the real-daemon
+scenarios and selectable platform check suites. Each native row is declared
+beside the test it selects (//scenario:row or //scenario:suite,
+scenario_declarations.py) with a stable identifier, its group (the identifier
+before the first dot) and its workflow matrix parameters; the fixed checks are
+the selectable jobs of the reusable platform workflow. This tool validates the
+catalog against those jobs, the tests it selects and the fixture, and prints
+the selected matrix with an explanation. Every row is in the default coverage
+(`all`); there is no separate list of required rows, and rows are planned in
+identifier order. `validate` resolves test selectors against the tests Go
+lists for the native suites (go_test_list.py compiles them and executes no
+test body) and runs the fixture's own reading of the declarations and its
+admission of every row (one cluster-free Go test of integration/fixture, which
+needs the fixture module's Go toolchain); it starts no cluster. `list`, `plan`
+and `env` read local files and Git objects only.
 
   scenario_plan.py validate               invariants, fixed jobs, selector targets, documented
                                           reproductions, fixture admission of every row
@@ -22,12 +26,11 @@ no cluster. `list`, `plan` and `env` read local files only.
   scenario_plan.py sharing                every row's fixture sharing value and the jobs of the default
                                           coverage
 
-`list`, `plan` and `env` accept --catalog PATH to read another revision's
-catalog (a pull request's vocabulary) while running this trusted script. PATH
-is a fragment directory, or the earlier single catalog file of a pull request
-opened before the split. `plan` and `env` then take that revision's test
-sources from --sources-revision SHA (Git blobs, no checkout); without it they
-plan another catalog without grouping.
+`list`, `plan` and `env` accept --revision SHA to read another revision's
+declarations (a pull request's vocabulary) from its Git objects, without a
+checkout, while running this trusted script; the fixture sharing declarations
+that group rows come from the same objects, and the fixed checks from this
+tree's workflow.
 
 A selector S is "all", "group:<group>" or a scenario identifier; several can be
 given. An unknown selector is an error, never an empty or conservative match.
@@ -70,7 +73,7 @@ declaration and a misplaced declaration. A fixture configuration is a row's
 parameters without test_run.
 
 plan groups the selected rows: the shareable rows of one configuration with
-an explicit test_run, in catalog order, run as one job of at most
+an explicit test_run, in catalog (identifier) order, run as one job of at most
 MAX_SEQUENCE_ROWS rows, a fixture sequence (integration/fixture/sequence.go).
 Every other selected row, and a configuration with one such row selected,
 keeps a job of its own, exactly as before; a request of one row is therefore
@@ -84,7 +87,10 @@ and the default coverage's job count.
 
 validate refuses a documented `env ID` of an unknown row, a documented `env`
 that is not this checked form, and a hand-written reproduction that selects
-the exact test of a row with capabilities but does not declare them.
+the exact test of a row with capabilities but does not declare them. It also
+refuses a scenario declaration outside the native suites' test files, the
+catalog files of the earlier layout, and a row set that the fixture's own
+reading of the declarations (Go's parser) does not find identically.
 """
 import argparse
 import json
@@ -100,9 +106,9 @@ import fixture_sharing as sharing_sources
 import go_test_list
 import rgw_native_gate
 import scenario_catalog
+import scenario_declarations
 
 ROOT = Path(__file__).resolve().parent.parent
-CATALOG = ROOT / scenario_catalog.CATALOG
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CHECKS_WORKFLOW = ROOT / ".github" / "workflows" / "platform-checks.yml"
 NATIVE_WORKFLOW = ROOT / ".github" / "workflows" / "native-scenarios.yml"
@@ -144,19 +150,18 @@ class PlanError(Exception):
     pass
 
 
-def args_with_catalog(catalog):
-    return argparse.Namespace(catalog=str(catalog), sources_revision=None)
-
-
-def load_catalog_document(path=CATALOG):
+def load_catalog_document(revision=None):
+    """The catalog of this tree, or of a revision's Git objects."""
     try:
-        return scenario_catalog.load(path)
+        if revision:
+            return scenario_catalog.load_revision(revision, Path.cwd(), ROOT)
+        return scenario_catalog.load(ROOT)
     except scenario_catalog.CatalogError as error:
         raise PlanError(str(error)) from None
 
 
-def load_catalog(path=CATALOG):
-    return load_catalog_document(path)["scenarios"]
+def load_catalog(revision=None):
+    return load_catalog_document(revision)["scenarios"]
 
 
 def validate_catalog(scenarios):
@@ -377,21 +382,27 @@ def reproduction_problems(documents, scenarios):
     return problems
 
 
-def fixture_admission_problems(run=subprocess.run, directory=FIXTURE, planned=()):
+def fixture_admission_problems(run=subprocess.run, directory=FIXTURE, planned=(), rows=()):
     """The rows of this tree's catalog that its fixture refuses.
 
-    Runs the fixture's TestCatalogRowsAreAdmittedByTheFixture, which passes
-    every row through loadProfile with the native workflow's bindings and
-    reports each refusal on a line marked ADMISSION_MARK. A check that does
-    not run, does not pass and reports no row is a problem as well, never a
-    silent pass. planned are matrix entries of fixture sequences the planner
-    makes; the same test passes each of them through loadProfile."""
+    Runs the fixture's TestCatalogRowsAreAdmittedByTheFixture, which reads
+    the declarations with Go's parser, passes every row through loadProfile
+    with the native workflow's bindings and reports each refusal on a line
+    marked ADMISSION_MARK. A check that does not run, does not pass and
+    reports no row is a problem as well, never a silent pass. planned are
+    matrix entries of fixture sequences the planner makes; the same test
+    passes each of them through loadProfile. rows are the rows this planner
+    read from the declarations (CEPH_MSGR_PLANNED_ROWS); the test reports
+    every row the two readings do not find identically."""
     command = ["go", "test", "-mod=readonly", "-count=1", "-json", "-run", "^%s$" % ADMISSION_TEST, "."]
     with tempfile.TemporaryDirectory() as scratch:
         jobs = Path(scratch) / "planned-jobs.json"
         jobs.write_text(json.dumps(list(planned)), encoding="utf-8")
+        declared = Path(scratch) / "planned-rows.json"
+        declared.write_text(json.dumps([{"id": row["id"], "params": row["params"]} for row in rows]), encoding="utf-8")
         try:
-            result = run(command, cwd=str(directory), env=dict(os.environ, GOWORK="off", CEPH_MSGR_PLANNED_JOBS=str(jobs)),
+            result = run(command, cwd=str(directory), env=dict(os.environ, GOWORK="off", CEPH_MSGR_PLANNED_JOBS=str(jobs),
+                                                               CEPH_MSGR_PLANNED_ROWS=str(declared)),
                          capture_output=True, text=True, timeout=1200)
         except (OSError, subprocess.SubprocessError) as error:
             return ["the fixture admission check (%s) did not run: %s" % (ADMISSION_TEST, error)]
@@ -644,17 +655,15 @@ def matrix(entries, declared=None):
     }
 
 
-def plan_sources(args):
-    """The declarations plan and env group by, or None (no grouping)."""
-    if getattr(args, "sources_revision", None):
+def plan_sources(revision=None):
+    """The fixture sharing declarations plan and env group by: this tree's,
+    or a revision's from its Git objects."""
+    if revision:
         try:
-            sources = sharing_sources.revision_sources(args.sources_revision, Path.cwd())
+            return sharing_sources.declarations(sharing_sources.revision_sources(revision, Path.cwd()))
         except scenario_catalog.CatalogError as error:
-            raise PlanError("test sources of %s: %s" % (args.sources_revision, error)) from None
-        return None if sources is None else sharing_sources.declarations(sources)
-    if Path(args.catalog).resolve() == CATALOG.resolve():
-        return sharing_sources.declarations(sharing_sources.tree_sources(ROOT))
-    return None
+            raise PlanError("test sources of %s: %s" % (revision, error)) from None
+    return sharing_sources.declarations(sharing_sources.tree_sources(ROOT))
 
 
 def fixed_entries(document):
@@ -667,31 +676,35 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("validate")
     listing = sub.add_parser("list")
-    listing.add_argument("--catalog", default=str(CATALOG))
+    listing.add_argument("--revision")
     plan = sub.add_parser("plan")
     plan.add_argument("--select", action="append", required=True)
-    plan.add_argument("--catalog", default=str(CATALOG))
-    plan.add_argument("--sources-revision")
+    plan.add_argument("--revision")
     sub.add_parser("sharing")
     env = sub.add_parser("env")
     env.add_argument("id", nargs="+")
-    env.add_argument("--catalog", default=str(CATALOG))
-    env.add_argument("--sources-revision")
+    env.add_argument("--revision")
     args = parser.parse_args(argv)
     try:
-        scenarios = load_catalog(getattr(args, "catalog", CATALOG))
         if args.command == "validate":
-            document = load_catalog_document()
-            problems = (validate_catalog(scenarios)
-                        + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
-                        + selector_problems(scenarios, suite_tests(), routed_tests())
-                        + reproduction_problems([(str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
-                                                 for path in documentation_files()], scenarios)
-                        + fixture_admission_problems(planned=[job for job in matrix(
-                            scenarios, plan_sources(args_with_catalog(CATALOG)))["include"] if "test_sequence" in job]))
+            problems = scenario_declarations.stray_declarations(ROOT)
+            try:
+                document = scenario_catalog.load(ROOT)
+            except scenario_catalog.CatalogError as error:
+                for problem in problems + str(error).splitlines():
+                    print(problem, file=sys.stderr)
+                return 1
+            scenarios = document["scenarios"]
+            problems += (validate_catalog(scenarios)
+                         + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
+                         + selector_problems(scenarios, suite_tests(), routed_tests())
+                         + reproduction_problems([(str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
+                                                  for path in documentation_files()], scenarios)
+                         + fixture_admission_problems(planned=[job for job in matrix(
+                             scenarios, plan_sources())["include"] if "test_sequence" in job], rows=scenarios))
             shared, values = fixture_sharing()
             problems += shared + sharing_problems(scenarios, values)
-            problems += sequence_problems(scenarios, values, plan_sources(args_with_catalog(CATALOG)))
+            problems += sequence_problems(scenarios, values, plan_sources())
             for problem in problems:
                 print(problem, file=sys.stderr)
             if problems:
@@ -699,6 +712,7 @@ def main(argv=None):
             print("catalog valid: %d scenarios, all in default coverage, selecting existing tests, admitted by the fixture,"
                   " each with a fixture sharing value" % len(scenarios))
         elif args.command == "sharing":
+            scenarios = load_catalog()
             problems, values = fixture_sharing()
             problems += sharing_problems(scenarios, values)
             if problems:
@@ -706,7 +720,7 @@ def main(argv=None):
                     print(problem, file=sys.stderr)
                 return 1
             groups = sharing_groups(scenarios, values)
-            planned = jobs(scenarios, plan_sources(args_with_catalog(CATALOG)))
+            planned = jobs(scenarios, plan_sources())
             for params, shareable, isolated in groups:
                 print("configuration %s" % json.dumps(params, sort_keys=True))
                 for sid in shareable:
@@ -721,9 +735,11 @@ def main(argv=None):
             print("default coverage: %d rows in %d jobs, %d of them fixture sequences of %s rows"
                   % (len(scenarios), len(planned), len(sequences), "+".join(str(len(job)) for job in sequences) or "no"))
         elif args.command == "list":
-            for entry in scenarios + fixed_entries(load_catalog_document(args.catalog)):
+            document = load_catalog_document(args.revision)
+            for entry in document["scenarios"] + fixed_entries(document):
                 print(entry["id"])
         elif args.command == "env":
+            scenarios = load_catalog(args.revision)
             problems = validate_catalog(scenarios)
             if problems:
                 raise PlanError("; ".join(problems))
@@ -733,16 +749,15 @@ def main(argv=None):
                     raise PlanError("unknown scenario %r" % sid)
             if len(set(args.id)) != len(args.id):
                 raise PlanError("a scenario is named twice")
-            planned = jobs([entry for entry in scenarios if entry["id"] in args.id], plan_sources(args))
+            planned = jobs([entry for entry in scenarios if entry["id"] in args.id], plan_sources(args.revision))
             if len(planned) != 1:
                 raise PlanError("the rows %s do not form one fixture sequence (%d jobs)" % (" ".join(args.id), len(planned)))
             for name, value in row_environment(job_parameters(planned[0]), workflow_bindings()):
                 print("export %s=%s" % (name, shlex.quote(value)))
         else:
-            problems = validate_catalog(scenarios)
-            document = load_catalog_document(args.catalog)
-            if "fixed_jobs" in document:
-                problems += fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
+            document = load_catalog_document(args.revision)
+            scenarios = document["scenarios"]
+            problems = validate_catalog(scenarios) + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
             if problems:
                 raise PlanError("; ".join(problems))
             vocabulary = scenarios + fixed_entries(document)
@@ -750,10 +765,7 @@ def main(argv=None):
             for line in explanation:
                 print(line, file=sys.stderr)
             print("selected %d of %d scenarios/checks" % (len(entries), len(vocabulary)), file=sys.stderr)
-            declared = plan_sources(args)
-            if declared is None:
-                print("no test sources for this catalog: every row runs on its own fixture", file=sys.stderr)
-            planned = matrix(entries, declared)
+            planned = matrix(entries, plan_sources(args.revision))
             sequences = [job for job in planned["include"] if "test_sequence" in job]
             for job in sequences:
                 print("fixture sequence of %s rows: %s" % (job["sequence_rows"], job["scenarios"]), file=sys.stderr)

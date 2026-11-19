@@ -7,8 +7,9 @@ and the planner's refusal of every other routed row shape.
 """
 import contextlib
 import io
-import json
+import os
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,7 +21,7 @@ import scenario_plan as plan
 CHECKPOINT = "rgw.aes256k.ip4.container.t-rgwcheckpoint"
 MULTISTRIPE = "rgw.aes256k.ip4.container.t-rgwmultistripe"
 BACKEND_FAULT = "rgw.aes256k.ip4.container.t-rgwbackendfault"
-# Rows in the planner's order: catalog fragments in file-name order.
+# Rows in the planner's order: identifier order.
 ROUTED = [BACKEND_FAULT, CHECKPOINT, MULTISTRIPE]
 PROFILE = {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "rgw_native": "1"}
 
@@ -45,7 +46,7 @@ class RGWRowsTest(ci_row_catalog.RowsTestCase):
         chosen, _ = plan.select(self.entries, ["all"])
         for sid in ROUTED:
             self.assertIn(sid, [entry["id"] for entry in chosen])
-        declared = plan.plan_sources(plan.args_with_catalog(plan.CATALOG))
+        declared = plan.plan_sources()
         jobs = plan.matrix(chosen, declared)["include"]
         routed = [job for job in jobs if job.get("rgw_native") == "1"]
         self.assertEqual([job["scenario"] for job in routed], ROUTED)
@@ -119,16 +120,25 @@ class RoutedRowRefusalTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertIn("rgw_native", self.problems(entry))
 
-    def test_plan_of_another_catalog_refuses_a_bad_routed_row(self):
+    def test_plan_of_another_revision_refuses_a_bad_routed_row(self):
         with tempfile.TemporaryDirectory() as directory:
-            catalog = Path(directory) / "catalog.d"
-            catalog.mkdir()
-            (catalog / "_catalog.json").write_text(json.dumps({"version": 1, "fixed_jobs": []}), encoding="utf-8")
-            (catalog / "rgw.json").write_text(json.dumps({"scenarios": [row("rgw.bad", test_run="^TestRGWNative.*$")]}),
-                                              encoding="utf-8")
-            errors = io.StringIO()
-            with contextlib.redirect_stderr(errors), contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(plan.main(["plan", "--catalog", str(catalog), "--select", "all"]), 2)
+            root = Path(directory)
+            git = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                                               cwd=root, check=True, capture_output=True).stdout.decode().strip()
+            git("init", "-q")
+            (root / "integration" / "fixture").mkdir(parents=True)
+            (root / "integration" / "fixture" / "r_test.go").write_text(
+                "package main\n\n//scenario:row rgw.bad key=aes256k service=aes256k family=4 rgw_native=1 test_run=^TestRGWNative.*$\n"
+                "//fixture:isolated x\nfunc TestRGWNativeCheckpointIntegration(t *testing.T) {}\n", encoding="utf-8")
+            git("add", ".")
+            git("commit", "-qm", "x")
+            errors, previous = io.StringIO(), os.getcwd()
+            os.chdir(root)
+            try:
+                with contextlib.redirect_stderr(errors), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(plan.main(["plan", "--revision", git("rev-parse", "HEAD"), "--select", "all"]), 2)
+            finally:
+                os.chdir(previous)
             self.assertIn("rgw_native=1 requires a test_run of exactly one of", errors.getvalue())
 
     def test_routed_listing_must_list_the_test_once(self):
