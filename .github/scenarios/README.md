@@ -347,6 +347,12 @@ default branch.
 Unknown selectors fail rather than silently matching nothing. Validation rejects
 duplicate identifiers, unsupported releases, missing parameters, bad or empty
 test selectors, selectors matching no test and missing suite definitions.
+A new validation of the catalog is a module of its own in
+[`tools/scenario_checks`](../../tools/scenario_checks/__init__.py) with a
+`check(context)` function and its tests in
+`tools/test_scenario_check_<name>.py`; `validate` runs every module there in
+name order. It edits no function, list or test class of `scenario_plan.py`
+or `test_scenario_plan.py`.
 
 ### Routed RGW checkpoint rows
 

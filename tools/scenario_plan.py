@@ -95,7 +95,9 @@ validate refuses a documented `env ID` of an unknown row, a documented `env`
 that is not this checked form, and a hand-written reproduction that selects
 the exact test of a row with capabilities but does not declare them. It also
 refuses a scenario declaration outside the native suites' test files and the
-catalog files of the earlier layout.
+catalog files of the earlier layout. A further check is a module of its own in
+tools/scenario_checks (see that package), which validate runs in name order;
+adding one edits no function, list or test class of this file.
 """
 import argparse
 import json
@@ -111,6 +113,7 @@ import fixture_sharing as sharing_sources
 import go_test_list
 import rgw_native_gate
 import scenario_catalog
+import scenario_checks
 import scenario_declarations
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -695,6 +698,10 @@ def main(argv=None):
                          + reproduction_problems([(str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
                                                   for path in documentation_files()], scenarios)
                          + admitted + declared + shared + sharing_problems(scenarios, values))
+            # A new check is a module of tools/scenario_checks, not a call here.
+            problems += scenario_checks.run(scenario_checks.ScenarioContext(
+                root=ROOT, document=document, scenarios=scenarios, listing=listing, routed_listing=routed_listing,
+                sharing=tests, selectors=selectors, values=values))
             for problem in problems:
                 print(problem, file=sys.stderr)
             if problems:
