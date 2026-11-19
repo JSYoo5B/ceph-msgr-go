@@ -1,11 +1,14 @@
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 import unittest
 
 import native_test_results as results
+import rgw_native_gate as gate
 import scenario_plan as plan
 from test_go_test_list import SHAPES, TWICE, module, tests_file
+from test_rgw_native_gate import stream as rgw_stream
 
 
 class NativeResultTests(unittest.TestCase):
@@ -161,6 +164,160 @@ class NativeResultTests(unittest.TestCase):
         for name in ["native_test_results"] + local:
             copy = 'cp .trusted-native/tools/%s.py "$RUNNER_TEMP/%s.py"' % (name, name)
             self.assertLess(text.index(copy), tested_checkout, name)
+
+
+def git(root, *arguments):
+    return subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.invalid"] + list(arguments),
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+
+class RoutedRGWResultTests(unittest.TestCase):
+    """The rgw-fixture backend of rows with rgw_native=1."""
+
+    def checkout(self, names=(gate.CHECKPOINT, gate.MULTISTRIPE)):
+        """A committed Git tree whose fixture module declares names; returns (root, HEAD)."""
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        root = Path(holder.name)
+        fixture = root / results.RGW_SUITE[1]
+        fixture.mkdir(parents=True)
+        (fixture / "go.mod").write_text("module example.invalid/fixture\n\ngo 1.24\n", encoding="utf-8")
+        (fixture / "main.go").write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
+        bodies = ["func %s(t *testing.T) {}" % name for name in names] + ["func TestRGWNativeHelper(t *testing.T) {}"]
+        (fixture / "rgw_test.go").write_text(tests_file(*bodies, package="main"), encoding="utf-8")
+        git(root, "init", "-q")
+        git(root, "add", ".")
+        git(root, "commit", "-q", "-m", "fixture")
+        return root, git(root, "rev-parse", "HEAD")
+
+    def stream_path(self):
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return str(Path(holder.name) / "rgw-native.jsonl")
+
+    def request(self, test=gate.CHECKPOINT):
+        return {"selector": "^%s$" % test, "expected": [["fixture", test]], "backend": results.RGW_BACKEND,
+                "revision": "a" * 40, "stream": "/nonexistent/rgw-native.jsonl"}
+
+    def log(self, test=gate.CHECKPOINT, result="PASS"):
+        return "Running Ceph test suite: fixture\n=== RUN   %s\n--- %s: %s (33.39s)\nPASS\n" % (test, result, test)
+
+    def test_snapshot_binds_one_known_checkpoint_the_revision_and_a_new_stream(self):
+        root, head = self.checkout()
+        stream = self.stream_path()
+        for test in (gate.CHECKPOINT, gate.MULTISTRIPE):
+            request = results.snapshot(root, "^%s$" % test, backend=results.RGW_BACKEND, revision=head, stream=stream)
+            self.assertEqual(request, {"selector": "^%s$" % test, "expected": [["fixture", test]],
+                                       "backend": results.RGW_BACKEND, "revision": head, "stream": stream})
+
+    def test_snapshot_refuses_unsupported_backends_tests_and_shapes(self):
+        root, head = self.checkout()
+        stream = self.stream_path()
+        refused = {
+            "unknown backend": dict(selector="^%s$" % gate.CHECKPOINT, backend="rgw", revision=head, stream=stream),
+            "unknown test": dict(selector="^TestRGWNativeHelper$", backend=results.RGW_BACKEND, revision=head, stream=stream),
+            "unanchored test": dict(selector=gate.CHECKPOINT, backend=results.RGW_BACKEND, revision=head, stream=stream),
+            "both tests": dict(selector="^%s$|^%s$" % (gate.CHECKPOINT, gate.MULTISTRIPE), backend=results.RGW_BACKEND,
+                               revision=head, stream=stream),
+            "broad selector": dict(selector="", backend=results.RGW_BACKEND, revision=head, stream=stream),
+            "sequence": dict(selector="^%s$" % gate.CHECKPOINT, sequence=True, backend=results.RGW_BACKEND,
+                             revision=head, stream=stream),
+            "missing revision": dict(selector="^%s$" % gate.CHECKPOINT, backend=results.RGW_BACKEND, stream=stream),
+            "wrong revision": dict(selector="^%s$" % gate.CHECKPOINT, backend=results.RGW_BACKEND, revision="b" * 40,
+                                   stream=stream),
+            "short revision": dict(selector="^%s$" % gate.CHECKPOINT, backend=results.RGW_BACKEND, revision=head[:12],
+                                   stream=stream),
+            "relative stream": dict(selector="^%s$" % gate.CHECKPOINT, backend=results.RGW_BACKEND, revision=head,
+                                    stream="rgw-native.jsonl"),
+            "revision without backend": dict(selector="^%s$" % gate.CHECKPOINT, revision=head),
+        }
+        for name, arguments in refused.items():
+            with self.subTest(name), self.assertRaises(ValueError):
+                results.snapshot(root, **arguments)
+
+    def test_snapshot_refuses_a_changed_fixture_module_an_old_stream_and_a_missing_test(self):
+        root, head = self.checkout()
+        arguments = dict(backend=results.RGW_BACKEND, revision=head)
+        selector = "^%s$" % gate.CHECKPOINT
+        untracked = root / results.RGW_SUITE[1] / "extra_test.go"
+        untracked.write_text("package main\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "differs from the tested revision"):
+            results.snapshot(root, selector, stream=self.stream_path(), **arguments)
+        untracked.unlink()
+        stream = self.stream_path()
+        Path(stream).write_text("", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            results.snapshot(root, selector, stream=stream, **arguments)
+        root, head = self.checkout(names=(gate.MULTISTRIPE,))
+        with self.assertRaisesRegex(ValueError, "does not list"):
+            results.snapshot(root, selector, backend=results.RGW_BACKEND, revision=head, stream=self.stream_path())
+
+    def test_verdict_requires_the_text_pass_and_the_rgw_gate(self):
+        for test in (gate.CHECKPOINT, gate.MULTISTRIPE):
+            with self.subTest(test):
+                verdict = results.verify(self.request(test), self.log(test), stream=rgw_stream(test), head="a" * 40)
+                self.assertTrue(verdict["passed"], verdict["problems"])
+                self.assertEqual(verdict["observed"], [{"suite": "fixture", "test": test, "result": "PASS"}])
+                self.assertTrue(verdict["rgw_gate"]["passed"])
+                self.assertEqual(verdict["backend"], results.RGW_BACKEND)
+
+    def test_verdict_refuses_skipped_missing_duplicate_and_foreign_targets(self):
+        test = gate.CHECKPOINT
+        good = rgw_stream(test)
+        skipped = rgw_stream(test, passes=0, extra=[{"Action": "skip", "Test": test}], line="", cleanup=False)
+        cases = {
+            "skipped stream and log": (self.log(test, "SKIP"), skipped, "a" * 40),
+            "skipped stream": (self.log(test), skipped, "a" * 40),
+            "missing log result": ("Running Ceph test suite: fixture\nPASS\n", good, "a" * 40),
+            "missing stream": (self.log(test), None, "a" * 40),
+            "duplicate log result": (self.log(test) + "--- PASS: %s (1.00s)\n" % test, good, "a" * 40),
+            "duplicate stream pass": (self.log(test), rgw_stream(test, passes=2), "a" * 40),
+            "other checkpoint": (self.log(gate.MULTISTRIPE), rgw_stream(gate.MULTISTRIPE), "a" * 40),
+            "product suite result": (self.log(test) + "Running Ceph test suite: api\n--- PASS: TestCephAIntegration (1.00s)\n",
+                                     good, "a" * 40),
+            "foreign package": (self.log(test), rgw_stream(test, terminal="example.org/unrelated"), "a" * 40),
+            "no cleanup record": (self.log(test), rgw_stream(test, cleanup=False), "a" * 40),
+            "revision changed": (self.log(test), good, "b" * 40),
+            "not a test2json stream": (self.log(test), "go: downloading\n", "a" * 40),
+        }
+        for name, (log, stream, head) in cases.items():
+            with self.subTest(name):
+                verdict = results.verify(self.request(test), log, stream=stream, head=head)
+                self.assertFalse(verdict["passed"])
+
+    def test_verdict_reads_the_stream_file_and_refuses_unknown_backends(self):
+        request = dict(self.request(), stream=self.stream_path())
+        self.assertFalse(results.verify(request, self.log())["passed"])
+        Path(request["stream"]).write_text(rgw_stream(gate.CHECKPOINT), encoding="utf-8")
+        self.assertTrue(results.verify(request, self.log())["passed"])
+        self.assertFalse(results.verify(dict(request, backend="rgw"), self.log())["passed"])
+
+    def test_product_requests_refuse_fixture_results(self):
+        request = {"selector": "^TestRequired$", "expected": [["api", "TestRequired"]]}
+        text = "Running Ceph test suite: api\n--- PASS: TestRequired (1.00s)\n"
+        self.assertTrue(results.verify(request, text)["passed"])
+        self.assertNotIn("backend", results.verify(request, text))
+        verdict = results.verify(request, text + self.log())
+        self.assertFalse(verdict["passed"])
+        self.assertIn("fixture/%s: a fixture-module result in a product-suite request" % gate.CHECKPOINT, verdict["problems"])
+
+    def test_cli_rechecks_the_revision_after_the_run(self):
+        root, head = self.checkout()
+        stream = self.stream_path()
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        scratch = Path(holder.name)
+        expected = scratch / "expected.json"
+        self.assertEqual(results.main(["snapshot", "--root", str(root), "--selector", "^%s$" % gate.CHECKPOINT,
+                                       "--backend", results.RGW_BACKEND, "--revision", head, "--stream", stream,
+                                       "--output", str(expected)]), 0)
+        Path(stream).write_text(rgw_stream(gate.CHECKPOINT), encoding="utf-8")
+        (scratch / "log.txt").write_text(self.log(), encoding="utf-8")
+        arguments = ["verify", "--expected", str(expected), "--log", str(scratch / "log.txt"),
+                     "--output", str(scratch / "tests.json"), "--root", str(root)]
+        self.assertEqual(results.main(arguments), 0)
+        git(root, "commit", "-q", "--allow-empty", "-m", "moved")
+        self.assertEqual(results.main(arguments), 1)
 
 
 if __name__ == "__main__":
