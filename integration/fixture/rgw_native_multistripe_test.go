@@ -26,7 +26,10 @@ const (
 // checkpoint: one S3 PUT of a 6 MiB object that the pinned gateway stores as a
 // head plus tail RADOS objects, its manifest, S3 DELETE and the resulting
 // tail cleanup through the owned garbage-collection queue. S3 is only input.
-// No product API, S3 SDK or comment-selected CI command is introduced.
+// No product API or S3 SDK is introduced. A catalog row with rgw_native=1
+// routes the trusted native workflow to this test (rgw_native_route.go).
+//
+//fixture:isolated starts its own owned RGW cluster and runs one explicit GC process on it
 func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_RGW_NATIVE") == "" {
 		t.Skip("set CEPH_MSGR_TEST_RGW_NATIVE=1 on an authorized Linux Docker runner")

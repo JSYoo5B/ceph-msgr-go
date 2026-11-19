@@ -21,8 +21,12 @@ import (
 
 const rgwNativeImage = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
 
-// This is a dedicated fixture-only checkpoint, not a profile of the Messenger
-// product suite or an available comment-selected CI scenario.
+// TestRGWNativeCheckpointIntegration is a dedicated fixture-only checkpoint,
+// not a profile of the Messenger product suite. A catalog row with
+// rgw_native=1 routes the trusted native workflow to this test
+// (rgw_native_route.go).
+//
+//fixture:isolated starts its own owned RGW cluster and restarts its gateway
 func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_RGW_NATIVE") == "" {
 		t.Skip("set CEPH_MSGR_TEST_RGW_NATIVE=1 on an authorized Linux Docker runner")
