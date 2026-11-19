@@ -137,11 +137,11 @@ changes.
 
 `scenario_plan.py plan` groups the selected rows: the shareable rows of one
 configuration that have an explicit `test_run` form one job of at most eight
-rows, in catalog order, at the place of its first row. An isolated row, a
+rows, in catalog (identifier) order, at the place of its first row. An isolated row, a
 broad row (no `test_run`), a row of another configuration and a request that
 selects one row of a configuration keep a job of their own with unchanged
 parameters, so `/ci run <row>` runs exactly that row. Because `plan` also
-plans a pull request's catalog for `/ci run`, it does not build that
+plans a pull request's declarations for `/ci run`, it does not build that
 revision: [`tools/fixture_sharing.py`](../../tools/fixture_sharing.py) reads
 the declarations above as text, from the working tree or from the tested
 revision's test-file blobs. It calls a row shareable only if every top-level
@@ -149,10 +149,8 @@ test its selector matches in `integration` and `cephmsgr` has a
 `//fixture:shareable` declaration directly above its function, and
 `validate` requires that reading to agree with
 `TestCatalogRowsDeclareFixtureSharing` for every row with an explicit
-`test_run`. Without the sources of another revision's catalog, or for a
-revision whose fixture has no sequence runner (`sequence.go` reading
-`CEPH_MSGR_TEST_SEQUENCE`), `plan` groups nothing: an older fixture would run
-the union selector in one process without the checks between tests.
+`test_run`. The scenario rows and these sharing lines come from the same
+sources, so `plan` always has both.
 `validate` also passes every sequence job it plans of the default coverage
 through the fixture's `loadProfile`, as the workflow forwards it.
 

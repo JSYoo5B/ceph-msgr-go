@@ -64,7 +64,7 @@ must follow the owner.
 | Raw command channels and their selectors | [COMMAND_CHANNEL_MATRIX.md](cephmsgr/COMMAND_CHANNEL_MATRIX.md) | `TestCommandChannelMatrixSelectorsExist` |
 | Join of a wire row to its unit selector and native receipt; attribution category of each receipt | [PROTOCOL_EVIDENCE.md](cephmsgr/PROTOCOL_EVIDENCE.md) | `python3 tools/protocol_evidence.py` |
 | Provenance of retained native codec vectors | the `testdata/*README.md` files and provenance records beside each package's vectors | the native-vector tests of that package |
-| Scenario definitions and required rows | [catalog.d](.github/scenarios/catalog.d/); rules in the [scenario README](.github/scenarios/README.md) | `python3 tools/scenario_plan.py validate`, `TestCICatalogInventory` |
+| Scenario definitions and required rows | `//scenario:` lines beside each native test; rules in the [scenario README](.github/scenarios/README.md#catalog-and-planner) | `python3 tools/scenario_plan.py validate`, `TestCICatalogInventory` |
 | Classification of native recipes per path, and where each record is | the [coverage map index](integration/fixture/coverage/README.md), one area file per path beside it and the row files of each area | `python3 tools/native_path_coverage.py` |
 | Reproducible fixture setup and control | `integration/fixture/*_FIXTURE.md`, `*_RECIPE.md` and `*_ORACLE.md` | review |
 | An observed native result: tested source, image, profile, outcome and what was not verified | the `integration/fixture/*_VALIDATION.md` record of that run | review; records are not rewritten by later changes |
@@ -99,8 +99,8 @@ answer.
    [native path coverage map](integration/fixture/coverage/README.md). Its
    Evidence column names the catalog scenario ID or group and the Go test;
    its Visibility column says whether a dedicated row requires the test or a
-   broad row may skip it. The scenario itself is defined in
-   its group's file in [catalog.d](.github/scenarios/catalog.d/).
+   broad row may skip it. The scenario itself is declared beside its test,
+   as a `//scenario:` line in the test's doc comment.
 5. **Observed native result.** Open the validation record linked from the
    coverage row. The receipt row in
    [PROTOCOL_EVIDENCE.md](cephmsgr/PROTOCOL_EVIDENCE.md#native-receipts)

@@ -62,15 +62,18 @@ A pull request that adds a native test edits only the files below. It edits
 no list, count or file of another area:
 
 - `integration/<name>_test.go`: the native test `TestCeph<Name>Integration`
-  with its `//fixture:shareable` or `//fixture:isolated` line (see
-  [Fixture sharing](#fixture-sharing)) and any cluster-free helper test.
-  Neither is registered anywhere; the tools list them with `go test -list`.
-- `.github/scenarios/catalog.d/<group>.<name>.json`: the new test's rows in
-  a new file named after its subject. A row with a `test_run` has an identifier that ends in `.t-<name>`.
+  with its rows and its sharing line at the end of its doc comment, and any
+  cluster-free helper test. Each row is one `//scenario:row <id>
+  <name>=<value> ...` line (see [Catalog and planner](#catalog-and-planner));
+  the identifier of a row of one test ends in `.t-<name>`. The
+  `//fixture:shareable` or `//fixture:isolated` line comes last (see
+  [Fixture sharing](#fixture-sharing)). Neither test is registered anywhere
+  else; the tools list them with `go test -list` and read the rows from the
+  source.
 - `integration/fixture/<name>.go`: the capability of a test-specific fixture
   mode, `defineCapability` beside the mode (see
-  [Fixture capabilities](#fixture-capabilities)). The row declares it in
-  `capabilities`. On a fixture with its own default selection the row also
+  [Fixture capabilities](#fixture-capabilities)). The row declares it as
+  `capabilities=<name>`. On a fixture with its own default selection the row also
   declares the one capability that admits its test there: an existing one
   (`osd-erasure-width` on the four-OSD topology), or a new
   `defineExclusiveCapability` when the new mode is the admission itself.
@@ -94,29 +97,61 @@ in this document. `tools/test_merge_proof.py` makes two such pull requests in
 a temporary Git repository, once in two areas and once in one area, merges
 them and runs the validators on the merged tree. Every case must merge without
 a conflict, including two RBD registrations and two four-OSD registrations.
-The proof requires Git to create each merge without repairs.
+The proof requires Git to create each merge without repairs, requires that no
+two branches edit one file, and requires the planner to refuse a catalog file
+brought back beside the declarations.
 
 ## Catalog and planner
 
-The catalog is the directory [`catalog.d`](catalog.d/). `_catalog.json` holds the
-catalog version and the fixed check suites. Existing row groups have their own
-`<group>.json`, `{"scenarios": [...]}`, holding that group's rows, and each row
-keeps its `group` field. New registrations use `<group>.<subject>.json`,
-with the same JSON shape and group field. Each filename component has 1–64
-lowercase alphanumeric or hyphen characters and starts with an alphanumeric.
-A subject is chosen by its author, without allocating a name in a shared list.
-`tools/scenario_catalog.py` composes the directory for every
-reader (the planner, the change planner, the coverage map check and the
-fixture's Go tests use it or its Go counterpart `ciLoadCatalog`). The composed
-rows are in file-name order of the fragments and in file order within each
-fragment. A duplicate identifier in any two fragments, a row whose `group` is
-not the filename before the first dot, an empty fragment and any other file
-or directory are refused.
+The catalog is not a file. Each row is declared beside the test it selects,
+in that test's doc comment, before its `//fixture:` sharing line:
 
-Subject fragments remove the same-group shared edit while retaining the
-existing catalog data. The longer-term direction of declarations beside the
-native tests remains separate. A trusted default-branch planner must contain
-this loader before a PR can request rows using the new filename form.
+```go
+// TestCephOSDCopyFromSnapTruncateIntegration checks ...
+//
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdcopyfromsnaptruncate key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
+//fixture:isolated ...
+func TestCephOSDCopyFromSnapTruncateIntegration(t *testing.T) {
+```
+
+- `//scenario:row <id> <name>=<value> ...` selects the test it is declared
+  beside: its `test_run` is `^<TestName>$`. A row of several tests gives an
+  explicit `test_run=<selector>` that also selects that test, and is declared
+  beside the first test the selector names.
+- `//scenario:suite <id> <name>=<value> ...` has no `test_run`: it runs every
+  test its fixture configuration enables. It is declared beside the test that
+  configuration exists for (`managers=0` beside
+  `TestCephManagerAvailabilityIntegration`, `osd_soak=4m` beside
+  `TestCephOSDSoakIntegration`, and so on), or beside its group's base test
+  (`TestCephIntegration` for `mon-mgr`, `TestCephOSDIOIntegration` for `osd`).
+- The group is the identifier before its first dot. A value has no white
+  space and may be empty (`stress=`). The row's parameters are the written
+  ones in written order, then `test_run`, then `capabilities`.
+- Declarations are read from the `*_test.go` files of `integration`,
+  `cephmsgr` and, for the routed RGW checkpoints only (`rgw_native=1`),
+  `integration/fixture`. The rows are in identifier order, so where a
+  declaration sits changes no plan.
+
+`tools/scenario_declarations.py` reads the declarations as text, and
+`tools/scenario_catalog.py` composes them with the fixed check suites for
+every reader (the planner, the change planner and the coverage map check).
+The fixture reads them independently with Go's parser
+(`integration/fixture/ci_declarations_test.go`), and `validate` passes the
+planner's rows to `TestCatalogRowsAreAdmittedByTheFixture`, which reports
+every row the two readings do not find identically. A malformed or indented
+declaration, one outside the doc comment of a top-level native test of those
+suites, one in any other Go file, a duplicate identifier or parameter, a suite
+row with a `test_run`, a row whose explicit `test_run` does not select its
+test (or repeats `^<TestName>$`), `rgw_native=1` outside the RGW checkpoints
+and a checkpoint row without it are refused. So are the catalog files of the
+earlier layout (`.github/scenarios/catalog.d`, `catalog.json`): a tree or a
+tested revision that has one is refused, so rows are never read from two
+places.
+
+The fixed check suites are the jobs of
+[`platform-checks.yml`](../workflows/platform-checks.yml) whose condition is
+their own name in the plan's `fixed` list; the workflow that runs a check is
+its only declaration.
 
 ### Fixture capabilities
 
@@ -603,7 +638,8 @@ defaults retain their optional skips and require at least one actual PASS;
 success does not claim that those optional tests ran. Scenario artifacts include
 the expected tests, observed results and verdict in `tests.json`.
 
-The catalog also names five selectable check suites:
+The catalog also names five selectable check suites, the selectable jobs of
+`platform-checks.yml`:
 
 | Selector | Work |
 | --- | --- |
@@ -653,14 +689,13 @@ product's Go 1.25.0 (or the matrix Go) afterwards for the product steps;
 is older than the modules its tools load.
 
 The planner emits native rows in `include` and selected check suites in `fixed`.
-`--catalog` reads the tested revision's vocabulary using the trusted planner.
-It takes a fragment directory, or the single `catalog.json` that held the
-catalog before it was split. For `/ci run`, the trusted
-`scenario_catalog.py extract` copies the tested revision's catalog blobs from
-Git objects, without checking the revision out, and refuses a revision with
-neither layout, with both, or with a symlink, subdirectory or unknown file in
-`catalog.d`. The single-file path exists only for pull requests opened before
-the split and can be removed once none of them is open.
+`--revision SHA` reads the tested revision's vocabulary using the trusted
+planner: for `/ci run`, `plan --revision` reads the revision's declaring test
+files (and their `//fixture:` sharing lines) from Git objects as text, without
+checking the revision out or running any of its code, and takes the fixed
+check suites from the trusted workflow that runs them. A revision that still
+has `catalog.d` or `catalog.json` is refused with a request to merge the
+default branch.
 Unknown selectors fail rather than silently matching nothing. Validation rejects
 duplicate identifiers, unsupported releases, missing parameters, bad or empty
 test selectors, selectors matching no test and missing suite definitions.
@@ -677,7 +712,7 @@ module instead of the controller's own fixture:
 (`TestRGWNativeBackendFaultIntegration`, which stops and restarts the
 checkpoint cluster's own OSD and manager). Their recipes, receipts and limits
 are in [the RGW record](../../integration/fixture/RGW_NATIVE_VALIDATION.md).
-A row routes with the parameter `rgw_native: "1"`, which the native workflow
+A row routes with the parameter `rgw_native=1`, which the native workflow
 forwards as `CEPH_MSGR_TEST_RGW_NATIVE`; every other row keeps the fallback
 `0`. The routing is closed at each step:
 

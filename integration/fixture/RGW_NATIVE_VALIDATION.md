@@ -226,11 +226,11 @@ this file, so the recorded commit is the tested one.
 Each checkpoint has one row of group `rgw` in the scenario catalog:
 `rgw.aes256k.ip4.container.t-rgwcheckpoint`,
 `rgw.aes256k.ip4.container.t-rgwmultistripe` and
-`rgw.aes256k.ip4.container.t-rgwbackendfault`, in
-`.github/scenarios/catalog.d/rgw.checkpoint.json`, `rgw.multistripe.json`
-and `rgw.backendfault.json`. A reviewer requests them with `/ci run group:rgw` or
+`rgw.aes256k.ip4.container.t-rgwbackendfault`, each declared beside its
+checkpoint (`//scenario:row ... rgw_native=1` in the test's doc comment). A
+reviewer requests them with `/ci run group:rgw` or
 by identifier, and the weekly periodic run selects them with the rest of the
-default coverage. The row parameter `rgw_native: "1"` routes the trusted
+default coverage. The row parameter `rgw_native=1` routes the trusted
 native workflow (`.github/workflows/native-scenarios.yml`) to the fixture
 controller's closed RGW route (`rgw_native_route.go`): it admits only these
 three exact tests at the checkpoints' own fixed inputs, starts no fixture of
