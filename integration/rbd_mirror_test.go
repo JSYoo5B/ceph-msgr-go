@@ -176,6 +176,7 @@ func rbdMirrorPeerWitness(osd []rbdMirrorSession, mons []rbdMirrorMonSession, ad
 // patch arrives at the destination. The product implements no mirroring: the
 // Go session is the control that attributes the fault to one peer path.
 //
+//scenario:row rbd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdmirrorpathrecovery key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=rbd-mirror
 //fixture:isolated creates pool msgr-mirror with mirroring and a peer user, kept after finish; starts mirror containers
 func TestCephRBDMirrorPathRecoveryIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_RBD_MIRROR") != "1" {

@@ -1025,6 +1025,8 @@ func waitRBDLockNotification(ctx context.Context, r *rbdLockResponder, from int,
 	}
 }
 
+//scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-lock-owner-loss
+//scenario:row rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-lock-owner-loss
 //fixture:isolated kills the native lock owner and blocklists its address; removed only at fixture teardown
 func TestCephRBDLockOwnerLossIntegration(t *testing.T) { runRBDLockOwnerLoss(t, false) }
 
@@ -1045,6 +1047,8 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) { runRBDLockOwnerLoss(t, 
 // gone afterwards. See
 // integration/fixture/RBD_LOCK_OWNER_LOSS_PENDING_VALIDATION.md.
 //
+//scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerlosspending key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-lock-owner-loss,rbd-lock-pending-requests
+//scenario:row rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerlosspending key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-lock-owner-loss,rbd-lock-pending-requests
 //fixture:isolated blocklists the lock owner, toggles pool flag nodeep-scrub; blocklist removed only at fixture teardown
 func TestCephRBDLockOwnerLossPendingIntegration(t *testing.T) { runRBDLockOwnerLoss(t, true) }
 
