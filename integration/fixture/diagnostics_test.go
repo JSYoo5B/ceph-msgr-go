@@ -68,27 +68,35 @@ func TestCollectDiagnosticFilesRefusesPatternsPathsAndRepeats(t *testing.T) {
 	}
 }
 
-// saveMetadata copies declared files that exist and nothing else from the
-// output directory.
+// saveMetadata copies every declared file that exists and nothing else from
+// the output directory.
 func TestSaveMetadataCopiesOnlyDeclaredFiles(t *testing.T) {
-	out, diagnostics := t.TempDir(), t.TempDir()
-	for _, name := range []string{"osd-pool-result.json", "keyring", "ceph.conf", "osd-pool-result.json.tmp", "undeclared-results.json"} {
-		if err := os.WriteFile(filepath.Join(out, name), []byte("{}"), 0o600); err != nil {
+	for _, declared := range []bool{false, true} {
+		out, diagnostics := t.TempDir(), t.TempDir()
+		written := []string{"osd-pool-result.json", "keyring", "ceph.conf", "osd-pool-result.json.tmp", "undeclared-results.json"}
+		want := []string{"osd-pool-result.json"}
+		if declared {
+			want = slices.Sorted(maps.Keys(diagnosticFiles))
+			written = append(written, want...)
+		}
+		for _, name := range written {
+			if err := os.WriteFile(filepath.Join(out, name), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := saveMetadata(out, diagnostics); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := saveMetadata(out, diagnostics); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := os.ReadDir(diagnostics)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var copied []string
-	for _, entry := range entries {
-		copied = append(copied, entry.Name())
-	}
-	if strings.Join(copied, " ") != "osd-pool-result.json" {
-		t.Fatal("saveMetadata copied", copied)
+		entries, err := os.ReadDir(diagnostics)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var copied []string
+		for _, entry := range entries {
+			copied = append(copied, entry.Name())
+		}
+		if !slices.Equal(copied, want) {
+			t.Fatal("saveMetadata copied", len(copied), "files, not the", len(want), "declared ones present:", copied)
+		}
 	}
 }

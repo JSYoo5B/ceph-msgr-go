@@ -11,7 +11,11 @@ and only that:
 - its catalog row in a new subject-named fragment of its group in catalog.d;
 - the fixture capability the row declares, in a new integration/fixture file
   (defineCapability, or defineExclusiveCapability on a fixture with its own
-  default selection);
+  default selection), with the public receipt its control writes
+  (collectDiagnosticFiles);
+- a new owned-pool oracle mode, in its own module
+  tools/osd_pool_mode_<name>_oracle.py (@oracle_mode), which the native test
+  reads with nativePoolResult into a result type of its own;
 - a coverage row with its dated note, in a new row file
   integration/fixture/coverage/<AREA>/<AREA>-<name>.md;
 - the row's own checks, in a new tools/test_ci_rows_<group>_<name>.py.
@@ -32,13 +36,16 @@ Each merged tree then passes the repository's own validators, run from that
 tree: scenario_plan.py validate (catalog, selectors, the fixture's admission
 and sharing of every row), the cluster-free listing tools and the cluster-free
 tests with their result gate, native_path_coverage.py, every test of the
-fixture module, the coverage map's tests and every tools/test_ci_rows_*
-module. A validator that needs a total, a global list or a test-name
-admission list for the selections the branches add to (single-OSD legacy
-rows, the MDS CephFS, RBD and four-OSD erasure fixtures) fails on a merged
-tree, because no branch edits one; a branch that did edit one would conflict
-in a file outside the area. Checks of selections no branch adds to are not
-exercised here.
+fixture module, the coverage map's tests, every tools/test_ci_rows_* module
+and the owned-pool oracle's tests. It also requires that the merged oracle
+registers both branches' modes, that the fixture admits them from their
+declarations and that the fixture collects both branches' receipts. A
+validator that needs a total, a global list or a test-name admission list for
+the selections the branches add to (single-OSD legacy rows, the MDS CephFS,
+RBD and four-OSD erasure fixtures), or a central list of oracle modes or
+collected receipts, fails on a merged tree, because no branch edits one; a
+branch that did edit one would conflict in a file outside the area. Checks of
+selections no branch adds to are not exercised here.
 
 The test needs git and the Go toolchain of the fixture module, as the other
 tools tests do. It runs no cluster. Every merged tree is validated in the same
@@ -70,7 +77,8 @@ ID_PROFILE = "aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-le
 
 class Author:
     """One branch's additions: one native test, one helper, one row, one
-    capability, one coverage row and the row's own checks."""
+    capability with one receipt, one owned-pool oracle mode, one coverage row
+    and the row's own checks."""
 
     def __init__(self, name, group, area, opt_ins, exclusive, requires, test=None, base=None, id_profile=ID_PROFILE, also=()):
         self.args = (name, group, area, opt_ins, exclusive, requires)
@@ -93,25 +101,30 @@ class Author:
         # The coverage row is named after this author's subject; no number
         # is taken, so no other branch needs to be known.
         self.coverage_id = "%s-merge-proof-%s" % (area, name.lower())
+        # The owned-pool oracle mode and the public receipt of the control.
+        self.mode = "mergeproof" + name.lower()
+        self.receipt = "%s-results.json" % self.slug
 
     # The files, as an author writes them.
 
     def native_test(self):
         return ("package integration_test\n\n"
-                "import \"testing\"\n\n"
+                "import (\n\t\"context\"\n\t\"testing\"\n)\n\n"
                 "// %s is a native test of the merge proof (tools/test_merge_proof.py).\n"
                 "// It exists only in that test's temporary repository.\n"
                 "//\n"
                 "//fixture:shareable changes nothing outside the temporary repository of the merge proof\n"
                 "func %s(t *testing.T) {\n"
                 "\tt.Skip(\"merge proof test; selected only in the merge proof's temporary repository\")\n"
+                "\tvar result struct {\n\t\tSlot string `json:\"slot\"`\n\t}\n"
+                "\tnativePoolResult(t, context.Background(), %s, nil, &result)\n"
                 "}\n\n"
                 "// %s is the cluster-free helper test of the merge proof.\n"
                 "func %s(t *testing.T) {\n"
                 "\tif selector := %s; selector[0] != '^' {\n"
                 "\t\tt.Fatal(selector)\n"
                 "\t}\n"
-                "}\n" % (self.test, self.test, self.helper, self.helper, json.dumps(self.selector)))
+                "}\n" % (self.test, self.test, json.dumps(self.mode), self.helper, self.helper, json.dumps(self.selector)))
 
     def capability_source(self):
         variable = "capMergeProof" + self.name
@@ -125,8 +138,22 @@ class Author:
                 "\t\"admit the merge proof's mode for one test\",\n"
                 "\t%s, nil)\n\n"
                 "// mergeProof%sMode is the mode that %s admits.\n"
-                "func mergeProof%sMode(p profile) bool { return p.admits(%s) }\n"
-                % (variable, self.test, variable, call, json.dumps(self.requires), self.name, variable, self.name, variable))
+                "func mergeProof%sMode(p profile) bool { return p.admits(%s) }\n\n"
+                "// The public receipt of the merge proof's control.\n"
+                "var _ = collectDiagnosticFiles(%s)\n"
+                % (variable, self.test, variable, call, json.dumps(self.requires), self.name, variable, self.name, variable,
+                   json.dumps(self.receipt)))
+
+    def oracle_mode(self):
+        return ('"""Owned-pool oracle mode %s of the merge proof (tools/test_merge_proof.py).\n\n'
+                "It exists only in that test's temporary repository.\n"
+                '"""\n'
+                "import osd_pool_oracle as pool\n"
+                "from osd_pool_oracle import oracle_mode\n\n\n"
+                "# %s reports the name of owned slot 1 and sends no command.\n"
+                "@oracle_mode\n"
+                "def mode_%s(rados, cluster, request, out):\n"
+                "    return {\"slot\": pool.pool_name(1)}\n" % (self.mode, self.mode, self.mode))
 
     def row_checks(self):
         return ('"""Admission checks for the merge proof\'s %s row."""\n'
@@ -167,6 +194,7 @@ class Author:
             "capability": "integration/fixture/%s.go" % self.snake,
             "coverage": "integration/fixture/coverage/%s/%s.md" % (self.area, self.coverage_id),
             "checks": "tools/test_ci_rows_%s_%s.py" % (self.group.replace("-", "_"), self.snake),
+            "mode": "tools/osd_pool_mode_%s_oracle.py" % self.mode,
         }
 
 
@@ -314,6 +342,7 @@ class MergeProofTest(unittest.TestCase):
         repo.write(paths["fragment"], json.dumps({"scenarios": [
             {"id": author.id, "group": author.group, "params": author.params}]}, indent=1) + "\n")
         repo.write(paths["coverage"], author.coverage_file())
+        repo.write(paths["mode"], author.oracle_mode())
         repo.git("add", "--", *paths.values())
         repo.git("commit", "-q", "--no-verify", "-m", "add " + author.test)
         return branch
@@ -380,8 +409,23 @@ class MergeProofTest(unittest.TestCase):
         self.assertEqual(fixture.returncode, 0, "fixture module tests failed:\n" + (fixture.stdout + fixture.stderr)[-6000:])
         for test in ("TestFixtureCapabilityDefinitions", "TestCatalogRowsAreAdmittedByTheFixture",
                      "TestCatalogRowsDeclareFixtureSharing", "TestCICatalogInventory",
-                     "TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture"):
+                     "TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture",
+                     "TestOwnedPoolOracleModesAreDeclaredBesideTheirHandlers", "TestDiagnosticFilesAreDeclaredBesideTheirControls"):
             self.assertRegex(fixture.stdout, r"(?m)^--- PASS: %s \(" % test)
+        # The fixture admits both branches' modes from their own modules and
+        # collects both branches' receipts, though neither edited a list.
+        admitted = set(re.search(r"declared owned-pool oracle modes: ([a-z0-9 ]+)", fixture.stdout).group(1).split())
+        collected = set(re.search(r"declared diagnostic files: (\S+(?: \S+)*)", fixture.stdout).group(1).split())
+        for author in authors:
+            self.assertIn(author.mode, admitted)
+            self.assertIn(author.receipt, collected)
+        # The oracle itself registers both modes, and its own tests pass.
+        registered = repo.run(python, "-c", "import osd_pool_oracle as o; print(' '.join(sorted(o.HANDLERS)))",
+                              cwd=repo.path / "tools").stdout.split()
+        self.assertEqual(set(registered), admitted)
+        oracle_tests = repo.run(python, "-m", "unittest", "test_osd_pool_oracle", "-v", check=False, cwd=repo.path / "tools")
+        self.assertEqual(oracle_tests.returncode, 0, "owned-pool oracle tests failed:\n" + oracle_tests.stderr[-6000:])
+        self.assertRegex(oracle_tests.stderr, r"test_registered_modes_are_exactly_the_declared_ones .*\.\.\. ok")
 
         repo.run(python, "-m", "unittest", "discover", "-s", "tools", "-p", "test_scenario_catalog.py")
 

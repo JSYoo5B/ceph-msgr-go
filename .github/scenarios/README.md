@@ -74,6 +74,13 @@ no list, count or file of another area:
   declares the one capability that admits its test there: an existing one
   (`osd-erasure-width` on the four-OSD topology), or a new
   `defineExclusiveCapability` when the new mode is the admission itself.
+  The public receipts the control writes are declared in the same file with
+  `collectDiagnosticFiles`; the fixture keeps only declared files on failure.
+- `tools/osd_pool_mode_<name>_oracle.py`: a new mode of the owned-pool
+  oracle, the handler `mode_<name>` marked `@oracle_mode` and no other mode.
+  The oracle imports the module, and the fixture admits the mode from that
+  declaration. The test reads the mode's result with `nativePoolResult` into
+  a type of its own, so `poolReceipt` gains no field.
 - `integration/fixture/coverage/<AREA>/<AREA>-<name>.md`: the row of the
   [coverage map](../../integration/fixture/coverage/README.md#area-files)
   in a row file of its own, named after the row's subject, with its dated
