@@ -111,6 +111,8 @@ type snapObjectInfo struct {
 	UserVersion        uint64   `json:"user_version"`
 	Size               uint64   `json:"size"`
 	MTime              string   `json:"mtime"`
+	TruncateSeq        uint32   `json:"truncate_seq"`
+	TruncateSize       uint64   `json:"truncate_size"`
 	Flags              []string `json:"flags"`
 	ExpectedObjectSize uint64   `json:"expected_object_size"`
 	ExpectedWriteSize  uint64   `json:"expected_write_size"`
