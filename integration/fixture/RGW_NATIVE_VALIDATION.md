@@ -1,11 +1,12 @@
 # Bounded native RGW Messenger checkpoints
 
-`TestRGWNativeCheckpointIntegration` (small object) and
+`TestRGWNativeCheckpointIntegration` (small object),
 `TestRGWNativeMultiStripeIntegration` (multi-stripe object, manifest and
 garbage collection, described [below](#multi-stripe-manifest-and-gc-checkpoint))
-are dedicated development-fixture tests using released
-ceph-testcontainers-go v0.3.0. They add no product API, S3 SDK or native
-runtime dependency. Each has one catalog row that the trusted native workflow
+and `TestRGWNativeBackendFaultIntegration` (OSD and manager restart around
+S3 requests, described [below](#backend-fault-checkpoint)) are dedicated
+development-fixture tests using released ceph-testcontainers-go. They add no
+product API, S3 SDK or native runtime dependency. Each has one catalog row that the trusted native workflow
 routes to it ([Trusted catalog selection](#trusted-catalog-selection)).
 Issue [#13](https://github.com/JSYoo5B/ceph-msgr-go/issues/13) remains open for
 the remaining service-induced paths and failure campaigns.
@@ -127,9 +128,10 @@ This small-object checkpoint does not cover large objects, multipart,
 multisite, service-registration messages, MGR/OSD faults, compression or
 arbitrary security/address profiles. Manifest-ordered tail reconstruction and
 deferred GC belong to the multi-stripe checkpoint below. The trusted catalog
-rows below select both checkpoints; they add no fault, profile or path to
-either checkpoint, so backend OSD/MGR faults and broader profiles remain open
-before SVC-1 or issue #13 can be described as complete.
+rows below select each checkpoint; they add no fault, profile or path to a
+checkpoint. Backend OSD and manager faults are the separate
+[backend-fault checkpoint](#backend-fault-checkpoint); broader profiles and
+failure campaigns remain open before issue #13 can be described as complete.
 
 ## Multi-stripe manifest and GC checkpoint
 
@@ -186,7 +188,8 @@ client instances and are not counted as gateway reception. `radosgw-admin gc
 process` removes the tails as its own client, so tail removal is established by
 independent absence, not by gateway attribution. A `reached_pg` entry
 establishes reception only, not a result code or durability. No restart is
-repeated in this checkpoint, and MGR/OSD faults and multipart remain open.
+repeated in this checkpoint; OSD and manager faults are the backend-fault
+checkpoint's, and multipart remains open.
 
 ### Running and retaining the evidence
 
@@ -221,15 +224,16 @@ this file, so the recorded commit is the tested one.
 ### Trusted catalog selection
 
 Each checkpoint has one row of group `rgw` in the scenario catalog:
-`rgw.aes256k.ip4.container.t-rgwcheckpoint` and
-`rgw.aes256k.ip4.container.t-rgwmultistripe`, in
-`.github/scenarios/catalog.d/rgw.checkpoint.json` and
-`rgw.multistripe.json`. A reviewer requests them with `/ci run group:rgw` or
+`rgw.aes256k.ip4.container.t-rgwcheckpoint`,
+`rgw.aes256k.ip4.container.t-rgwmultistripe` and
+`rgw.aes256k.ip4.container.t-rgwbackendfault`, in
+`.github/scenarios/catalog.d/rgw.checkpoint.json`, `rgw.multistripe.json`
+and `rgw.backendfault.json`. A reviewer requests them with `/ci run group:rgw` or
 by identifier, and the weekly periodic run selects them with the rest of the
 default coverage. The row parameter `rgw_native: "1"` routes the trusted
 native workflow (`.github/workflows/native-scenarios.yml`) to the fixture
 controller's closed RGW route (`rgw_native_route.go`): it admits only these
-two exact tests at the checkpoints' own fixed inputs, starts no fixture of
+three exact tests at the checkpoints' own fixed inputs, starts no fixture of
 its own, runs the selected test with `go test -json` in this module and keeps
 the raw stream as `rgw-native.jsonl` in the diagnostics directory. The
 trusted result gate (`tools/native_test_results.py --backend rgw-fixture`)
@@ -257,10 +261,118 @@ python3 tools/native_test_results.py verify --expected ../rgw-run/expected-tests
   --log ../rgw-run/ceph-tests.log --output ../rgw-run/native-tests.json
 ```
 
-The development workflow above remains: it runs both checkpoints
+The development workflow above remains: it runs every checkpoint
 automatically for pull requests that change the RGW fixture files and keeps
 its source-archive manifest, while a catalog row runs only on request or
 weekly.
+
+## Backend-fault checkpoint
+
+`TestRGWNativeBackendFaultIntegration` starts its own fresh one-MON, one-MGR,
+one-BlueStore-OSD, one-gateway fixture with the same secure-only aes256k
+configuration and release/source identity check as the other checkpoints,
+and reuses their gateway identity discovery, bounded history polling,
+one-shot S3 input, independent oracle and cleanup gate. It needs
+`CEPH_MSGR_TEST_RGW_NATIVE=1` and is selected only by its exact name. Its
+three objects are deterministic 1,031-byte inputs (`rgwNativeFaultPayload`,
+mirrored by `tools/rgw_native_gate.py`).
+
+1. Put `before-fault` once and require gateway-attributed index prepare,
+   head WRITEFULL and index complete reception, as the small checkpoint
+   does, before any backend oracle. Record the largest TID of each gateway
+   client in that history, then read the head bytes and index key natively.
+2. Read `ceph osd dump` and require an established connection of a gateway
+   radosclient Messenger to the OSD's public nonce. Stop the OSD container
+   once (30-second Docker stop timeout) and poll the MON until it reports
+   the OSD down in a later epoch. Pinned
+   [`osd_fast_shutdown_notify_mon`](https://github.com/ceph/ceph/blob/v20.2.4/src/common/options/global.yaml.in)
+   makes the stopping OSD tell the MON, so no peer report is needed.
+3. Issue one PUT of `during-osd-fault` and one GET of `before-fault` once
+   each, in the background. Both must stay outstanding for five seconds,
+   with the container stopped and the MON still reporting the OSD down at
+   the end of that window. Pinned
+   [`rados_osd_op_timeout`](https://github.com/ceph/ceph/blob/v20.2.4/src/common/options/global.yaml.in)
+   defaults to 0 (no timeout), so the gateway's requests wait for the OSD.
+4. Start the same container once, require a new Docker start time and poll
+   the MON until the OSD is up in an epoch after the down epoch, with a new
+   public nonce (pinned
+   [`ceph_osd.cc`](https://github.com/ceph/ceph/blob/v20.2.4/src/ceph_osd.cc)
+   takes a random Messenger nonce). Both requests must still be outstanding
+   when the OSD is started.
+5. Classify each overlapping request from its HTTP exchange alone:
+   `succeeded` (a complete response with the expected status),
+   `failed_status` (a complete response with another status) or
+   `uncertain` (no complete response; the server outcome is unknown). The
+   classification is retained in the receipt and is never the only
+   evidence: the checkpoint requires both requests to be `succeeded` and then
+   checks the native state. A request that is not `succeeded` fails the run
+   with its class and a read-only head presence probe; it is never
+   reissued.
+6. At the restarted OSD process (whose operation history holds only requests
+   it received), require gateway-attributed reception of the PUT's index
+   prepare, head WRITEFULL and index complete, of the GET's head read, and
+   of a `watch reconnect` on the zone's control-pool `notify.N` objects.
+   Every one must carry a map epoch no older than the epoch the OSD came up
+   in and a TID above its client's pre-fault TIDs. Pinned
+   [`Objecter::_send_linger`](https://github.com/ceph/ceph/blob/v20.2.4/src/osdc/Objecter.cc)
+   resends a registered watch as `CEPH_OSD_WATCH_OP_RECONNECT`, printed as
+   `watch reconnect cookie <c> gen <g>`
+   ([`osd_types.cc`](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/osd_types.cc),
+   [`ceph_strings.cc`](https://github.com/ceph/ceph/blob/v20.2.4/src/common/ceph_strings.cc));
+   the gateway watches
+   [`rgw_num_control_oids`](https://github.com/ceph/ceph/blob/v20.2.4/src/common/options/rgw.yaml.in)
+   control objects. The gateway's process identities must be unchanged, an
+   established gateway connection to the new OSD nonce must exist and none
+   to the old one. The highest `RETRY=` attempt that
+   [`MOSDOp::print`](https://github.com/ceph/ceph/blob/v20.2.4/src/messages/MOSDOp.h)
+   shows is recorded, not required: a request first sent after the OSD
+   returned is attempt 0.
+7. Independently read both heads with `rados get` and locate both keys in
+   exactly one actual index shard; read `during-osd-fault` once through S3.
+8. Read `ceph mgr dump` and `ceph service dump`: the service map's one rgw
+   daemon must carry a gateway GID, and a gateway connection to the active
+   manager's nonce must be established. Stop the manager container once, put
+   `during-mgr-fault` once while it stays stopped, and classify that PUT as
+   in step 5; the manager is not in the S3 data path. Start the same
+   container once and poll the MON until a manager with a new GID and nonce
+   is active (pinned
+   [`MgrMonitor`](https://github.com/ceph/ceph/blob/v20.2.4/src/mon/MgrMonitor.cc)
+   replaces a restarted active daemon). Then require an established gateway
+   connection to the new nonce
+   ([`MgrClient::reconnect`](https://github.com/ceph/ceph/blob/v20.2.4/src/mgr/MgrClient.cc)
+   opens a new session and marks the daemon status dirty) and a nonzero
+   rgw `status_stamp` in `ceph service status` from the new manager. Pinned
+   [`DaemonServer`](https://github.com/ceph/ceph/blob/v20.2.4/src/mgr/DaemonServer.cc)
+   gives a new manager process a zero stamp and sets it only from an
+   MMgrReport that carries daemon status, so the stamp shows the gateway's
+   report to that process; `last_beacon`, which a new manager assumes on
+   its own, is not used. The service map's rgw GIDs must be unchanged, and
+   all three objects are read natively again.
+9. Delete the three objects once each through S3 (HTTP 204, then 404),
+   require native head and index-key absence, remove the bucket and user,
+   and apply the shared independent cleanup gate.
+
+The connection observations read the gateway's own admin sockets
+(`messenger dump`, pinned
+[`AsyncMessenger::dump`](https://github.com/ceph/ceph/blob/v20.2.4/src/msg/async/AsyncMessenger.cc)
+and [`AsyncConnection::dump`](https://github.com/ceph/ceph/blob/v20.2.4/src/msg/async/AsyncConnection.cc))
+and keep only the peer type, ID, nonces and state, never an address. The
+receipt line `RGW_NATIVE_BACKEND_FAULT` retains the map states, outcomes,
+attributed reception, watch reconnects, connection clients, manager GIDs and
+object hashes; the gate recomputes the hashes and checks the epoch, TID,
+nonce, outcome and reconnection relations.
+
+Boundaries: HTTP outcome, reception, reconnection and native state are
+separate evidence, and none of them is inferred from another. The gateway's
+internal queueing of the overlapping requests is not observed: only one of
+the gateway's Objecters registers `objecter_requests` on its admin socket,
+and in a local exploratory run that one showed no outstanding operation
+during the outage. The request overlap is therefore established by the
+client side (both outstanding across the window while the MON reports the
+OSD down) and by the reception of their operations only after the OSD's
+return. The checkpoint stops each daemon gracefully; a killed OSD, a
+network partition, a fault during a multi-stripe or multipart upload and
+any profile other than this one remain open.
 
 ## Selected run and first failures
 

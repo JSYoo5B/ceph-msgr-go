@@ -207,8 +207,10 @@ independent native observation is still missing.
   that stopped following the OSDMap after a MON freeze, with its cause open.
 - **Service-induced paths are mostly outside the catalog.** RGW has a separate
   [small-object/native-CALL and gateway-restart checkpoint and multi-stripe
-  manifest/GC checkpoint](../RGW_NATIVE_VALIDATION.md) (SVC-1); backend faults and
-  a trusted selector remain open. The rbd-mirror paths
+  manifest/GC checkpoint](../RGW_NATIVE_VALIDATION.md) (SVC-1) and a graceful
+  OSD and manager restart checkpoint (SVC-rgw-backend-fault), all selectable
+  through the trusted catalog; killed daemons, partitions and broader RGW
+  profiles remain open. The rbd-mirror paths
   (SVC-2 and SVC-3) have one catalog recipe on one profile; the cephfs-mirror
   paths (SVC-4 and SVC-5) still have no local acceptance recipe.
 - **Native Messenger state is unobserved.** No recipe reports native

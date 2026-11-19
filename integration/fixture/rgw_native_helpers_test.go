@@ -43,15 +43,30 @@ func (s rgwNativeS3) request(ctx context.Context, method, path string, payload [
 }
 
 func (s rgwNativeS3) requestBounded(ctx context.Context, method, path string, payload []byte, status int, limit int64) ([]byte, error) {
+	got, body, err := s.exchange(ctx, method, path, payload, limit)
+	if err != nil {
+		return nil, err
+	}
+	if got != status {
+		return nil, fmt.Errorf("RGW %s status %d, want %d", method, got, status)
+	}
+	return body, nil
+}
+
+// exchange sends one signed request once and returns the received HTTP status
+// and bounded body. A nil error means a complete response was read; any error
+// leaves the server outcome unknown, and a status of 0 means no response
+// status arrived at all. It never retries or follows a redirect.
+func (s rgwNativeS3) exchange(ctx context.Context, method, path string, payload []byte, limit int64) (int, []byte, error) {
 	if limit <= 0 || limit > rgwNativeMaxResponseLimit {
-		return nil, errors.New("RGW checkpoint response allowance outside its fixed bound")
+		return 0, nil, errors.New("RGW checkpoint response allowance outside its fixed bound")
 	}
 	if !regexp.MustCompile(`^/[a-z0-9-]+(?:/[a-z0-9-]+)?$`).MatchString(path) {
-		return nil, errors.New("RGW checkpoint accepts only fixed ASCII bucket/key paths")
+		return 0, nil, errors.New("RGW checkpoint accepts only fixed ASCII bucket/key paths")
 	}
 	request, err := http.NewRequestWithContext(ctx, method, s.endpoint+path, bytes.NewReader(payload))
 	if err != nil {
-		return nil, errors.New("construct RGW checkpoint request")
+		return 0, nil, errors.New("construct RGW checkpoint request")
 	}
 	now := time.Now().UTC()
 	stamp, day := now.Format("20060102T150405Z"), now.Format("20060102")
@@ -77,25 +92,22 @@ func (s rgwNativeS3) requestBounded(ctx context.Context, method, path string, pa
 		// A failed local wait can leave an unknown server-side outcome. The
 		// caller fails this run and cleans its fixture; it does not replay PUT.
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("RGW %s request failed (server outcome may be unknown): %w", method, ctx.Err())
+			return 0, nil, fmt.Errorf("RGW %s request failed (server outcome may be unknown): %w", method, ctx.Err())
 		}
-		return nil, fmt.Errorf("RGW %s request failed (server outcome may be unknown)", method)
+		return 0, nil, fmt.Errorf("RGW %s request failed (server outcome may be unknown)", method)
 	}
 	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("RGW %s response read was cancelled (server outcome may be unknown): %w", method, ctx.Err())
+			return response.StatusCode, nil, fmt.Errorf("RGW %s response read was cancelled (server outcome may be unknown): %w", method, ctx.Err())
 		}
-		return nil, errors.New("RGW checkpoint response could not be read")
+		return response.StatusCode, nil, errors.New("RGW checkpoint response could not be read")
 	}
 	if int64(len(body)) > limit {
-		return nil, errors.New("RGW checkpoint response exceeded its read bound")
+		return response.StatusCode, nil, errors.New("RGW checkpoint response exceeded its read bound")
 	}
-	if response.StatusCode != status {
-		return nil, fmt.Errorf("RGW %s status %d, want %d", method, response.StatusCode, status)
-	}
-	return body, nil
+	return response.StatusCode, body, nil
 }
 
 type rgwNativeOperation struct {

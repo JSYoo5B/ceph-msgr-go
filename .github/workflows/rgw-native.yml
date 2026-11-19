@@ -6,7 +6,7 @@ name: RGW native fixture run
 # request's own fixture code with read-only permissions, so it runs only for
 # changes that touch the RGW fixture files or this workflow, or on explicit
 # manual dispatch. A passing run is evidence for the exact tested commit only.
-# The trusted catalog rows of group rgw select the same two checkpoints
+# The trusted catalog rows of group rgw select the same three checkpoints
 # through native-scenarios.yml on request or weekly; this runner remains the
 # automatic run for pull requests that change the RGW fixture files.
 on:
@@ -47,6 +47,7 @@ jobs:
         test:
           - TestRGWNativeCheckpointIntegration
           - TestRGWNativeMultiStripeIntegration
+          - TestRGWNativeBackendFaultIntegration
     steps:
       # Copy the result gate from the workflow's own revision before the
       # tested checkout and its test code exist. This is a development run of
