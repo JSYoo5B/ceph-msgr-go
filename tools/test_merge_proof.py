@@ -6,9 +6,9 @@ base and makes six branches from it. Each branch adds what the section
 "Adding a native test" of .github/scenarios/README.md tells an author to add,
 and only that:
 
-- a native test TestCeph<Name>Integration with its //fixture: sharing line
+- a native test TestCeph<Name>Integration with its scenario row declared
+  beside it (//scenario:row in its doc comment), its //fixture: sharing line
   and a cluster-free helper test, in a new integration/<name>_test.go;
-- its catalog row in a new subject-named fragment of its group in catalog.d;
 - the fixture capability the row declares, in a new integration/fixture file
   (defineCapability, or defineExclusiveCapability on a fixture with its own
   default selection), with the public receipt its control writes
@@ -29,8 +29,8 @@ each other.
 Case A merges an OSD branch with an MDS branch, which must merge without a
 textual conflict in any file. Case B merges two RBD branches and Case C
 merges two controls of the four-OSD erasure topology. Every case requires a
-clean merge without conflict resolution. Each branch owns its fragment and
-coverage row.
+clean merge without conflict resolution. No two branches edit one file, and
+each branch edits only its own files.
 
 Each merged tree then passes the repository's own validators, run from that
 tree: scenario_plan.py validate (catalog, selectors, the fixture's admission
@@ -45,7 +45,9 @@ the selections the branches add to (single-OSD legacy rows, the MDS CephFS,
 RBD and four-OSD erasure fixtures), or a central list of oracle modes or
 collected receipts, fails on a merged tree, because no branch edits one; a
 branch that did edit one would conflict in a file outside the area. Checks of
-selections no branch adds to are not exercised here.
+selections no branch adds to are not exercised here. A merged tree that
+carries a catalog file again (.github/scenarios/catalog.d or catalog.json) is
+refused by the planner, so the rows cannot move back into a shared file.
 
 The test needs git and the Go toolchain of the fixture module, as the other
 tools tests do. It runs no cluster. Every merged tree is validated in the same
@@ -113,6 +115,7 @@ class Author:
                 "// %s is a native test of the merge proof (tools/test_merge_proof.py).\n"
                 "// It exists only in that test's temporary repository.\n"
                 "//\n"
+                "%s\n"
                 "//fixture:shareable changes nothing outside the temporary repository of the merge proof\n"
                 "func %s(t *testing.T) {\n"
                 "\tt.Skip(\"merge proof test; selected only in the merge proof's temporary repository\")\n"
@@ -124,7 +127,13 @@ class Author:
                 "\tif selector := %s; selector[0] != '^' {\n"
                 "\t\tt.Fatal(selector)\n"
                 "\t}\n"
-                "}\n" % (self.test, self.test, json.dumps(self.mode), self.helper, self.helper, json.dumps(self.selector)))
+                "}\n" % (self.test, self.declaration(), self.test, json.dumps(self.mode), self.helper, self.helper,
+                         json.dumps(self.selector)))
+
+    def declaration(self):
+        """The row, declared beside the test it selects."""
+        written = " ".join("%s=%s" % (name, value) for name, value in self.params.items() if name != "test_run")
+        return "//scenario:row %s %s" % (self.id, written)
 
     def capability_source(self):
         variable = "capMergeProof" + self.name
@@ -190,7 +199,6 @@ class Author:
     def paths(self):
         return {
             "test": "integration/%s_test.go" % self.snake,
-            "fragment": ".github/scenarios/catalog.d/%s.%s.json" % (self.group, self.slug),
             "capability": "integration/fixture/%s.go" % self.snake,
             "coverage": "integration/fixture/coverage/%s/%s.md" % (self.area, self.coverage_id),
             "checks": "tools/test_ci_rows_%s_%s.py" % (self.group.replace("-", "_"), self.snake),
@@ -315,9 +323,8 @@ class MergeProofTest(unittest.TestCase):
             cls.repo.git("add", "--all", ".")
             cls.repo.git("commit", "-q", "--no-verify", "-m", "base")
             cls.base_ids = cls.repo.run(sys.executable, "tools/scenario_plan.py", "list").stdout.split()
-            cls.base_rows = sum(len(json.loads(path.read_bytes().decode("utf-8"))["scenarios"])
-                                for path in (cls.repo.path / ".github" / "scenarios" / "catalog.d").glob("*.json")
-                                if not path.name.startswith("_"))
+            cls.base_rows = int(cls.repo.run(sys.executable, "-c", "import scenario_plan; print(len(scenario_plan.load_catalog()))",
+                                             cwd=cls.repo.path / "tools").stdout)
             cls.branches = {}
             for key, author in AUTHORS.items():
                 cls.branches[key] = cls.author_branch(author)
@@ -339,8 +346,6 @@ class MergeProofTest(unittest.TestCase):
         repo.write(paths["test"], author.native_test())
         repo.write(paths["capability"], author.capability_source())
         repo.write(paths["checks"], author.row_checks())
-        repo.write(paths["fragment"], json.dumps({"scenarios": [
-            {"id": author.id, "group": author.group, "params": author.params}]}, indent=1) + "\n")
         repo.write(paths["coverage"], author.coverage_file())
         repo.write(paths["mode"], author.oracle_mode())
         repo.git("add", "--", *paths.values())
@@ -376,7 +381,16 @@ class MergeProofTest(unittest.TestCase):
         self.assertEqual(rows, self.base_rows + len(authors))
         for author in authors:
             plan = json.loads(repo.run(python, "tools/scenario_plan.py", "plan", "--select", author.id).stdout)
-            self.assertEqual([(row["scenario"], row["capabilities"]) for row in plan["include"]], [(author.id, author.declared)])
+            self.assertEqual(plan["include"], [dict(author.params, scenario=author.id)])
+        # A catalog file brought back next to the declarations is refused.
+        for retired in (".github/scenarios/catalog.d/_catalog.json", ".github/scenarios/catalog.json"):
+            repo.write(retired, "{}\n")
+            refused = repo.run(python, "tools/scenario_plan.py", "list", check=False)
+            (repo.path / retired).unlink()
+            self.assertEqual(refused.returncode, 2, retired)
+            self.assertIn("rows are declared beside their tests; remove this catalog file", refused.stderr)
+        shutil.rmtree(repo.path / ".github" / "scenarios" / "catalog.d")
+        self.assertEqual(repo.git("status", "--porcelain").stdout, "")
 
         repo.run(python, "tools/cluster_free_tests.py", "check")
         selector = repo.run(python, "tools/cluster_free_tests.py", "selector").stdout.strip()
@@ -459,8 +473,11 @@ class MergeProofTest(unittest.TestCase):
                              self.repo.git("rev-parse", self.branches[key] + "^{tree}").stdout, key)
         for first, second in (("rbda", "rbdb"), ("eca", "ecb")):
             self.assertNotEqual(AUTHORS[first].coverage_id, AUTHORS[second].coverage_id)
-            self.assertEqual(self.changed(self.branches[first]) & self.changed(self.branches[second]),
-                             set(), "same-area branches edit a shared file")
+        keys = list(AUTHORS)
+        for index, first in enumerate(keys):
+            for second in keys[index + 1:]:
+                self.assertEqual(self.changed(self.branches[first]) & self.changed(self.branches[second]),
+                                 set(), "%s and %s edit a shared file" % (first, second))
 
     def test_merges_compose_and_validate(self):
         # Case A and Case B run in this order in one test so that both merged
@@ -479,10 +496,10 @@ class MergeProofTest(unittest.TestCase):
 
     def same_area(self, first, second):
         ours, theirs = AUTHORS[first], AUTHORS[second]
-        self.assertNotEqual(ours.paths()["fragment"], theirs.paths()["fragment"])
+        self.assertNotEqual(ours.paths()["test"], theirs.paths()["test"])
         self.merge(self.branches[first], self.branches[second])
         for author in (ours, theirs):
-            self.assertIn(author.id, self.repo.read(author.paths()["fragment"]))
+            self.assertIn(author.declaration(), self.repo.read(author.paths()["test"]))
             self.assertEqual(self.repo.read(author.paths()["coverage"]), author.coverage_file())
         self.validate([ours, theirs])
 
