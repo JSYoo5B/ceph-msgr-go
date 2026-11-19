@@ -34,7 +34,7 @@ func TestMgrServiceProfileIsExclusiveAndSelectsItsTest(t *testing.T) {
 }
 
 func TestMgrServiceOracleModeIsAdmitted(t *testing.T) {
-	if !nativeOwnedPoolModes["servicewatch"] || !nativeOwnedPoolModes["servicemetadata"] {
+	if !oracleModes["servicewatch"] || !oracleModes["servicemetadata"] {
 		t.Fatal("the native owned-pool oracle request validator rejects the servicewatch mode")
 	}
 }

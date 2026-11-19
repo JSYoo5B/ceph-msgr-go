@@ -8,9 +8,9 @@ func TestMgrServiceColdBootstrapProfileAndOracleBoundary(t *testing.T) {
 	if err != nil || !p.mgrServiceColdBootstrap() || p.osd != "0" || p.runtime != "container" {
 		t.Fatal(p, err)
 	}
-	for mode := range nativeOwnedPoolModes {
+	for mode := range oracleModes {
 		want := mode == "mgrstate" || mode == "servicewatch"
-		if nativePoolModeAllowed(p, mode) != want {
+		if nativePoolModeAllowed(p, oracleModes, mode) != want {
 			t.Fatal("MON-only profile changed oracle authority", mode)
 		}
 	}
@@ -32,7 +32,7 @@ func TestMgrServiceColdBootstrapProfileAndOracleBoundary(t *testing.T) {
 		}
 		return ""
 	})
-	if err != nil || nativePoolModeAllowed(ordinary, "mgrstate") {
+	if err != nil || nativePoolModeAllowed(ordinary, oracleModes, "mgrstate") {
 		t.Fatal("ordinary no-MGR profile gained native oracle access", err)
 	}
 }

@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
@@ -38,8 +41,69 @@ func (c *fixtureCluster) runOracleCommandWithTimeout(ctx context.Context, out st
 	return nil
 }
 
-// nativeOwnedPoolModes are the requests the native owned-pool oracle accepts.
-var nativeOwnedPoolModes = map[string]bool{"create": true, "seed": true, "observe": true, "place": true, "pghistory": true, "opsinflight": true, "objecterrequests": true, "shardhistory": true, "pginterval": true, "pgstate": true, "watchers": true, "snapshot": true, "selfmanaged": true, "quota": true, "poolinfo": true, "clusterstat": true, "versions": true, "mgrstate": true, "service": true, "servicewatch": true, "servicecompare": true, "servicemetadata": true, "fullratios": true, "osdflags": true, "inconsistent": true, "cleanup": true}
+// An owned-pool oracle mode is declared only beside its handler in the
+// oracle's staged sources (tools/osd_pool_oracle.py oracle_mode): the line
+// "@oracle_mode" directly above "def mode_<name>(", in osd_pool_oracle.py or
+// in the mode's own module osd_pool_mode_<name>_oracle.py. The fixture admits
+// exactly the modes declared that way, so no list names them.
+var (
+	ownedPoolModeDeclaration = regexp.MustCompile(`(?m)^@oracle_mode\ndef mode_([a-z][a-z0-9]{0,31})\(`)
+	ownedPoolModeDecorator   = regexp.MustCompile(`(?m)^[ \t]*@`)
+	ownedPoolModeModule      = regexp.MustCompile(`^osd_pool_mode_([a-z][a-z0-9]{0,31})_oracle\.py$`)
+)
+
+// ownedPoolOracleModes reads the modes the owned-pool oracle staged in dir
+// declares. Like the oracle's loader it refuses a source with any other
+// decorator, a mode declared twice and a mode module that does not declare
+// exactly the mode of its file name.
+func ownedPoolOracleModes(dir string) (map[string]bool, error) {
+	modules, err := filepath.Glob(filepath.Join(dir, "osd_pool_mode_*_oracle.py"))
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(modules)
+	modes := map[string]bool{}
+	for _, path := range append([]string{filepath.Join(dir, "osd_pool_oracle.py")}, modules...) {
+		data, err := readBoundedFile(path, 1<<20)
+		if err != nil {
+			return nil, fmt.Errorf("owned-pool oracle source: %w", err)
+		}
+		declared := ownedPoolModeDeclaration.FindAllSubmatch(data, -1)
+		if len(ownedPoolModeDecorator.FindAll(data, -1)) != len(declared) {
+			return nil, fmt.Errorf("%s marks a mode outside the declaration rule", filepath.Base(path))
+		}
+		if name := filepath.Base(path); name != "osd_pool_oracle.py" {
+			own := ownedPoolModeModule.FindStringSubmatch(name)
+			if own == nil || len(declared) != 1 || string(declared[0][1]) != own[1] {
+				return nil, fmt.Errorf("%s must declare exactly its own owned-pool oracle mode", name)
+			}
+		}
+		for _, match := range declared {
+			mode := string(match[1])
+			if modes[mode] {
+				return nil, fmt.Errorf("owned-pool oracle mode %s declared twice", mode)
+			}
+			modes[mode] = true
+		}
+	}
+	if len(modes) == 0 {
+		return nil, errors.New("owned-pool oracle declares no mode")
+	}
+	return modes, nil
+}
+
+func readBoundedFile(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err == nil && int64(len(data)) > limit {
+		err = fmt.Errorf("%s exceeds %d bytes", filepath.Base(path), limit)
+	}
+	return data, err
+}
 
 func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -49,7 +113,12 @@ func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string
 		return err
 	}
 	if fields != nil {
-		if len(fields) != 2 || !nativePoolModeAllowed(c.profile, fields[1]) {
+		// The modes the staged oracle that runs this request declares.
+		modes, err := ownedPoolOracleModes(out)
+		if err != nil {
+			return err
+		}
+		if len(fields) != 2 || !nativePoolModeAllowed(c.profile, modes, fields[1]) {
 			return errors.New("invalid native owned-pool oracle request")
 		}
 		if (fields[1] == "servicemetadata" || fields[1] == "servicecompare" || fields[1] == "mgrstate") && c.profile.mgrService != "1" {
@@ -78,11 +147,12 @@ func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string
 // Cold bootstrap admits only MON MgrMap observation and the bounded service
 // identity watch. It does not grant object/pool control to a MON-only fixture.
 // The pginterval mode is admitted only by its capability.
-func nativePoolModeAllowed(p profile, mode string) bool {
+// modes are the declared modes of the staged oracle (ownedPoolOracleModes).
+func nativePoolModeAllowed(p profile, modes map[string]bool, mode string) bool {
 	if mode == "pginterval" && !p.pgIntervalSelected() {
 		// Observing one PG's interval, and ending it, is admitted by
 		// capability osd-pg-interval alone.
 		return false
 	}
-	return nativeOwnedPoolModes[mode] && (p.osd == "1" || p.mgrServiceColdBootstrap() && (mode == "mgrstate" || mode == "servicewatch"))
+	return modes[mode] && (p.osd == "1" || p.mgrServiceColdBootstrap() && (mode == "mgrstate" || mode == "servicewatch"))
 }
