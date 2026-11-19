@@ -46,6 +46,7 @@ func TestProfileDefaults(t *testing.T) {
 		osdStore:       "memstore",
 		osdReplicas:    "1",
 		osdProfile:     "legacy-v6",
+		rgwNative:      "0",
 		testRun:        "^TestCeph.*Integration$",
 		defaultRun:     "^TestCeph.*Integration$",
 		testTimeout:    "10m",

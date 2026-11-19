@@ -149,6 +149,13 @@ func command(ctx context.Context, args []string) (result error) {
 	if _, err := os.Stat(filepath.Join(root, "SPEC.md")); err != nil {
 		return fmt.Errorf("product checkout: %w", err)
 	}
+	if p.rgwNative == "1" {
+		// A routed RGW checkpoint starts and removes its own owned cluster.
+		if args[0] != "run" {
+			return fmt.Errorf("%s=1 is supported only by run", rgwNativeEnv)
+		}
+		return runRGWNative(ctx, root, p, os.Stdout)
+	}
 	if p.osdSoak != "" {
 		if p.sourceSHA, err = soakSourceSHA(root, p.sourceSHA); err != nil {
 			return err

@@ -54,6 +54,9 @@ type profile struct {
 	// sequence holds the space-separated selectors of a fixture sequence
 	// (sequence.go), whose union testRun is; empty for one row.
 	sequence string
+	// rgwNative routes the row to one dedicated RGW checkpoint of this
+	// module (rgw_native_route.go) instead of the controller's fixture.
+	rgwNative string
 	// monFreeze opts in to the connected-MON freeze tests, which can leave the
 	// OSD on an old OSDMap (integration/fixture/MON_FREEZE_FIXTURE_ISSUE.md).
 	monFreeze string
@@ -115,6 +118,7 @@ func loadSingleProfile(getenv func(string) string) (profile, error) {
 		osdSoak:              getenv("CEPH_MSGR_TEST_OSD_SOAK"),
 		sourceSHA:            getenv("CEPH_MSGR_TEST_SOURCE_SHA"),
 		monFreeze:            getenv("CEPH_MSGR_TEST_MON_FREEZE"),
+		rgwNative:            value(rgwNativeEnv, "0"),
 		testRun:              getenv("CEPH_MSGR_TEST_RUN"),
 		capabilities:         getenv("CEPH_MSGR_TEST_CAPABILITIES"),
 		testTimeout:          value("CEPH_MSGR_TEST_TIMEOUT", "10m"),
@@ -160,10 +164,21 @@ func loadSingleProfile(getenv func(string) string) (profile, error) {
 		{"CEPH_MSGR_TEST_OSD_REPLICAS", p.osdReplicas, osdTopologyNames()},
 		{"CEPH_MSGR_TEST_MGR_COUNT", p.mgrCount, []string{"0", "2"}},
 		{"CEPH_MSGR_TEST_IP_FAMILY", p.ipFamily, []string{"4", "6"}},
+		{rgwNativeEnv, p.rgwNative, []string{"0", "1"}},
 	} {
 		if !slices.Contains(choice.allowed, choice.value) {
 			return profile{}, fmt.Errorf("%s must be one of %s", choice.name, strings.Join(choice.allowed, ", "))
 		}
+	}
+	if p.rgwNative == "1" {
+		// The routed checkpoint starts its own cluster; nothing below
+		// applies to it, and rgwNativeProfileProblem refuses every input
+		// that would select another fixture mode.
+		if err := rgwNativeProfileProblem(p); err != nil {
+			return profile{}, err
+		}
+		p.defaultRun = p.testRun
+		return p, nil
 	}
 	if p.osdProfile == "replicated-pg-request-v9-reply-v8" && p.osdReplicas != "1" {
 		return profile{}, fmt.Errorf("request-v9 fixture requires exactly one OSD for its verified acceptance recipes")
