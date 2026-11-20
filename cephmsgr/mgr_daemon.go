@@ -1146,14 +1146,19 @@ func (d *MgrDaemon) WaitRotatingKeys(ctx context.Context, after uint64) (MgrRota
 
 // NextMgrMap returns the oldest undelivered MgrMap event. Accepted events
 // drain before the terminal cause. ctx bounds only this wait; a canceled
-// wait consumes nothing.
+// wait consumes nothing. Cancellation is decided under daemon.mu
+// immediately before the dequeue, so an event published after ctx ends,
+// even one published while this call waits for the lock, stays queued.
 func (d *MgrDaemon) NextMgrMap(ctx context.Context) (MgrMapEvent, error) {
 	for {
-		// A canceled wait consumes nothing, also with an event queued.
 		if err := ctx.Err(); err != nil {
 			return MgrMapEvent{}, err
 		}
 		d.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			d.mu.Unlock()
+			return MgrMapEvent{}, err
+		}
 		if len(d.events) > 0 {
 			event := d.events[0]
 			d.events = d.events[1:]
@@ -1175,7 +1180,8 @@ func (d *MgrDaemon) NextMgrMap(ctx context.Context) (MgrMapEvent, error) {
 
 // NextDigest returns the latest unread MMgrDigest of a SubscribeDigest
 // daemon; a newer digest replaces an unread one. ctx bounds only this wait;
-// a canceled wait consumes nothing.
+// a canceled wait consumes nothing. As in NextMgrMap, cancellation is
+// decided under daemon.mu immediately before the digest is taken.
 func (d *MgrDaemon) NextDigest(ctx context.Context) (ClusterDigest, error) {
 	if !d.options.SubscribeDigest {
 		return ClusterDigest{}, errors.New("ceph: MGR daemon has no digest subscription")
@@ -1185,6 +1191,10 @@ func (d *MgrDaemon) NextDigest(ctx context.Context) (ClusterDigest, error) {
 			return ClusterDigest{}, err
 		}
 		d.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			d.mu.Unlock()
+			return ClusterDigest{}, err
+		}
 		if d.digest != nil {
 			digest := *d.digest
 			d.digest = nil
