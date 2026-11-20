@@ -15,7 +15,7 @@ type containerLogOpener func(context.Context) (io.ReadCloser, error)
 var errContainerLogExceedsBound = errors.New("container log exceeds its bound")
 
 // withContainerLog is the only collection path for daemon logs that consumer
-// attribution needs from process start. ceph-testcontainers-go v0.5.0 has no
+// attribution needs from process start. ceph-testcontainers-go v1.0.1 has no
 // primitive that returns a daemon's complete log since its process started
 // together with an explicit truncation signal: diagnostics.Collect keeps a
 // bounded tail of at most LogTail lines, and Finalization.Verify evaluates only

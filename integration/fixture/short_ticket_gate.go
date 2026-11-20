@@ -30,10 +30,10 @@ import (
 // or not, leaves a registered slot with a live beacon session healthy, so a Go
 // MGR -13 is never excused by an unrelated MonClient -13 line.
 //
-// The gate composes public ceph-testcontainers-go v0.5.0 primitives: the
+// The gate composes public ceph-testcontainers-go v1.0.1 primitives: the
 // rosters come from Container.Managers and Container.Monitors, the sessions
 // from each MonitorContainer.AdminSocket, and the refusal evidence from the
-// handles' container logs. Two steps keep consumer code because v0.5.0 has no
+// handles' container logs. Two steps keep consumer code because v1.0.1 has no
 // provider observation for them, and the provider's review of this gate
 // proposed none (JSYoo5B/ceph-testcontainers-go#540): the
 // epoch-bearing MgrMap read (observeManagerMap, a native `mgr dump` through

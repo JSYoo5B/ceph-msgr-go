@@ -189,7 +189,7 @@ func monitorReclaimRefusals(ctx context.Context, monitors []monitorLogSource, na
 // nativeManagerRefusal reads one owned MGR's latest-process MonClient -13 line
 // and attributes it to MonClient global IDs using MON evidence from the same
 // process only. With scanAlways the MONs are read even without a -13 line.
-// It reads the handles' container logs; ceph-testcontainers-go v0.5.0 has no
+// It reads the handles' container logs; ceph-testcontainers-go v1.0.1 has no
 // provider observation of latest-process MonClient refusals, and the bounded
 // log tail of diagnostics.Collect does not cover a whole process. The
 // provider's review (JSYoo5B/ceph-testcontainers-go#540) keeps this a consumer
