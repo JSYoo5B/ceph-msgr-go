@@ -108,11 +108,14 @@ const (
 // with it the caller's pair is used unconditionally and the data is not
 // truncated. The destination SnapContext and ORDERSNAP apply to the
 // destination head like any write, and the source snapset is not copied.
-// filter_snapc drops the context's removed snapshots (PG snap_trimq and
-// purged_snaps) but not its seq: only removed snapshots clone nothing and still
-// raise the snapset seq, and a removed newest snapshot over a live one clones
-// the pre-copy head under the seq (the removed id) holding only the live
-// snapshots (ceph/ceph/blob/v20.2.4/src/osd/PG.cc filter_snapc,
+// filter_snapc drops the context's removed snapshots that the PG still holds
+// in its snap_trimq or purged_snaps, but not its seq: only removed snapshots
+// clone nothing and still raise the snapset seq, and a removed newest snapshot
+// over a live one clones the pre-copy head under the seq (the removed id)
+// holding only the live snapshots. Once the MON stopped queueing a trimmed
+// snapshot the PG drops it from purged_snaps (PG.cc on_active_advmap), and a
+// context naming it then clones the pre-copy head holding that snapshot,
+// which no trim removes (ceph/ceph/blob/v20.2.4/src/osd/PG.cc filter_snapc,
 // PrimaryLogPG.cc execute_ctx and make_writeable). The
 // destination gets the source's user version, which can be lower than its
 // previous one. A copy that fails after the OSD started it reports its

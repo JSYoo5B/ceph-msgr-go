@@ -227,8 +227,10 @@ type OSDOperation struct {
 // caller. A copy may lead only SetXattr/RemoveXattr operations, which the OSD
 // applies in the same transaction. The destination receives the source's
 // user version, and the OSD does not copy a source's empty OMAP key. The
-// target SnapContext loses its removed snapshots on the OSD but keeps its
-// sequence, so a context naming only removed snapshots makes no clone.
+// target SnapContext loses the removed snapshots its PG still trims or lists
+// as purged but keeps its sequence, so a context naming only such snapshots
+// makes no clone. A snapshot whose removal the MON has finished is no longer
+// dropped: a context naming it makes a clone that no trim removes.
 type OSDCopyFromInput struct {
 	SourcePool                 int64
 	SourceName                 string

@@ -26,7 +26,8 @@ import (
 // keeps both raw as a known refusal. A copy onto itself gets -EINVAL. The
 // TRUNCATE_SEQ flag installs the supplied sequence: a later lower-sequence
 // write is trimmed on the sequenced copy and applied in full on a plain one.
-// Not verified: MAP_SNAP_CLONE, the cache-tier flags and EC pools.
+// The source-read flags are TestCephOSDCopyFromCloneIDIntegration's and
+// TestCephOSDCopyFromCacheFlagsIntegration's. Not verified: EC pools.
 //
 //scenario:covers CLIENT to OSD
 //fixture:isolated allocates a self-managed snap in the fixture pool, permanently adding its selfmanaged_snaps pool flag

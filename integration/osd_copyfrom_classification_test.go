@@ -27,8 +27,9 @@ import (
 // -EINPROGRESS. The same connections refuse FAILOK/EXCL, non-FADVISE source
 // hints, SNAPDIR, invalid truncate forms and destination read snapshots
 // known-unsent. Removed snapshots, self sources and extreme snapshot ids and
-// versions are TestCephOSDCopyFromSnapshotEdgesIntegration's. Not verified:
-// cache-tier flags and direct clone mapping.
+// versions are TestCephOSDCopyFromSnapshotEdgesIntegration's, the clone id
+// TestCephOSDCopyFromCloneIDIntegration's and the cache flags
+// TestCephOSDCopyFromCacheFlagsIntegration's.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdcopyfromclassification key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
 //scenario:covers CLIENT to OSD
