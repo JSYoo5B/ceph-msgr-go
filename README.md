@@ -183,9 +183,10 @@ and wire subset (`go doc github.com/JSYoo5B/ceph-msgr-go/cephmsgr`).
 - **Maps and streams.** `Snapshot` copies MonMap, MgrMap and service state
   without network I/O, and `WaitMonMap`/`WaitMgrMap` wait for a strictly newer
   authenticated map. `RequestOSDMaps` and `WatchOSDMaps` deliver raw OSDMap
-  batches from MON; `WatchLogs`, `WatchConfig`, `WatchDigest`,
-  `WatchFSMapUser` and `WatchMDSMaps` are bounded watches whose overflow ends
-  only the watch. Map reception is not placement, routing or mount success.
+  batches from MON. `WatchLogs`, `WatchFSMapUser`, `WatchMDSMaps` and
+  `WatchServiceMap` are bounded watches whose overflow ends only that watch;
+  `WatchConfig` and `WatchDigest` keep only the newest unread value. Map
+  reception is not placement, routing or mount success.
 - **OSD.** Callers supply the address and ID, pool, locator, raw hash, map
   epoch and PG/shard placement. The product preserves request identity,
   epochs, per-op results, versions and raw data; it computes no CRUSH and
