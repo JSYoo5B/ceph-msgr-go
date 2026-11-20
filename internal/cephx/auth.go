@@ -12,13 +12,21 @@ import (
 )
 
 const (
-	// Pinned Ceph v20.2.4 include/msgr.h:92: CEPH_ENTITY_TYPE_MDS.
+	// Pinned Ceph v20.2.4 include/msgr.h:91-96: CEPH_ENTITY_TYPE_MON, MDS,
+	// OSD, CLIENT, MGR and AUTH.
+	ServiceMon        uint32 = 0x01
 	ServiceMDS        uint32 = 0x02
 	ServiceOSD        uint32 = 0x04
 	ServiceMgr        uint32 = 0x10
 	ServiceAuth       uint32 = 0x20
 	defaultServices          = ServiceAuth | ServiceMgr
 	supportedServices        = defaultServices | ServiceOSD | ServiceMDS
+	entityClient      uint32 = 0x08
+	// MgrDaemonServices is native MgrStandby's fixed want_keys,
+	// MON|OSD|MDS|MGR, together with the AUTH ticket every exchange returns
+	// (ceph/ceph/blob/v20.2.4/src/mgr/MgrStandby.cc init). A MGR daemon
+	// identity requests exactly this mask.
+	MgrDaemonServices = ServiceMon | ServiceOSD | ServiceMDS | ServiceMgr | ServiceAuth
 )
 
 var ErrTicket = errors.New("cephx: missing, expired or malformed ticket")
@@ -66,6 +74,13 @@ type Client struct {
 	GlobalID uint64
 	Tickets  map[uint32]Ticket
 	services uint32
+	// entity is the CEPH_ENTITY_TYPE of Name: CLIENT (zero selects it) or
+	// MGR for NewMgrDaemon. It is the entity type of the initial request.
+	entity uint32
+	// challenge is the MON's server challenge of the handshake that
+	// authenticated this identity. The in-session renewal proof is keyed
+	// with it, as the MON's session handler keeps the same challenge.
+	challenge uint64
 }
 
 // NewClient selects the service tickets requested in each MON exchange.
@@ -91,17 +106,56 @@ func NewClient(name string, key Key, services uint32) (*Client, error) {
 	return &Client{Name: name, Key: key, Tickets: make(map[uint32]Ticket), services: services}, nil
 }
 
+// NewMgrDaemon selects a mgr.<id> daemon identity. It requests the fixed
+// MgrDaemonServices mask on initial authentication and on renewal, and its
+// initial request names the MGR entity type (0x10), not CLIENT. The mask
+// selects ticket requests only: a MON ticket is requested because native
+// MgrStandby requests one, and no MON or service authorizer support follows
+// from it (Authorizer still builds only MGR, OSD and MDS authorizers).
+func NewMgrDaemon(name string, key Key) (*Client, error) {
+	if !strings.HasPrefix(name, "mgr.") || len(name) <= 4 || len(name) > 1024 || strings.ContainsAny(name, "\x00\r\n") {
+		return nil, errors.New("cephx: identity must be mgr.<id>")
+	}
+	if key.Type() != AES && key.Type() != AES256K {
+		return nil, ErrKey
+	}
+	return &Client{Name: name, Key: key, Tickets: make(map[uint32]Ticket), services: MgrDaemonServices, entity: ServiceMgr}, nil
+}
+
 // Services returns the immutable request mask, preserved by Client value copies.
 func (c *Client) Services() uint32 { return c.services }
+
+// EntityType is the CEPH_ENTITY_TYPE of the identity: 0x08 for client.* and
+// 0x10 for a NewMgrDaemon identity.
+func (c *Client) EntityType() uint32 {
+	if c.entity == 0 {
+		return entityClient
+	}
+	return c.entity
+}
+
+// ID is the identity without its entity-type prefix, as the initial request
+// and a MGR beacon carry it.
+func (c *Client) ID() string {
+	_, id, _ := strings.Cut(c.Name, ".")
+	return id
+}
 
 func validServices(services uint32) bool {
 	return services&defaultServices == defaultServices && services&^supportedServices == 0
 }
+
+func (c *Client) validMask() bool {
+	if c.entity == ServiceMgr {
+		return c.services == MgrDaemonServices
+	}
+	return validServices(c.services)
+}
 func (c *Client) Initial() []byte {
 	e := wire.Encoder{}
 	e.U8(10)
-	e.U32(8)
-	e.String(strings.TrimPrefix(c.Name, "client."))
+	e.U32(c.EntityType())
+	e.String(c.ID())
 	e.U64(c.GlobalID)
 	return e.Data
 }
@@ -124,10 +178,41 @@ func (c *Client) Challenge(p []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.authRequest(challenge, nonce)
+	p, err = c.authRequest(challenge, nonce)
+	if err == nil {
+		c.challenge = challenge
+	}
+	return p, err
+}
+
+// RenewalRequest builds the in-session CEPHX_GET_AUTH_SESSION_KEY request
+// that native MonClient sends in an MAuth message when its tickets need
+// renewal (ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxClientHandler.cc
+// build_request). It presents the current AUTH ticket and requests the same
+// service mask. It requires the server challenge of this identity's
+// handshake; FinishRenewal verifies the reply.
+func (c *Client) RenewalRequest() ([]byte, error) {
+	if c.challenge == 0 {
+		return nil, ErrTicket
+	}
+	nonce, err := randomUint64()
+	if err != nil {
+		return nil, err
+	}
+	return c.authRequest(c.challenge, nonce)
+}
+
+// FinishRenewal verifies an in-session renewal reply, the MAuthReply
+// result_bl. The MON encodes an empty connection-secret field in session
+// (CephxServiceHandler.cc passes no connection secret there), so none is
+// required; any nonempty field is still decrypted and checked. The GlobalID
+// is unchanged and tickets are replaced only after every entry verifies.
+func (c *Client) FinishRenewal(p []byte) error {
+	_, _, err := c.Finish(c.GlobalID, p, false)
+	return err
 }
 func (c *Client) authRequest(challenge, nonce uint64) ([]byte, error) {
-	if !validServices(c.services) {
+	if !c.validMask() {
 		return nil, errors.New("cephx: invalid requested service mask")
 	}
 	b := wire.Encoder{}
