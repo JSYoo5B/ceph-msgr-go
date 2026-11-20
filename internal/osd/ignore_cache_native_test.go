@@ -158,6 +158,31 @@ func ignoreCacheNativeBytes(t *testing.T, encoded, hash string) []byte {
 	return raw
 }
 
+// TestIgnoreCacheMatches24FreshNativeRequests compares the 24 requests of
+// testdata/ignore-cache-native-provenance.json (STAT, READ, WRITEFULL and DELETE
+// across v6, v8 and untraced v9, each without and with IGNORE_CACHE 0x8000; both
+// use the cache-pool feature bit 35) with complete Go segments. Each comes from a
+// fresh native ObjectOperation and MOSDOp of Ceph v20.2.4 (commit
+// 7f793731f1b39eb4f465e960113d2363c311b964) through one canonical Message::encode,
+// decoded into a separate object and never re-encoded. The 41-byte header is an
+// offline MessageFrame::Encode projection (sequence 1, TID 77, ACK 3, priority
+// 127), not a ProtocolV2 session; nothing about server execution follows.
+//
+// This suite and the other request oracles built on its helpers (cache-op,
+// set-chunk, tier-op, sparse-read-compound, checksum-compound and
+// enforce-snap-context) are regenerated the same way: copy the driver
+// tools/osd_<suite>_native_encoder.py, its .cc wrapper,
+// tools/mon_ping_native_encoder.{py,cc} and tools/osd_ignore_cache_native_encoder.py
+// into one directory and run, on a Linux amd64 Docker host with an empty work
+// directory (an existing encoded output is refused),
+//
+//	docker run --rm --entrypoint python3 -v <work>:/native-cache -v <tools>:/tools \
+//	  quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9 \
+//	  /tools/osd_<suite>_native_encoder.py --build-native \
+//	  --work /native-cache/work --wrapper /tools/osd_<suite>_native_encoder.cc
+//
+// The last JSON line of the output is the retained proof; the line before it
+// belongs to the shared MPing SDK build.
 func TestIgnoreCacheMatches24FreshNativeRequests(t *testing.T) {
 	proof := loadIgnoreCacheNativeProof(t)
 	if len(proof.Fixtures) != 24 {

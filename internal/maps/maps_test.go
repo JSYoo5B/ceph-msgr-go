@@ -64,6 +64,15 @@ func TestMonMapReleaseAndAddresses(t *testing.T) {
 	}
 }
 
+// TestRealTentacleMonMap decodes testdata/monmap-v20.2.4.bin, the unmodified
+// `ceph mon getmap -o FILE` output of a disposable integration/cluster.sh
+// cluster (image quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9,
+// commit 7f793731f1b39eb4f465e960113d2363c311b964): one MON "a", epoch 1,
+// minimum release 20, msgr2 address 127.0.0.1:33300/0, aes256k, a fixed test
+// FSID and no keys or tickets. File SHA-256:
+// 76ba70850239a649e2938dc18aa0a3984b55ea4dac97bb621aea4a4b20e61b79.
+// It is daemon output, not a Go encoding or an upstream fixture, and a later
+// harness change does not rewrite it.
 func TestRealTentacleMonMap(t *testing.T) {
 	blob, err := os.ReadFile("testdata/monmap-v20.2.4.bin")
 	if err != nil {
@@ -78,6 +87,18 @@ func TestRealTentacleMonMap(t *testing.T) {
 	}
 }
 
+// TestRealTentacleIPv6Maps decodes two maps of a development cluster from the
+// same image and commit as TestRealTentacleMonMap: 3 MON and 2 MGR on IPv6
+// loopback, aes256k, secure Messenger,
+// auth_allow_insecure_global_id_reclaim=false and an empty MGR module
+// directory (so no module description catalog). monmap-3-ipv6-v20.2.4.bin is
+// unmodified `ceph mon getmap -o FILE` output (MONs a, b, c at [::1]:33300 to
+// 33302; SHA-256 febf0460156f42d875335c1349f270d684d33d162b29c3a1b8074cb323eb34d2).
+// mgrmap-ipv6-v20.2.4.bin is the complete v14/compat 6 MgrMap read without
+// re-encoding from the stopped MON store with
+// `ceph-monstore-tool <store> get mgr -- --out FILE` (SHA-256
+// aabc11827f6ff039104b47cf0305961a4aba916922f92fbc2f09eb0c741a5b2b); the
+// expected values come from the same tool's `--readable` output.
 func TestRealTentacleIPv6Maps(t *testing.T) {
 	monBlob, err := os.ReadFile("testdata/monmap-3-ipv6-v20.2.4.bin")
 	if err != nil {

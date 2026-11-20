@@ -199,6 +199,15 @@ func nativeBackoffCases() []struct {
 	}{{"block-single", single}, {"block-range", rangeBlock}, {"ack-range", ack}, {"unblock-range", unblock}, {"block-sharded", shard}}
 }
 
+// TestBackoffMatchesFreshNativeEncoder compares the five backoff-native-*
+// MOSDBackoff vectors (regenerate with `encode-osd-backoff`, see runNativeEncoder
+// in integration/fixture; provenance in testdata/backoff-native-provenance.json):
+// a single-object BLOCK, a half-open BLOCK, its original-epoch ACK_BLOCK, a
+// newer-epoch UNBLOCK and a sharded PG with global bounds, all type 61 v1, TID 0,
+// priority 127. Fresh native encode_payload produced each front and a separate
+// native decoder checked it. The offline header (sequence 1, ACK 3) proves
+// envelope serialization, not ProtocolV2 execution, server-generated BLOCK or
+// UNBLOCK, ACK delivery or feature acceptance.
 func TestBackoffMatchesFreshNativeEncoder(t *testing.T) {
 	for _, tc := range nativeBackoffCases() {
 		t.Run(tc.name, func(t *testing.T) {

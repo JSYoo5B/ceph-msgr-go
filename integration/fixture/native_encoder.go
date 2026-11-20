@@ -24,6 +24,17 @@ func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
 	return runNativeEncoder(ctx, args, mutationEncoderSpec)
 }
 
+// runNativeEncoder regenerates one checked-in native vector suite:
+//
+//	go -C integration/fixture run . <spec.command> -cache .artifacts/native-sdk -output <proof.json>
+//
+// It copies the tools/ wrappers and spec.driver into a disposable container of
+// profileDefaultImage, where the driver builds the pinned Ceph source with its
+// official CMake configuration, links only the selected wrapper and prints the
+// proof. Each fixture's front_hex, data_hex and header_hex become the
+// <name>.{front,data,header}.hex files in the consuming package's testdata and
+// the proof becomes the suite's *-native-provenance.json. The cache must not
+// be shared by concurrent runs.
 func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec) (result error) {
 	flags := flag.NewFlagSet(spec.command, flag.ContinueOnError)
 	project := flags.String("project", "../..", "product checkout")

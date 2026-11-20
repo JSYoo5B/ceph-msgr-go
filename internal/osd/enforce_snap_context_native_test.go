@@ -48,6 +48,13 @@ func loadEnforceSnapContextNativeProof(t *testing.T) enforceSnapContextNativePro
 	return proof
 }
 
+// TestEnforceSnapContextMatches12FreshNativeRequests compares the 12 requests of
+// testdata/enforce-snap-context-native-provenance.json (generator
+// tools/osd_enforce_snap_context_native_encoder.py, regenerated as described at
+// TestIgnoreCacheMatches24FreshNativeRequests): a head WRITEFULL with ORDERSNAP
+// and data 00ff410a across v6, v8 and v9, with an empty or seq=7 snaps=[7,5]
+// context, without and with ENFORCE_SNAPC. Matched pairs differ only by request
+// flag 0x100000. They establish serialization only, not server behaviour.
 func TestEnforceSnapContextMatches12FreshNativeRequests(t *testing.T) {
 	proof := loadEnforceSnapContextNativeProof(t)
 	if len(proof.Fixtures) != 12 {

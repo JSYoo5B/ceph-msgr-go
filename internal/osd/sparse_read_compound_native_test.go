@@ -42,6 +42,15 @@ func sparseReadCompoundNativeRequest(shape string) Request {
 	return Request{ClientInc: 1, MapEpoch: 11, Locator: Locator{Pool: 7, Key: "route-key", Namespace: "tenant", Hash: -1}, Object: "sparse-read-compound-codec", Hash: 0x11223344, Operations: ops}
 }
 
+// TestSparseReadCompoundMatches15FreshNativeRequests compares the 15 requests of
+// testdata/sparse-read-compound-native-provenance.json (generator
+// tools/osd_sparse_read_compound_native_encoder.py, regenerated as described at
+// TestIgnoreCacheMatches24FreshNativeRequests): five layouts of SPARSE_READ with
+// READ or a second SPARSE_READ across v6, v8 and v9, in the order librbd builds
+// them (ceph/ceph/blob/v20.2.4/src/librbd/io/ObjectRequest.cc 238-246), with
+// fadvise hints set through set_last_op_flags as neorados does
+// (src/neorados/RADOS.cc 449-452). They are request layouts only: no allocation
+// map, EOF behaviour or execution outcome.
 func TestSparseReadCompoundMatches15FreshNativeRequests(t *testing.T) {
 	proof := loadSparseReadCompoundNativeProof(t)
 	if len(proof.Fixtures) != 15 {

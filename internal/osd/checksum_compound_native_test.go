@@ -144,6 +144,14 @@ func checksumCompoundNativePacked(op Operation) (union, input []byte) {
 	return union, input
 }
 
+// TestChecksumCompoundMatches15FreshNativeRequests compares the 15 requests of
+// testdata/checksum-compound-native-provenance.json (generator
+// tools/osd_checksum_compound_native_encoder.py, regenerated as described at
+// TestIgnoreCacheMatches24FreshNativeRequests): five layouts combining CRC32C,
+// xxHash32 and xxHash64 CHECKSUM with READ, STAT, ASSERT_VER or binary CMPEXT
+// across v6, v8 and v9, without the cache-pool bit 35. Native ASSERT_VER encodes
+// an unused u64 before the version u64. The requests establish no checksum
+// value, object content or execution outcome.
 func TestChecksumCompoundMatches15FreshNativeRequests(t *testing.T) {
 	proof := loadChecksumCompoundNativeProof(t)
 	if len(proof.Fixtures) != 15 {

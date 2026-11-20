@@ -160,6 +160,15 @@ func TestReplyV8RejectsMalformedBoundsBooleanAndData(t *testing.T) {
 	}
 }
 
+// TestReplyV8MatchesFreshNativeMessages decodes the five reply-v8-native-*
+// vectors (success, enoent, unknown-error, mutation-ack, redirect; regenerate
+// with `encode-osd-reply-v8`, see runNativeEncoder in integration/fixture;
+// provenance in testdata/reply-v8-native-provenance.json). The pinned
+// MOSDOpReply selects v8 with NEW_OSDOPREPLY_ENCODING; each fresh reply was built
+// from a separately constructed native request and checked by a separate native
+// decoder. The mutation-ack vector lacks ONDISK on purpose and is no evidence of
+// completion or durability. Nothing here proves feature advertisement or live
+// profile interoperability.
 func TestReplyV8MatchesFreshNativeMessages(t *testing.T) {
 	for _, tc := range []struct {
 		name             string

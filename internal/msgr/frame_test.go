@@ -236,6 +236,14 @@ func FuzzSecureFrameReader(f *testing.F) {
 	})
 }
 
+// TestCephCapturedBannerAndHello reads testdata/ceph-mon-hello-v20.2.4.bin:
+// the unmodified server banner and one pre-authentication CRC HELLO frame
+// (98 bytes, SHA-256 54b8b7f18a7ea701787094eb1e9a34b2b5d1c729e6c81dd754afe326681afe8a)
+// that testdata/capture_hello.py recorded from a disposable MON of image
+// quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9
+// (commit 7f793731f1b39eb4f465e960113d2363c311b964). The script sends only a
+// banner, so the file holds no keys, tickets or secrets; secure mode is covered
+// by testdata/frames.json (testdata/generate.py) and live tests instead.
 func TestCephCapturedBannerAndHello(t *testing.T) {
 	p, err := os.ReadFile("testdata/ceph-mon-hello-v20.2.4.bin")
 	if err != nil {

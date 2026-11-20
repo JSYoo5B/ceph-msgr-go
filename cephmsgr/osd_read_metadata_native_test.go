@@ -13,7 +13,16 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/osd"
 )
 
-// These synthetic peers send independently generated native envelopes. Actual
+// These synthetic peers send independently generated native envelopes: the
+// mapext-native-* and checksum-native-* vectors of internal/osd/testdata
+// (regenerate with `encode-osd-mapext` and `encode-osd-checksum`, see
+// runNativeEncoder in integration/fixture). The checksum suite has one request
+// and four logical replies for each of CRC32C, xxHash32 and xxHash64, with
+// xxHash64 seed and result bits above uint32. checksum-native-provenance.json is
+// the receipt that produced the files; checksum-native-provenance-20261110.json
+// is a later receipt of the current driver with byte-identical segments. The
+// native wrappers feed logical outputs to the real reply encoder, so the vectors
+// prove wire format, not allocation layout or hash execution; actual
 // daemon/native-librados acceptance is covered by the opt-in integration tests.
 func TestOSDReadMetadataPublicNativePayloads(t *testing.T) {
 	for _, tc := range []struct {

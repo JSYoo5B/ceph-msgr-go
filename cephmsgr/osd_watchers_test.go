@@ -131,8 +131,13 @@ func TestOSDWatcherPublicResultAndMalformedResponse(t *testing.T) {
 	}
 }
 
-// The public path uses the fresh native request and response envelopes. These
-// bytes were generated independently from the Go encoder; this peer is synthetic.
+// The public path uses the fresh native request and response envelopes of the
+// five watchers-native-* vectors (IPv4/IPv6 entries, maximum cookie, empty list
+// and EACCES/ENOENT; regenerate with `encode-osd-watchers`, see runNativeEncoder
+// in integration/fixture; provenance in
+// internal/osd/testdata/watchers-native-provenance.json). The native watcher-list
+// encoder produced the output; Go supplies only logical inputs. The refusals are
+// logical inputs, not daemon permission evidence, and this peer is synthetic.
 func TestOSDWatcherPublicWireMatchesFreshNative(t *testing.T) {
 	for _, name := range []string{"populated", "empty", "enoent", "eacces"} {
 		t.Run(name, func(t *testing.T) {
