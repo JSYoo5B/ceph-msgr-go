@@ -3,25 +3,60 @@ package msgr
 import "github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 
 const (
-	MonMapMessage           uint16 = 4
-	MonGetMapMessage        uint16 = 5
-	MonGetOSDMapMessage     uint16 = 6
-	SubscribeMessage        uint16 = 15
-	SubscribeAckMessage     uint16 = 16
-	AuthMessage             uint16 = 17
-	AuthReplyMessage        uint16 = 18
-	OSDMapMessage           uint16 = 41
-	OSDOpMessage            uint16 = 42
-	OSDOpReplyMessage       uint16 = 43
-	MonCommandMessage       uint16 = 50
-	MonCommandReplyMessage  uint16 = 51
-	TellCommandMessage      uint16 = 97
+	// MonMapMessage is received; header compat above 1 is refused, and the inner
+	// map envelope carries its own version.
+	MonMapMessage uint16 = 4
+	// MonGetMapMessage is sent with header 1/0.
+	MonGetMapMessage uint16 = 5
+	// MonGetOSDMapMessage is sent with header 1/0.
+	MonGetOSDMapMessage uint16 = 6
+	// SubscribeMessage is sent with header 3/1.
+	SubscribeMessage uint16 = 15
+	// SubscribeAckMessage is defined only: no encoder or decoder exists.
+	SubscribeAckMessage uint16 = 16
+	// AuthMessage is defined only: CephX runs inside msgr2 authentication
+	// frames, not this message.
+	AuthMessage uint16 = 17
+	// AuthReplyMessage is defined only, as AuthMessage.
+	AuthReplyMessage uint16 = 18
+	// OSDMapMessage is received with header 1/1 or 4/3.
+	OSDMapMessage uint16 = 41
+	// OSDOpMessage is sent with header 6 (base), 8 or 9 and compat 3, by the
+	// selected OSD profile; it shares type 42 with osd.RequestMessage.
+	OSDOpMessage uint16 = 42
+	// OSDOpReplyMessage is received with header exactly 6/2 (base) or 8/2
+	// (reply-v8 profile); it shares type 43 with osd.ReplyMessage.
+	OSDOpReplyMessage uint16 = 43
+	// MonCommandMessage is sent with header 1/0.
+	MonCommandMessage uint16 = 50
+	// MonCommandReplyMessage is received with header compat at most 1 and
+	// matched by type and transaction.
+	MonCommandReplyMessage uint16 = 51
+	// TellCommandMessage is sent with header 1/0 (MCommand to a MON, MGR, OSD or
+	// MDS).
+	TellCommandMessage uint16 = 97
+	// TellCommandReplyMessage is received with header compat at most 1 and
+	// matched by type and transaction.
 	TellCommandReplyMessage uint16 = 98
-	MgrMapMessage           uint16 = 0x704
-	MgrCommandMessage       uint16 = 0x709
-	MgrCommandReplyMessage  uint16 = 0x70a
+	// MgrMapMessage is received; header compat above 1 is refused.
+	MgrMapMessage uint16 = 0x704
+	// MgrCommandMessage is sent with header 1/0.
+	MgrCommandMessage uint16 = 0x709
+	// MgrCommandReplyMessage is received with header compat at most 1 and
+	// matched by type and transaction.
+	MgrCommandReplyMessage uint16 = 0x70a
 )
 
+// MessageData is one Messenger message (Ceph v20.2.4 msg/Message.h header2
+// and its segments). Each message type constant in this package and in the
+// mds and osd packages states on its own declaration whether the client sends
+// it, receives it or only defines it, and the header versions it emits or
+// accepts. Every received message first requires compat at most its header
+// version; further checks vary by decoder and are stated per type. Those
+// statements bound acceptance only: they do not advertise support for, or
+// promise a refusal of, every other header version a daemon may send. Types
+// without a constant, such as CephFS client metrics (29) and the full FSMap
+// (45), and daemon-to-daemon types are not implemented.
 type MessageData struct {
 	Sequence, Transaction, AckSequence     uint64
 	Type, Priority, Version, CompatVersion uint16

@@ -7,6 +7,10 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
+// ServiceMapMessage is received without an additional header-version check
+// and with empty middle and data; the ServiceMap and service structs accept
+// compat at most 1 and the daemon struct at most 2.
+//
 // MServiceMap and ServiceMap, independently translated from Ceph 20.2.4
 // commit 7f793731f1b39eb4f465e960113d2363c311b964: messages/MServiceMap.h,
 // mgr/ServiceMap.cc encode/decode, msg/Message.h MSG_SERVICE_MAP and

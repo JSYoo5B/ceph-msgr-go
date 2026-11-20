@@ -62,7 +62,7 @@ class ChangePlanTests(unittest.TestCase):
         result = self.result(base=consumer_base)
         self.assertFalse(result['docs_only'])
         self.assertEqual(result['documentation_inputs'], ['README.md'])
-        for path in ('SPEC.md','cephmsgr/MESSAGE_LEDGER.md','new.md'):
+        for path in ('SPEC.md','AGENTS.md','new.md'):
             self.write(path, 'content\n')
         self.commit()
         self.assertFalse(self.result()['docs_only'])

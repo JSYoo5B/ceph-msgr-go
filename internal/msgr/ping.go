@@ -6,6 +6,9 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
+// PingMessage is sent with header 1/1; the reply must have header 1 with
+// compat 0, empty middle and data and transaction 0.
+//
 // MPing, independently translated from Ceph v20.2.4 commit
 // 7f793731f1b39eb4f465e960113d2363c311b964: messages/MPing.h,
 // mon/Monitor.cc handle_ping and mon/MonClient.h MonClientPinger (LGPL-2.1;

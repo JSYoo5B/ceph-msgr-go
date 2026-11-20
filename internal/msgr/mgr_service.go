@@ -12,11 +12,21 @@ import (
 // Pinned Ceph 20.2.4 7f793731f1b39eb4f465e960113d2363c311b964,
 // src/msg/Message.h MSG_MGR_*: the MGR service-daemon lifecycle messages.
 const (
-	MgrOpenMessage      uint16 = 0x700
+	// MgrOpenMessage is sent with header 3/1, by the opt-in service daemon only.
+	MgrOpenMessage uint16 = 0x700
+	// MgrConfigureMessage is received by the opt-in service daemon with header
+	// versions 1 to 4 and compat exactly 1; a nonempty middle or data segment is
+	// refused and unimplemented extension bytes are kept raw.
 	MgrConfigureMessage uint16 = 0x701
-	MgrReportMessage    uint16 = 0x702
-	MgrCloseMessage     uint16 = 0x708
-	MgrUpdateMessage    uint16 = 0x70b
+	// MgrReportMessage is sent with header 9/1, by the opt-in service daemon
+	// only.
+	MgrReportMessage uint16 = 0x702
+	// MgrCloseMessage is sent and received by the opt-in service daemon; the
+	// echo must have header exactly 1/1 and empty middle and data segments.
+	MgrCloseMessage uint16 = 0x708
+	// MgrUpdateMessage is sent with header 2/1, by the opt-in service daemon
+	// only.
+	MgrUpdateMessage uint16 = 0x70b
 )
 
 // Bounds for caller-supplied service registration data. They apply to names,

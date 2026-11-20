@@ -12,7 +12,9 @@ import (
 // finish_reclaim_session and client/Client.cc start_reclaim/finish_reclaim
 // (LGPL-2.1; no code copied).
 const (
-	ClientReclaimMessage      uint16 = 27
+	// ClientReclaimMessage is sent with header 1/1.
+	ClientReclaimMessage uint16 = 27
+	// ClientReclaimReplyMessage is received with header exactly 1/1.
 	ClientReclaimReplyMessage uint16 = 28
 
 	// ReclaimReset is CEPH_RECLAIM_RESET, the only flag the MDS honors.

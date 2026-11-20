@@ -15,6 +15,8 @@ import (
 // LGPL-2.1 sources; no code copied.
 
 const (
+	// ClientReconnectMessage is sent with header 5/4; its decoder exists for
+	// verification only.
 	ClientReconnectMessage uint16 = 23
 	// FeatureMultiReconnect is the MDS feature that selects the current
 	// MClientReconnect v5 (with the "more" flag) on native clients.

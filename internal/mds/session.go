@@ -16,6 +16,8 @@ import (
 // MDSCapAuth) and mds/cephfs_features.h. LGPL-2.1 sources; no code copied.
 
 const (
+	// ClientSessionMessage is sent and received with header version 1 or 7 and
+	// compat 1.
 	ClientSessionMessage uint16 = 22
 	// SessionHeadBytes is the packed ceph_mds_session_head size.
 	SessionHeadBytes          = 28

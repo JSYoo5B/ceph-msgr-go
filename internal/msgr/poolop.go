@@ -10,8 +10,10 @@ import (
 // (POOL_OP_*) and mon/OSDMonitor.cc enforce_pool_op_caps/preprocess_pool_op/
 // prepare_pool_op (LGPL-2.1; no code copied).
 const (
+	// PoolOpReplyMessage is received; header compat above 1 is refused.
 	PoolOpReplyMessage uint16 = 48
-	PoolOpMessage      uint16 = 49
+	// PoolOpMessage is sent with header 4/2.
+	PoolOpMessage uint16 = 49
 
 	PoolOpCreateSnap          uint32 = 0x11
 	PoolOpDeleteSnap          uint32 = 0x12

@@ -10,7 +10,10 @@ import (
 // mon/Monitor.cc handle_get_version (LGPL-2.1; no code copied). The MON copies
 // the request's header TID and payload handle into the reply.
 const (
-	MonGetVersionMessage      uint16 = 19
+	// MonGetVersionMessage is sent with header 1/0.
+	MonGetVersionMessage uint16 = 19
+	// MonGetVersionReplyMessage is received with header version 1 or 2, no
+	// additional compat guard, and empty middle and data.
 	MonGetVersionReplyMessage uint16 = 20
 )
 

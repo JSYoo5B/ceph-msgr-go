@@ -9,7 +9,11 @@ import "errors"
 // messages/MOSDOpReply.h, osd/osd_types.{h,cc}, and include/rados.h.
 // Those sources carry LGPL-2.1 notices; no native implementation is copied.
 const (
-	RequestMessage      uint16 = 42
+	// RequestMessage is sent with header 6 (base), 8 or 9 and compat 3, by the
+	// selected profile; it shares type 42 with msgr.OSDOpMessage.
+	RequestMessage uint16 = 42
+	// ReplyMessage is received with header exactly 6/2 (base) or 8/2 (reply-v8
+	// profile); it shares type 43 with msgr.OSDOpReplyMessage.
 	ReplyMessage        uint16 = 43
 	Read                uint16 = 0x1201
 	Stat                uint16 = 0x1202
