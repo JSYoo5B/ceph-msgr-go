@@ -2,7 +2,9 @@
 """Check frame/message/role ledger links to tests and retained evidence.
 
 Each native receipt is one file in cephmsgr/receipts/ named by its ID; this
-module is the only reader of those files.
+module is the only reader of those files. Table rows follow the order of their
+source (wire value, opcode catalog, feature ledger), so a new row has a fixed
+place.
 
 This validates references, not the truth of a native observation. A linked
 unit test must be declared as a top-level test in the linked file and listed by
@@ -107,6 +109,16 @@ def receipt_rows(texts, problems):
     return rows
 
 
+def order_problems(label, rows, rank, what):
+    """Rows must appear in the order `rank` gives their keys, so a new row has
+    one place and never goes at the end of the table by default."""
+    keys = [key for key in rows if key in rank]
+    for before, after in zip(keys, keys[1:]):
+        if rank[before] > rank[after]:
+            return [label + ": row " + after + " is out of " + what + " order (after " + before + ")"]
+    return []
+
+
 def message_rows(root):
     result = {}
     for line in (root / "cephmsgr/MESSAGE_LEDGER.md").read_text().splitlines():
@@ -122,11 +134,12 @@ def message_rows(root):
 
 
 def feature_rows(root):
-    result = set()
+    """Feature ledger profile names in ledger order."""
+    result = {}
     for line in (root / "internal/session/FEATURE_LEDGER.md").read_text().splitlines():
         cells = [cell.strip() for cell in line.split("|")]
         if len(cells) >= 7 and re.fullmatch(r"(?:adds )?`0x[0-9a-f]{16}`", cells[2]):
-            result.add(cells[1])
+            result.setdefault(cells[1], len(result))
     return result
 
 
@@ -213,6 +226,10 @@ def local_file(root, document, target):
     return path
 
 
+def numeric_rank(keys):
+    return {key: int(key, 0) for key in keys}
+
+
 def check(root=ROOT, text=None, receipts=None):
     """Problems in the ledger. `text` replaces the document and `receipts`
     (ID -> file text) the receipt directory, so tests can check variants."""
@@ -231,14 +248,18 @@ def check(root=ROOT, text=None, receipts=None):
     receipts = receipt_rows(receipts, problems)
     expected = message_rows(root)
     catalog = opcode_rows(root)
-    for label, actual, wanted in (("messages", set(messages), set(expected)),
-                                  ("frames", set(frames), frame_rows(root)),
-                                  ("opcodes", set(opcodes), {name for name, row in catalog.items() if row["status"] == "implemented"}),
-                                  ("features", set(features), feature_rows(root))):
-        for key in sorted(wanted - actual):
+    implemented = {name: index for index, name in enumerate(catalog) if catalog[name]["status"] == "implemented"}
+    profiles = feature_rows(root)
+    frame_keys = frame_rows(root)
+    for label, rows, wanted, what in (("messages", messages, numeric_rank(expected), "message type"),
+                                      ("frames", frames, numeric_rank(frame_keys), "frame tag"),
+                                      ("opcodes", opcodes, implemented, "opcode catalog"),
+                                      ("features", features, profiles, "feature ledger")):
+        for key in sorted(set(wanted) - set(rows)):
             problems.append(label + ": missing row " + key)
-        for key in sorted(actual - wanted):
+        for key in sorted(set(rows) - set(wanted)):
             problems.append(label + ": undeclared row " + key)
+        problems.extend(order_problems(label, rows, wanted, what))
     for name, row in receipts.items():
         if row[1] not in CATEGORIES:
             problems.append("receipt " + name + ": unknown attribution category")

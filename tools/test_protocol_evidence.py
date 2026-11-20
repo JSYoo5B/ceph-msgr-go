@@ -35,6 +35,10 @@ class ProtocolEvidenceTests(unittest.TestCase):
     def table_row(self, start):
         return next(line for line in self.text.splitlines() if line.startswith(start))
 
+    def swapped(self, first, second):
+        a, b = self.table_row(first), self.table_row(second)
+        return self.text.replace(a, "\0").replace(b, a).replace("\0", b)
+
     def test_current_join_covers_messages_roles_and_real_unit_definitions(self):
         self.assertEqual(self.check(), [])
         self.assertEqual(len(evidence.message_rows(evidence.ROOT)), 50)
@@ -220,6 +224,24 @@ class ProtocolEvidenceTests(unittest.TestCase):
             with self.subTest(problem=problem):
                 self.assertIn(problem, self.check(receipts=self.with_receipt("osd-x", text)))
         self.assertEqual(self.check(receipts=self.with_receipt("osd-x", self.receipt("osd-x"))), [])
+
+    def test_rows_follow_their_source_order(self):
+        cases = (
+            ("| READ |", "| STAT |", "opcodes: row READ is out of opcode catalog order (after STAT)"),
+            ("| SET_CHUNK |", "| TIER_PROMOTE |", "opcodes: row SET_CHUNK is out of opcode catalog order (after TIER_PROMOTE)"),
+            ("| 2 | PingMonitor;", "| 4 | Snapshot MON", "messages: row 2 is out of message type order (after 4)"),
+            ("| 1 | Dial", "| 2 |", "frames: row 1 is out of frame tag order (after 2)"),
+            ("| MON (entity type 1) |", "| OSD (entity type 4) |",
+             "features: row MON (entity type 1) is out of feature ledger order (after OSD (entity type 4))"),
+        )
+        for first, second, problem in cases:
+            with self.subTest(problem=problem):
+                self.assertIn(problem, self.check(self.swapped(first, second)))
+        # Appending a moved row at the end of the table is refused as well.
+        row = self.table_row("| READ |")
+        last = self.table_row("| SCRUBLS |")
+        text = self.text.replace(row + "\n", "").replace(last, last + "\n" + row)
+        self.assertIn("opcodes: row READ is out of opcode catalog order (after SCRUBLS)", self.check(text))
 
     def test_missing_or_escaping_links_cannot_pass(self):
         for target in ("missing_test.go", "../../../outside_test.go"):
