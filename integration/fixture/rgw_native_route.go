@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -28,10 +29,15 @@ const rgwNativeStream = "rgw-native.jsonl"
 // checkpoint's output, as it prints api and client for the product suites.
 const rgwNativeSuite = "fixture"
 
-// rgwNativeTargets is the closed set of tests a row may route to. Each starts
-// and removes its own owned RGW cluster; the controller starts none. A new
-// target is added here, to tools/rgw_native_gate.py and to a catalog row.
-var rgwNativeTargets = []string{"TestRGWNativeCheckpointIntegration", "TestRGWNativeMultiStripeIntegration", "TestRGWNativeBackendFaultIntegration"}
+// rgwNativeCheckpoint is the name of a test a row may route to: a top-level
+// TestRGWNative...Integration test of this module, which starts and removes
+// its own owned RGW cluster; the controller starts none. The trusted planner
+// admits a routed row only for a checkpoint declared with its row
+// (//scenario:row ... rgw_native=1) and verified by its own module of
+// tools/rgw_native_gate.py, so no list here names the checkpoints. A name of
+// word characters only is no regular expression beyond itself, so ^Name$
+// selects that one test.
+var rgwNativeCheckpoint = regexp.MustCompile(`^TestRGWNative\w*Integration$`)
 
 // rgwNativeTimeout bounds one checkpoint's go test process, as the
 // development workflow (.github/workflows/rgw-native.yml) does.
@@ -39,16 +45,40 @@ const rgwNativeTimeout = "20m"
 
 // rgwNativeTarget returns the routed test of an exact selector ^Name$.
 func rgwNativeTarget(selector string) (string, bool) {
-	for _, name := range rgwNativeTargets {
-		if selector == "^"+name+"$" {
-			return name, true
+	name, anchored := strings.CutPrefix(selector, "^")
+	name, ended := strings.CutSuffix(name, "$")
+	if !anchored || !ended || !rgwNativeCheckpoint.MatchString(name) {
+		return "", false
+	}
+	return name, true
+}
+
+// rgwNativeListed requires Go's own test listing of the module in dir to hold
+// exactly name for the selector ^name$, so a checkpoint name this module does
+// not declare is refused before anything runs.
+func rgwNativeListed(ctx context.Context, dir, name string) error {
+	cmd := exec.CommandContext(ctx, "go", "test", "-mod=readonly", "-list", "^"+name+"$", ".")
+	cmd.Dir = dir
+	cmd.Env = environment(map[string]string{"GOWORK": "off"}, true)
+	cmd.Stderr = os.Stderr
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("RGW native checkpoint %s: go test -list: %w", name, err)
+	}
+	var listed []string
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line != "" && !strings.HasPrefix(line, "ok ") {
+			listed = append(listed, line)
 		}
 	}
-	return "", false
+	if !slices.Equal(listed, []string{name}) {
+		return fmt.Errorf("RGW native checkpoint %s: the fixture module lists %q for ^%s$", name, listed, name)
+	}
+	return nil
 }
 
 // rgwNativeProfileProblem admits a routed row only as the checkpoints run:
-// one exact known test, no capability or sequence, and every other input at
+// one exact checkpoint name, no capability or sequence, and every other input at
 // the value the checkpoint itself uses (its cluster is fixed by
 // rgwNativeStartFixture: Tentacle 20.2.4 pinned image, secure Messenger v2,
 // aes256k keys and service tickets, IPv4, one MON/MGR/BlueStore OSD and one
@@ -56,7 +86,7 @@ func rgwNativeTarget(selector string) (string, bool) {
 // in the job's name without effect.
 func rgwNativeProfileProblem(p profile) error {
 	if _, ok := rgwNativeTarget(p.testRun); !ok {
-		return fmt.Errorf("%s=1 requires CEPH_MSGR_TEST_RUN to be exactly one of ^%s$", rgwNativeEnv, strings.Join(rgwNativeTargets, "$ or ^"))
+		return fmt.Errorf("%s=1 requires CEPH_MSGR_TEST_RUN to be exactly ^Name$ of one checkpoint %s, not %q", rgwNativeEnv, rgwNativeCheckpoint, p.testRun)
 	}
 	defaults := []struct{ name, value, want string }{
 		{"CEPH_MSGR_TEST_IMAGE", p.image, profileDefaultImage},
@@ -102,7 +132,8 @@ func rgwNativeProfileProblem(p profile) error {
 }
 
 // runRGWNative runs the routed checkpoint of p with go test in this module
-// and starts no fixture of its own. The raw test2json stream goes to
+// and starts no fixture of its own; a name the module does not list is
+// refused first. The raw test2json stream goes to
 // rgwNativeStream in the diagnostics directory, which must not exist yet, so
 // a stream of an earlier run is never read as this run's result. The output
 // of each event is printed after "Running Ceph test suite: fixture", as the
@@ -123,8 +154,12 @@ func runRGWNative(ctx context.Context, project string, p profile, stdout io.Writ
 		return fmt.Errorf("RGW native stream: %w", err)
 	}
 	defer stream.Close()
+	dir := filepath.Join(project, "integration", "fixture")
+	if err := rgwNativeListed(ctx, dir, name); err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, "go", rgwNativeArguments(name)...)
-	cmd.Dir = filepath.Join(project, "integration", "fixture")
+	cmd.Dir = dir
 	cmd.Env = environment(map[string]string{rgwNativeEnv: "1", "GOWORK": "off"}, true)
 	cmd.Stderr = os.Stderr
 	output, err := cmd.StdoutPipe()

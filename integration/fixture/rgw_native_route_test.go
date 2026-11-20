@@ -14,8 +14,8 @@ func rgwRouteEnv(values map[string]string) func(string) string {
 	return func(name string) string { return values[name] }
 }
 
-func TestRGWNativeRouteAdmitsOnlyOneKnownCheckpoint(t *testing.T) {
-	for _, name := range rgwNativeTargets {
+func TestRGWNativeRouteAdmitsOnlyOneCheckpointName(t *testing.T) {
+	for _, name := range ciDeclaredRoutedTests(t) {
 		p, err := loadProfile(rgwRouteEnv(map[string]string{rgwNativeEnv: "1", "CEPH_MSGR_TEST_RUN": "^" + name + "$"}))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -31,7 +31,11 @@ func TestRGWNativeRouteAdmitsOnlyOneKnownCheckpoint(t *testing.T) {
 	refused := map[string]map[string]string{
 		"no selector":       {},
 		"broad selector":    {"CEPH_MSGR_TEST_RUN": "^TestRGWNative"},
-		"unknown test":      {"CEPH_MSGR_TEST_RUN": "^TestRGWNativeOtherIntegration$"},
+		"pattern selector":  {"CEPH_MSGR_TEST_RUN": "^TestRGWNative.*Integration$"},
+		"class selector":    {"CEPH_MSGR_TEST_RUN": "^TestRGWNative[A-Z]Integration$"},
+		"no end anchor":     {"CEPH_MSGR_TEST_RUN": "^TestRGWNativeCheckpointIntegration"},
+		"no start anchor":   {"CEPH_MSGR_TEST_RUN": "TestRGWNativeCheckpointIntegration$"},
+		"subtest":           {"CEPH_MSGR_TEST_RUN": "^TestRGWNativeCheckpointIntegration$/x"},
 		"unit test":         {"CEPH_MSGR_TEST_RUN": "^TestRGWNativeHistoryRequiresAttributedDecodedObjectReception$"},
 		"product test":      {"CEPH_MSGR_TEST_RUN": "^TestCephMonPingIntegration$"},
 		"both checkpoints":  {"CEPH_MSGR_TEST_RUN": "^TestRGWNativeCheckpointIntegration$|^TestRGWNativeMultiStripeIntegration$"},
@@ -73,7 +77,7 @@ func TestRGWNativeRouteAdmitsOnlyOneKnownCheckpoint(t *testing.T) {
 }
 
 func TestRGWNativeRouteRunsOneBoundedCheckpointCommand(t *testing.T) {
-	for _, name := range rgwNativeTargets {
+	for _, name := range ciDeclaredRoutedTests(t) {
 		args := rgwNativeArguments(name)
 		want := []string{"test", "-mod=readonly", "-json", "-count=1", "-timeout=20m", "-run", "^" + name + "$", "."}
 		if !slices.Equal(args, want) {
@@ -175,5 +179,37 @@ func TestRGWNativeRouteSelectsOnlyItsOwnSuite(t *testing.T) {
 	}
 	if _, problems := ciSelection(sources, rows[:1], bindings); !slices.Contains(problems, "no catalog selector includes fixture/TestRGWNativeCheckpointIntegration") {
 		t.Fatalf("an unrouted checkpoint was not reported: %v", problems)
+	}
+}
+
+// TestRGWNativeRouteRefusesANameTheModuleDoesNotList: a selector of the
+// checkpoint name form that names no test of this module, or a test the name
+// rule admits but Go does not list, is refused before go test runs it.
+func TestRGWNativeRouteRefusesANameTheModuleDoesNotList(t *testing.T) {
+	ctx := context.Background()
+	if err := rgwNativeListed(ctx, ".", "TestRGWNativeCheckpointIntegration"); err != nil {
+		t.Fatal(err)
+	}
+	err := rgwNativeListed(ctx, ".", "TestRGWNativeOtherIntegration")
+	if err == nil || !strings.Contains(err.Error(), "lists []") {
+		t.Fatalf("listed an unknown checkpoint: %v", err)
+	}
+	// A routed profile of an unknown name loads, and its run stops at the
+	// listing: no suite line is printed and no checkpoint runs.
+	p, err := loadProfile(rgwRouteEnv(map[string]string{rgwNativeEnv: "1", "CEPH_MSGR_TEST_RUN": "^TestRGWNativeOtherIntegration$"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.diagnostics = t.TempDir()
+	project, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runRGWNative(ctx, project, p, &out); err == nil || !strings.Contains(err.Error(), "TestRGWNativeOtherIntegration") {
+		t.Fatalf("ran an unknown checkpoint: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("printed a suite before refusing: %q", out.String())
 	}
 }
