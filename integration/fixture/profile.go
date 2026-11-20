@@ -60,6 +60,10 @@ type profile struct {
 	// monFreeze opts in to the connected-MON freeze tests, which can leave the
 	// OSD on an old OSDMap (integration/fixture/MON_FREEZE_FIXTURE_ISSUE.md).
 	monFreeze string
+	// inputs holds the inputs declared with defineInput (input.go), the one
+	// field for all of them. The fields above are frozen: a new input is
+	// declared beside the code that reads it and becomes no field.
+	inputs string
 }
 
 // profileInputPrefix begins the name of every fixture input a catalog row
@@ -114,6 +118,14 @@ func loadProfile(getenv func(string) string) (profile, error) {
 }
 
 func loadSingleProfile(getenv func(string) string) (profile, error) {
+	p := loadPinnedFields(getenv)
+	p.inputs = readDeclaredInputs(getenv)
+	return admitSingleProfile(p, getenv)
+}
+
+// loadPinnedFields reads the frozen inputs that are fields of profile. A new
+// input is declared with defineInput instead and adds no line here.
+func loadPinnedFields(getenv func(string) string) profile {
 	value := func(name, fallback string) string {
 		if result := getenv(name); result != "" {
 			return result
@@ -167,6 +179,10 @@ func loadSingleProfile(getenv func(string) string) (profile, error) {
 		diagnostics:          getenv("CEPH_MSGR_TEST_DIAGNOSTICS"),
 	}
 	p.serviceCipher = value("CEPH_MSGR_TEST_SERVICE_CIPHER", p.keyType)
+	return p
+}
+
+func admitSingleProfile(p profile, getenv func(string) string) (profile, error) {
 	capabilities, err := parseCapabilities(p.capabilities, p.testRun)
 	if err != nil {
 		return profile{}, err
@@ -589,7 +605,7 @@ func (p profile) osdPGV8() bool {
 func (p profile) monitors() string { return p.monAddresses }
 
 func (p profile) containerEnvironment() map[string]string {
-	return map[string]string{
+	env := map[string]string{
 		"CEPH_MSGR_TEST_MDS_FRESH":               p.mdsFresh,
 		"CEPH_MSGR_TEST_MDS_COMMANDS":            p.mdsCommands,
 		"CEPH_MSGR_TEST_MDS_SESSIONS":            p.mdsSessions,
@@ -625,6 +641,12 @@ func (p profile) containerEnvironment() map[string]string {
 		"CEPH_MSGR_TEST_MON_FREEZE":              p.monFreeze,
 		"CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS":     "1",
 	}
+	// A declared input reaches the native tests and capability requirement
+	// terms as its own variable.
+	for variable, value := range p.declaredInputs() {
+		env[variable] = value
+	}
+	return env
 }
 
 func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
