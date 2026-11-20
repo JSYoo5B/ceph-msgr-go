@@ -19,6 +19,17 @@ import (
 // Each checksum is compared directly with librados at the same read snap;
 // the product neither discovers snapshots nor computes local expected hashes.
 //
+// The native oracle selects the snap with rados_ioctx_snap_set_read before
+// rados_checksum and always restores LIBRADOS_SNAP_HEAD. For CRC32C, xxHash32
+// and xxHash64 the cases cover an old clone with holes, a rewritten head, an
+// unchanged object, an object created after the snap, a deleted head with a
+// retained clone, later snaps resolving to the head, trimming, exact and past
+// clone EOF and a signed ENOENT for an absent clone. The OSD resolves the
+// selected object before CHECKSUM dispatch
+// (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc) and does not echo the read
+// snap in its reply. Not verified: EC, pool snapshot mode and compound
+// checksums.
+//
 //fixture:isolated allocates self-managed snaps on the shared fixture pool, leaving its selfmanaged_snaps flag set
 func TestCephOSDSnapshotChecksumIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

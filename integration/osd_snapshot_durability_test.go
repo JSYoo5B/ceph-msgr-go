@@ -19,6 +19,8 @@ import (
 // clone and the new head survive SIGKILL and restart of the object's primary,
 // and LIST_SNAPS still names the snapshot.
 //
+// Not verified: ROLLBACK under failover and host power loss.
+//
 //scenario:covers CLIENT to OSD
 //fixture:isolated kills and restarts an OSD; restart waits osd-ready clean without a pg_temp proof
 func TestCephOSDSnapshotDurabilityIntegration(t *testing.T) {

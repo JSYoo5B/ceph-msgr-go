@@ -74,6 +74,17 @@ func nativeU64Xattr(t *testing.T, ctx context.Context, input u64XattrNativeInput
 	return result
 }
 
+// TestCephOSDU64XattrIntegration compares Go CMPXATTR in U64 mode with a
+// native C++ twin using ObjectOperation::cmpxattr(name, op, uint64_t) (the C
+// ABI is string-only) on separate owned objects seeded alike. The server
+// parses the stored value as a decimal with from_chars and does not require
+// full consumption, so "19suffix" and "19\0tail" compare as 19; leading signs,
+// whitespace and overflow are -22; a true comparison is +1 and a false one
+// -125 (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc). The product never
+// parses stored values. The native C++ API exposes no per-op comparison
+// result, so only native aggregates and effects are compared. Not verified: v8
+// profiles, snapshot comparisons, EC and primary failure.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable edits owned UUID subject and mirror objects in the fixture pool; checked cleanup removes them
 func TestCephOSDU64XattrIntegration(t *testing.T) {

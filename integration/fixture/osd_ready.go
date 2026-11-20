@@ -17,8 +17,13 @@ const (
 	// to be up and in and every PG to be exactly active+clean.
 	osdCleanBudget = 30 * time.Second
 	// A denied recovery reservation waits 30 seconds before DoRecovery in
-	// pinned PeeringState::WaitLocalRecoveryReserved::react(RecoveryTooFull).
-	// Allow three such intervals for recovery and MON/MGR status propagation.
+	// pinned PeeringState::WaitLocalRecoveryReserved::react(RecoveryTooFull)
+	// (ceph/ceph/blob/v20.2.4/src/osd/PeeringState.cc; the
+	// osd_recovery_retry_interval default is in src/common/options/osd.yaml.in).
+	// Clearing OSD fullness does not end that wait, so a 30-second window
+	// cannot cover it. Allow three such intervals for recovery and MON/MGR
+	// status propagation; the wait reads the effective interval but never
+	// changes it.
 	// Mutation restoration callers separately allow 180 seconds for this wait,
 	// daemon restart, native placement and object restoration.
 	osdRecoveryBudget = 90 * time.Second

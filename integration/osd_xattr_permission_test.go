@@ -41,6 +41,13 @@ func nativeReadonlyXattr(t *testing.T, ctx context.Context, oracle osdFixtureOra
 	return result
 }
 
+// TestCephOSDXattrPermissionsIntegration uses the fixture's client.readonly
+// (OSD allow r). GET and GETALL succeed; SET and RM are aggregate EPERM (-1)
+// with Go per-op 0, because capability admission refuses the vector before any
+// operation runs. The reply flags echo the request's ONDISK and do not show
+// execution. The result is a known OSDError, the same session keeps reading,
+// and native state is unchanged.
+//
 //scenario:covers Messenger/CephX
 //fixture:shareable sets an xattr on the fixture object; cleanup removes it, restores mtime and natively verifies the state
 func TestCephOSDXattrPermissionsIntegration(t *testing.T) {

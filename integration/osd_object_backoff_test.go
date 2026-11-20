@@ -187,6 +187,31 @@ func objectBackoffHeldDegraded(op objectBackoffOp, client string) bool {
 // object is in flight when its primary is SIGKILLed; the caller then resubmits
 // explicitly to the replacement primary. Native rados clients run alongside.
 //
+// Trigger (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc,
+// PrimaryLogPG::do_op): a write on an object missing on an acting replica gets
+// an object-scope backoff (PG::add_backoff in src/osd/PG.cc, begin == end ==
+// the head object, op dropped) only when the session negotiated RADOS_BACKOFF
+// and osd_backoff_on_degraded is true. The pinned default is false
+// (src/common/options/global.yaml.in), so the first leaf sets it in the
+// disposable cluster's osd section and the second leaf removes it to use the
+// default waiting_for_degraded_object parking. on_global_recover calls
+// PG::release_backoffs, which sends UNBLOCK with the original ID and bounds.
+//
+// Guarantees checked: the Go ACK reaches the primary with the original epoch
+// and bounds (dump_historic_ops); the write dropped at BLOCK is never answered
+// and reports OutcomeUnknownError with its original submission tuple on
+// cancellation; an explicit resubmission executes exactly once against the
+// native snapshot; a second ACK of a released BLOCK is refused. After a
+// SIGKILLed primary the held Go request is an unknown outcome and is not
+// replayed; the explicit resubmission to the replacement primary executes once
+// and the killed op is not resurrected after recovery.
+//
+// Not verified: object BLOCK under the default configuration (unfound objects
+// only), UNBLOCK delivered by an interval change, a late ACK after UNBLOCK,
+// non-equal object bounds, several simultaneous object backoffs, split during
+// an object backoff, EC pools, and execution of a parked write on a primary
+// that keeps running.
+//
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdobjectbackofffailover key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdobjectbackofffailover key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:covers CLIENT to OSD

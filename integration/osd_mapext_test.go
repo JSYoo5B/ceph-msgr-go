@@ -57,6 +57,15 @@ func mapExtOracle(t *testing.T, ctx context.Context, name string, offset, length
 	return result
 }
 
+// TestCephOSDMapExtIntegration compares dense and sparse full-object maps
+// directly with native rados mapext. The CLI exposes only a full-object
+// operation, so partial, EOF-clipped and beyond-EOF expectations are the
+// intersection of that native full map with the requested range
+// (native_same_range=false), not same-range native calls. Store-specific
+// allocation layouts are kept as observed; no physical allocation claim
+// follows from the logical map. An over-budget output fails only its own,
+// separately authenticated connection while the original client keeps reading.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable sparse-read mapping on its owned UUID objects; checked omap-write cleanup removes them
 func TestCephOSDMapExtIntegration(t *testing.T) {

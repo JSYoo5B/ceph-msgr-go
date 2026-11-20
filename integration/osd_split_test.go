@@ -146,6 +146,15 @@ func checkSplitUnknown(t *testing.T, reply cephmsgr.OSDReply, err error, request
 // The second is received at the old parent after its split epoch. Its native
 // envelope receipt and unchanged snapshot do not establish a mutation outcome.
 //
+// The recipe changes only the owned pool's pg_num and pgp_num targets through
+// ordinary MON commands, holds the split at sixteen PGs and restores PGP
+// before PG, comparing the caller's current object state before the merge with
+// the state after it. After the split the caller reads the child with fresh
+// native placement and sends a different mutation once; neither uncertain
+// mutation is replayed. Not verified: concurrent multi-client splits,
+// three-replica split and recovery, other PG counts, restart durability, EC,
+// CRUSH variants and repeated live scopes in one fixture.
+//
 //scenario:covers CLIENT to OSD
 //scenario:covers Daemon-to-daemon
 //fixture:shareable splits fixture pool PGs 8 to 16; checked finish merges back to 8 and waits for the pool active+clean

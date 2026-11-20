@@ -58,6 +58,20 @@ func omapCmpAction(flags cephmsgr.OSDOperationFlags, key string, value []byte, c
 	return omapWriteAction{Op: "cmp", Flags: uint32(flags), Key: []byte(key), Value: append([]byte{}, value...), Comparison: &comparison}
 }
 
+// Each single-assertion case is compared with native C rados_read_op_omap_cmp2
+// or rados_write_op_omap_cmp2 per-op prval on the owned object or a native
+// mirror seeded with the same state and mtime. Compare-before-write vectors
+// commit only when the guard passes or is FAILOK; identifiers 2, 4 and 6 are
+// refused by Go before transmission (the server answers -22). A read-only
+// compare on an absent object is aggregate -2 with per-op 0, the
+// reply_op_error path rather than the handler's own ENOENT.
+//
+// Not verified: several assertions in one native operation and the server's
+// order-dependent EINVAL for an unsupported identifier after another assertion
+// (each C cmp2 call carries one assertion, so this needs a C++ oracle),
+// read-only credentials, and response loss or SIGKILL for compare-before-write
+// vectors.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable OMAP compares on its owned UUID objects; checked omap-write cleanup removes them
 func TestCephOSDOmapCompareIntegration(t *testing.T) {

@@ -299,6 +299,14 @@ func poolPlaceOn(t *testing.T, ctx context.Context, slot int, object, namespace 
 
 func attrNames(a nativeXattrSnapshot) map[string]string { return xattrInventory(a) }
 
+// TestCephOSDCrossPoolAndNamespaceCopyFromIntegration copies native-seeded
+// sources between the two owned pools and across namespaces with COPY_FROM2:
+// the destination equals the source in bytes and xattrs, the source is
+// unchanged, the reply is ONDISK with the native user version and the
+// destination's pool. A source namespace that does not match is a known -2
+// that creates no destination. Omap and the header of copied objects are not
+// observed, and copies killed in flight are not tested.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable copies across two owned pools and namespaces; checked owned-pool cleanup removes them and restores the config
 func TestCephOSDCrossPoolAndNamespaceCopyFromIntegration(t *testing.T) {
@@ -375,6 +383,14 @@ func TestCephOSDCrossPoolAndNamespaceCopyFromIntegration(t *testing.T) {
 // Pool snapshots are the other snapshot mode: the daemon takes the SnapContext
 // from the pool, so the client sends none for writes and names the pool snap
 // id only when reading or rolling back.
+//
+// After a native rados_ioctx_snap_create, a Go WRITEFULL without a SnapContext
+// clones (native head and snapshot reads, xattr kept on the clone), a read at
+// the pool snap id returns the original, LIST_SNAPS names it, and ROLLBACK
+// restores the head. Observed server behavior, not a product contract: a write
+// carrying an explicit client SnapContext in a pool-snapshot pool commits as a
+// head overwrite instead of being refused. Not verified: EC, rollback or
+// cloning under failover, and a self-managed-then-pool mode switch.
 //
 //scenario:covers CLIENT to OSD
 //fixture:shareable pool snapshot, writes and rollback in one owned pool; checked owned-pool cleanup removes it

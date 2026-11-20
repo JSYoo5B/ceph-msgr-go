@@ -15,6 +15,19 @@ import (
 // the native client alike. UNSET_MANIFEST makes it a plain (now empty) object
 // again. Refusals are the known codes of PrimaryLogPG.
 //
+// A proxied read's reply echoes the requested length with a shorter payload,
+// which the read validator accepts. IGNORE_REDIRECT reads the manifest
+// object's own empty data; RWORDERED and SKIPRWLOCKS reads still follow the
+// redirect, and SKIPRWLOCKS on a write is refused locally. WRITEFULL, APPEND,
+// SETXATTR, DELETE and OMAP SETVALS sent to the redirected object are proxied
+// to the target with ONDISK, observed natively on the target. Known refusals:
+// redirect of an absent object -2, of an object to itself -22, UNSET_MANIFEST
+// on a plain object -95; a target without OSDSetRedirect or the reverse is
+// refused before submission.
+//
+// Not verified: other write opcodes through a redirect, reference-counted
+// redirects, and dedup pools.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable manifest ops in two owned pools only; checked owned-pool cleanup removes them and restores the config it changed
 func TestCephOSDRedirectIntegration(t *testing.T) {

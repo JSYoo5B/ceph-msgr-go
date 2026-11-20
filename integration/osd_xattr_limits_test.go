@@ -22,6 +22,13 @@ import (
 // Both the caller-targeted object and native mirror can map to any owned OSD.
 // The fixture gates every owned daemon's effective limits before this test sends.
 //
+// osd_max_attr_size and osd_max_attr_name_len are set to 32 through
+// TemporaryConfig, which restores the exact prior MON entries. A 32-byte value
+// and name commit; a 33-byte value is -EFBIG (-27) and a 33-byte name
+// -ENAMETOOLONG (-36), each after an earlier staged SET, with bytes,
+// attributes, version and mtime unchanged (rollback). These are known server
+// refusals; a negative reply has no ONDISK requirement.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable sets OSD xattr limits in central config, restored with readback; fixture xattrs restored and verified
 func TestCephOSDXattrServerLimitsIntegration(t *testing.T) {

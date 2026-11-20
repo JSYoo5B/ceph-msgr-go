@@ -35,6 +35,9 @@ type nativeLateAckReceipt struct {
 // until after activation delivered UNBLOCK. The same authenticated connection
 // must retain a bounded receipt and local gate until the original ACK is queued.
 //
+// The native ACK receipt (completed operation history) proves reception by the
+// OSD, not the daemon's internal STATE_ACKED.
+//
 //scenario:covers CLIENT to OSD
 //fixture:isolated sets fixture pool size/min_size to 2/2 and back; restore waits for one PG active, not all clean
 func TestCephOSDBackoffLateAckIntegration(t *testing.T) {

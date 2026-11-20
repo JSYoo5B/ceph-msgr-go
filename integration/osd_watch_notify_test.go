@@ -48,6 +48,17 @@ func notifyOracle(t *testing.T, ctx context.Context, action string) nativeNotify
 	return result
 }
 
+// TestCephOSDWatchNotifyIntegration covers a Go notifier with two independent
+// native watchers, explicit Go watch registration and ping, a partial timeout
+// with native replies and one unacknowledged Go watch, a native rados_notify2
+// notifier receiving an explicit binary Go ACK, and explicit unwatch. The
+// ordinary operation reply and the asynchronous completion stay distinct; a
+// provisional completion is delivered only after it is correlated with a
+// successful ordinary reply.
+//
+// Not verified: live DISCONNECT, reconnect or failover (separate tests),
+// scoped watch permissions, and EC pools.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable native workers stopped, the Go watch unwatched and owned objects removed in checked cleanup
 func TestCephOSDWatchNotifyIntegration(t *testing.T) {

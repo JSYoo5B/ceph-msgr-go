@@ -27,6 +27,12 @@ import (
 // worker expects, so no append was lost, duplicated or reordered, and the
 // client's goroutines must return to their starting level.
 //
+// Each worker has its own client because OpenOSD shares one handle per OSD
+// within a client and Close ends it for every holder. Not verified: a long
+// soak under MON failure, PG splits, ticket renewal during the soak (the
+// default ticket lifetime exceeds the run), EC pools, and durations beyond the
+// configured one.
+//
 //scenario:suite osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3.osd-soak-4m key=aes256k service=aes256k family=4 stress= osd=1 osd_store=bluestore osd_replicas=3 osd_soak=4m
 //scenario:covers CLIENT to OSD
 //fixture:shareable workers write owned UUID objects in the fixture pool; checked cleanup removes them
