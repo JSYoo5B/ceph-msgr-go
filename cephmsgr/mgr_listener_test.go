@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -659,5 +660,58 @@ func TestMgrListenerRefusesPeersBeyondItsLimitsBeforeServerIdent(t *testing.T) {
 	}
 	if s := f.listener.State(); s.Peers != 2 || s.Accepted != 2 || s.Refused != 2 {
 		t.Fatal("state", s)
+	}
+}
+
+// acceptRecorder reports the first Accept call of the listener it wraps.
+type acceptRecorder struct {
+	net.Listener
+	once  sync.Once
+	first func()
+}
+
+func (r *acceptRecorder) Accept() (net.Conn, error) {
+	r.once.Do(r.first)
+	return r.Listener.Accept()
+}
+
+// TestMgrListenerWorkerIsAccountedWhenPublished closes the daemon right
+// after Listen published the listener and before Listen returned. The
+// daemon's Close finds the listener, so it must also wait for that
+// listener's accept worker: the worker runs before Close returns, never
+// after.
+func TestMgrListenerWorkerIsAccountedWhenPublished(t *testing.T) {
+	f := newFakeMgrMon(t)
+	hooks := &mgrDaemonHooks{}
+	d, err := DialMgrDaemon(context.WithValue(context.Background(), mgrDaemonHooksKey{}, hooks), f.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	var closeReturned atomic.Bool
+	hooks.afterListenerPublished = func(*MgrListener) {
+		d.Close()
+		closeReturned.Store(true)
+	}
+	bound, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan bool, 1)
+	recorder := &acceptRecorder{Listener: bound, first: func() { accepted <- closeReturned.Load() }}
+	l, err := d.Listen(MgrListenerOptions{Listener: recorder, Addresses: []ManagerAddress{{Type: 2, Endpoint: bound.Addr().(*net.TCPAddr).AddrPort()}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case afterClose := <-accepted:
+		if afterClose {
+			t.Fatal("the accept worker started after the daemon's Close returned")
+		}
+	default:
+		t.Fatal("the daemon's Close returned before the listener's accept worker ran")
+	}
+	if s := l.State(); !s.Closed {
+		t.Fatal("listener survived its daemon", s)
 	}
 }

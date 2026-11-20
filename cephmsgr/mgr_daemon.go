@@ -301,6 +301,9 @@ type mgrDaemonHooks struct {
 	// beforeSessionClosed runs in a MON session's close callback, after the
 	// session made Done observable and before sessionClosed.
 	beforeSessionClosed func(generation uint64)
+	// afterListenerPublished runs in Listen once the daemon published the
+	// listener, before Listen returns.
+	afterListenerPublished func(*MgrListener)
 }
 
 type mgrDaemonHooksKey struct{}
@@ -508,7 +511,11 @@ func (d *MgrDaemon) listenersLocked() []*MgrListener {
 	return out
 }
 
-func (d *MgrDaemon) addListener(l *MgrListener) bool {
+// publishListener registers l and starts its accept worker under daemon.mu,
+// the lock Close and fail take to find the daemon's listeners: one that
+// finds l also waits for that worker (MgrListener.Close), and a daemon
+// already closed or failed refuses l.
+func (d *MgrDaemon) publishListener(l *MgrListener) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed || d.failure != nil {
@@ -518,6 +525,8 @@ func (d *MgrDaemon) addListener(l *MgrListener) bool {
 		d.listeners = make(map[*MgrListener]struct{})
 	}
 	d.listeners[l] = struct{}{}
+	l.wg.Add(1)
+	go l.serve()
 	return true
 }
 

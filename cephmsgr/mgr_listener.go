@@ -208,7 +208,10 @@ type MgrListener struct {
 // Listen starts accepting OSD sessions on options.Listener as this daemon.
 // The daemon's rotating MGR secrets verify each authorizer, so a peer can
 // be admitted only once WaitRotatingKeys has returned a set holding its
-// ticket's secret ID. Closing the daemon closes the listener.
+// ticket's secret ID. Closing the daemon closes the listener and waits for
+// its workers: a Listen racing the daemon's Close or failure either returns
+// ErrClosed or a listener that the daemon has closed, never one whose
+// worker outlives the daemon's Close.
 func (d *MgrDaemon) Listen(options MgrListenerOptions) (*MgrListener, error) {
 	if options.Listener == nil {
 		return nil, errors.New("ceph: MGR listener requires a bound listener")
@@ -288,12 +291,13 @@ func (d *MgrDaemon) Listen(options MgrListenerOptions) (*MgrListener, error) {
 		HandshakeLimit: min(64<<10, options.MaxFrameSize), MessageLimit: options.MaxFrameSize,
 		GlobalSeq: d.nextGlobalSeq,
 	}
-	if !d.addListener(l) {
+	if !d.publishListener(l) {
 		cancel()
 		return fail(ErrClosed)
 	}
-	l.wg.Add(1)
-	go l.serve()
+	if d.hooks != nil && d.hooks.afterListenerPublished != nil {
+		d.hooks.afterListenerPublished(l)
+	}
 	return l, nil
 }
 
