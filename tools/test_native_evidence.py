@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 import native_evidence as evidence
+import native_evidence_capsend as capsend
 import scenario_plan
 
 
@@ -19,12 +20,12 @@ class NativeEvidenceTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.receipts = self.root / "private-input"
         self.receipts.mkdir()
-        profile = evidence.PROFILES[0]
+        profile = capsend.PROFILES[0]
         self.request = {"execution_source": "linux-runner", "tested_sha": "a" * 40, "controller_sha": "b" * 40, "run_id": 101, "attempt": 1,
-                        "matrix": dict(profile, scenario=evidence.scenario_id(profile))}
+                        "matrix": dict(profile, scenario=capsend.scenario_id(profile))}
         self.tests = self.root / "tests.json"
-        self.write(self.tests, {"selector": evidence.SELECTOR, "expected": [["api", evidence.TEST]],
-                               "observed": [{"suite": "api", "test": evidence.TEST, "result": "PASS"}],
+        self.write(self.tests, {"selector": capsend.SELECTOR, "expected": [["api", capsend.TEST]],
+                               "observed": [{"suite": "api", "test": capsend.TEST, "result": "PASS"}],
                                "problems": [], "passed": True})
         self.raw = self.fixture()
         for name, value in self.raw.items():
@@ -58,16 +59,16 @@ class NativeEvidenceTests(unittest.TestCase):
                 "mds-cephfs-data-results.json": {"source_commit": evidence.SOURCE, "global_id": 10, "cephfs_nonce": 17,
                                                 "facts": {"restart_recipe": "cap-send", "cap_send_recovery": facts},
                                                 "oracle": {"endpoint": "v2:192.0.2.3:3300/77", "baseline_config": {"private": "omitted"}}},
-                "mds-cephfs-data-cleanup.json": dict.fromkeys(evidence.CLEAN_FLAGS, True) | {"source_commit": evidence.SOURCE,
+                "mds-cephfs-data-cleanup.json": dict.fromkeys(capsend.CLEAN_FLAGS, True) | {"source_commit": evidence.SOURCE,
                     "residual_owned_sessions": [], "kept_new_blocklist": [], "config": {"unreviewed": "omitted"}},
-                "mds-fresh-cleanup.json": dict.fromkeys(evidence.FRESH_FLAGS, True) | {"source_commit": evidence.SOURCE}}
+                "mds-fresh-cleanup.json": dict.fromkeys(capsend.FRESH_FLAGS, True) | {"source_commit": evidence.SOURCE}}
 
     def collect(self):
         return evidence.collect(self.request, self.receipts, self.tests, self.output)
 
     def test_successful_bundle_is_closed_hashed_and_exactly_attributed(self):
         manifest = self.collect()
-        self.assertEqual({p.name for p in self.output.iterdir()}, evidence.FILES | {"manifest.json"})
+        self.assertEqual({p.name for p in self.output.iterdir()}, capsend.FILES | {"manifest.json"})
         self.assertEqual(manifest["schema_version"], 1)
         self.assertEqual(manifest["tested_sha"], "a" * 40)
         self.assertEqual(manifest["controller_sha"], "b" * 40)
@@ -85,12 +86,12 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         for row in rows:
             request = dict(self.request, matrix=dict(row["params"], scenario=row["id"]))
-            self.assertIn(evidence.context(request)["profile"], evidence.PROFILES)
+            self.assertIn(evidence.context(request)["profile"], capsend.PROFILES)
         # The rows declare their fixture capability; evidence recorded
         # before the declaration (no capabilities field) keeps its context.
-        self.assertEqual({row["params"].get("capabilities") for row in rows}, {evidence.CAPSEND_CAPABILITIES})
+        self.assertEqual({row["params"].get("capabilities") for row in rows}, {capsend.CAPABILITIES})
         legacy = dict(self.request, matrix={key: value for key, value in rows[0]["params"].items() if key != "capabilities"} | {"scenario": rows[0]["id"]})
-        self.assertIn(evidence.context(legacy)["profile"], evidence.PROFILES)
+        self.assertIn(evidence.context(legacy)["profile"], capsend.PROFILES)
         for field, value in (("scenario", "arbitrary"), ("test_run", "^TestOther$"), ("mode", "secure"),
                              ("image", "quay.io/ceph/ceph:latest"), ("unknown", "1"), ("capabilities", "exclusive-mds-cephfs"),
                              ("capabilities", "")):
@@ -114,8 +115,8 @@ class NativeEvidenceTests(unittest.TestCase):
 
     def test_skipped_missing_or_failed_required_parent_is_incomplete(self):
         for change in ({"passed": False}, {"passed": 1}, {"expected": []}, {"observed": []},
-                       {"observed": [{"suite": "api", "test": evidence.TEST, "result": "SKIP"}]},
-                       {"observed": [{"suite": "client", "test": evidence.TEST, "result": "PASS"}]}):
+                       {"observed": [{"suite": "api", "test": capsend.TEST, "result": "SKIP"}]},
+                       {"observed": [{"suite": "client", "test": capsend.TEST, "result": "PASS"}]}):
             with self.subTest(change=change):
                 data = json.loads(self.tests.read_text())
                 data.update(change)
@@ -236,7 +237,7 @@ class NativeEvidenceTests(unittest.TestCase):
                 evidence.privacy({"field": text})
 
     def test_invalid_test_result_never_publishes_a_passed_test(self):
-        self.write(self.tests, {"selector": evidence.SELECTOR, "expected": [], "observed": [], "problems": [], "passed": True})
+        self.write(self.tests, {"selector": capsend.SELECTOR, "expected": [], "observed": [], "problems": [], "passed": True})
         request, status = self.root / "request.json", self.root / "status.json"
         self.write(request, self.request)
         self.assertEqual(evidence.main(["collect", "--request", str(request), "--receipts", str(self.receipts),
@@ -246,7 +247,7 @@ class NativeEvidenceTests(unittest.TestCase):
     def test_retained_native_bundle_matches_the_independently_recorded_run(self):
         request = {"execution_source": "linux-runner", "tested_sha": "b537120efe464d9f21f76fe3fd9f5152cd91e4fc",
                    "controller_sha": "b537120efe464d9f21f76fe3fd9f5152cd91e4fc", "run_id": 2026102301, "attempt": 1,
-                   "matrix": dict(evidence.PROFILES[0], scenario=evidence.scenario_id(evidence.PROFILES[0]))}
+                   "matrix": dict(capsend.PROFILES[0], scenario=capsend.scenario_id(capsend.PROFILES[0]))}
         path = scenario_plan.ROOT / ".github/scenarios/testdata/cap-send-native-v1"
         try:
             manifest = evidence.verify(path, evidence.context(request))
@@ -276,8 +277,9 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertLess(capture, text.index('ref: ${{ inputs.ref }}'))
         self.assertIn('test "$(git rev-parse HEAD)" = "$TESTED_SHA"', text)
         self.assertLess(text.index('sh integration/run.sh'), text.index('native_evidence.py" collect'))
-        admitted = "matrix.test_run == '%s' || matrix.test_run == '%s' || (matrix.osd_soak || '') != ''" % (evidence.SELECTOR, evidence.FLOCK_SELECTOR)
-        self.assertEqual(text.count(admitted), 3)
+        # The family decision is the trusted collector's step output
+        # (test_native_evidence_families.py).
+        self.assertEqual(text.count("steps.evidence_family.outputs.family != ''"), 3)
         artifact = text[text.index('      - name: Preserve reviewed successful-native evidence'):text.index('      - name: Require complete evidence')]
         self.assertIn('path: ${{ runner.temp }}/success-evidence/', artifact)
         self.assertIn('retention-days: 7', artifact)

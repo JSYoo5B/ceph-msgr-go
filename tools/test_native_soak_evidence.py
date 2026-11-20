@@ -13,10 +13,12 @@ import unittest
 from unittest import mock
 
 import native_evidence as evidence
+import native_evidence_capsend as capsend_family
+import native_evidence_soak as family
 import osd_soak_receipts as receipts
 import scenario_plan
 
-DURATION = evidence.SOAK_DURATION_NS
+DURATION = family.DURATION_NS
 TESTED = "a" * 40
 CONTROLLER = "b" * 40
 PRIVATE_MARKER = "private-host.example.invalid"
@@ -31,7 +33,7 @@ class NativeSoakEvidenceTests(unittest.TestCase):
         self.receipts.mkdir()
         self.output = self.root / "bundle"
         self.request = {"execution_source": "github-actions", "tested_sha": TESTED, "controller_sha": CONTROLLER, "run_id": 202, "attempt": 3,
-                        "matrix": dict(evidence.SOAK_PROFILE, scenario=evidence.SOAK_SCENARIO)}
+                        "matrix": dict(family.PROFILE, scenario=family.SCENARIO)}
         self.tests = self.root / "tests.json"
         self.put(self.tests, self.gate())
         self.populate()
@@ -45,7 +47,7 @@ class NativeSoakEvidenceTests(unittest.TestCase):
     @staticmethod
     def gate():
         return {"selector": "", "expected": [],
-                "observed": [{"suite": "api", "test": evidence.SOAK_TESTS[label], "result": "PASS"} for label in ("failover", "steady")],
+                "observed": [{"suite": "api", "test": family.TESTS[label], "result": "PASS"} for label in ("failover", "steady")],
                 "problems": [], "passed": True}
 
     def stage(self, label, kind, value):
@@ -65,8 +67,8 @@ class NativeSoakEvidenceTests(unittest.TestCase):
             "schema_version": 1, "kind": "fixture_termination", "status": "passed", "configured_source_sha": TESTED,
             "configured_image": evidence.IMAGE, "observed_image_id": manifest["image_id"], "architecture": "amd64",
             "fixture_manifest_sha256": digest, "configured_duration_ns": DURATION, "suite_exit_success": True,
-            "termination_succeeded": True, "termination_elapsed_ns": 7000, "expected_tests": list(evidence.SOAK_LABELS)})
-        for label in evidence.SOAK_LABELS:
+            "termination_succeeded": True, "termination_elapsed_ns": 7000, "expected_tests": list(family.LABELS)})
+        for label in family.LABELS:
             self.stage(label, "started", {"configured_source_sha": TESTED, "configured_duration_ns": DURATION, "fixture_manifest_sha256": digest})
             owned = ["%s-seed" % label] + ["%s-%d" % (label, worker) for worker in range(4)]
             self.stage(label, "setup", {"elapsed_ns": 1000, "owned_objects": owned})
@@ -140,11 +142,11 @@ class NativeSoakEvidenceTests(unittest.TestCase):
 
     def test_complete_bundle_is_attributed_hashed_and_closed(self):
         manifest = self.collect()
-        self.assertEqual({p.name for p in self.output.iterdir()}, evidence.SOAK_FILES | {"manifest.json"})
+        self.assertEqual({p.name for p in self.output.iterdir()}, family.FILES | {"manifest.json"})
         self.assertEqual((manifest["kind"], manifest["schema_version"]), ("native-soak-success", 1))
         self.assertEqual((manifest["tested_sha"], manifest["controller_sha"], manifest["run_id"], manifest["attempt"]), (TESTED, CONTROLLER, 202, 3))
-        self.assertEqual(manifest["scenario"], evidence.SOAK_SCENARIO)
-        self.assertEqual(manifest["selector"], evidence.SOAK_SELECTOR)
+        self.assertEqual(manifest["scenario"], family.SCENARIO)
+        self.assertEqual(manifest["selector"], family.SELECTOR)
         self.assertEqual(manifest["configured_image"], evidence.IMAGE)
         self.assertEqual(manifest["observed"]["image_id"], "sha256:" + "c" * 64)
         self.assertEqual(evidence.verify(self.output, self.context()), manifest)
@@ -176,13 +178,13 @@ class NativeSoakEvidenceTests(unittest.TestCase):
 
     def test_projection_budget_is_the_reason_raw_retention_is_not_used(self):
         # Eight maximum-sized raw receipts alone exceed the bundle budget.
-        self.assertGreater(8 * evidence.SOAK_RECEIPT_LIMIT, evidence.TOTAL_LIMIT)
+        self.assertGreater(8 * family.RECEIPT_LIMIT, evidence.TOTAL_LIMIT)
 
     def test_catalog_row_is_the_only_admitted_profile(self):
         rows = [row for row in scenario_plan.load_catalog() if row.get("params", {}).get("osd_soak")]
-        self.assertEqual([row["id"] for row in rows], [evidence.SOAK_SCENARIO])
+        self.assertEqual([row["id"] for row in rows], [family.SCENARIO])
         request = dict(self.request, matrix=dict(rows[0]["params"], scenario=rows[0]["id"]))
-        self.assertEqual(evidence.context(request)["profile"], evidence.SOAK_PROFILE)
+        self.assertEqual(evidence.context(request)["profile"], family.PROFILE)
 
     # Trusted controller boundary -----------------------------------------
 
@@ -352,8 +354,8 @@ class NativeSoakEvidenceTests(unittest.TestCase):
 
     def test_soak_bundle_is_not_a_cap_send_bundle(self):
         self.collect()
-        capsend = evidence.PROFILES[0]
-        request = dict(self.request, matrix=dict(capsend, scenario=evidence.scenario_id(capsend)))
+        capsend = capsend_family.PROFILES[0]
+        request = dict(self.request, matrix=dict(capsend, scenario=capsend_family.scenario_id(capsend)))
         with self.assertRaises(evidence.EvidenceError):
             evidence.verify(self.output, evidence.context(request))
         manifest = json.loads((self.output / "manifest.json").read_text())
@@ -421,7 +423,7 @@ class NativeSoakEvidenceTests(unittest.TestCase):
     def test_receipt_size_boundary(self):
         path = self.receipts / "osd-soak-v1-steady-started.json"
         base = path.read_bytes().rstrip()
-        limit = evidence.SOAK_RECEIPT_LIMIT
+        limit = family.RECEIPT_LIMIT
         path.write_bytes(base + b" " * (limit - len(base)))
         self.assertEqual(path.stat().st_size, limit)
         self.collect()
@@ -491,8 +493,11 @@ class NativeSoakEvidenceTests(unittest.TestCase):
         self.assertNotIn("tools/osd_soak_receipts.py", text.replace("cp .trusted-native/tools/osd_soak_receipts.py", ""))
         # Evidence is required for any soak row, so an unadmitted profile fails
         # closed in the collector instead of silently skipping retention.
-        condition = "(matrix.test_run == '%s' || matrix.test_run == '%s' || (matrix.osd_soak || '') != '')" % (evidence.SELECTOR, evidence.FLOCK_SELECTOR)
-        self.assertEqual(text.count(condition), 3)
+        # The collector's family decision gates the evidence steps; every
+        # matrix with an osd_soak value claims the soak family.
+        self.assertEqual(text.count("steps.evidence_family.outputs.family != ''"), 3)
+        for value in ("4m", "8h", "30s"):
+            self.assertEqual(evidence.claimed_family({"osd_soak": value}), "soak")
         self.assertIn('--receipts "$RUNNER_TEMP/ceph-diagnostics"', text)
 
     # Public verdict ---------------------------------------------------------

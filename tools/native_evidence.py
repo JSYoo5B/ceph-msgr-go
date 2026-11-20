@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Collect/verify bounded successful-native receipts; never archive fixture IPC.
 
-Version 1 admits the explicit cap-send and shared-FLOCK recovery rows and the
-single four-minute OSD soak pair. Each projects numeric identity/time/outcome fields,
-cleanup results and hashes, not raw logs, endpoints, commands, configuration,
-credentials, full capability objects or raw workload bytes. Hashes bind the
-projected files and name the omitted raw receipts; they do not let a reader
-recompute omitted native bytes or xattrs, nor establish the truth of a native
-assertion. The soak family validates its raw receipts with the validator copied
-from the trusted controller, never with the tested checkout's copy.
+This module holds the bundle mechanics every family shares: the run context,
+input reading, privacy and size bounds, the observed runtime file, the
+manifest and its hash inventory. A family is a module named
+native_evidence_<name>.py beside this one; it declares the matrices it
+claims, the profiles it admits and how it projects and re-validates its
+files (see family_problems). Each projects numeric identity/time/outcome
+fields, cleanup results and hashes, not raw logs, endpoints, commands,
+configuration, credentials, full capability objects or raw workload bytes.
+Hashes bind the projected files and name the omitted raw receipts; they do
+not let a reader recompute omitted native bytes or xattrs, nor establish the
+truth of a native assertion. Families are imported only from this module's
+own directory, which the workflow fills from the trusted controller.
 """
 import argparse
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -29,18 +34,9 @@ IMAGE = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997
 PROVIDER = "github.com/JSYoo5B/ceph-testcontainers-go"
 PROVIDER_VERSION = "v0.5.0"
 RETAINED_PROVIDER_VERSIONS = frozenset({"v0.3.0", "v0.4.0", PROVIDER_VERSION})
-TEST = "TestCephMDSCephFSCapSendRecoveryIntegration"
-SELECTOR = "^" + TEST + "$"
-FLOCK_TEST = "TestCephMDSCephFSSharedFlockRecoveryIntegration"
-FLOCK_SELECTOR = "^" + FLOCK_TEST + "$"
-FLOCK_FILES = {"tests.json", "flock.json", "cleanup.json", "runtime.json"}
-FLOCK_OWNERS = (0x80000000474F0001, 0x80000000474F0003)
-FLOCK_CLEAN = ("attempted", "completed", "namespace_checked", "namespace_restored", "journal_pause_restored",
-               "blocklist_restored", "client_identity_removed", "recovery_identity_removed", "native_identity_removed")
 INPUT_LIMIT = 16 << 20
 FILE_LIMIT = 256 << 10
 TOTAL_LIMIT = 1 << 20
-FILES = {"tests.json", "cap-send.json", "cleanup.json", "runtime.json"}
 DEFAULTS = {
     "release": "20.2.4", "key": "aes256k", "service": "aes256k", "family": "4", "mode": "secure",
     "stress": "", "runtime": "container", "managers": "2", "race": "0", "expiry": "0", "idle": "0",
@@ -51,37 +47,19 @@ DEFAULTS = {
     "mds_cephfs_ranks": "0", "mds_cephfs_ranks_replay": "0", "mds_cephfs_completion": "0",
     "mds_cephfs_data": "0", "rbd": "0", "test_run": "",
 }
-SOAK_SCENARIO = "osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3.osd-soak-4m"
-SOAK_SELECTOR = "^TestCephOSDSoak(Failover)?Integration$"
-SOAK_DURATION_NS = 240_000_000_000
-SOAK_LABELS = ("steady", "failover")
-SOAK_TESTS = {"steady": "TestCephOSDSoakIntegration", "failover": "TestCephOSDSoakFailoverIntegration"}
-SOAK_FILES = {"tests.json", "soak.json", "cleanup.json", "receipts.json", "runtime.json"}
-SOAK_RECEIPT_LIMIT = 512 << 10
-SOAK_COUNTERS = {"steady": {"appends", "reads", "unknowns", "resubmissions", "xattrs", "truncations", "churns", "unsent"},
-                 "failover": {"appends", "reads", "unknowns", "resubmissions", "xattrs", "truncations", "faults", "replacements", "resent"}}
-SOAK_PROFILE = dict(DEFAULTS, key="aes256k", service="aes256k", family="4", osd="1", osd_store="bluestore",
-                    osd_replicas="3", osd_soak="4m")
-COMMON = dict(DEFAULTS, osd="1", mds_fresh="1", mds_cephfs_data="1", test_run=SELECTOR)
-PROFILES = [dict(COMMON, key="aes", service="aes", mode="crc", family="4", runtime="host", osd_store="bluestore"),
-            dict(COMMON, family="6")]
-FLOCK_PROFILES = [dict(profile, mds_cephfs_data="0", mds_cephfs="1", test_run=FLOCK_SELECTOR) for profile in PROFILES]
-# The fixture capability the cap-send rows declare. It travels in the matrix
-# but is not part of the recorded profile, so evidence recorded before rows
-# declared capabilities keeps its context.
-CAPSEND_CAPABILITIES = "exclusive-mds-cephfs-data"
 CONTEXT_KEYS = {"execution_source", "tested_sha", "controller_sha", "run_id", "attempt", "scenario", "selector", "profile", "configured_image"}
-CLEAN_FLAGS = ("attempted", "completed", "config_restored", "osd_config_restored", "namespace_checked",
-               "namespace_restored", "layout_restored", "blocklist_restored", "client_identity_removed", "native_identity_removed")
+# Fresh-filesystem cleanup flags every MDS fixture family reports.
 FRESH_COMMON = ("attempted", "completed", "filesystem_removed", "pools_removed", "identity_removed")
-FRESH_FLAGS = FRESH_COMMON + ("cephfs_data_verified",)
-FLOCK_FRESH_FLAGS = FRESH_COMMON + ("cephfs_verified",)
 PRIVATE = re.compile(r"(?:[\\/]Users[\\/]|[\\/]home[\\/]|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:ssh|keyring)\b)", re.I)
 
-
-KIND_FLOCK = "native-shared-flock-success"
-KIND_CAPSEND = "native-success"
-KIND_SOAK = "native-soak-success"
+FAMILY_PREFIX = "native_evidence_"
+# What a family module declares. Values are checked by family_problems.
+FAMILY_VALUES = ("KIND", "FILES", "PROFILES", "CAPABILITIES")
+FAMILY_FUNCTIONS = ("claims", "scenario_id", "selector", "runtime_facts", "gate", "project", "validate")
+# A request that names no family has its test result classified with this
+# family's gate, as before families were modules; the collector then refuses
+# the request. A new family never changes it.
+UNCLAIMED_GATE = "capsend"
 
 
 class EvidenceError(ValueError):
@@ -162,18 +140,99 @@ def encoded(value):
     return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
 
 
-def is_soak(profile):
-    return profile == SOAK_PROFILE
+# Families ------------------------------------------------------------------
 
 
-def scenario_id(profile):
-    if is_soak(profile):
-        return SOAK_SCENARIO
+def family_problems(name, module, path):
+    """Why a discovered module is not a usable family declaration."""
+    problems = []
+    if not re.fullmatch(r"[a-z][a-z0-9]*", name):
+        problems.append("%s: a family name is lowercase letters and digits" % path.name)
+    if Path(getattr(module, "__file__", "") or "").resolve() != path.resolve():
+        problems.append("%s: imported from another location" % path.name)
+    missing = [attr for attr in FAMILY_VALUES + FAMILY_FUNCTIONS if not hasattr(module, attr)]
+    if missing:
+        return problems + ["%s: missing %s" % (path.name, ", ".join(missing))]
+    problems += ["%s: %s is not callable" % (path.name, attr) for attr in FAMILY_FUNCTIONS if not callable(getattr(module, attr))]
+    if not isinstance(module.KIND, str) or not module.KIND:
+        problems.append("%s: KIND is not a name" % path.name)
+    files = module.FILES
+    if not (isinstance(files, (set, frozenset)) and all(isinstance(item, str) for item in files)
+            and {"tests.json", "runtime.json"} <= files and "manifest.json" not in files):
+        problems.append("%s: FILES needs tests.json and runtime.json and never manifest.json" % path.name)
+    if not isinstance(module.CAPABILITIES, str):
+        problems.append("%s: CAPABILITIES is not a string" % path.name)
+    profiles = module.PROFILES
+    if not (isinstance(profiles, list) and profiles and all(isinstance(item, dict) and set(item) == set(DEFAULTS) for item in profiles)):
+        problems.append("%s: PROFILES needs complete normalized profiles" % path.name)
+    return problems
+
+
+def declarations(directory):
+    """Import every family module in directory: (families, problems with them)."""
+    directory = Path(directory).resolve()
+    found, problems = {}, []
+    for path in sorted(directory.glob(FAMILY_PREFIX + "*.py")):
+        name = path.stem[len(FAMILY_PREFIX):]
+        try:
+            module = importlib.import_module(path.stem)
+        except ImportError:
+            problems.append("%s: not importable" % path.name)
+            continue
+        problems += family_problems(name, module, path)
+        found[name] = module
+    if not found:
+        problems.append("no family module beside the collector")
+    if problems:
+        return found, problems
+    kinds = [module.KIND for module in found.values()]
+    if len(kinds) != len(set(kinds)):
+        problems.append("two families declare one KIND")
+    for name, module in found.items():
+        for profile in module.PROFILES:
+            # Each admitted profile belongs to one family, and the matrix of
+            # its row is claimed by that family alone, so the workflow never
+            # skips collection for an admitted row.
+            matrix = dict(profile, scenario=module.scenario_id(profile))
+            owners = sorted(other for other, item in found.items() if profile in item.PROFILES)
+            claimants = sorted(other for other, item in found.items() if item.claims(matrix))
+            if owners != [name] or claimants != [name]:
+                problems.append("%s: an admitted profile is admitted by %s and claimed by %s" % (name, owners, claimants))
+    return found, problems
+
+
+def discover(directory):
+    """The usable families in directory; any declaration problem refuses them all."""
+    found, problems = declarations(directory)
+    need(not problems, "evidence-family-declaration")
+    return found
+
+
+def families():
+    return discover(Path(__file__).parent)
+
+
+def claimed_family(matrix):
+    """The family a job's matrix asks for, or None; two claims are refused."""
+    names = [name for name, module in families().items() if module.claims(matrix)]
+    need(len(names) <= 1, "ambiguous-evidence-family")
+    return names[0] if names else None
+
+
+def profile_family(profile):
+    """The family admitting a normalized profile, or None (discover keeps them disjoint)."""
+    for module in families().values():
+        if profile in module.PROFILES:
+            return module
+    return None
+
+
+# Shared projections ----------------------------------------------------------
+
+
+def row_scenario_id(group, test, profile):
+    """The catalog ID of an explicit single-test MDS row."""
     mode = ".crc" if profile["mode"] == "crc" else ""
-    if profile in FLOCK_PROFILES:
-        group, test = "mds-cephfs-sharedflock-recovery", "mdscephfssharedflockrecovery"
-    else:
-        group, test = "mds-cephfs-capsend", "mdscephfscapsendrecovery"
     return ("%s.%s.ip%s%s.%s.osd-store-%s.osd-replicas-1.osd-profile-legacy-v6.t-%s"
             % (group, profile["key"], profile["family"], mode, profile["runtime"], profile["osd_store"], test))
 
@@ -185,14 +244,14 @@ def context(request):
     need(isinstance(matrix, dict) and set(matrix) <= set(DEFAULTS) | {"scenario", "image", "capabilities"}, "unsupported-matrix-field")
     need(all(isinstance(value, str) for value in matrix.values()), "matrix-value")
     profile = dict(DEFAULTS, **{key: value for key, value in matrix.items() if key in DEFAULTS})
-    need((profile in PROFILES or profile in FLOCK_PROFILES or is_soak(profile)) and matrix.get("scenario") == scenario_id(profile), "unsupported-profile")
-    capability = "exclusive-mds-cephfs" if profile in FLOCK_PROFILES else CAPSEND_CAPABILITIES
-    need(matrix.get("capabilities") in (None, "" if is_soak(profile) else capability), "unsupported-capabilities")
+    family = profile_family(profile)
+    need(family is not None and matrix.get("scenario") == family.scenario_id(profile), "unsupported-profile")
+    need(matrix.get("capabilities") in (None, family.CAPABILITIES), "unsupported-capabilities")
     image = matrix.get("image", IMAGE)
     need(image == IMAGE, "unsupported-image")
     value = {"execution_source": request["execution_source"], "tested_sha": sha(request["tested_sha"]), "controller_sha": sha(request["controller_sha"]),
              "run_id": integer(request["run_id"], 1), "attempt": integer(request["attempt"], 1),
-             "scenario": matrix["scenario"], "selector": SOAK_SELECTOR if is_soak(profile) else profile["test_run"], "profile": profile, "configured_image": image}
+             "scenario": matrix["scenario"], "selector": family.selector(profile), "profile": profile, "configured_image": image}
     privacy(value)
     return value
 
@@ -204,7 +263,8 @@ def validate_context(value):
     need(value == expected, "context-mismatch")
 
 
-def tests_projection(value, test=TEST):
+def tests_projection(value, test):
+    """The gate of a family whose row selects exactly one API parent test."""
     keys(value, {"selector", "expected", "observed", "problems", "passed"})
     need(value["passed"] is True and value == {"selector": "^" + test + "$", "expected": [["api", test]],
                    "observed": [{"suite": "api", "test": test, "result": "PASS"}],
@@ -218,14 +278,7 @@ def runtime_projection(raw, ctx):
                "osd_replicas": "osd_replicas"}
     reported = {key: raw[field] for key, field in mapping.items()}
     need(reported == {key: ctx["profile"][key] for key in mapping}, "fixture-profile-mismatch")
-    if is_soak(ctx["profile"]):
-        need(raw.get("mds_fresh") is False and raw.get("mds_cephfs_data") is False and raw.get("rbd_base") is False
-             and raw.get("image") == ctx["configured_image"], "fixture-profile-mismatch")
-    elif ctx["profile"] in FLOCK_PROFILES:
-        need(raw["mds_fresh"] is True and raw["mds_cephfs"] is True and raw["mds_cephfs_data"] is False
-             and raw["image"] == ctx["configured_image"], "fixture-profile-mismatch")
-    else:
-        need(raw["mds_fresh"] is True and raw["mds_cephfs_data"] is True and raw["image"] == ctx["configured_image"], "fixture-profile-mismatch")
+    profile_family(ctx["profile"]).runtime_facts(raw, ctx)
     need(raw["provider"] == PROVIDER and raw["provider_version"] == PROVIDER_VERSION, "provider-mismatch")
     value = {"image_id": raw["image_id"], "architecture": raw["architecture"], "daemon_version": raw["daemon_version"],
              "fixture_reported_profile": reported, "provider_version": raw["provider_version"]}
@@ -245,326 +298,37 @@ def validate_runtime(value, ctx):
     need(value["fixture_reported_profile"] == {key: ctx["profile"][key] for key in names}, "fixture-profile-mismatch")
 
 
-def cap_send_projection(raw):
-    need(raw["source_commit"] == SOURCE and raw["facts"]["restart_recipe"] == "cap-send", "receipt-source-or-recipe")
-    facts = raw["facts"]["cap_send_recovery"]
-    need(isinstance(facts["flushes"], list) and len(facts["flushes"]) == 2 and
-         isinstance(facts["acks"], list) and len(facts["acks"]) == 2, "flush-count")
-    flushes = []
-    for flush in facts["flushes"]:
-        need(isinstance(flush["Attempts"], list) and len(flush["Attempts"]) == 2, "attempt-count")
-        attempts = []
-        for item in flush["Attempts"]:
-            attempts.append({key: item[field] for key, field in (
-                ("kind", "Kind"), ("generation", "Generation"), ("reconnected_from", "ReconnectedFrom"),
-                ("admitted", "Admitted"), ("cap_id", "CapID"), ("seq", "Seq"), ("issue_seq", "IssueSeq"),
-                ("migrate_seq", "MigrateSeq"), ("barrier", "Barrier"))})
-        flushes.append({"inode": flush["Ino"], "tid": flush["Transaction"], "size": flush["Caps"]["Size"], "attempts": attempts})
-    acks = [{"inode": item["Caps"]["Ino"], "tid": item["Transaction"], "arrival": item["Arrival"],
-             "cap_id": item["Caps"]["CapID"]} for item in facts["acks"]]
-    adopted = facts["adopted"]
-    need(adopted["state"] == "adopted", "incarnation-not-adopted")
-    value = {"source_commit": SOURCE, "global_id": raw["global_id"], "cephfs_nonce": raw["cephfs_nonce"],
-             "old_mds_gid": adopted["armed"]["gid"], "new_mds_gid": adopted["adopted"]["gid"],
-             "flushes": flushes, "acks": acks, "native_branches": facts["new_branches"],
-             "object_requests_before": facts["object_requests_before_restart"], "object_requests_after": facts["object_requests_after_recovery"],
-             "native_stat": {key: facts["native_stat"][key] for key in ("exists", "ino", "size", "mtime", "version")}}
-    validate_caps(value)
-    return value
-
-
-def validate_caps(value):
-    keys(value, {"source_commit", "global_id", "cephfs_nonce", "old_mds_gid", "new_mds_gid", "flushes", "acks",
-                 "native_branches", "object_requests_before", "object_requests_after", "native_stat"})
-    need(value["source_commit"] == SOURCE, "receipt-source")
-    for key in ("global_id", "cephfs_nonce", "old_mds_gid", "new_mds_gid", "object_requests_before", "object_requests_after"):
-        integer(value[key], 1)
-    need(value["old_mds_gid"] != value["new_mds_gid"] and value["object_requests_before"] == value["object_requests_after"], "recovery-identity-or-io")
-    need(value["native_branches"] == {"uncertain": "applied", "refused": "applied"}, "native-branch")
-    need(isinstance(value["flushes"], list) and len(value["flushes"]) == 2 and isinstance(value["acks"], list) and len(value["acks"]) == 2, "flush-count")
-    for index, (flush, ack) in enumerate(zip(value["flushes"], value["acks"])):
-        keys(flush, {"inode", "tid", "size", "attempts"})
-        for key in ("inode", "tid", "size"):
-            integer(flush[key], 1)
-        need(isinstance(flush["attempts"], list) and len(flush["attempts"]) == 2, "attempt-count")
-        for attempt in flush["attempts"]:
-            keys(attempt, {"kind", "generation", "reconnected_from", "admitted", "cap_id", "seq", "issue_seq", "migrate_seq", "barrier"})
-            need(attempt["kind"] in {"first-send", "resubmit"} and type(attempt["admitted"]) is bool, "attempt-class")
-            for key in ("generation", "reconnected_from", "cap_id", "seq", "issue_seq", "migrate_seq", "barrier"):
-                integer(attempt[key])
-        first, last = flush["attempts"]
-        need(first["admitted"] is (index == 0) and last["admitted"] is True and last["kind"] == ("resubmit" if index == 0 else "first-send") and last["generation"] > first["generation"], "attempt-outcome")
-        keys(ack, {"inode", "tid", "arrival", "cap_id"})
-        for key in ack:
-            integer(ack[key], 1)
-        need(ack["inode"] == flush["inode"] and ack["tid"] == flush["tid"] and ack["cap_id"] == last["cap_id"], "ack-identity")
-    first, second = value["flushes"]
-    need(first["inode"] == second["inode"] and first["tid"] < second["tid"] and value["acks"][0]["arrival"] < value["acks"][1]["arrival"], "flush-order")
-    st = value["native_stat"]
-    keys(st, {"exists", "ino", "size", "mtime", "version"})
-    need(st["exists"] is True and st["ino"] == second["inode"] and st["size"] == second["size"], "native-stat")
-    for key in ("ino", "size", "mtime", "version"):
-        integer(st[key], 1)
-
-
-def soak_tests_projection(value):
-    """The broad gate lists no expected tests for this row, so require both parents here."""
-    keys(value, {"selector", "expected", "observed", "problems", "passed"})
-    need(value["passed"] is True and value["selector"] == "" and value["expected"] == [] and value["problems"] == [], "required-test-not-passed")
-    observed = value["observed"]
-    need(isinstance(observed, list) and len(observed) == 2, "required-test-not-passed")
-    for item in observed:
-        keys(item, {"suite", "test", "result"})
-    need(sorted((i["suite"], i["test"], i["result"]) for i in observed) ==
-         sorted(("api", test, "PASS") for test in SOAK_TESTS.values()), "required-test-not-passed")
-    return {"selector": "", "fixture_selector": SOAK_SELECTOR,
-            "required": [{"suite": "api", "test": SOAK_TESTS[label], "result": "PASS"} for label in SOAK_LABELS], "passed": True}
-
-
-def validate_soak_tests(value):
-    keys(value, {"selector", "fixture_selector", "required", "passed"})
-    need(value == {"selector": "", "fixture_selector": SOAK_SELECTOR, "passed": True,
-                   "required": [{"suite": "api", "test": SOAK_TESTS[label], "result": "PASS"} for label in SOAK_LABELS]},
-         "required-test-not-passed")
-
-
-def receipt_names(faults):
-    names = {"osd-soak-v1-fixture-termination.json"}
-    for label in SOAK_LABELS:
-        prefix = "osd-soak-v1-%s-" % label
-        names |= {prefix + stage + ".json" for stage in ("started", "setup", "workload", "cleanup")}
-        names |= {prefix + "worker-%d.json" % worker for worker in range(4)}
-    prefix = "osd-soak-v1-failover-"
-    names.add(prefix + "recovery-clean.json")
-    names |= {prefix + "fault-%03d-%s.json" % (cycle, phase) for cycle in range(1, faults + 1) for phase in ("kill", "restart", "clean")}
-    return names
-
-
-def trusted_soak_validator():
-    try:
-        import osd_soak_receipts as module
-    except ImportError as error:
-        raise EvidenceError("trusted-soak-validator-missing") from error
-    # The workflow copies this module beside the collector before the tested
-    # checkout exists; any other location would not be the trusted controller.
-    need(Path(module.__file__).resolve().parent == Path(__file__).resolve().parent, "trusted-soak-validator-location")
-    return module
-
-
-def soak_projection(directory, ctx):
-    directory = Path(directory)
-    need(not directory.is_symlink() and directory.is_dir(), "unsafe-receipt-directory")
-    validator = trusted_soak_validator()
-    try:
-        result = validator.verify(directory, ctx["tested_sha"], ctx["configured_image"], SOAK_DURATION_NS, SOAK_LABELS)
-    except (ValueError, TypeError, KeyError, OSError, RecursionError):
-        raise EvidenceError("soak-receipts-invalid") from None
-    hashes = result["receipt_sha256"]
-    raw, files = {}, {}
-    for name, expected in sorted(hashes.items()):
-        data = read(directory / name, SOAK_RECEIPT_LIMIT)
-        need(hashlib.sha256(data).hexdigest() == expected, "receipt-hash-mismatch")
-        files[name] = {"size": len(data), "sha256": expected}
-        raw[name] = decode(data)
-    workloads, cleanups = {}, {}
-    for label in SOAK_LABELS:
-        prefix = "osd-soak-v1-%s-" % label
-        setup, run, clean = raw[prefix + "setup.json"], raw[prefix + "workload.json"], raw[prefix + "cleanup.json"]
-        owned = setup["owned_objects"]
-        codes = {entry["object"]: entry["code"] for entry in clean["objects"]}
-        workers = []
-        for worker in range(4):
-            item = raw[prefix + "worker-%d.json" % worker]
-            native = item["native"]
-            xattr = item["expected_xattr"].encode()
-            workers.append({"worker": worker, "native_observation_elapsed_ns": item["native_observation_elapsed_ns"],
-                            "version": native["version"], "mtime_seconds": native["seconds"], "mtime_nanos": native["nanos"],
-                            "expected_length": item["expected_length"], "native_length": item["native_length"],
-                            "data_sha256": item["native_sha256"], "xattr_length": len(xattr), "xattr_sha256": hashlib.sha256(xattr).hexdigest()})
-        value = {"setup_elapsed_ns": setup["elapsed_ns"], "owned_object_count": len(owned),
-                 "workload": {key: run[key] for key in ("actual_workload_ns", "after_workload_start_ns", "test_elapsed_ns")}
-                 | {"counters": {key: run["counters"][key] for key in sorted(SOAK_COUNTERS[label])}},
-                 "workers": workers}
-        if label == "failover":
-            faults = []
-            for cycle in range(1, run["counters"]["faults"] + 1):
-                for phase in ("kill", "restart", "clean"):
-                    item = raw[prefix + "fault-%03d-%s.json" % (cycle, phase)]
-                    faults.append({"cycle": cycle, "phase": phase, "after_workload_start_ns": item["after_workload_start_ns"],
-                                   "elapsed_ns": item["elapsed_ns"], "victim": int(item["victim"])})
-            value["faults"] = faults
-            value["recovery_clean"] = True
-        workloads[label] = value
-        cleanups[label] = {"removed": True, "elapsed_ns": clean["elapsed_ns"], "codes": [codes[name] for name in owned]}
-    end = raw["osd-soak-v1-fixture-termination.json"]
-    soak = {"tested_revision": ctx["tested_sha"], "configured_duration_ns": SOAK_DURATION_NS, "observations": result["observations"], "workloads": workloads}
-    cleanup = {"fixture_termination": {"succeeded": True, "suite_exit_success": True, "elapsed_ns": end["termination_elapsed_ns"]}, "workloads": cleanups}
-    receipts = {"fixture_manifest_sha256": hashes["fixture-manifest.json"], "files": files}
-    validate_soak(soak, ctx)
-    validate_soak_cleanup(cleanup)
-    validate_receipts(receipts, soak)
-    return soak, cleanup, receipts
-
-
-def validate_soak(value, ctx):
-    keys(value, {"tested_revision", "configured_duration_ns", "observations", "workloads"})
-    need(value["tested_revision"] == ctx["tested_sha"] and value["configured_duration_ns"] == SOAK_DURATION_NS and value["observations"] == 8, "soak-context")
-    keys(value["workloads"], set(SOAK_LABELS))
-    for label in SOAK_LABELS:
-        item = value["workloads"][label]
-        keys(item, {"setup_elapsed_ns", "owned_object_count", "workload", "workers"} | ({"faults", "recovery_clean"} if label == "failover" else set()))
-        integer(item["setup_elapsed_ns"], 1)
-        need(item["owned_object_count"] == 5, "owned-object-count")
-        run = item["workload"]
-        keys(run, {"actual_workload_ns", "after_workload_start_ns", "test_elapsed_ns", "counters"})
-        for key in ("actual_workload_ns", "after_workload_start_ns", "test_elapsed_ns"):
-            integer(run[key], 1)
-        need(SOAK_DURATION_NS <= run["actual_workload_ns"] <= run["after_workload_start_ns"] <= run["test_elapsed_ns"], "workload-interval")
-        keys(run["counters"], SOAK_COUNTERS[label])
-        for counter in run["counters"].values():
-            integer(counter)
-        need(run["counters"]["appends"] >= 100 and run["counters"]["reads"] >= 10 and (label != "steady" or run["counters"]["churns"] >= 10), "workload-counters")
-        need(isinstance(item["workers"], list) and len(item["workers"]) == 4, "worker-count")
-        for index, worker in enumerate(item["workers"]):
-            keys(worker, {"worker", "native_observation_elapsed_ns", "version", "mtime_seconds", "mtime_nanos", "expected_length", "native_length",
-                          "data_sha256", "xattr_length", "xattr_sha256"})
-            need(worker["worker"] == index, "worker-identity")
-            integer(worker["native_observation_elapsed_ns"], 1)
-            integer(worker["version"], 1)
-            need(type(worker["mtime_seconds"]) is int and 0 <= worker["mtime_seconds"] <= 0xFFFFFFFF, "native-mtime")
-            need(type(worker["mtime_nanos"]) is int and 0 <= worker["mtime_nanos"] < 1_000_000_000, "native-mtime")
-            integer(worker["xattr_length"])
-            integer(worker["expected_length"])
-            need(worker["expected_length"] == worker["native_length"] and worker["native_length"] <= 128 << 10, "worker-length")
-            digest(worker["data_sha256"])
-            digest(worker["xattr_sha256"])
-        if label == "failover":
-            faults = run["counters"]["faults"]
-            need(1 <= faults <= 64 and item["recovery_clean"] is True and isinstance(item["faults"], list) and len(item["faults"]) == 3 * faults, "fault-cycles")
-            previous, victims = 0, {}
-            for index, fault in enumerate(item["faults"]):
-                keys(fault, {"cycle", "phase", "after_workload_start_ns", "elapsed_ns", "victim"})
-                cycle, phase = divmod(index, 3)
-                need(fault["cycle"] == cycle + 1 and fault["phase"] == ("kill", "restart", "clean")[phase], "fault-order")
-                when = fault["after_workload_start_ns"]
-                need(type(when) is int and 0 <= when <= run["after_workload_start_ns"], "fault-outside-interval")
-                need(phase != 0 or when <= run["actual_workload_ns"], "fault-outside-workload")
-                need(type(fault["elapsed_ns"]) is int and 0 < fault["elapsed_ns"] <= when and when >= previous, "fault-interval")
-                previous = when
-                need(type(fault["victim"]) is int and fault["victim"] in (0, 1, 2), "fault-victim")
-                need(victims.setdefault(fault["cycle"], fault["victim"]) == fault["victim"], "fault-victim")
-
-
-def validate_soak_cleanup(value):
-    keys(value, {"fixture_termination", "workloads"})
-    keys(value["fixture_termination"], {"succeeded", "suite_exit_success", "elapsed_ns"})
-    need(value["fixture_termination"]["succeeded"] is True and value["fixture_termination"]["suite_exit_success"] is True, "cleanup-incomplete")
-    integer(value["fixture_termination"]["elapsed_ns"], 1)
-    keys(value["workloads"], set(SOAK_LABELS))
-    for item in value["workloads"].values():
-        keys(item, {"removed", "elapsed_ns", "codes"})
-        integer(item["elapsed_ns"], 1)
-        need(item["removed"] is True and isinstance(item["codes"], list) and len(item["codes"]) == 5 and
-             all(type(code) is int and code in (0, -2) for code in item["codes"]), "cleanup-incomplete")
-
-
-def validate_receipts(value, soak):
-    keys(value, {"fixture_manifest_sha256", "files"})
-    digest(value["fixture_manifest_sha256"])
-    files = value["files"]
-    need(isinstance(files, dict), "receipt-inventory")
-    faults = soak["workloads"]["failover"]["workload"]["counters"]["faults"]
-    need(1 <= faults <= 64 and set(files) == receipt_names(faults) | {"fixture-manifest.json"}, "receipt-inventory")
-    for record in files.values():
-        keys(record, {"size", "sha256"})
-        need(type(record["size"]) is int and 0 < record["size"] <= SOAK_RECEIPT_LIMIT, "receipt-size")
-        digest(record["sha256"])
-    need(files["fixture-manifest.json"]["sha256"] == value["fixture_manifest_sha256"], "receipt-inventory")
-
-
-def flock_projection(raw):
-    locks = raw["facts"]["held_flock"]
-    need(raw["source_commit"] == SOURCE and locks["Recipe"] == "shared-two-owners", "receipt-source-or-recipe")
-    calls = locks["Calls"]
-    ledger = [item for item in raw["requests"] if item["Op"] == 0x01109 and item["Transaction"] != 0]
-    need(len(calls) == len(ledger) == integer(locks["SetFileLockSubmissions"]) == 4, "flock-call-count")
-    operations = []
-    for index, (call, entry) in enumerate(zip(calls, ledger)):
-        operation = "acquire" if index < 2 else "unlock"
-        name = "flock-shared-%s-owner-%d" % (operation, index % 2)
-        need(call["Name"] == entry["Name"] == name and call["Rule"] == 2 and
-             call["Type"] == (1 if index < 2 else 4) and entry["Session"] == ("restart" if index < 2 else "reconnected"),
-             "flock-operation")
-        result = entry["FirstResult"]
-        need(not entry.get("Error") and integer(entry["FirstArrival"], 1) and type(result) is int and
-             call["Outcome"] == "reply result %d" % result, "flock-reply")
-        operations.append({"operation": operation, "owner": call["Owner"], "tid": call["TID"], "result": result})
-    after = locks["ProbeAfter"]
-    need(len(after) == 4, "flock-probe-count")
-    probes = [{"after_unlock_tid": item.get("AfterUnlockTID"), "request_id": item["RequestID"],
-               "action": item["Action"], "errno": item["Probe"]["errno"],
-               "acquired": item["Probe"]["acquired"], "unlocked": item["Probe"]["unlocked"]} for item in after]
-    value = {"operations": operations, "accepted_tids": [item["Transaction"] for item in ledger], "post_restart_probes": probes}
-    validate_flock(value)
-    return value
-
-
-def validate_flock(value):
-    keys(value, {"operations", "accepted_tids", "post_restart_probes"})
-    ops, tids, probes = value["operations"], value["accepted_tids"], value["post_restart_probes"]
-    need(all(isinstance(seq, list) and len(seq) == 4 for seq in (ops, tids, probes)), "flock-count")
-    for index, item in enumerate(ops):
-        keys(item, {"operation", "owner", "tid", "result"})
-        need(item["operation"] == ("acquire" if index < 2 else "unlock") and integer(item["owner"]) == FLOCK_OWNERS[index % 2]
-             and integer(item["tid"], 1) == integer(tids[index], 1) and type(item["result"]) is int and item["result"] == 0,
-             "flock-operation-ledger")
-    need(len(set(tids)) == 4, "flock-repeated-tid")
-    previous = 0
-    for index, item in enumerate(probes):
-        keys(item, {"after_unlock_tid", "request_id", "action", "errno", "acquired", "unlocked"})
-        tid = item["after_unlock_tid"]
-        expected_errno = (0, 11, 11, 0)[index]
-        need((tid is None if index < 2 else integer(tid, 1) == tids[index])
-             and integer(item["request_id"], 1) > previous
-             and item["action"] == ("flock-sh-nb" if index == 0 else "flock-ex-nb")
-             and type(item["errno"]) is int and item["errno"] == expected_errno
-             and item["acquired"] is (expected_errno == 0) and item["unlocked"] is item["acquired"], "flock-probe-order")
-        previous = item["request_id"]
-
-
-def cleanup_projection(data, fresh, flock=False):
+def cleanup_projection(data, fresh, data_flags, fresh_flags):
+    """An MDS fixture's metadata and fresh-filesystem cleanup verdicts."""
     need(data["source_commit"] == fresh["source_commit"] == SOURCE, "cleanup-source")
     need(not data.get("errors") and not fresh.get("error") and not data["residual_owned_sessions"] and not data["kept_new_blocklist"], "cleanup-incomplete")
-    value = {"source_commit": SOURCE, "data": {key: data[key] for key in (FLOCK_CLEAN if flock else CLEAN_FLAGS)},
-             "filesystem": {key: fresh[key] for key in fresh_flags(flock)}}
-    validate_cleanup(value, flock)
+    value = {"source_commit": SOURCE, "data": {key: data[key] for key in data_flags},
+             "filesystem": {key: fresh[key] for key in fresh_flags}}
+    validate_cleanup(value, data_flags, fresh_flags)
     return value
 
 
-def fresh_flags(flock):
-    return FLOCK_FRESH_FLAGS if flock else FRESH_FLAGS
-
-
-def validate_cleanup(value, flock=False):
+def validate_cleanup(value, data_flags, fresh_flags):
     keys(value, {"source_commit", "data", "filesystem"})
     need(value["source_commit"] == SOURCE, "cleanup-source")
-    for group, flags in (("data", FLOCK_CLEAN if flock else CLEAN_FLAGS), ("filesystem", fresh_flags(flock))):
+    for group, flags in (("data", data_flags), ("filesystem", fresh_flags)):
         keys(value[group], flags)
         need(all(value[group][key] is True for key in flags), "cleanup-incomplete")
+
+
+# Bundle ----------------------------------------------------------------------
 
 
 def verify(bundle, expected):
     bundle = Path(bundle)
     need(not bundle.is_symlink() and bundle.is_dir(), "unsafe-bundle")
-    soak = isinstance(expected, dict) and isinstance(expected.get("profile"), dict) and is_soak(expected["profile"])
-    files, kind = (SOAK_FILES, KIND_SOAK) if soak else (FILES, KIND_CAPSEND)
-    flock = expected.get("profile") in FLOCK_PROFILES
-    if flock:
-        files, kind = FLOCK_FILES, KIND_FLOCK
+    family = profile_family(expected.get("profile")) if isinstance(expected, dict) else None
+    need(family is not None, "unsupported-profile")
+    files = family.FILES
     need({item.name for item in bundle.iterdir()} == files | {"manifest.json"}, "bundle-inventory")
     manifest = document(bundle / "manifest.json", FILE_LIMIT)
     keys(manifest, CONTEXT_KEYS | {"schema_version", "kind", "files", "total_bytes", "observed"})
-    need(type(manifest["schema_version"]) is int and manifest["schema_version"] == SCHEMA_VERSION and manifest["kind"] == kind, "schema-version")
+    need(type(manifest["schema_version"]) is int and manifest["schema_version"] == SCHEMA_VERSION and manifest["kind"] == family.KIND, "schema-version")
     ctx = {key: manifest[key] for key in CONTEXT_KEYS}
     validate_context(ctx)
     need(ctx == expected, "manifest-context-mismatch")
@@ -581,19 +345,7 @@ def verify(bundle, expected):
     need(manifest["total_bytes"] == total and total + len(read(bundle / "manifest.json", FILE_LIMIT)) <= TOTAL_LIMIT, "total-limit")
     validate_runtime(payloads["runtime.json"], ctx)
     need(manifest["observed"] == payloads["runtime.json"], "observed-mismatch")
-    if soak:
-        validate_soak_tests(payloads["tests.json"])
-        validate_soak(payloads["soak.json"], ctx)
-        validate_soak_cleanup(payloads["cleanup.json"])
-        validate_receipts(payloads["receipts.json"], payloads["soak.json"])
-    elif flock:
-        tests_projection(payloads["tests.json"], FLOCK_TEST)
-        validate_flock(payloads["flock.json"])
-        validate_cleanup(payloads["cleanup.json"], flock=True)
-    else:
-        tests_projection(payloads["tests.json"])
-        validate_caps(payloads["cap-send.json"])
-        validate_cleanup(payloads["cleanup.json"])
+    family.validate(payloads, ctx)
     privacy(manifest)
     for value in payloads.values():
         privacy(value)
@@ -605,24 +357,9 @@ def collect(request, receipts, tests, output):
     receipts, output = Path(receipts), Path(output)
     need(not output.exists() and not output.is_symlink(), "attempt-collision")
     need(not receipts.is_symlink() and receipts.is_dir(), "unsafe-receipt-directory")
-    if is_soak(ctx["profile"]):
-        soak, cleanup, inventory = soak_projection(receipts, ctx)
-        payloads = {"tests.json": soak_tests_projection(document(tests, FILE_LIMIT)), "soak.json": soak, "cleanup.json": cleanup,
-                    "receipts.json": inventory, "runtime.json": runtime_projection(document(receipts / "fixture-manifest.json"), ctx)}
-        kind = KIND_SOAK
-    elif ctx["profile"] in FLOCK_PROFILES:
-        payloads = {"tests.json": tests_projection(document(tests, FILE_LIMIT), FLOCK_TEST),
-                    "flock.json": flock_projection(document(receipts / "mds-cephfs-sharedflock-recovery-results.json")),
-                    "cleanup.json": cleanup_projection(document(receipts / "mds-cephfs-cleanup.json"),
-                                                       document(receipts / "mds-fresh-cleanup.json"), flock=True),
-                    "runtime.json": runtime_projection(document(receipts / "fixture-manifest.json"), ctx)}
-        kind = KIND_FLOCK
-    else:
-        payloads = {"tests.json": tests_projection(document(tests, FILE_LIMIT)),
-                    "cap-send.json": cap_send_projection(document(receipts / "mds-cephfs-data-results.json")),
-                    "cleanup.json": cleanup_projection(document(receipts / "mds-cephfs-data-cleanup.json"), document(receipts / "mds-fresh-cleanup.json")),
-                    "runtime.json": runtime_projection(document(receipts / "fixture-manifest.json"), ctx)}
-        kind = KIND_CAPSEND
+    family = profile_family(ctx["profile"])
+    payloads = family.project(receipts, tests, ctx)
+    need(set(payloads) == family.FILES, "bundle-inventory")
     files, total, content = [], 0, {}
     for name in sorted(payloads):
         data = encoded(payloads[name])
@@ -630,7 +367,7 @@ def collect(request, receipts, tests, output):
         total += len(data)
         content[name] = data
         files.append({"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
-    manifest = dict(ctx, schema_version=SCHEMA_VERSION, kind=kind, files=files, total_bytes=total, observed=payloads["runtime.json"])
+    manifest = dict(ctx, schema_version=SCHEMA_VERSION, kind=family.KIND, files=files, total_bytes=total, observed=payloads["runtime.json"])
     data = encoded(manifest)
     need(len(data) <= FILE_LIMIT and total + len(data) <= TOTAL_LIMIT, "total-limit")
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -653,9 +390,20 @@ def environment_request():
         raise EvidenceError("invalid-run-environment") from error
 
 
+def family_output():
+    """The workflow's step output naming the job's family; empty when none claims it."""
+    try:
+        matrix = decode(os.environ["MATRIX_JSON"])
+    except KeyError as error:
+        raise EvidenceError("invalid-run-environment") from error
+    need(isinstance(matrix, dict), "invalid-run-environment")
+    return "family=%s" % (claimed_family(matrix) or "")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("family", help="print the GitHub step output naming the family MATRIX_JSON claims")
     capture = sub.add_parser("collect")
     capture.add_argument("--receipts", required=True)
     capture.add_argument("--tests", required=True)
@@ -666,6 +414,13 @@ def main(argv=None):
     for command in (capture, check):
         command.add_argument("--request", help="run request JSON; omitted reads trusted workflow environment")
     args = parser.parse_args(argv)
+    if args.command == "family":
+        try:
+            print(family_output())
+            return 0
+        except EvidenceError as error:
+            print(str(error), file=sys.stderr)
+            return 1
     status = {"test_result": "unknown", "evidence_result": "incomplete"}
     result = 1
     try:
@@ -675,16 +430,13 @@ def main(argv=None):
         except EvidenceError as error:
             failure = error
         if args.command == "collect":
-            # An unreadable request leaves the cap-send gate in force; the
-            # request error is reported after the test result is classified.
+            # An unreadable or unclaimed request is classified with the
+            # UNCLAIMED_GATE family's gate; the request error is reported
+            # after the test result is classified.
             matrix = request.get("matrix") if isinstance(request, dict) else None
-            requested_soak = isinstance(matrix, dict) and bool(matrix.get("osd_soak"))
             raw_tests = document(args.tests, FILE_LIMIT)
-            if requested_soak:
-                soak_tests_projection(raw_tests)
-            else:
-                test = FLOCK_TEST if isinstance(matrix, dict) and matrix.get("test_run") == FLOCK_SELECTOR else TEST
-                tests_projection(raw_tests, test)
+            name = claimed_family(matrix) if isinstance(matrix, dict) else None
+            families()[name or UNCLAIMED_GATE].gate(raw_tests)
             status["test_result"] = "passed"
         if failure:
             raise failure
@@ -706,4 +458,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    # Family modules import this module by name; give them this instance so
+    # they raise the EvidenceError that main() classifies.
+    sys.modules.setdefault("native_evidence", sys.modules[__name__])
     sys.exit(main())
