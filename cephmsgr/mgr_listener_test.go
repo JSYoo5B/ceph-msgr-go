@@ -569,6 +569,31 @@ func TestMgrDaemonCloseClosesItsListeners(t *testing.T) {
 	}
 }
 
+// TestMgrDaemonFatalMonCauseClosesItsListeners ends the daemon with a fatal
+// cause of its established MON session (a MonMap of another cluster): the
+// daemon's failure must close its listeners as Close does.
+func TestMgrDaemonFatalMonCauseClosesItsListeners(t *testing.T) {
+	f := newListenerFixture(t, MgrListenerOptions{Authorize: allowAll})
+	mon := f.mon.next(t)
+	if err := mon.push(msgr.MessageData{Type: msgr.MonMapMessage, Front: mockMonMapAuthEpoch(20, [16]byte{2}, []msgr.Address{{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}}, 2, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	state := waitDaemon(t, f.daemon, func(s MgrDaemonState) bool { return s.Err != nil })
+	if !isFSIDMismatch(state.Err) {
+		t.Fatal("daemon cause", state.Err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !f.listener.State().Closed && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s := f.listener.State(); !s.Closed {
+		t.Fatal("listener survived its daemon's failure", s)
+	}
+	if _, err := f.listener.Accept(context.Background()); err == nil {
+		t.Fatal("Accept after the daemon failed")
+	}
+}
+
 func TestMgrListenerValidatesItsOptions(t *testing.T) {
 	f := newListenerFixture(t, MgrListenerOptions{Authorize: allowAll})
 	endpoint := netip.MustParseAddrPort("127.0.0.1:1")
