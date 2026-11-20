@@ -383,7 +383,9 @@ type monTarget struct {
 // listed, that target moves to the front: routine renewal re-authenticates to
 // the MON that already admitted this GlobalID, instead of first spending the
 // setup timeout on an unreachable earlier seed while the rotating keys behind
-// the reclaim proof age. The other targets keep their order as fallbacks.
+// the reclaim proof age (native Tentacle refuses a reclaim whose rotating AUTH
+// secret expired with -13). The other targets keep their order as fallbacks.
+// Every attempt presents the same GlobalID and current AUTH ticket.
 func monTargets(seeds []string, learned []msgr.Address, admitted monTarget, healthy bool) ([]monTarget, []error) {
 	var failures []error
 	targets := make([]monTarget, 0, len(seeds)+len(learned))

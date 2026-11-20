@@ -21,6 +21,8 @@ import (
 // is frozen the native pool shows no allocation, and after it resumes the
 // client's next allocation follows whatever the native pool then holds (the
 // frozen MON may still deliver the request it had buffered).
+// The test accepts either fate of the buffered request. It runs only with
+// CEPH_MSGR_TEST_MON_FREEZE=1.
 //
 //scenario:covers CLIENT to MON/MGR
 //fixture:isolated pauses and recycles a MON; an unexplained failure can leave an OSD on an old OSDMap afterwards

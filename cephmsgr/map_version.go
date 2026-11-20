@@ -32,6 +32,18 @@ type MapVersionResult struct {
 // that epoch. It fetches no map. The MON answers once it is in quorum and the
 // service is readable; ctx bounds the wait, which ends as an
 // OutcomeUnknownError after transmission (the request is read-only).
+//
+// The MON copies the request's TID and handle into the reply and both are
+// checked; a reply with another handle, or an oldest version above the newest,
+// fails the session. A request pending when its connection is lost ends as an
+// OutcomeUnknownError and is not retransmitted; the next call may use another
+// admitted MON and takes the next client-wide handle, while TIDs are
+// per-connection. Native evidence covers a lost reply under orderly MON stop
+// and SIGKILL of a MON that answered or had parked the request out of quorum,
+// with CRC framing only; a request delayed inside a MON that is in quorum is
+// not verified. Source: ceph/ceph/blob/v20.2.4/src/messages/MMonGetVersion.h,
+// ceph/ceph/blob/v20.2.4/src/messages/MMonGetVersionReply.h and
+// ceph/ceph/blob/v20.2.4/src/mon/Monitor.cc (handle_get_version).
 func (c *Client) MapVersion(ctx context.Context, kind MapKind) (MapVersionResult, error) {
 	var result MapVersionResult
 	switch kind {

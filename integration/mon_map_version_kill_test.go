@@ -46,6 +46,16 @@ func requireMonKillReceipt(t *testing.T, control, name string) {
 // killed with SIGKILL instead of stopped in order. This is the forced-death
 // counterpart of TestCephMonMapVersionConnectedStopIntegration: the MON has
 // answered, the caller is still waiting, and the peer dies without shutdown.
+// The pending call must end as an OutcomeUnknownError with a zero result whose
+// cause is the peer loss (EOF or ECONNRESET), while its context is live and
+// the 60 s keepalive cannot supply the result; it is not retransmitted, and
+// one fresh call uses another MON, the next handle and the same GID and
+// matches the native OSDMap epoch.
+//
+// Both kill cells run with 120 s tickets so that routine renewal and native
+// reclaim do not cross the out-of-quorum window; they are not evidence for the
+// ordinary ticket lifetime. The relay decodes CRC frames only, so secure-mode
+// request observation is not covered.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=mon-forced-kill
 //scenario:row osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill key=aes256k service=aes256k mode=crc family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=mon-forced-kill
@@ -161,6 +171,14 @@ func awaitMonQuorumLossDuringStop(ctx context.Context, stopped <-chan error, int
 // answered by the same MON, which is still out of quorum, and no version
 // reply exists. Only then is that MON killed with SIGKILL. No reply is
 // withheld by the test and no elapsed-time guess sets the fault phase.
+// A MON out of quorum for two lease intervals drops every client session on
+// its tick (Monitor.cc tick), so the kill and the observed connection end must
+// both fall within 7 s of the last in-quorum status the MON answered. MONs
+// restart in descending name order because the provider's readiness check of
+// the bootstrap MON needs a quorum. That the operation sat on waitfor_quorum
+// follows from ceph/ceph/blob/v20.2.4/src/mon/Monitor.cc and the reported
+// state, not from a daemon-side observation; a request delayed inside a MON
+// that is in quorum is not covered.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionunprocessedkill key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=mon-forced-kill
 //scenario:row osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionunprocessedkill key=aes256k service=aes256k mode=crc family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=mon-forced-kill

@@ -31,6 +31,15 @@ func goMonTellValue(t *testing.T, ctx context.Context, c *Client, target string)
 // reads the later value through fresh sessions. A restart would clear the
 // override, so the surviving distinct override also shows the same incarnation.
 //
+// The command is the daemon-local `config set log_max_recent` that
+// Monitor::handle_tell_command queues to the MON's admin-socket handler
+// (ceph/ceph/blob/v20.2.4/src/mon/Monitor.cc,
+// ceph/ceph/blob/v20.2.4/src/common/ceph_context.cc), not the MON configuration
+// database. The option is in-memory crash-log retention, so the cell only
+// raises it within a bound. In secure mode the exact-target gate cannot decode
+// frames and falls back to a padded-size threshold. Not established: MON
+// restart durability, exactly-once server execution and secure-frame identity.
+//
 //scenario:covers CLIENT to MON/MGR
 //fixture:shareable sets a runtime override on mon.b; cleanup restores it and fresh native views show baseline override state
 func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
@@ -39,6 +48,9 @@ func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
 
 // The current-MON API shares the admitted primary connection. Losing its reply
 // ends that primary session, unlike MonTellTo's operation-private connection.
+// Recovery may admit another MON, so exactly one complete original write is
+// required across every observed connection and peer, and the fresh reads
+// still name the original MON.
 //
 //scenario:covers CLIENT to MON/MGR
 //fixture:shareable sets a runtime override on mon.b; cleanup restores it and fresh native views show baseline override state

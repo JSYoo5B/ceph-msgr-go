@@ -17,6 +17,9 @@ import (
 // Close synchronously: they can run on a worker Close must join. They must not
 // retain credentials or payloads. Installation delivery can follow selection;
 // observers must join by receipt identity rather than callback delivery order.
+// A local protocol write alone does not show server acceptance. Stock Ceph
+// does not expose which key the MGR verifier selected, so native rotating-key
+// generations are not observed.
 type authTraceContextKey struct{}
 type authTraceHooks struct {
 	cycle     *atomic.Int64

@@ -81,6 +81,19 @@ func managerPreparationIdentities(state managerPreparationMap, names map[string]
 	return identities, nil
 }
 
+// prepareManagerFailoverWithBackend brings both owned managers to an
+// unrefused active and standby slot before an independent failover. Stale
+// registered slots occur after MON elections under short tickets: a daemon is
+// refused AUTH reclaim while the MgrMap still lists it. A daemon whose latest
+// process logged a MonClient -13 line is judged by the global IDs the MONs
+// refused it since that process started: if they include its registered GID
+// the slot is stale, preparation waits for actual map absence (MgrMonitor
+// keeps a registration until beacon expiry) and then restarts the daemon once;
+// if they name only other IDs the refusal belongs to a module client and the
+// slot is retained; if the MONs attribute nothing it stays blocked until a
+// late attribution or its bound. A missing daemon with a refusal is restarted
+// once. Afterwards a clean process log and a GID distinct from every refused
+// one are required. Native map reads, not sleeps, decide absence.
 func prepareManagerFailoverWithBackend(parent context.Context, owned []string, backend managerPreparationBackend, budget time.Duration) error {
 	if len(owned) != 2 || owned[0] == "" || owned[1] == "" || owned[0] == owned[1] || budget <= 0 || budget > 45*time.Second {
 		return errors.New("ordinary MGR failover requires two unique owned daemons and a bounded preparation")

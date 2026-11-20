@@ -21,6 +21,18 @@ import (
 // joins cleanup. After queue admission, loss or cancellation without a valid
 // reply returns OutcomeUnknownError, even though this operation is read-only.
 // No endpoint fallback, automatic retry or remote cancellation is performed.
+//
+// It is the Messenger primitive behind go-ceph rados.Conn.PingMonitor, not a
+// MON command or a Messenger keepalive. Only the selected member's first valid
+// v2 address is attempted, with the client's connection mode and no downgrade;
+// a native MON's ability to answer a ping before command capability checks
+// does not bypass this admission. A failure before queue admission is known
+// unsent. Both directions are message type 2 with TID zero; the MON's reply
+// is version 1 with compat 0, one bounded Ceph string in the front and no
+// middle or data. Empty and binary strings are returned as sent. A valid
+// accepted reply is kept when it races local cancellation or teardown.
+// Source: ceph/ceph/blob/v20.2.4/src/messages/MPing.h and
+// ceph/ceph/blob/v20.2.4/src/mon/Monitor.cc (handle_ping).
 func (c *Client) PingMonitor(ctx context.Context, name string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

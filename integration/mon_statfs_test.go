@@ -14,6 +14,13 @@ import (
 
 // Client.Statfs sends the MStatfs that librados cluster_stat and libcephfs
 // statfs send. The independent native client asks for the same figures.
+// The cluster form is compared with native rados_cluster_stat, polling until a
+// pair matches because the MGR stat service lags. The pool form has no native
+// twin here, so it is checked only for consistency with the cluster form and
+// the seeded object count; the libcephfs comparison is the
+// statfs_matches_libcephfs leaf of TestCephMDSCephFSIntegration. An absent
+// pool and an identity without MON "pg" read get no reply, so those calls end
+// by their context as unknown outcomes and the session keeps working.
 //
 //scenario:covers CLIENT to MON/MGR
 //fixture:shareable statfs reads and seeds in one owned pool; checked owned-pool cleanup removes it and restores the config it changed

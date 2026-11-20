@@ -22,6 +22,11 @@ import (
 // MPoolOp is the only route to self-managed snapshot ids (no CLI command
 // exists) and also creates and removes pool snapshots by name. The independent
 // native client observes the OSDMap pool state and uses the ids end to end.
+// Go and native allocations draw from one sequence, a Go-allocated id serves
+// as a Go write's SnapContext that native reads honour, removal makes the OSDs
+// trim the clone, and a client pinned to each MON (peons forward to the
+// leader) gets consecutive ids. Refusals (mode mismatch, absent pool, missing
+// capability) are known signed codes that leave the native pool unchanged.
 //
 //scenario:covers CLIENT to MON/MGR
 //fixture:shareable pool and self-managed snapshots in owned pools only; checked owned-pool cleanup removes the pools
