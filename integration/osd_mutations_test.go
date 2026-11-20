@@ -84,9 +84,8 @@ func restoreMutationObject(t *testing.T, c *cephmsgr.Client, oracle osdFixtureOr
 // per-op codes and binary readback must match. A FAILOK CMPEXT mismatch commits
 // on the wire with aggregate 0, while the native wrapper returns -EIO because
 // Objecter's cmpext callback raises on mismatch even under FAILOK
-// (src/osdc/Objecter.h, v20.2.4); the test compares the two separately. Mixed
-// vectors check output boundaries and staged size against committed reads.
-// Not verified: EC pools and the native mixed read/write payload encoding.
+// (src/osdc/Objecter.h, v20.2.4); the test compares the two separately. Not
+// verified: EC pools.
 //
 //scenario:covers CLIENT to OSD
 //fixture:isolated deletes and rewrites the shared fixture object; the native compare leaves a -native-mutation mirror object
