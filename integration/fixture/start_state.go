@@ -980,3 +980,5 @@ func (c *fixtureCluster) controlStartStateRequest(ctx context.Context, out strin
 	}
 	return publishAck(out, "start-state-verify."+fields[0])
 }
+
+var _ = defineControl("start-state", frozenControlRank(21), (*fixtureCluster).controlStartStateRequest)

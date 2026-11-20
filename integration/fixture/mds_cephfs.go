@@ -983,6 +983,8 @@ func (c *fixtureCluster) mdsCephFSControl(ctx context.Context, out string, field
 	return nil
 }
 
+var _ = defineRequestControl("mds-cephfs", frozenControlRank(7), (*fixtureCluster).mdsCephFSControl)
+
 func (c *fixtureCluster) mdsCephFSAct(ctx context.Context, id int64, action mdsCephFSAction, result *mdsCephFSResult) error {
 	s, x := c.mdsFresh, c.mdsCephFS
 	switch action.name {

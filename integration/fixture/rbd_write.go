@@ -605,6 +605,8 @@ func (c *fixtureCluster) rbdWriteControl(ctx context.Context, out string, fields
 	return c.rbdBaseFinish(m, nil)
 }
 
+var _ = defineRequestControl("rbd-write", frozenControlRank(12), (*fixtureCluster).rbdWriteControl)
+
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.
 var _ = collectDiagnosticFiles(

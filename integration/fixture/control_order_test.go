@@ -1,19 +1,20 @@
 package main
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"context"
+	"errors"
+	"path/filepath"
 	"slices"
-	"strconv"
+	"strings"
 	"testing"
 )
 
 // recordedControlOrder is the polling order of the fixture's controls when
-// the hand-written sequence in controls was recorded. Each entry names the
-// method a poll calls, the request file of one acknowledged request inside a
-// grouped method, or the worker failure checkpoint by its file name. It is
-// frozen: a control added later never joins it.
+// the hand-written sequence in controls became declarations. Each entry names
+// the method a poll calls, the request file of one acknowledged request that a
+// grouped method used to poll, or the worker failure checkpoint by its file
+// name. It is frozen: a control added later never joins it, because it takes
+// no rank (controlAfterRanked).
 var recordedControlOrder = []string{
 	"controlCopyFromErrorRequest",
 	"controlCachePoolsRequest",
@@ -79,97 +80,121 @@ var recordedControlOrder = []string{
 	"controlDaemonCommandRequest",
 }
 
-// groupedControls are the methods whose body polls several acknowledged
-// requests one after another.
-var groupedControls = map[string]string{
-	"controlMDSRequests": "control_mds.go",
-	"controlRBDRequests": "control_rbd.go",
+// controlIdentity names a declared control the way recordedControlOrder does:
+// the method a control poll calls, the request file of a request control, or
+// the worker failure checkpoint by its file name.
+func controlIdentity(control *fixtureControl) string {
+	method := control.source[strings.LastIndex(control.source, ".")+1:]
+	switch {
+	case method == "checkNativeOracleWorker":
+		return "native-oracles.error"
+	case strings.HasPrefix(method, "control"):
+		return method
+	}
+	return control.name
 }
 
-func fixtureMethod(t *testing.T, file, name string) *ast.FuncDecl {
-	t.Helper()
-	f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+func TestDeclaredControlsKeepTheRecordedOrder(t *testing.T) {
+	var ranked, later []string
+	for _, control := range controlSequence {
+		if control.order.rank != 0 {
+			if len(later) != 0 {
+				t.Fatal("ranked control", control.name, "runs after an unranked one")
+			}
+			ranked = append(ranked, controlIdentity(control))
+		} else {
+			later = append(later, control.name)
+		}
+	}
+	if !slices.Equal(ranked, recordedControlOrder) {
+		t.Fatalf("ranked controls poll\n%q\nrecorded\n%q", ranked, recordedControlOrder)
+	}
+	if !slices.IsSorted(later) {
+		t.Fatal("controls added after the recorded order do not run by name", later)
+	}
+}
+
+func TestRequestControlConsumesAndAcknowledgesItsRequest(t *testing.T) {
+	var seen []string
+	declaredBefore := declaredControls
+	t.Cleanup(func() { declaredControls = declaredBefore })
+	defineRequestControl("example-request", controlAfterRanked, func(_ *fixtureCluster, _ context.Context, _ string, fields []string) error {
+		seen = fields
+		return nil
+	})
+	control := declaredControls[len(declaredControls)-1]
+	out := t.TempDir()
+	c := &fixtureCluster{}
+	if err := control.poll(c, context.Background(), out); err != nil || seen != nil {
+		t.Fatal("a control without a pending request ran", err, seen)
+	}
+	writeControlRequest(t, out, "example-request", "7 a b")
+	if err := control.poll(c, context.Background(), out); err != nil || !slices.Equal(seen, []string{"7", "a", "b"}) {
+		t.Fatal("request fields did not reach the handler", err, seen)
+	}
+	if fileExists(filepath.Join(out, "example-request")) || !fileExists(filepath.Join(out, "example-request-completed.7")) {
+		t.Fatal("request was not consumed and acknowledged")
+	}
+	failed := errors.New("synthetic handler failure")
+	defineRequestControl("example-failure", controlAfterRanked, func(*fixtureCluster, context.Context, string, []string) error { return failed })
+	control = declaredControls[len(declaredControls)-1]
+	writeControlRequest(t, out, "example-failure", "8")
+	if err := control.poll(c, context.Background(), out); err != failed || fileExists(filepath.Join(out, "example-failure-completed.8")) {
+		t.Fatal("a failed request was acknowledged or lost its error", err)
+	}
+}
+
+func (c *fixtureCluster) exampleControlA(context.Context, string) error { return nil }
+func (c *fixtureCluster) exampleControlB(context.Context, string) error { return nil }
+
+func exampleControl(name string, order controlOrder, poll controlPoll) *fixtureControl {
+	return &fixtureControl{name: name, order: order, poll: poll, source: functionName(poll)}
+}
+
+func TestControlSequenceRefusesBadDeclarations(t *testing.T) {
+	a, b := (*fixtureCluster).exampleControlA, (*fixtureCluster).exampleControlB
+	for _, tc := range []struct {
+		name     string
+		declared []*fixtureControl
+		refusal  string
+	}{
+		{"duplicate name", []*fixtureControl{exampleControl("x", controlAfterRanked, a), exampleControl("x", controlAfterRanked, b)}, "declared twice"},
+		{"function declared twice", []*fixtureControl{exampleControl("x", controlAfterRanked, a), exampleControl("y", controlAfterRanked, a)}, "is declared as fixture controls"},
+		{"nil function", []*fixtureControl{{name: "x"}}, "has no function"},
+		{"bad name", []*fixtureControl{exampleControl("Bad_Name", controlAfterRanked, a)}, "lower-case words"},
+		{"shared rank", []*fixtureControl{exampleControl("x", frozenControlRank(1), a), exampleControl("y", frozenControlRank(1), b)}, "share rank 1"},
+	} {
+		if _, err := sequenceControls(tc.declared); err == nil || !strings.Contains(err.Error(), tc.refusal) {
+			t.Error(tc.name, "was not refused:", err)
+		}
+	}
+	for _, refused := range []func(){
+		func() { defineControl("x", controlAfterRanked, nil) },
+		func() { defineRequestControl("x", controlAfterRanked, nil) },
+		func() { frozenControlRank(0) },
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Error("declaration without a function or with a non-positive rank was accepted")
+				}
+			}()
+			refused()
+		}()
+	}
+	sequence, err := sequenceControls([]*fixtureControl{
+		exampleControl("zeta", controlAfterRanked, a),
+		exampleControl("alpha", controlAfterRanked, b),
+		exampleControl("ranked", frozenControlRank(1), (*fixtureCluster).checkNativeOracleWorker),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range f.Decls {
-		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv != nil && fn.Name.Name == name {
-			return fn
-		}
-	}
-	t.Fatal("no method", name, "in", file)
-	return nil
-}
-
-func controlCall(stmt ast.Stmt) (string, bool) {
-	s, ok := stmt.(*ast.IfStmt)
-	if !ok || s.Init == nil {
-		return "", false
-	}
-	assign, ok := s.Init.(*ast.AssignStmt)
-	if !ok || len(assign.Rhs) != 1 {
-		return "", false
-	}
-	call, ok := assign.Rhs[0].(*ast.CallExpr)
-	if !ok {
-		return "", false
-	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return "", false
-	}
-	return sel.Sel.Name, true
-}
-
-func requestLiterals(t *testing.T, fn *ast.FuncDecl) []string {
-	t.Helper()
 	var names []string
-	for _, stmt := range fn.Body.List {
-		s, ok := stmt.(*ast.IfStmt)
-		if !ok {
-			continue
-		}
-		assign := s.Init.(*ast.AssignStmt)
-		call := assign.Rhs[0].(*ast.CallExpr)
-		if call.Fun.(*ast.SelectorExpr).Sel.Name != "request" {
-			t.Fatal("grouped control polls something other than a request")
-		}
-		name, err := strconv.Unquote(call.Args[1].(*ast.BasicLit).Value)
-		if err != nil {
-			t.Fatal(err)
-		}
-		names = append(names, name)
+	for _, control := range sequence {
+		names = append(names, control.name)
 	}
-	return names
-}
-
-func TestHandWrittenControlSequenceMatchesTheRecordedOrder(t *testing.T) {
-	var got []string
-	for _, stmt := range fixtureMethod(t, "control.go", "controls").Body.List {
-		if name, ok := controlCall(stmt); ok {
-			if file, grouped := groupedControls[name]; grouped {
-				got = append(got, requestLiterals(t, fixtureMethod(t, file, name))...)
-			} else {
-				got = append(got, name)
-			}
-			continue
-		}
-		if s, ok := stmt.(*ast.IfStmt); ok {
-			if call, ok := s.Cond.(*ast.CallExpr); ok && len(call.Args) == 1 {
-				if join, ok := call.Args[0].(*ast.CallExpr); ok && len(join.Args) == 2 {
-					if lit, ok := join.Args[1].(*ast.BasicLit); ok && lit.Value == `"native-oracles.error"` {
-						got = append(got, "native-oracles.error")
-						continue
-					}
-				}
-			}
-		}
-		if _, ok := stmt.(*ast.ReturnStmt); ok {
-			continue
-		}
-		t.Fatal("unrecognized statement in controls at", stmt.Pos())
-	}
-	if !slices.Equal(got, recordedControlOrder) {
-		t.Fatalf("controls polls\n%q\nrecorded\n%q", got, recordedControlOrder)
+	if !slices.Equal(names, []string{"ranked", "alpha", "zeta"}) {
+		t.Fatal("ranked controls do not precede the others, ordered by name", names)
 	}
 }

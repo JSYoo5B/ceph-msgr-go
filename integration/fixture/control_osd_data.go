@@ -51,6 +51,8 @@ func (c *fixtureCluster) controlOSDCompoundRequest(ctx context.Context, out stri
 	return nil
 }
 
+var _ = defineControl("osd-compound", frozenControlRank(22), (*fixtureCluster).controlOSDCompoundRequest)
+
 func (c *fixtureCluster) controlOSDMutationRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -71,6 +73,8 @@ func (c *fixtureCluster) controlOSDMutationRequest(ctx context.Context, out stri
 	}
 	return nil
 }
+
+var _ = defineControl("osd-mutation", frozenControlRank(27), (*fixtureCluster).controlOSDMutationRequest)
 
 func (c *fixtureCluster) controlOSDXattrLimitRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -120,6 +124,8 @@ func (c *fixtureCluster) controlOSDXattrLimitRequest(ctx context.Context, out st
 	return nil
 }
 
+var _ = defineControl("osd-xattr-limit", frozenControlRank(28), (*fixtureCluster).controlOSDXattrLimitRequest)
+
 func (c *fixtureCluster) controlOSDOMAPRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -146,6 +152,8 @@ func (c *fixtureCluster) controlOSDOMAPRequest(ctx context.Context, out string) 
 	}
 	return nil
 }
+
+var _ = defineControl("osd-omap", frozenControlRank(29), (*fixtureCluster).controlOSDOMAPRequest)
 
 func (c *fixtureCluster) controlOSDOMAPWriteRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -175,6 +183,8 @@ func (c *fixtureCluster) controlOSDOMAPWriteRequest(ctx context.Context, out str
 	return nil
 }
 
+var _ = defineControl("osd-omap-write", frozenControlRank(30), (*fixtureCluster).controlOSDOMAPWriteRequest)
+
 func (c *fixtureCluster) controlOSDWatchNotifyRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -196,6 +206,8 @@ func (c *fixtureCluster) controlOSDWatchNotifyRequest(ctx context.Context, out s
 	}
 	return nil
 }
+
+var _ = defineControl("osd-watch-notify", frozenControlRank(36), (*fixtureCluster).controlOSDWatchNotifyRequest)
 
 func (c *fixtureCluster) controlOSDSparseReadRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -219,6 +231,8 @@ func (c *fixtureCluster) controlOSDSparseReadRequest(ctx context.Context, out st
 	return nil
 }
 
+var _ = defineControl("osd-sparse-read", frozenControlRank(37), (*fixtureCluster).controlOSDSparseReadRequest)
+
 func (c *fixtureCluster) controlOSDPGListRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -240,6 +254,8 @@ func (c *fixtureCluster) controlOSDPGListRequest(ctx context.Context, out string
 	}
 	return nil
 }
+
+var _ = defineControl("osd-pg-list", frozenControlRank(38), (*fixtureCluster).controlOSDPGListRequest)
 
 func (c *fixtureCluster) controlOSDU64XattrRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -263,6 +279,8 @@ func (c *fixtureCluster) controlOSDU64XattrRequest(ctx context.Context, out stri
 	return nil
 }
 
+var _ = defineControl("osd-u64-xattr", frozenControlRank(39), (*fixtureCluster).controlOSDU64XattrRequest)
+
 func (c *fixtureCluster) controlOSDWriteSameRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -284,6 +302,8 @@ func (c *fixtureCluster) controlOSDWriteSameRequest(ctx context.Context, out str
 	}
 	return nil
 }
+
+var _ = defineControl("osd-writesame", frozenControlRank(40), (*fixtureCluster).controlOSDWriteSameRequest)
 
 func (c *fixtureCluster) controlOSDChecksumCompoundRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -307,6 +327,8 @@ func (c *fixtureCluster) controlOSDChecksumCompoundRequest(ctx context.Context, 
 	return nil
 }
 
+var _ = defineControl("osd-checksum-compound", frozenControlRank(41), (*fixtureCluster).controlOSDChecksumCompoundRequest)
+
 func (c *fixtureCluster) controlOSDEnforceSnapContextRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -329,6 +351,8 @@ func (c *fixtureCluster) controlOSDEnforceSnapContextRequest(ctx context.Context
 	return nil
 }
 
+var _ = defineControl("osd-enforce-snap-context", frozenControlRank(42), (*fixtureCluster).controlOSDEnforceSnapContextRequest)
+
 func (c *fixtureCluster) controlOSDSetChunkRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -349,6 +373,8 @@ func (c *fixtureCluster) controlOSDSetChunkRequest(ctx context.Context, out stri
 	}
 	return nil
 }
+
+var _ = defineControl("osd-set-chunk", frozenControlRank(43), (*fixtureCluster).controlOSDSetChunkRequest)
 
 func (c *fixtureCluster) controlOSDChecksumRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -372,6 +398,8 @@ func (c *fixtureCluster) controlOSDChecksumRequest(ctx context.Context, out stri
 	return nil
 }
 
+var _ = defineControl("osd-checksum", frozenControlRank(48), (*fixtureCluster).controlOSDChecksumRequest)
+
 func (c *fixtureCluster) controlOSDMapExtRangeRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -393,6 +421,8 @@ func (c *fixtureCluster) controlOSDMapExtRangeRequest(ctx context.Context, out s
 	}
 	return nil
 }
+
+var _ = defineControl("osd-mapext-range", frozenControlRank(49), (*fixtureCluster).controlOSDMapExtRangeRequest)
 
 func (c *fixtureCluster) controlOSDMapExtRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -416,6 +446,8 @@ func (c *fixtureCluster) controlOSDMapExtRequest(ctx context.Context, out string
 	return nil
 }
 
+var _ = defineControl("osd-mapext", frozenControlRank(50), (*fixtureCluster).controlOSDMapExtRequest)
+
 func (c *fixtureCluster) controlOSDWatchersRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -437,6 +469,8 @@ func (c *fixtureCluster) controlOSDWatchersRequest(ctx context.Context, out stri
 	}
 	return nil
 }
+
+var _ = defineControl("osd-watchers", frozenControlRank(51), (*fixtureCluster).controlOSDWatchersRequest)
 
 func (c *fixtureCluster) controlOSDCommandRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -460,6 +494,8 @@ func (c *fixtureCluster) controlOSDCommandRequest(ctx context.Context, out strin
 	return nil
 }
 
+var _ = defineControl("osd-command", frozenControlRank(52), (*fixtureCluster).controlOSDCommandRequest)
+
 func (c *fixtureCluster) controlOSDXattrNativeRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -481,6 +517,8 @@ func (c *fixtureCluster) controlOSDXattrNativeRequest(ctx context.Context, out s
 	return nil
 }
 
+var _ = defineControl("osd-xattr-native", frozenControlRank(53), (*fixtureCluster).controlOSDXattrNativeRequest)
+
 func (c *fixtureCluster) controlOSDXattrRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -501,6 +539,8 @@ func (c *fixtureCluster) controlOSDXattrRequest(ctx context.Context, out string)
 	}
 	return nil
 }
+
+var _ = defineControl("osd-xattr", frozenControlRank(54), (*fixtureCluster).controlOSDXattrRequest)
 
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.

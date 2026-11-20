@@ -1189,6 +1189,8 @@ func (c *fixtureCluster) mdsCephFSCompletionControl(ctx context.Context, out str
 	return nil
 }
 
+var _ = defineRequestControl("mds-cephfs-completion", frozenControlRank(9), (*fixtureCluster).mdsCephFSCompletionControl)
+
 func (c *fixtureCluster) mdsCephFSCompletionAct(ctx context.Context, id int64, action mdsCephFSCompletionAction, result *mdsCephFSCompletionResult) error {
 	x := c.mdsCephFSCompletion
 	switch action.name {
