@@ -13,8 +13,23 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
-// The retained requests come from fresh ObjectOperation/MOSDOp objects in the
-// pinned native SDK. They are codec evidence, not live execution receipts.
+// TestCopyFromFreshNativeRequests checks testdata/copy-from-native.json: five v6
+// requests from fresh native ObjectOperation::copy_from/copy_from2 and MOSDOp
+// objects of Ceph v20.2.4, decoded by separate native objects. They are codec
+// evidence, not copy execution. Regenerate on a Linux amd64 Docker host with a
+// fresh work directory:
+//
+//	docker run --rm -v <checkout>:/repo -v <work>:/work \
+//	  quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9 \
+//	  python3 /repo/tools/osd_copy_from_native_encoder.py \
+//	  --work /work --wrapper /repo/tools/osd_copy_from_native_encoder.cc > copy-from-native.json
+//
+// Pinned src/osdc/Objecter.h 1520-1545 always appends the truncate pair for
+// COPY_FROM2, and src/osd/PrimaryLogPG.cc 8126-8135 reads it only with
+// TRUNCATE_SEQ. Go keeps its shorter flagless form, so for the two flagless
+// COPY_FROM2 vectors the test requires exactly twelve trailing native zero bytes
+// and equality of every other byte instead of claiming parity. No v8 or v9 copy
+// vector exists.
 func TestCopyFromFreshNativeRequests(t *testing.T) {
 	raw, err := os.ReadFile("testdata/copy-from-native.json")
 	if err != nil {

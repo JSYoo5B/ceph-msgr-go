@@ -17,6 +17,25 @@ import (
 
 const oracleFeatures uint64 = 3026423347916342070
 
+// oracleBytes reads a native decoder fixture. The unprefixed request-v6 and
+// reply-v6-* files (and mutation-* without "native") are reference envelopes
+// built with Python struct.pack from the pinned MOSDOp.h, MOSDOpReply.h,
+// osd_types.{h,cc}, rados.h, msgr.h and zipkin_trace.h of Ceph v20.2.4
+// (commit 7f793731f1b39eb4f465e960113d2363c311b964; mutation-* by
+// tools/osd_mutation_codec_oracle.py), then accepted and re-exported by the
+// pinned ceph-dencoder with the oracleFeatures mask; provenance.json and
+// mutation-provenance.json hold the image, summaries and envelope hashes:
+//
+//	ceph-dencoder type MOSDOp import request-v6-input.bin decode dump_json \
+//	  set_features 3026423347916342070 encode export request-v6-native.bin
+//
+// (type MOSDOpReply for replies). The retained files drop the envelope
+// header, footer and length prefixes. Re-export keeps the decoded payload, so
+// these prove native decoding, not the native payload encoder; the fresh
+// *-native-* vectors cover the encoder. Request inputs are oracleRequest; the
+// replies carry stat size 6, mtime 1000 s + 55 ns and read bytes 00 ff 41 0a,
+// ENOENT -2 overall and per op, or a redirect to pool 9, key "redirect",
+// namespace "tenant", object "next-object", each with the v6 24-byte trace.
 func oracleBytes(t *testing.T, name string) []byte {
 	t.Helper()
 	p, err := os.ReadFile("testdata/" + name + ".hex")

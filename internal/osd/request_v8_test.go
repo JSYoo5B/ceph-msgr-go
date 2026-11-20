@@ -119,6 +119,15 @@ func TestV8PrefixKeepsActualPGAndRawHashIndependent(t *testing.T) {
 	}
 }
 
+// TestV8RequestsMatchFreshNativeTwoStageEncoder compares the five
+// request-v8-native-* vectors (read/stat, create/write, snapshot context with
+// incarnation 99, checksum and shard 3; regenerate with `encode-osd-request-v8`,
+// see runNativeEncoder in integration/fixture; provenance in
+// testdata/request-v8-native-provenance.json). Pinned
+// ceph/ceph/blob/v20.2.4/src/messages/MOSDOp.h selects its v8 branch with
+// NEW_OSDOP_ENCODING and RESEND_ON_SPLIT and without SERVER_SQUID: actual spg_t
+// separate from the raw hobject hash, no v9 trace field. Sharded encoding proves
+// no EC I/O, split/retry, live targeting or native execution.
 func TestV8RequestsMatchFreshNativeTwoStageEncoder(t *testing.T) {
 	for _, kind := range []string{"read", "mutation", "snapshot", "checksum", "shard"} {
 		t.Run(kind, func(t *testing.T) {

@@ -284,9 +284,13 @@ func TestOSDOmapSentReplyCollectionsAndTerminalFaults(t *testing.T) {
 	}
 }
 
-// Fresh native SDK objects encoded these payloads independently of Go. The
-// synthetic peer verifies public correlation/conversion and raw collections;
-// it does not establish live filtering, pagination, storage or authentication.
+// Fresh native SDK objects encoded these payloads independently of Go: the five
+// omap-native-* vectors (binary cursors and prefixes, page-more and BYKEYS
+// framing; regenerate with `encode-osd-omap`, see runNativeEncoder in
+// integration/fixture; provenance in
+// internal/osd/testdata/omap-native-provenance.json). The synthetic peer verifies
+// public correlation/conversion and raw collections; it does not establish live
+// filtering, pagination, storage or authentication.
 func TestOSDOmapPublicResultsMatchFreshNativePayloads(t *testing.T) {
 	cursor, prefix := "a\x00\xff", "b\x00\x80"
 	for _, tc := range []struct {

@@ -139,8 +139,9 @@ func TestMonMembersFromActualTentacleFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Expected member names/ports come from the native cluster metadata
-			// documented in testdata/README.md, not from this Go decoder.
+			// Expected member names/ports come from the native cluster that
+			// produced the maps (TestRealTentacleMonMap and
+			// TestRealTentacleIPv6Maps), not from this Go decoder.
 			m, err := DecodeMon(memberFixtureBytes(nil, blob))
 			if err != nil || len(m.Members) != len(tc.names) {
 				t.Fatalf("actual map: %+v, %v", m, err)

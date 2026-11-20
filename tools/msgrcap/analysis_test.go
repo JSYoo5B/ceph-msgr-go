@@ -17,7 +17,7 @@ import (
 // These tests use synthetic captures only. Frames are produced by the
 // product's internal/msgr writer, so they check that the separate capture
 // walker, reassembly and passive derivation agree with that writer; they are
-// not evidence of native interoperability (see CAPTURE_ANALYSIS.md).
+// not evidence of native interoperability (see the package doc in main.go).
 
 type pcapBuilder struct {
 	buf     bytes.Buffer

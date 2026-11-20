@@ -12,10 +12,19 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/osd"
 )
 
-// Fresh native SDK objects encoded these payloads independently of Go. The
-// synthetic peer verifies public submission, ONDISK acceptance, FAILOK and
-// known-refusal conversion. It does not establish live OMAP range removal,
-// execution, staging, durability, erasure pool refusal or authentication.
+// Fresh native SDK objects encoded these payloads independently of Go: the five
+// omap-range-native-* vectors (regenerate with `encode-osd-omap-range`, see
+// runNativeEncoder in integration/fixture; provenance in
+// internal/osd/testdata/omap-range-native-provenance.json). Every request range
+// is ordered, so Go's local refusal of a reversed range is not exercised. Refusal
+// shapes follow the OMAPRMKEYRANGE handler of
+// ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc: -EOPNOTSUPP for a pool without
+// OMAP support (supports_omap in src/osd/osd_types.h is false only for erasure
+// pools), then -ENOENT for a missing object; the constructed versions do not
+// model set_enoent_reply_versions. The synthetic peer verifies public submission,
+// ONDISK acceptance, FAILOK and known-refusal conversion. It does not establish
+// live OMAP range removal, execution, staging, durability, erasure pool refusal
+// or authentication.
 func TestOSDOmapRemoveKeyRangePublicResultsMatchFreshNativePayloads(t *testing.T) {
 	binary := OSDOperation{Code: OSDRemoveOmapKeyRange, Omap: OSDOmapInput{RangeBegin: "b\x00", RangeEnd: "c\xff"}}
 	empty := OSDOperation{Code: OSDRemoveOmapKeyRange, Flags: OSDFailOK}

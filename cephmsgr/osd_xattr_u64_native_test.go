@@ -11,6 +11,13 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/osd"
 )
 
+// TestOSDXattrU64PublicFreshNativeReplies uses the five u64-xattr-native-*
+// vectors (read and compare-before-SET requests; true +1, false -125 and invalid
+// -22 replies; regenerate with `encode-osd-u64-xattrs`, see runNativeEncoder in
+// integration/fixture; provenance in
+// internal/osd/testdata/u64-xattr-native-provenance.json). Pinned Ceph v20.2.4
+// encoded each fresh object and decoded it separately. The replies are logical
+// inputs, not live execution evidence.
 func TestOSDXattrU64PublicFreshNativeReplies(t *testing.T) {
 	for _, tc := range []struct {
 		name string

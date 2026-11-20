@@ -36,6 +36,21 @@ func osdMessageFixture(t testing.TB, version uint16) msgr.MessageData {
 	return msgr.MessageData{Type: osdMapMessage, Version: version, CompatVersion: compat, Front: osdMessageBytes(t, name)}
 }
 
+// TestDecodeNativeValidatedOSDMessages decodes testdata/osd-message. The v1
+// and v4 fronts are reference envelopes built with Python struct.pack from
+// ceph/ceph/blob/v20.2.4/src/messages/MOSDMap.h and accepted by the pinned
+// native decoder (image and envelope hashes in provenance.json):
+//
+//	ceph-dencoder type MOSDMap import osdmap-v1-reference.bin decode dump_json \
+//	  encode export osdmap-v1-native-validated.bin
+//
+// and the same for v4. The nested full/incremental blobs are native
+// `OSDMap select_test 2` and `OSDMap::Incremental select_test 1` output for
+// feature mask 3026423347916342070, given FSID
+// 00112233-4455-6677-8899-aabbccddeeff and epochs 10, 11 and 12. No Go codec
+// produced these bytes. Native export keeps the decoded payload instead of
+// calling MOSDMap::encode_payload again, so this proves native decoder
+// acceptance, not the feature-selected encoder or live map delivery.
 func TestDecodeNativeValidatedOSDMessages(t *testing.T) {
 	for _, version := range []uint16{1, 4} {
 		input := osdMessageFixture(t, version)

@@ -55,10 +55,15 @@ func xattrNativeMessage(t *testing.T, name string) msgr.MessageData {
 	return m
 }
 
-// Fresh native MOSDOp/MOSDOpReply encode_payload plus separate native decoders
-// produced these fixtures. The logical operations are independently supplied
-// to that C++ wrapper; Go never supplies encoder input bytes to the wrapper.
-// This is byte interoperability proof, not daemon execution or stored attrs.
+// TestXattrRequestMatchesFreshNativeEncoder compares the request of the five
+// xattr-native-* vectors (regenerate with `encode-osd-xattrs`, see
+// runNativeEncoder in integration/fixture; provenance in
+// testdata/xattr-native-provenance.json). Fresh native MOSDOp/MOSDOpReply
+// encode_payload plus separate native decoders produced them from logical
+// operations supplied to the C++ wrapper; Go never supplies encoder input bytes.
+// The replies (mixed read, CMP ECANCELED, SET EFBIG, RM ENOENT) are constructed
+// logical inputs. This is byte interoperability proof, not daemon execution,
+// comparison, configured limits or stored attrs.
 func TestXattrRequestMatchesFreshNativeEncoder(t *testing.T) {
 	m, err := EncodeRequest(xattrNativeRequest(), oracleFeatures, wire.DefaultLimit)
 	if err != nil {
