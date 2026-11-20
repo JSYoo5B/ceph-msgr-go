@@ -10,30 +10,99 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
+// Tag is a msgr2.1 frame tag, as numbered by src/msg/async/frames_v2.h at
+// Ceph v20.2.4 (commit 7f793731f1b39eb4f465e960113d2363c311b964); the
+// handshake follows ProtocolV2.cc at the same tag. This is the client side
+// only: no server-side tag handling exists, because the repository has no
+// listening Messenger. Each tag's comment states its phase, what the Go
+// client does with it and what it refuses. A tag received outside the phase
+// that expects it is a terminal ErrFrame, never ignored.
 type Tag uint8
 
 const (
+	// Hello (banner exchange) is sent first with the client's entity type and
+	// target address; exactly one Hello is received, and its entity type
+	// must equal the requested role. Wrong role, extra segments or trailing
+	// bytes are refused.
 	Hello Tag = iota + 1
+	// AuthRequest (authentication) is sent once with CephX method 2 and one
+	// requested connection mode, CRC or secure, never both.
 	AuthRequest
+	// AuthBadMethod (authentication) is received as a typed authentication
+	// error carrying the server method and int32 result code. It is always
+	// terminal: no method downgrade or retry.
 	AuthBadMethod
+	// AuthReplyMore (authentication) is received and answered by the CephX
+	// state machine. A malformed payload is a protocol failure; at most 8
+	// rounds are accepted.
 	AuthReplyMore
+	// AuthRequestMore (authentication) is sent in answer to AuthReplyMore.
 	AuthRequestMore
+	// AuthDone (authentication) is received with the global ID; the selected
+	// mode must equal the requested one and secure mode needs its secret.
+	// A mode mismatch, a missing secret or no AuthDone within 8 rounds is
+	// refused.
 	AuthDone
+	// AuthSignature (authentication) is sent and received in both modes: the
+	// client signs its received transcript and verifies the peer's signature
+	// over its sent transcript with the CephX session key before admission.
+	// A mismatch is an authentication failure.
 	AuthSignature
+	// ClientIdent (identification) is sent with the role's supported and
+	// required feature masks, session flags and cookie.
 	ClientIdent
+	// ServerIdent (identification) is received; the target address must be
+	// among the server's addresses, the daemon ID must match where required,
+	// and its features and flags must be acceptable. Otherwise the session
+	// is refused.
 	ServerIdent
+	// IdentMissingFeatures (identification) is received as ErrFeatures with
+	// the peer's 64-bit missing mask in the error text (no structured
+	// field). It is always terminal; nothing is silently downgraded.
 	IdentMissingFeatures
+	// SessionReconnect (resume) is sent only for an explicit stateful resume
+	// (fresh MDS or CephFS) with the next global and connect sequences.
 	SessionReconnect
+	// SessionReset (resume) is received as the terminal ErrSessionReset of a
+	// stateful session; a request whose transmission began keeps an unknown
+	// outcome.
 	SessionReset
+	// SessionRetry (resume) is received; the connect sequence is advanced and
+	// the reconnect resent, at most 8 times. Sequence overflow or a
+	// malformed body is refused.
 	SessionRetry
+	// SessionRetryGlobal (resume) is received; the global sequence is
+	// advanced and the reconnect resent, at most 8 times. Sequence overflow
+	// or a malformed body is refused.
 	SessionRetryGlobal
+	// SessionReconnectOK (resume) is received; the stream resumes and
+	// unacknowledged messages above the peer's sequence are retransmitted.
 	SessionReconnectOK
+	// Wait (resume) is received and refused: no wait or replace policy is
+	// implemented.
 	Wait
+	// Message (established) is sent and received. Sequence, ACK sequence and
+	// stateful gaps are validated, duplicates dropped and replies matched to
+	// pending requests by type and transaction. A zero sequence, an ACK
+	// beyond what was sent, a stateful gap or a wrong reply type is refused.
 	Message
+	// Keepalive (established) is sent periodically; a received Keepalive is
+	// echoed as KeepaliveAck. A segment other than 8 bytes is refused.
 	Keepalive
+	// KeepaliveAck (established) is received and refreshes liveness; the
+	// keepalive timeout is the only liveness policy. A segment other than 8
+	// bytes is refused.
 	KeepaliveAck
+	// Ack (established) is sent for received messages and received for sent
+	// ones, releasing acknowledged messages. A sequence beyond what was sent
+	// or a wrong length is refused.
 	Ack
+	// CompressionRequest (post-auth) is sent only when the peer banner
+	// supports compression; it offers snappy and zstd on CRC connections and
+	// declines on secure ones.
 	CompressionRequest
+	// CompressionDone (post-auth) is received; a selected method must have
+	// been offered and implemented.
 	CompressionDone
 )
 
