@@ -18,6 +18,32 @@ func validateOSDProfile(options Options) error {
 }
 
 // OSDProfile selects one implemented wire contract, never arbitrary features.
+// It is chosen before Dial, applies to the client's MON and OSD sessions and
+// cannot change on an existing client; an unknown value fails locally, and a
+// replicated profile without EnableOSD fails before network activity.
+//
+// The replicated profiles add RESEND_ON_SPLIT (the incarnation-2 mask
+// 1<<21|1<<57 it shares with RADOS_BACKOFF, OSDMAP_PG_UPMAP,
+// CRUSH_CHOOSE_ARGS and SERVER_LUMINOUS), OSDHASHPSPOOL (30) and
+// NEW_OSDOP_ENCODING (56) to the OSD sessions' supported and required
+// features, and HASHPSPOOL to MON admission; the MON-only CRUSH admission
+// bits are never copied to OSD sessions. A peer that requires a missing bit
+// fails negotiation, without a weaker retry. The ReplyV8 profile also
+// requires NEW_OSDOPREPLY_ENCODING (58), which shares its bit with
+// CRUSH_TUNABLES5, and the v9 profile also requires the SERVER_SQUID mask
+// 1<<49|1<<57 (ceph/ceph/blob/v20.2.4/src/include/ceph_features.h). These
+// bits select encodings only: no profile evaluates CRUSH, applies maps,
+// follows redirects or handles PG splits. A request older than the PG's
+// current primary interval, split or force-resend epoch can be dropped by the
+// OSD without a reply (osd/PG.cc), and the client never replays it. Native
+// acceptance covers legacy CRUSH with HASHPSPOOL; default optimal CRUSH, MSR,
+// upmap routing and general pool topologies are not established.
+//
+// Every profile accepts exactly one reply version (v6/compat2, or v8/compat2
+// for the ReplyV8 profiles); the received header never selects another
+// decoder. The v8 and v9 replies carry no reqid, client incarnation or shard,
+// so OSDReply.Submission keeps those locally and validation checks object,
+// pool, actual PG, operation vector and retry attempt.
 type OSDProfile uint8
 
 const (
@@ -33,8 +59,10 @@ const (
 	OSDProfileReplicatedPGReplyV8
 	// OSDProfileReplicatedPGRequestV9ReplyV8 uses untraced v9/compat3 requests
 	// and strict v8/compat2 replies with explicit replicated placement. The
-	// empty OTEL envelope is supported; nonempty trace input, CRUSH, erasure
-	// coding, automatic routing and uncertain-request replay are not provided.
+	// request carries the canonical empty OTEL envelope (version 1, compat 1,
+	// length 1, is_valid false), as a native build without Jaeger sends it;
+	// nonempty trace input, CRUSH, erasure coding, automatic routing and
+	// uncertain-request replay are not provided.
 	OSDProfileReplicatedPGRequestV9ReplyV8
 )
 
@@ -45,6 +73,12 @@ const (
 // target holds in the PG's acting set (its position there), which the OSD
 // requires in spg_t; the caller derives it from its own map, as for Primary.
 // For an optimized pool whose PG has a pg_temp also set PrimaryFirst.
+// A request naming NO_SHARD or another shard on an EC PG is treated as
+// misdirected and never answered; after a primary change the new primary
+// holds a different shard, so derive both from the new map. Operations travel
+// unchanged and the pool decides what it supports (an EC pool refuses OMAP
+// writes with -95 EOPNOTSUPP). The object-hash profile sends no shard and the
+// OSD maps the raw hash to the primary shard itself.
 type OSDPlacement struct {
 	PG      OSDPG
 	Primary int32

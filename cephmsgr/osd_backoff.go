@@ -271,6 +271,12 @@ func (o *OSDConnection) NextBackoff(ctx context.Context) (OSDBackoffEvent, error
 // the queued ACK. Duplicate queued ACKs are
 // refused. ACK transmission requires the replicated PG profile and its
 // installed single-writer admission gate. The default profile rejects it.
+// The gate stays closed until the ACK is written because native
+// PG::release_backoffs keeps an unacknowledged BLOCK in STATE_DELETING until
+// its ACK, and Session::check_backoff can assert on an acknowledged
+// restriction the client ignores (osd/PG.cc, osd/Session.cc). The OSD uses
+// the original epoch to discard stale ACKs after a split. Native Objecter
+// resends outstanding operations on UNBLOCK; this client never does.
 func (o *OSDConnection) AckBackoff(ctx context.Context, event OSDBackoffEvent) error {
 	if err := ctx.Err(); err != nil {
 		return err
