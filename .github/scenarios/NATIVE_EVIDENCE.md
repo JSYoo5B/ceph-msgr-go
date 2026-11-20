@@ -4,62 +4,83 @@ This is a bounded retention checkpoint for issue #1. It reuses the existing
 trusted scenario controller and required-test gate. It does not add another
 planner, authorization path, scheduling queue or fixture capability.
 
-## Admitted pilot
+## Families
 
-Three closed families request a successful bundle. The first is the two explicit
-`mds-cephfs-capsend` rows, selecting
-`^TestCephMDSCephFSCapSendRecoveryIntegration$`. Their existing CRC/AES IPv4 host BlueStore and secure/aes256k IPv6 container
-MemStore profiles remain unchanged. The second is the single four-minute OSD soak row
-(see [below](#four-minute-osd-soak-family)). The third covers the two shared-FLOCK recovery rows described below. Other successful native scenarios still
-retain their ordinary result/test artifacts without a bundle.
+A family is the set of rows that request a successful bundle and the closed
+projection it retains. Each family is one module,
+`tools/native_evidence_<name>.py`, beside the collector. `native_evidence.py`
+imports every module whose file name matches that rule and keeps only the
+mechanics the families share: the run context, input reading, bounds, privacy
+checks, the observed runtime file and the manifest. A family module declares:
 
-The collector is copied from the calling workflow's trusted checkout before
-checking out tested code. It uses only Python's standard library. The job
-checks that the checkout equals the captured tested SHA before executing it.
-No status/comment write permission is added to the test job.
+| Name | Declares |
+| --- | --- |
+| `KIND` | The manifest `kind` of its bundles |
+| `FILES` | Its closed payload file set, always with `tests.json` and `runtime.json` |
+| `PROFILES` | The normalized matrix profiles it admits |
+| `CAPABILITIES` | The fixture capability value its rows may carry in the matrix |
+| `claims(matrix)` | Whether a job's matrix requests this family's bundle |
+| `scenario_id`, `selector` | The admitted scenario ID and manifest selector of a profile |
+| `runtime_facts`, `gate`, `project`, `validate` | Its fixture-manifest checks, required-test gate, projection of the input metadata, and re-validation of a downloaded bundle |
 
-The fixture's metadata directory is **input only**. The collector reads exactly:
+The collector refuses every family when one declaration is incomplete or
+imported from another directory, when two families share a `KIND` or admit
+one profile, or when an admitted profile's matrix is claimed by any family
+but its own. A matrix that two families claim is refused
+(`ambiguous-evidence-family`). A request that no family claims, or whose
+matrix cannot be read, has its test result classified with the cap-send gate
+and is then refused; that fallback is fixed and a new family does not change
+it.
 
-- `fixture-manifest.json`;
-- `mds-cephfs-data-results.json`;
-- `mds-cephfs-data-cleanup.json`;
-- `mds-fresh-cleanup.json`;
-- the trusted gate's separately supplied `native-tests.json`.
+The workflow does not list families. After copying the collector and every
+`native_evidence_*.py` module from the calling workflow's trusted checkout,
+and before checking out tested code, the job runs
+`native_evidence.py family`, which prints the claimed family's name (or
+nothing) as the step output `family`. The collection, completeness and result
+steps run for a job whose output is not empty. The tested checkout supplies
+data only; it never supplies a family module.
 
-Other input metadata is ignored rather than copied. The input contains
-endpoints, configuration and larger protocol objects; it is never the artifact
-upload directory. Authentication material, keyrings, Ceph configuration, full
-fixture IPC, process output, native log lines and failure diagnostics are
-excluded from the successful bundle.
+To add a family, add its module and its daemon-free tests
+(`tools/test_native_<name>_evidence.py`). The module docstring describes what
+the bundle retains and omits; a new family does not edit this file, the
+collector or the workflow. The family sections below
+describe the families declared before family modules existed, because other
+documents link to them.
 
-## Closed output inventory
+The collector uses only Python's standard library. The job checks that the
+checkout equals the captured tested SHA before executing it. No
+status/comment write permission is added to the test job.
 
-`tools/native_evidence.py collect` projects reviewed fields into five files:
+The fixture's metadata directory is **input only**. A family reads only the
+files it names, together with the trusted gate's separately supplied
+`native-tests.json`. Other input metadata is ignored rather than copied. The
+input contains endpoints, configuration and larger protocol objects; it is
+never the artifact upload directory. Authentication material, keyrings, Ceph
+configuration, full fixture IPC, process output, native log lines and failure
+diagnostics are excluded from the successful bundle.
+
+## Common files
+
+Every bundle has `manifest.json`, the family's `tests.json` and
+`runtime.json`, and the family's own payload files:
 
 | File | Retained boundary |
 | --- | --- |
-| `manifest.json` | Version, execution context, configured/observed distinction and payload size/hash inventory |
-| `tests.json` | Exactly the required API parent PASS, expected selector, no missing/failed/skipped result |
-| `cap-send.json` | Client GID/nonce, old/new MDS GIDs, inode/flush TIDs, send generation/admission classes, correlated ACK identities/order, native apply branch classifications, equal before/after object-request counts and selected native stat fields |
-| `cleanup.json` | Reviewed DATA and filesystem cleanup booleans: namespace/layout/config/blocklist and client/native identity restoration, filesystem/pool removal |
+| `manifest.json` | Version, family `kind`, execution context, configured/observed distinction and payload size/hash inventory |
+| `tests.json` | The family's required API parent PASS results and selector, with no missing, failed or skipped result |
 | `runtime.json` | Inspected Docker image ID/architecture, native daemon version, provider version and separately labeled fixture-reported profile |
 
-No arbitrary string from the native result is retained. Branch/send labels
-are closed enums, identities are bounded integers, and hashes/versions/profile
-values have closed validators. Raw log lines and full native stat/capability
-objects remain omitted. The native test asserts its larger protocol contract;
-this bundle preserves only the listed reviewed projection, not every assertion's
-raw input or an independently reproduced oracle.
-
-Cleanup booleans describe the owned native state before fixture termination.
-The successful fixture process also requires its orderly container/network
-teardown. The v1 bundle is not a separate Docker inventory or post-termination
-inspection receipt.
+No arbitrary string from the native result is retained. Labels are closed
+enums, identities are bounded integers, and hashes/versions/profile values
+have closed validators. Raw log lines and full native objects remain omitted.
+The native test asserts its larger protocol contract; a bundle preserves only
+its family's reviewed projection, not every assertion's raw input or an
+independently reproduced oracle.
 
 ## Manifest and independent expected context
 
-The manifest's `schema_version` is integer **1** and its `kind` is
-`native-success`. Every field is required and unknown output fields are refused.
+The manifest's `schema_version` is integer **1** and its `kind` is the
+family's `KIND`. Every field is required and unknown output fields are refused.
 
 | Field | Meaning |
 | --- | --- |
@@ -71,8 +92,8 @@ The manifest's `schema_version` is integer **1** and its `kind` is
 | `profile` | Normalized requested matrix parameters, including explicit defaults; requested settings are not observations that every protocol path ran |
 | `configured_image` | The admitted digest-pinned registry reference requested for the fixture |
 | `observed` | Same validated structure as `runtime.json`; the Docker image ID is an inspected image/config identity, not relabeled as the configured registry manifest digest |
-| `files` | Exactly four unique payload names with byte size and lowercase SHA-256 |
-| `total_bytes` | Sum of the four payload sizes; the total limit also includes `manifest.json` |
+| `files` | Exactly the family's payload names, each once, with byte size and lowercase SHA-256 |
+| `total_bytes` | Sum of the payload sizes; the total limit also includes `manifest.json` |
 
 The observed daemon version must name Ceph Tentacle 20.2.4 at
 `7f793731f1b39eb4f465e960113d2363c311b964`. The configured image is
@@ -115,22 +136,47 @@ after **seven days**. Existing failed-test diagnostics retain their separate
 A native test can pass while required evidence is incomplete. `result.json`
 records `test_result` and `evidence_result` independently; the collection status
 retains a fixed public failure code. Collection or artifact-upload failure makes
-the pilot's final evidence gate fail and prevents overall native acceptance,
+the family's final evidence gate fail and prevents overall native acceptance,
 while preserving the actual test PASS. Missing/invalid required-test evidence
 is `unknown`, never an invented PASS. Canceled or skipped native jobs do not
 become accepted evidence. No automatic retry replaces the first attempt.
 
+## Cap-send recovery
+
+Declared in `tools/native_evidence_capsend.py`, with `kind`
+**`native-success`**. It admits the two explicit `mds-cephfs-capsend` rows,
+selecting `^TestCephMDSCephFSCapSendRecoveryIntegration$` on their CRC/AES
+IPv4 host BlueStore and secure/aes256k IPv6 container MemStore profiles. The
+collector reads exactly `fixture-manifest.json`,
+`mds-cephfs-data-results.json`, `mds-cephfs-data-cleanup.json`,
+`mds-fresh-cleanup.json` and the gate's `native-tests.json`. Beside the common
+files it retains:
+
+| File | Retained boundary |
+| --- | --- |
+| `cap-send.json` | Client GID/nonce, old/new MDS GIDs, inode/flush TIDs, send generation/admission classes, correlated ACK identities/order, native apply branch classifications, equal before/after object-request counts and selected native stat fields |
+| `cleanup.json` | Reviewed DATA and filesystem cleanup booleans: namespace/layout/config/blocklist and client/native identity restoration, filesystem/pool removal |
+
+Branch/send labels are closed enums. Full native stat and capability objects
+remain omitted. Cleanup booleans describe the owned native state before
+fixture termination. The successful fixture process also requires its orderly
+container/network teardown. The v1 bundle is not a separate Docker inventory
+or post-termination inspection receipt.
+
+The [cap-send validation record](NATIVE_EVIDENCE_VALIDATION.md) separates its
+actual Linux native run, retained projection and pre-merge hosted-workflow
+boundary.
+
 ## Four-minute OSD soak family
 
-This is a second closed family of the same manifest contract (`schema_version`
-1), identified by `kind` **`native-soak-success`**. It admits exactly one
+Declared in `tools/native_evidence_soak.py`, with `kind`
+**`native-soak-success`**. It admits exactly one
 profile: `osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3.osd-soak-4m` (aes256k
 client key and service cipher, secure mode, IPv4, container runtime, three
 BlueStore replicas, `osd_soak=4m`, the pinned image and provider above). The
 manifest `selector` is the fixture's own selection
 `^TestCephOSDSoak(Failover)?Integration$`, since the scenario row carries no
-`test_run`. Any other row with an `osd_soak` value still requests evidence in
-the workflow and is refused by the collector as an unsupported profile, so it
+`test_run`. Any other row with an `osd_soak` value is still claimed by this family and is refused by the collector as an unsupported profile, so it
 fails as `incomplete` rather than skipping retention.
 
 **Expected inventory comes from outside the receipts.** The collector fixes
@@ -143,8 +189,8 @@ or skip. A receipt's own `expected_tests` is checked against this fixed pair,
 never used to define it.
 
 **Trusted validator.** `native-scenarios.yml` copies `osd_soak_receipts.py`
-from the calling workflow's trusted checkout next to `native_evidence.py`,
-before the tested checkout. The collector imports it from its own directory and
+from the calling workflow's trusted checkout next to the collector, before the
+tested checkout. The family module imports it from its own directory and
 refuses a module found anywhere else. The tested checkout's copy (which the
 fixture runs after termination for the job log) is not used for retained
 evidence. The validator checks selected labels, worker identity and object
@@ -156,17 +202,17 @@ termination.
 512 KiB each (the fixture's diagnostic-copy bound) and carry base64 expected
 and native bytes, so eight maximum-sized worker receipts alone exceed the 1 MiB
 bundle limit. Raising the budget would only move the ceiling. The bundle
-therefore retains a closed projection plus hashes, with the same 256 KiB per
-file and 1 MiB total limits as cap-send:
+therefore retains a closed projection plus hashes, with the common 256 KiB per
+file and 1 MiB total limits:
 
 | File | Retained boundary |
 | --- | --- |
-| `manifest.json` | Same context, configured/observed distinction and size/hash inventory as cap-send, with the soak `kind` |
+| `manifest.json` | The common manifest with the soak `kind` |
 | `tests.json` | The two required API parent PASS results and both selectors |
 | `soak.json` | Tested revision, configured duration, observation count (8); per workload setup time, owned-object count, actual workload/test intervals, closed counter set, four worker observations (version, native mtime seconds/nanos, byte lengths, SHA-256 of the data and of the xattr value, observation time) and for failover each fault phase (cycle, phase, time since workload start, duration, victim OSD index) and the final clean-PG verdict |
 | `cleanup.json` | Per workload the native removal verdict, duration and the five object result codes (success or native absence) in ownership order, plus fixture termination success and duration |
 | `receipts.json` | Fixture manifest hash and, for each of the 22 raw files (two workloads, termination, fault receipts and the fixture manifest at one fault cycle), exact byte size and SHA-256 |
-| `runtime.json` | Same observed image ID, architecture, daemon version, provider and fixture-reported profile as cap-send |
+| `runtime.json` | The common runtime file |
 
 **What the projection cannot do.** The raw expected/native bytes, xattr values,
 object names, setup names, error strings and unresolved-outcome ledgers are
@@ -183,8 +229,8 @@ network inventory.
 `test_result=passed`, `evidence_result=incomplete`; the final step fails the job
 and the status file carries a fixed public code (for example
 `soak-receipts-invalid`) without echoing receipt contents. Retention is
-seven days, in the same `native-success-<run>-<attempt>-<job>-<scenario>`
-artifact name family as cap-send. Failed or canceled runs keep only their
+seven days, in the common `native-success-<run>-<attempt>-<job>-<scenario>`
+artifact name. Failed or canceled runs keep only their
 existing diagnostic behaviour, and cancellation evidence remains unverified.
 
 ## Local interface and verification limits
@@ -206,19 +252,18 @@ The verifier consumes data and never executes a receipt, native command or
 embedded path. Hashes provide file integrity, not a signature or proof that
 an otherwise fabricated record came from native execution.
 
-Daemon-free rejection tests (`tools/test_native_evidence.py`,
-`tools/test_native_flock_evidence.py` and `tools/test_native_soak_evidence.py`) validate the contract; a native run and hosted
-artifact upload are separate evidence. Before this workflow change reaches
+Daemon-free rejection tests (`tools/test_native_*evidence*.py`) validate the
+contract, and `tools/test_native_evidence_families.py` checks the family
+declarations and the workflow's family decision for every planned job; a
+native run and hosted artifact upload are separate evidence. Before this workflow change reaches
 the default branch, PR-comment runs still use the previous trusted workflow
 and do not run this new collector. An older successful request must not be
 reported as a hosted successful-bundle upload.
 
-The [pilot validation record](NATIVE_EVIDENCE_VALIDATION.md) separates its actual
-Linux native run, retained projection and pre-merge hosted-workflow boundary.
-
 ## Shared-FLOCK recovery
 
-The two `mds-cephfs-sharedflock-recovery` rows use the metadata fixture and
+Declared in `tools/native_evidence_flock.py`. The two
+`mds-cephfs-sharedflock-recovery` rows use the metadata fixture and
 require `TestCephMDSCephFSSharedFlockRecoveryIntegration` to pass. Their
 manifest kind is `native-shared-flock-success`. The common manifest, runtime
 and tests files identify the trusted controller, tested source, scenario,
