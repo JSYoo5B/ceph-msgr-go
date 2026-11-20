@@ -44,6 +44,11 @@ func TestCephOSDErasureOptimizedK2M2InFlightMutationIntegration(t *testing.T) {
 // The caller deliberately repeats an independently observed applied mutation
 // after an epoch change. PG-log duplicate detection in this bounded experiment
 // is separate from automatic replay policy and an exactly-once guarantee.
+// The resubmission under the original transaction and RetryAttempt 1 must be
+// answered with ONDISK and leave one native tail, while a fresh-TID control
+// appends a second tail, so the oracle would see a real second execution. Not
+// verified: PG-log retention bounds, requests held inside the dying OSD, other
+// EC widths and a signed refusal across the epoch change.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2appliedresubmit key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD

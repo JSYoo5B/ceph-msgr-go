@@ -78,6 +78,16 @@ func restoreMutationObject(t *testing.T, c *cephmsgr.Client, oracle osdFixtureOr
 	}
 }
 
+// Each mutation and guard vector is compared with a native librados vector on
+// a separate object reset to the same baseline with the same nanosecond mtime;
+// version guards are relative to each object's own version. Aggregate and
+// per-op codes and binary readback must match. A FAILOK CMPEXT mismatch commits
+// on the wire with aggregate 0, while the native wrapper returns -EIO because
+// Objecter's cmpext callback raises on mismatch even under FAILOK
+// (src/osdc/Objecter.h, v20.2.4); the test compares the two separately. Mixed
+// vectors check output boundaries and staged size against committed reads.
+// Not verified: EC pools and the native mixed read/write payload encoding.
+//
 //scenario:covers CLIENT to OSD
 //fixture:isolated deletes and rewrites the shared fixture object; the native compare leaves a -native-mutation mirror object
 func TestCephOSDMutationsIntegration(t *testing.T) {
@@ -185,6 +195,11 @@ func TestCephOSDMutationsIntegration(t *testing.T) {
 	}
 }
 
+// One APPEND whose reply is withheld after OSD authentication executes (a
+// native read proves it before cancellation); the call keeps
+// OutcomeUnknownError with its submission, and a fresh caller session reads
+// the bytes with a larger TID without repeating the append.
+//
 //scenario:covers Messenger/CephX
 //fixture:isolated appends to the shared fixture object; cleanup rewrites bytes and mtime with no native readback proof
 func TestCephOSDMutationLostReplyIntegration(t *testing.T) {
@@ -269,6 +284,11 @@ func TestCephOSDMutationLostReplyIntegration(t *testing.T) {
 	t.Log("native readback proved one append; local cancellation retained request identity, fresh session did not replay")
 }
 
+// An ONDISK write survives an orderly BlueStore stop and start: native and a
+// new Go read (with the refreshed epoch and endpoint nonce) match. This is not
+// host or device power loss, and MemStore ONDISK is not treated as restart
+// persistence.
+//
 //scenario:covers CLIENT to OSD
 //fixture:isolated stops and restarts an OSD; clean wait only on 3 replicas, no pg_temp check; rewrites the fixture object
 func TestCephOSDMutationRestartIntegration(t *testing.T) {

@@ -118,6 +118,13 @@ func nativeBackoffRoute(t *testing.T, base osdFixtureOracle, state nativeBackoff
 	return base
 }
 
+// The PG-wide recipe of tools/osd_backoff_oracle.py holds the PG peered but
+// inactive, so its primary answers a STAT with a native BLOCK. The test ACKs it
+// with the original epoch (native history confirms reception), checks that a
+// new request is refused as known unsent and the sent STAT keeps an unknown
+// outcome, then restores the PG and receives UNBLOCK. The refused APPEND is
+// never replayed; a later explicit caller APPEND executes exactly once.
+//
 //scenario:covers CLIENT to OSD
 //fixture:isolated sets fixture pool size/min_size 1/1 to 2/2 and back; restore waits for one PG active, not all clean
 func TestCephOSDBackoffIntegration(t *testing.T) {

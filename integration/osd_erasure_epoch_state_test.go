@@ -529,7 +529,8 @@ func (r *ecEpochRun) write(label string, route osdFixtureOracle, data []byte, se
 // and a notification completes again before the UNWATCH. The native watcher
 // list must hold exactly that registration throughout and nothing after the
 // UNWATCH, and the client must open no OSD connection the caller did not ask
-// for.
+// for. Not verified: a notification to a registration while it is
+// disconnected, watch timeout or expiry, and the nonoptimized pool.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2watchfailover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
@@ -669,7 +670,8 @@ func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
 // at both ids and at the head and LIST_SNAPS through the replacement must
 // match the native reads. After the original primary returns and every PG is
 // clean, the same reads and LIST_SNAPS through it must give the same bytes,
-// clones and user versions.
+// clones and user versions; that read does not show which shard's chunk the
+// returned primary used. Snapshot removal and trimming are not exercised.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2snapshotfailover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
@@ -811,7 +813,10 @@ func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 // active again without the nonprimary shard. The dropped APPEND keeps its
 // unknown outcome; the native object is unchanged, and one explicit
 // resubmission under the original identity applies it once. After the last
-// OSD returns and every PG is clean, the native state is unchanged.
+// OSD returns and every PG is clean, the native state is unchanged. Not
+// verified: a BLOCK from a primary leading under a primary-first pg_temp
+// (actual versus wire shard), native reception of the ACK on the EC PG, and
+// object-level backoff on an EC pool.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2pgbackoff key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD

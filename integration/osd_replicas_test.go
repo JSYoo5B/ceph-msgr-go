@@ -15,6 +15,11 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+// After an ONDISK write the native map's actual primary is SIGKILLed; native
+// placement then names another primary at a later epoch, and an explicit Go
+// read there returns the committed bytes with the original user version and
+// nanosecond mtime, while a second native read shows no further write.
+//
 //fixture:isolated kills and restarts the primary OSD; clean wait lacks a pg_temp proof; rewrites the fixture object unverified
 func TestCephOSDReplicasIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

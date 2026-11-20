@@ -18,7 +18,13 @@ import (
 // makes MON and OSDs require CRUSH_V2 from every client. Object I/O to it goes
 // to the PG primary with that primary's shard in spg_t (replicated-PG
 // profiles) or with the raw hash the OSD maps itself (object-hash profile).
-// The independent native client observes every result.
+// The independent native client observes every result. OMAP SETVALS is
+// refused with -EOPNOTSUPP, and a request with NO_SHARD or another shard is
+// never answered, so it ends as an unknown outcome. A watch receives a NOTIFY
+// from a second client and its ACK completes the notify. Not verified: MSR
+// rules, partial or direct shard reads, and replica (shard) reads, because a
+// balanced read routed to a non-primary shard asserts the OSD's EC read
+// pipeline in the pinned release.
 //
 //scenario:covers CLIENT to OSD
 //fixture:shareable own EC pool I/O only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
@@ -46,6 +52,7 @@ func TestCephOSDErasureJerasureIntegration(t *testing.T) {
 // The first wider width: an isa k=2,m=2 pool on the four-OSD topology, with
 // no optimizations and no faults. Size, min_size, acting set, primary shard
 // and control shard all come from the native pool and map, not from k=2,m=1.
+// min_size 3 is k + min(1, m-1) (OSDMonitor::prepare_pool_size, v20.2.4).
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasurek2m2 key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8
 //scenario:covers CLIENT to OSD

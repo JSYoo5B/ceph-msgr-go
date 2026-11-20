@@ -113,6 +113,20 @@ func osdDumpAddresses(t *testing.T, ctx context.Context, c *cephmsgr.Client) map
 	return addresses
 }
 
+// Raw OSD and PG commands (MCommand 97 / MCommandReply 98; a PG command is the
+// same message with `pgid` in its JSON and no map epoch) are compared with
+// native rados_osd_command and rados_pg_command: output bytes and status match
+// for version, config get, get_command_descriptions, invalid commands and an
+// `allow r` identity (-EACCES, OSD.cc:7379-7394 requires the allow-all OSD
+// cap). A PG query to an acting replica gets -EAGAIN "not primary for pgid"
+// and an absent pool -ENOENT without execution (OSD.cc:2789-2826, v20.2.4); Go
+// does not resend on EAGAIN, while native Objecter does (Objecter.cc:5058-5067)
+// so its call is bounded by rados_osd_op_timeout. A PG command naming another
+// primary is refused locally with ErrOSDCommandTarget. A command cancelled,
+// closed or timed out after sending, including on a paused primary, ends as an
+// unknown outcome with its submission; one on a closed handle is ErrClosed.
+// Not verified: counting server-side executions.
+//
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b300c0 key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 test_run=^TestCephOSDCommand(s|Crash)Integration$
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b300c0 key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 test_run=^TestCephOSDCommand(s|Crash)Integration$
 //scenario:covers CLIENT to OSD

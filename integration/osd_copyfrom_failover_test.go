@@ -22,7 +22,9 @@ import (
 // that read cannot finish until the cluster marks the frozen OSD down and the
 // source PG gets a new primary; the destination OSD then resends its read and
 // completes the copy. The caller only waits: one request, one ONDISK reply,
-// and the destination equals the source natively.
+// and the destination equals the source natively. The frozen OSD is then
+// resumed, SIGKILLed and restarted: one frozen past its heartbeat grace did not
+// return to clean PGs in time when only thawed.
 //
 //scenario:covers CLIENT to OSD
 //fixture:isolated pauses, kills and restarts an OSD; restart waits osd-ready clean without a pg_temp proof

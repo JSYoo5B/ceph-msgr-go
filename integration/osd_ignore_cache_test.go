@@ -223,6 +223,19 @@ func cachePoolCompare(t *testing.T, which string, r cephmsgr.OSDReply, baseline 
 	}
 }
 
+// TestCephOSDIgnoreCacheIntegration pairs each standalone Go STAT, READ,
+// WRITEFULL and DELETE, normal and with IgnoreCache, with an independent native
+// counterpart on its own head in the owned writeback tier (no overlay or
+// snapshots), with caller-supplied routing. IgnoreCache reads of a tier miss
+// return -ENOENT, writes land in the tier and leave the base unchanged, and a
+// normal read after an IgnoreCache DELETE re-promotes the base bytes while one
+// after a normal DELETE returns -ENOENT. That is behavior-only whiteout
+// evidence: raw FLAG_WHITEOUT is not inspected. Scoped identities get -EPERM
+// for read-only writes, foreign namespaces and the other pool. User versions
+// are compared only with each object's own baseline. Not verified live:
+// request-v8/v9 cache-pool I/O, EC, snapshots, FULL flags, replica reads and
+// fault injection.
+//
 //scenario:row osd-cache-pools.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdignorecache key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 osd_cache_pools=1
 //scenario:row osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdignorecache key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 osd_cache_pools=1
 //scenario:covers CLIENT to OSD

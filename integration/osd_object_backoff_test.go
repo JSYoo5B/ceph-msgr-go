@@ -187,6 +187,14 @@ func objectBackoffHeldDegraded(op objectBackoffOp, client string) bool {
 // object is in flight when its primary is SIGKILLed; the caller then resubmits
 // explicitly to the replacement primary. Native rados clients run alongside.
 //
+// The backoff gate is range-scoped: on the handle that received and ACKed the
+// BLOCK for X, STAT and READ of an unrelated object Y complete with native
+// bytes, version and mtime, while a fresh X STAT fails with ErrOSDBackoff as
+// known unsent and the original X append stays unresolved. A sent mutation is
+// never retried automatically. Not verified live: non-equal range BLOCKs,
+// several simultaneous object BLOCKs, EC pools, three-replica reply-v8, and a
+// durable Y write while the replica is paused.
+//
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdobjectbackofffailover key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdobjectbackofffailover key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:covers CLIENT to OSD

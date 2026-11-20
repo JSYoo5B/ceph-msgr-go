@@ -14,7 +14,8 @@ import (
 // session. A test-only identity with `mon 'allow r'` is refused a config write
 // (-13); its grant is then widened to `allow rw`. The test records whether the
 // existing session, which authenticated under the old capabilities, sees the
-// change, and requires a newly dialed client to be allowed. The write is a
+// change (the MON evaluates the capabilities it recorded when the session
+// authenticated), and requires a newly dialed client to be allowed. The write is a
 // harmless option on the identity's own config section, removed afterwards.
 //
 //scenario:covers Messenger/CephX

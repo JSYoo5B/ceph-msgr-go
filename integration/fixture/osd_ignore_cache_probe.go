@@ -184,6 +184,14 @@ func validateIgnoreCacheNative(data []byte, plan ignoreCacheProbePlan) error {
 	return nil
 }
 
+// ignoreCacheProbeCommand runs the native-only IGNORE_CACHE experiment
+// (`go run . probe-osd-ignore-cache -project ../.. -output DIR` with the
+// CEPH_MSGR_TEST_OSD legacy-v6 single-BlueStore environment and other
+// selectors unset). Two owned single-replica pools form a writeback tier
+// without overlay, hit set or snapshots; tools/osd_ignore_cache_oracle.py
+// drives four native identities, and the command then detaches the tier and
+// checks the pools, rules, identities and pool-deletion override are gone. It
+// makes no Go IGNORE_CACHE claim and does not decode raw FLAG_WHITEOUT.
 func ignoreCacheProbeCommand(ctx context.Context, args []string) (result error) {
 	flags := flag.NewFlagSet("probe-osd-ignore-cache", flag.ContinueOnError)
 	project := flags.String("project", "../..", "product checkout")

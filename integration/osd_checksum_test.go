@@ -54,6 +54,15 @@ func nativeChecksum(t *testing.T, ctx context.Context, object string, offset, le
 	return receipt
 }
 
+// Standalone head CHECKSUM for CRC32C, xxHash32 and xxHash64 is compared with
+// the independent C rados_checksum API: raw output bytes, full-width values
+// (xxHash64 seeds with high bits set), aggregate codes and unchanged head
+// bytes, version and mtime. Cases cover zero and nonzero seeds, chunks,
+// aligned and unaligned EOF trimming, reads past EOF and a missing object,
+// whose per-op status is not inferred from the C aggregate error. Pinned
+// sources: src/osd/PrimaryLogPG.cc (do_checksum) and src/common/Checksummer.h
+// at v20.2.4. Not verified: EC pools.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable read-only checksums on its owned UUID objects; checked omap-write cleanup removes them
 func TestCephOSDChecksumIntegration(t *testing.T) {

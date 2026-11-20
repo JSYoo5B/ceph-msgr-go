@@ -44,7 +44,11 @@ type copyGetHistory struct {
 // owned chunk limit forces that branch with data the bounded native observer
 // can still compare. Receiving EIO is not a cleanup barrier, so cleanup is
 // observed by a bounded poll of a complete native PG enumeration. This does
-// not establish removal timing, destination loss or automatic replay.
+// not establish removal timing, destination loss or automatic replay. With
+// the chunk limit lowered to 32 KiB, the 64 KiB source needs several
+// assert-version+copy-get requests in the owned OSD's op history (_copy_some);
+// that is the cursor evidence, while the temporary object itself need not be
+// observed. The reply is OSDError -EIO with per-op [-EINPROGRESS, 0].
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfrommultichunklateerror key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=osd-copy-from-multi-chunk
 //fixture:isolated sets the OSD copy-from injector and max chunk by admin socket; the restore leaves runtime overrides
