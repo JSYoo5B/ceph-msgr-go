@@ -39,7 +39,7 @@ each branch edits only its own files.
 
 Case D merges every branch into one tree, again without conflict
 resolution, and runs the whole tools test suite (this module excepted), the
-.github/scripts tests and protocol_evidence.py in it, so that a total or a
+.github/scripts tests and every test of the fixture module in it, so that a total or a
 shared list reintroduced in any tools test fails here, not only in the
 validators named below.
 
@@ -657,11 +657,11 @@ class MergeProofTest(unittest.TestCase):
         env = dict(repo.env, GOWORK="off", **{NESTED: "1"})
         for args, cwd in (([sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_*.py"], repo.path),
                           ([sys.executable, "-m", "unittest", "discover", "-s", ".github/scripts", "-p", "test_*.py"], repo.path),
-                          ([sys.executable, "tools/protocol_evidence.py"], repo.path)):
+                          (["go", "test", "-mod=readonly", "-count=1", "./..."], repo.path / "integration" / "fixture")):
             result = subprocess.run(args, cwd=str(cwd), env=env, capture_output=True, text=True, encoding="utf-8",
                                     errors="replace", timeout=TIMEOUT)
             self.assertEqual(result.returncode, 0, "%s failed on the tree of every branch:\n%s"
-                             % (" ".join(args[1:]), (result.stdout + result.stderr)[-8000:]))
+                             % (" ".join(args), (result.stdout + result.stderr)[-8000:]))
         self.assertEqual(repo.git("status", "--porcelain", "--untracked-files=no").stdout, "")
 
     def same_area(self, first, second):
