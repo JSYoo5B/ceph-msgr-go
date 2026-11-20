@@ -45,10 +45,32 @@ const (
 // opcode but COPY_FROM, COPY_FROM2 and SET_REDIRECT is refused, so no
 // standalone branch silently discards a source.
 //
+// The OSD reads the source with its own Objecter at the requested snap id,
+// so find_object_context resolves it like a client read: an id above the
+// source snapset seq (MaxSnap, an id the pool never allocated, a snapshot
+// removed after the source's last write) selects the head and its user
+// version; an id the covering clone does not list, a snapshot in the OSDMap
+// removed_snaps_queue (pending trim) and a trimmed one are -ENOENT. SnapDir
+// stays refused here; the pinned OSD would fail that read with -EINVAL. Every
+// source failure, including the version assertion (1 below the source is
+// -ERANGE, the largest value -EOVERFLOW), comes after the copy started:
+// aggregate code, per-op -EINPROGRESS, destination unchanged. A source equal
+// to the destination at its head is -EINVAL before the copy starts (aggregate
+// and per-op); at any other snap id ValidateCopyFromRequest refuses it before
+// transmission. Sources: ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc
+// (do_osd_ops COPY_FROM, start_copy, _copy_some, find_object_context,
+// do_op).
+//
 // Without TRUNCATE_SEQ the destination receives the source's truncate pair;
 // with it the caller's pair is used unconditionally and the data is not
 // truncated. The destination SnapContext and ORDERSNAP apply to the
-// destination head like any write, and the source snapset is not copied. The
+// destination head like any write, and the source snapset is not copied.
+// filter_snapc drops the context's removed snapshots (PG snap_trimq and
+// purged_snaps) but not its seq: only removed snapshots clone nothing and still
+// raise the snapset seq, and a removed newest snapshot over a live one clones
+// the pre-copy head under the seq (the removed id) holding only the live
+// snapshots (ceph/ceph/blob/v20.2.4/src/osd/PG.cc filter_snapc,
+// PrimaryLogPG.cc execute_ctx and make_writeable). The
 // destination gets the source's user version, which can be lower than its
 // previous one. A copy that fails after the OSD started it reports its
 // aggregate code with per-op -EINPROGRESS. The OSD omits a source's empty
@@ -108,6 +130,33 @@ func validateRedirectOperation(op Operation, limit uint32) (uint64, uint64, erro
 	redirect := op
 	redirect.Code = CopyFrom
 	return validateCopyFromOperation(redirect, limit)
+}
+
+// ValidateCopyFromRequest refuses a COPY_FROM or COPY_FROM2 whose source is
+// the destination object itself (same pool, name, namespace and locator key
+// as hobject_t stores it) at a snap id other than the head. The pinned OSD
+// answers the head form with -EINVAL before starting the copy (its source
+// hobject equals the destination), so that form is sent. At any other snap id
+// the two hobjects differ: start_copy blocks the destination head and its own
+// Objecter reads the source snap from the same PG, where do_op's
+// maybe_await_blocked_head parks that read until the head is unblocked, which
+// only the copy's completion does. The request would then stay unanswered and
+// every later operation on the object would wait behind it until an interval
+// change (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc do_osd_ops
+// COPY_FROM, start_copy, _copy_some, do_op; no native test sends it). The destination hash is not compared: a
+// request whose hash disagrees with its name is misrouted anyway.
+func ValidateCopyFromRequest(r Request) error {
+	for _, op := range r.Operations {
+		if op.Code != CopyFrom && op.Code != CopyFrom2 {
+			continue
+		}
+		in := op.CopyFrom
+		if in.Snap != 0 && in.Snap != NoSnap && in.Locator.Pool == r.Locator.Pool && in.Locator.Namespace == r.Locator.Namespace &&
+			in.Object == r.Object && hobjectKey(in.Locator.Key, in.Object) == hobjectKey(r.Locator.Key, r.Object) {
+			return ErrRequest
+		}
+	}
+	return nil
 }
 
 func copyFromTruncates(input CopyFromInput) bool {

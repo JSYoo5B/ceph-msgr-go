@@ -219,3 +219,48 @@ func TestOSDCopyFromRefusedBeforeSubmission(t *testing.T) {
 	default:
 	}
 }
+
+// The target object as its own source is refused known-unsent at every snap id
+// but the head, without consuming a TID; the head form is submitted with the
+// next TID, because the OSD itself answers it with -EINVAL.
+func TestOSDCopyFromSelfSourceRefusedBeforeSubmission(t *testing.T) {
+	c, peers, _ := osdTestClient(t)
+	o, err := c.OpenOSD(context.Background(), OSDTarget{Address: "192.0.2.1:6804"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := <-peers
+	target := osdValidationRequest().Object
+	self := OSDCopyFromInput{SourcePool: target.Pool, SourceName: target.Name, SourceKey: target.Key, SourceNamespace: target.Namespace}
+	for _, code := range []OSDOpcode{OSDCopyFrom, OSDCopyFrom2} {
+		for _, snap := range []uint64{1, 42, OSDMaxSnapshot} {
+			in := self
+			in.SourceSnapshot = snap
+			input := osdValidationRequest()
+			input.Operations = []OSDOperation{{Code: code, CopyFrom: in}}
+			before := c.osdNext.Load()
+			reply, err := o.Request(context.Background(), input)
+			if !errors.Is(err, osd.ErrRequest) || reply.Submission != (OSDSubmission{}) || before != c.osdNext.Load() {
+				t.Fatal("self source at a snap allocated a submission", code, snap, reply, err)
+			}
+		}
+	}
+	select {
+	case m := <-peer.requests:
+		t.Fatal("self source at a snap was sent", m.Transaction)
+	default:
+	}
+	before := c.osdNext.Load()
+	input := osdValidationRequest()
+	input.Operations = []OSDOperation{{Code: OSDCopyFrom2, CopyFrom: self}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, e := o.Request(ctx, input); done <- e }()
+	sent := peer.next(t)
+	cancel()
+	<-done
+	if sent.Transaction != before+1 {
+		t.Fatal("head self copy did not take the next TID", sent.Transaction, before)
+	}
+}

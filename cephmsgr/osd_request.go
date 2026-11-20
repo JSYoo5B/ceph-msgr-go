@@ -199,11 +199,18 @@ type OSDOperation struct {
 // OSDCopyFromInput is the active input for OSDCopyFrom and OSDCopyFrom2. The
 // source is the head of SourceName in SourcePool/SourceKey/SourceNamespace;
 // the OSD computes the source PG and fetches it with its own connection, so
-// the caller supplies no source placement. SourceSnapshot zero is the head;
-// 1 through OSDMaxSnapshot names a snapshot the OSD resolves to a clone. The
-// source must differ from the target. SourceVersion zero accepts any source
-// version; otherwise the OSD refuses a lower requested version with ERANGE
-// and a higher one with EOVERFLOW. TruncateSequence selects COPY_FROM2's
+// the caller supplies no source placement. SourceSnapshot zero (or
+// OSDHeadSnapshot) is the head; 1 through OSDMaxSnapshot names a snap id the
+// OSD resolves like a read at that id: an id above the source's snapset seq
+// (OSDMaxSnapshot, an unallocated id, a snapshot removed after the source's
+// last write) copies the head, and an id no clone covers, or a removed
+// snapshot whether pending trim or trimmed, fails with ENOENT. A source equal
+// to the target fails with EINVAL at the head and is refused before
+// submission at any other snapshot, where the pinned OSD would block the
+// object waiting on itself. SourceVersion zero accepts any source version;
+// otherwise the OSD refuses a lower requested version with ERANGE and a
+// higher one (up to the largest value) with EOVERFLOW, checked against the
+// object the snapshot selected. TruncateSequence selects COPY_FROM2's
 // TRUNCATE_SEQ form: the destination gets TruncateSequence (nonzero) and
 // TruncateSize instead of the source's values; it is refused on OSDCopyFrom.
 // SourceFadvise carries FADVISE hints for the source read; cache-tier copy
@@ -215,7 +222,9 @@ type OSDOperation struct {
 // because a native client would resend it; this client leaves that to the
 // caller. A copy may lead only SetXattr/RemoveXattr operations, which the OSD
 // applies in the same transaction. The destination receives the source's
-// user version, and the OSD does not copy a source's empty OMAP key.
+// user version, and the OSD does not copy a source's empty OMAP key. The
+// target SnapContext loses its removed snapshots on the OSD but keeps its
+// sequence, so a context naming only removed snapshots makes no clone.
 type OSDCopyFromInput struct {
 	SourcePool                 int64
 	SourceName                 string
