@@ -15,6 +15,20 @@ import (
 // PrimaryLogPG.cc:5835-6024: both handlers read ctx->new_obs.oi, which equals
 // the committed object state while no operation in the vector stages a write.
 // LGPL-2.1; independently translated, no source copied.
+//
+// The subset admits SPARSE_READ and READ with fadvise hints only, head-only on
+// the replicated primary, with no FAILOK, truncate fields, snapshot, replica
+// read, IgnoreCache, EnforceSnapContext, resubmission or EC shard; a vector
+// with CHECKSUM keeps the checksum subset. Each output budget and, separately,
+// the logical extent lengths must sum within the frame limit. Tentacle stops
+// at the first negative operation (PrimaryLogPG.cc:8205-8213): the aggregate
+// must equal it, earlier operations are successes, a failed SPARSE_READ keeps
+// its union without output, a failed READ may keep bytes read before a digest
+// failure, and later operations stay untouched. A missing object leaves every
+// per-op result zero, kept without attributing a prefix. Decoded results
+// appear only after the whole reply validates. The native C++ callback turns
+// a zero result with an empty buffer into -EIO (osdc/Objecter.h), unlike the
+// raw wire result.
 func SparseReadCompound(ops []Operation) bool {
 	if len(ops) < 2 {
 		return false

@@ -16,6 +16,14 @@ const SparseRead uint16 = 0x1205
 
 // SparseReadInput bounds the entire encoded extent map and byte buffer. The
 // budget is local and includes the two four-byte counts.
+//
+// The OSD clips the range at EOF and reads the store's allocated ranges of
+// the head or of the object it resolves for the read snap (oi.soid, as for
+// READ); MemStore reports the logical range with zero-filled holes and
+// BlueStore its allocation map, neither of them physical extents. Extents must
+// be nonempty, ordered, nonoverlapping and inside the request, and their sum
+// must equal the byte count, which is the returned Length. A failed operation
+// keeps its union and returns no output. EC is not supported.
 type SparseReadInput struct{ MaxOutputBytes uint32 }
 
 // SparseReadResult contains ordered logical extents and their concatenated

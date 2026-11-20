@@ -21,7 +21,15 @@ const (
 
 // ChecksumInput selects a bounded checksum read. Seed is encoded little-endian
 // in the request payload; ChunkSize and Type occupy the checksum union.
-// ChunkSize zero requests one checksum over the requested extent.
+// ChunkSize zero requests one checksum over the requested extent; otherwise
+// the positive length must be a multiple of it. The 32-bit algorithms refuse
+// a seed above MaxUint32 instead of dropping high bits. Each chunk starts from
+// the seed afresh, and this package computes no hashes.
+//
+// The OSD may trim the length at EOF: an unaligned trimmed length is -EINVAL
+// with the changed length kept on the error, and an offset at or past EOF
+// succeeds with the original length and no output. A missing object can give
+// aggregate -ENOENT with a zero per-op result; both are kept.
 type ChecksumInput struct {
 	ChunkSize uint32
 	Type      uint8

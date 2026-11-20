@@ -1,5 +1,3 @@
-// Package osd implements the bounded Tentacle wire codecs for explicitly
-// targeted object requests. It does not discover or route objects.
 package osd
 
 import "errors"
@@ -134,7 +132,7 @@ type Request struct {
 	// EnforceSnapContext uses the caller's SnapSeq/Snaps even in pool-snapshot mode.
 	EnforceSnapContext bool
 	// FullTry and FullForce set CEPH_OSD_FLAG_FULL_TRY/FULL_FORCE on a
-	// writing vector; at most one. See FULL_CONTRACT.md.
+	// writing vector; at most one. See requestFullFlags.
 	FullTry, FullForce bool
 	// BalanceReads and LocalizeReads set CEPH_OSD_FLAG_BALANCE_READS and
 	// LOCALIZE_READS so a non-primary replica may serve a read-only vector.
@@ -191,6 +189,12 @@ func (r Redirect) Empty() bool {
 	return r.Locator.Pool == -1 && r.Object == "" && len(r.LegacyInstructions) == 0
 }
 
+// Reply keeps the server's metadata raw. A failed reply can carry earlier
+// operations' output and nonzero versions: a failed write takes the
+// update_log_only path and gets the current user version and a distinct next
+// replay version (osd/PrimaryLogPG.cc execute_ctx, messages/MOSDOpReply.h).
+// Neither those versions nor ONDISK on a negative result establish a commit
+// or prove that the operation did not run.
 type Reply struct {
 	Object                       string
 	PG                           PG

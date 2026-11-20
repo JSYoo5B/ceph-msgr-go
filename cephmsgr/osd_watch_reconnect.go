@@ -145,6 +145,15 @@ func (o *OSDConnection) preflightWatchReconnect(request OSDRequest, cookie uint6
 // Unwatch or ACK afterward. A handle returned together with an operation error
 // owns the receipt, including when the remote outcome is unknown. There is no
 // rollback; another attempt requires that handle and a newer connection.
+//
+// Only a handle whose initial WATCH succeeded can reconnect; an unknown
+// initial outcome or an uncertain Unwatch gives no such proof. The OSD looks
+// the registration up by cookie and authenticated entity and answers a
+// missing one with -ENOTCONN, and a missing object with -ENOENT; neither falls
+// back to a fresh WATCH (Objecter.cc _send_linger, PrimaryLogPG.cc). Watch.cc
+// connect can redeliver pending notifications, so deduplication across
+// generations is the caller's; an old-generation event cannot be acknowledged
+// through the new handle. The OSD's original watch timeout stays in force.
 func (o *OSDConnection) ReconnectWatch(ctx context.Context, previous *OSDWatch, request OSDRequest) (*OSDWatch, OSDReply, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, OSDReply{}, err

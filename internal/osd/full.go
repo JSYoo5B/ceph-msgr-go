@@ -5,8 +5,12 @@ package osd
 // 7f793731f1b39eb4f465e960113d2363c311b964: include/rados.h:479-480 and
 // osd/PrimaryLogPG.cc:2138-2159,9014-9030 (LGPL-2.1; no code copied).
 // Without either flag a write to a full pool is discarded or dropped by the
-// OSD and never answered. FULL_TRY makes the OSD reply -EDQUOT or -ENOSPC;
-// FULL_FORCE proceeds despite the flag. Only a writing vector may carry one.
+// OSD and never answered; the native client waits for the flag to clear, but
+// this client has no such wait, so such a write ends with an unknown outcome
+// when the caller's context ends. FULL_TRY makes the OSD reply -EDQUOT (quota)
+// or -ENOSPC as a known refusal with no effect; FULL_FORCE proceeds despite
+// the flag, as native deletes do. Only a writing vector may carry one; watch
+// and notify vectors refuse both.
 func requestFullFlags(r Request, flags uint64) (uint64, error) {
 	if !r.FullTry && !r.FullForce {
 		return 0, nil
@@ -26,8 +30,12 @@ func requestFullFlags(r Request, flags uint64) (uint64, error) {
 // may read and neither writes nor uses the cache; otherwise it treats the
 // request as misdirected and drops it. A replica may answer -EAGAIN when the
 // object is unreadable or has an unstable write, which stays a known server
-// refusal. Only vectors made of the plain reads below are admitted: watchers,
-// PG listing, class calls, snapshot listing and writes are refused locally.
+// refusal. pg_committed_to advances on a replica only with the next write in
+// the same PG (osd/PeeringState.cc), so an object written last in its PG can
+// be bounced until another write lands there. The client never redirects or
+// repeats a bounced read. Only vectors made of the plain reads below are
+// admitted: watchers, PG listing, class calls, snapshot listing and writes
+// are refused locally.
 func requestReplicaFlags(r Request, flags uint64) (uint64, error) {
 	if !r.BalanceReads && !r.LocalizeReads {
 		return 0, nil

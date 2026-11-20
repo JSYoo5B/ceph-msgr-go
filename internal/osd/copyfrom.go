@@ -31,7 +31,30 @@ const (
 // check. Only the librados flags (zero) and COPY_FROM2's TRUNCATE_SEQ are
 // admitted; SourceFadvise admits the source-read FADVISE hints. Cache-tier
 // flags are not admitted. Flagless COPY_FROM2 omits the unused 12-byte
-// truncate tail emitted by the native Objecter builder; see COPY_FROM_CONTRACT.md.
+// truncate tail emitted by the native Objecter builder, which PrimaryLogPG
+// decodes only with TRUNCATE_SEQ set, so it is not byte-identical to the
+// native request.
+//
+// The copy flags FLUSH, IGNORE_OVERLAY, IGNORE_CACHE, MAP_SNAP_CLONE and
+// RWORDERED are internal cache-tier and clone modes and are refused, as are
+// the undefined bits; the pinned handler's check of unknown bits applies to
+// COPY_FROM2 only (ceph/ceph/blob/v20.2.4/src/include/rados.h,
+// src/osd/PrimaryLogPG.cc). SnapDir and the (1, all ones) truncate pair the
+// OSD rewrites to (0, 0) are refused. A nonzero version pins the source
+// version, which the OSD checks like ASSERT_VER. A CopyFrom input on any
+// opcode but COPY_FROM, COPY_FROM2 and SET_REDIRECT is refused, so no
+// standalone branch silently discards a source.
+//
+// Without TRUNCATE_SEQ the destination receives the source's truncate pair;
+// with it the caller's pair is used unconditionally and the data is not
+// truncated. The destination SnapContext and ORDERSNAP apply to the
+// destination head like any write, and the source snapset is not copied. The
+// destination gets the source's user version, which can be lower than its
+// previous one. A copy that fails after the OSD started it reports its
+// aggregate code with per-op -EINPROGRESS. The OSD omits a source's empty
+// OMAP key even on success (PrimaryLogPG::do_copy_get starts its OMAP walk
+// with UPPER_BOUND at the empty cursor); the client neither inspects nor
+// restores source OMAP.
 type CopyFromInput struct {
 	Object           string
 	Locator          Locator
@@ -56,7 +79,17 @@ type CopyFromResult struct {
 // SET_REDIRECT (rados.h 0x2227) and UNSET_MANIFEST (0x222a) are translated
 // from the same pinned sources: osdc/Objecter.h set_redirect/unset_manifest
 // and osd/PrimaryLogPG.cc do_osd_ops. SET_REDIRECT carries the COPY_FROM
-// union (target snap and version) and indata (target object and locator).
+// union (target snap and version) and indata (target object and locator),
+// without WITH_REFERENCE; reference-counted redirects are not implemented.
+// The OSD truncates the object, sets its user version to the target version
+// and serves its reads (and proxies its writes) from the target in any pool.
+// A proxied read echoes the requested extent length rather than the returned
+// byte count, so the read validator accepts either. UNSET_MANIFEST clears the
+// manifest and leaves a plain object; on a chunked object the OSD drops the
+// chunk references after commit, without a completion to the caller. The
+// redirected object must exist (-ENOENT) and must not target itself
+// (-EINVAL); UNSET_MANIFEST on a plain object is -EOPNOTSUPP. Both are
+// standalone and flagless.
 const (
 	SetRedirect   uint16 = 0x2227
 	UnsetManifest uint16 = 0x222a

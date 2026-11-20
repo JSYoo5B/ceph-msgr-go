@@ -10,6 +10,17 @@ import (
 // 7f793731f1b39eb4f465e960113d2363c311b964: include/rados.h:656-660,
 // osdc/Objecter.h:182-188 and osd/PrimaryLogPG.cc:5051-5084,6895-6900.
 // LGPL-2.1 sources; no native implementation is copied.
+//
+// The WRITESAME union is offset u64, logical length u64, pattern length u64
+// and four zero bytes; the payload is the nonempty pattern. A positive length
+// must be a multiple of the pattern length, and zero is admitted. The summed
+// logical WRITE, WRITEFULL, APPEND and WRITESAME bytes are bounded by the
+// frame limit independently of the frame input, so a tiny pattern cannot
+// bypass the work bound. The OSD expands the pattern into a nested WRITE
+// (PrimaryLogPG.cc:5051), which a newer truncate sequence can clip, so the
+// reply Length does not establish the bytes written; truncate fields are not
+// accepted for this union. SETXATTRS and RESETXATTRS stay unsupported: the
+// pinned PrimaryLogPG has no handler for them and answers -EOPNOTSUPP.
 func encodeWriteSameUnion(e *wire.Encoder, op Operation) {
 	e.U64(op.Offset)
 	e.U64(op.Length)

@@ -15,7 +15,20 @@ import (
 // LGPL-2.1 sources; no upstream implementation is copied.
 const MapExt uint16 = 0x1203
 
-// MapExtInput is a local output budget; no budget is sent to the server.
+// MapExtInput is a local output budget of at least four bytes; no budget is
+// sent to the server, which neither pages nor truncates its reply, and output
+// over budget fails the session.
+//
+// MAPEXT is a standalone read at the caller's snapshot of a nonempty,
+// non-overflowing interval; a zero length is refused because the pinned
+// backends encode it differently. The OSD rejects EC and returns the store's
+// fiemap as an ordered map<u64,u64>. Logical ranges are store-specific:
+// MemStore reports one range clipped to the object size and BlueStore its
+// allocated extents clipped to the interval, so neither is physical usage.
+// The decoder rejects empty, overflowing, unordered or overlapping ranges and
+// ranges outside the submitted interval; adjacent ranges stay distinct.
+// Compound MAPEXT is refused: native clients send it alone and its staged
+// versus committed view is uncharacterized.
 type MapExtInput struct{ MaxOutputBytes uint32 }
 
 func validateMapExtOperation(op Operation, limit uint32) error {
