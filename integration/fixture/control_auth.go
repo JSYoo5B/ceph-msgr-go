@@ -255,6 +255,8 @@ func (c *fixtureCluster) controlManagerAuthRequest(ctx context.Context, out stri
 	return nil
 }
 
+var _ = defineControl("mgr-auth", frozenControlRank(23), (*fixtureCluster).controlManagerAuthRequest)
+
 func (c *fixtureCluster) controlManagerKeyringRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -276,6 +278,8 @@ func (c *fixtureCluster) controlManagerKeyringRequest(ctx context.Context, out s
 	return nil
 }
 
+var _ = defineControl("mgr-keyring", frozenControlRank(24), (*fixtureCluster).controlManagerKeyringRequest)
+
 func (c *fixtureCluster) controlAuthBundleRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -296,6 +300,8 @@ func (c *fixtureCluster) controlAuthBundleRequest(ctx context.Context, out strin
 	}
 	return nil
 }
+
+var _ = defineControl("auth-bundle", frozenControlRank(25), (*fixtureCluster).controlAuthBundleRequest)
 
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.

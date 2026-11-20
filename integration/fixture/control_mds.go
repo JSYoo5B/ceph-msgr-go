@@ -6,70 +6,6 @@ import (
 	"slices"
 )
 
-func (c *fixtureCluster) controlMDSRequests(ctx context.Context, out string) error {
-	if fields, err := c.request(out, "mds-commands-native"); err != nil {
-		return err
-	} else if fields != nil {
-		if err := c.nativeMDSCommands(ctx, out, fields); err != nil {
-			return err
-		}
-		if err := publishAck(out, "mds-commands-native-completed."+fields[0]); err != nil {
-			return err
-		}
-	}
-	if fields, err := c.request(out, "mds-sessions"); err != nil {
-		return err
-	} else if fields != nil {
-		if err := c.mdsSessionsControl(ctx, out, fields); err != nil {
-			return err
-		}
-		if err := publishAck(out, "mds-sessions-completed."+fields[0]); err != nil {
-			return err
-		}
-	}
-	if fields, err := c.request(out, "mds-cephfs"); err != nil {
-		return err
-	} else if fields != nil {
-		if err := c.mdsCephFSControl(ctx, out, fields); err != nil {
-			return err
-		}
-		if err := publishAck(out, "mds-cephfs-completed."+fields[0]); err != nil {
-			return err
-		}
-	}
-	if fields, err := c.request(out, "mds-cephfs-ranks"); err != nil {
-		return err
-	} else if fields != nil {
-		if err := c.mdsCephFSRanksControl(ctx, out, fields); err != nil {
-			return err
-		}
-		if err := publishAck(out, "mds-cephfs-ranks-completed."+fields[0]); err != nil {
-			return err
-		}
-	}
-	if fields, err := c.request(out, "mds-cephfs-completion"); err != nil {
-		return err
-	} else if fields != nil {
-		if err := c.mdsCephFSCompletionControl(ctx, out, fields); err != nil {
-			return err
-		}
-		if err := publishAck(out, "mds-cephfs-completion-completed."+fields[0]); err != nil {
-			return err
-		}
-	}
-	if fields, err := c.request(out, "mds-cephfs-data"); err != nil {
-		return err
-	} else if fields != nil {
-		if err := c.mdsCephFSDataControl(ctx, out, fields); err != nil {
-			return err
-		}
-		if err := publishAck(out, "mds-cephfs-data-completed."+fields[0]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (c *fixtureCluster) controlMDSFreshRequest(ctx context.Context, out string) error {
 	if fields, err := c.request(out, "mds-fresh-observe"); err != nil {
 		return err
@@ -83,6 +19,8 @@ func (c *fixtureCluster) controlMDSFreshRequest(ctx context.Context, out string)
 	}
 	return nil
 }
+
+var _ = defineControl("mds-fresh", frozenControlRank(17), (*fixtureCluster).controlMDSFreshRequest)
 
 func (c *fixtureCluster) controlMDSMapsRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -106,6 +44,8 @@ func (c *fixtureCluster) controlMDSMapsRequest(ctx context.Context, out string) 
 	}
 	return nil
 }
+
+var _ = defineControl("mds-maps", frozenControlRank(34), (*fixtureCluster).controlMDSMapsRequest)
 
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.

@@ -25,6 +25,8 @@ func (c *fixtureCluster) controlMonitorElectionRequest(ctx context.Context, out 
 	return nil
 }
 
+var _ = defineControl("mon-election", frozenControlRank(19), (*fixtureCluster).controlMonitorElectionRequest)
+
 func (c *fixtureCluster) controlMonitorRestartRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -55,6 +57,8 @@ func (c *fixtureCluster) controlMonitorRestartRequest(ctx context.Context, out s
 	}
 	return nil
 }
+
+var _ = defineControl("mon-restart", frozenControlRank(55), (*fixtureCluster).controlMonitorRestartRequest)
 
 func (c *fixtureCluster) controlMonitorQuorumRequests(ctx context.Context, out string) error {
 	var fields []string
@@ -98,6 +102,8 @@ func (c *fixtureCluster) controlMonitorQuorumRequests(ctx context.Context, out s
 	return nil
 }
 
+var _ = defineControl("mon-quorum", frozenControlRank(56), (*fixtureCluster).controlMonitorQuorumRequests)
+
 func (c *fixtureCluster) controlLegacyMonitorStopRequest(ctx context.Context, out string) error {
 	if fileExists(filepath.Join(out, "stop-mon-a")) && !fileExists(filepath.Join(out, "mon-a-stopped")) {
 		d, e := c.daemon(ctx, "mon", "a")
@@ -113,3 +119,5 @@ func (c *fixtureCluster) controlLegacyMonitorStopRequest(ctx context.Context, ou
 	}
 	return nil
 }
+
+var _ = defineControl("mon-a-legacy-stop", frozenControlRank(57), (*fixtureCluster).controlLegacyMonitorStopRequest)

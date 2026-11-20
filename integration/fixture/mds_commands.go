@@ -229,6 +229,8 @@ func (c *fixtureCluster) nativeMDSCommands(ctx context.Context, out string, fiel
 	return nil
 }
 
+var _ = defineRequestControl("mds-commands-native", frozenControlRank(5), (*fixtureCluster).nativeMDSCommands)
+
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.
 var _ = collectDiagnosticFiles(

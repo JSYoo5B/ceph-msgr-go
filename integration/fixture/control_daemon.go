@@ -166,3 +166,5 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 	}
 	return nil
 }
+
+var _ = defineControl("daemon", frozenControlRank(18), (*fixtureCluster).controlDaemonRequests)

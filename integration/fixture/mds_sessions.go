@@ -712,6 +712,8 @@ func (c *fixtureCluster) mdsSessionsControl(ctx context.Context, out string, fie
 	return nil
 }
 
+var _ = defineRequestControl("mds-sessions", frozenControlRank(6), (*fixtureCluster).mdsSessionsControl)
+
 func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action mdsSessionsAction, result *mdsSessionsResult) error {
 	s, x := c.mdsFresh, c.mdsSessions
 	record := func(kind, target string) *mdsSessionsMutation {

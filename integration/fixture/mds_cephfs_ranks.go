@@ -1198,6 +1198,8 @@ func (c *fixtureCluster) mdsCephFSRanksControl(ctx context.Context, out string, 
 	return nil
 }
 
+var _ = defineRequestControl("mds-cephfs-ranks", frozenControlRank(8), (*fixtureCluster).mdsCephFSRanksControl)
+
 func (c *fixtureCluster) mdsCephFSRanksAct(ctx context.Context, id int64, action mdsCephFSRanksAction, result *mdsCephFSRanksResult) error {
 	s, x := c.mdsFresh, c.mdsCephFSRanks
 	switch action.name {

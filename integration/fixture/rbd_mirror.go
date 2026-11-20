@@ -302,6 +302,8 @@ func (c *fixtureCluster) controlRBDMirrorRequest(ctx context.Context, out string
 	return publishAck(out, "rbd-mirror-done."+fields[0])
 }
 
+var _ = defineControl("rbd-mirror", frozenControlRank(16), (*fixtureCluster).controlRBDMirrorRequest)
+
 func (c *fixtureCluster) rbdMirrorStart(ctx context.Context, s *rbdMirrorScope) error {
 	p := c.profile
 	r := &s.receipt

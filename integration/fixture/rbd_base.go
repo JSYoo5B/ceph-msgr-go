@@ -836,6 +836,8 @@ func (c *fixtureCluster) rbdBaseControl(ctx context.Context, out string, fields 
 	return c.rbdBaseFinish(m, nil)
 }
 
+var _ = defineRequestControl("rbd-base", frozenControlRank(11), (*fixtureCluster).rbdBaseControl)
+
 type rbdBaseCleanup struct {
 	Source                string             `json:"source_commit"`
 	Token                 string             `json:"token"`

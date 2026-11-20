@@ -1,10 +1,16 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -67,170 +73,174 @@ func (c *fixtureCluster) request(out, name string) ([]string, error) {
 	return fields, nil
 }
 
-// controls preserves the polling order across role-specific requests. Stop on
-// the first failure; earlier mutations and acknowledgements are not replayed.
+// controls polls every declared control once, in controlSequence order. It
+// stops on the first failure; earlier mutations and acknowledgements are not
+// replayed.
 func (c *fixtureCluster) controls(ctx context.Context, out string) error {
-	if err := c.controlCopyFromErrorRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlCachePoolsRequest(ctx, out); err != nil {
-		return err
-	}
-	if fileExists(filepath.Join(out, "native-oracles.error")) {
-		return errors.New("native oracle worker failed; inspect native-oracles.log")
-	}
-	if err := c.controlNamedManagerRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlMDSRequests(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlRBDRequests(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlRBDMirrorRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlMDSFreshRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlDaemonRequests(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlMonitorElectionRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDReadyRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlStartStateRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDCompoundRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlManagerAuthRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlManagerKeyringRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlAuthBundleRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlManagerFailoverRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDMutationRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDXattrLimitRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDOMAPRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDOMAPWriteRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDBackoffRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDObjectBackoffRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDUpmapRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlMDSMapsRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDSplitRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDWatchNotifyRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDSparseReadRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDPGListRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDU64XattrRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDWriteSameRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDChecksumCompoundRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDEnforceSnapContextRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDSetChunkRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDTierOpRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlManagerServiceConfigRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOwnedPoolRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDShardHistoryRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDChecksumRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDMapExtRangeRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDMapExtRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDWatchersRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDCommandRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDXattrNativeRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDXattrRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlMonitorRestartRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlMonitorQuorumRequests(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlLegacyMonitorStopRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlManagerStartRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlManagerSecurityRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlOSDEpochRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlManagerTellRequest(ctx, out); err != nil {
-		return err
-	}
-	if err := c.controlDaemonCommandRequest(ctx, out); err != nil {
-		return err
+	for _, control := range controlSequence {
+		if err := control.poll(c, ctx, out); err != nil {
+			return err
+		}
 	}
 	return nil
 }
+
+// controlPoll consumes the requests of one control from the output directory
+// and acknowledges them there. It returns nil when none is pending.
+type controlPoll func(c *fixtureCluster, ctx context.Context, out string) error
+
+// controlOrder places a control in the polling sequence.
+//
+// Order among independent controls carries no meaning: each control consumes
+// only its own request files and publishes only its own acknowledgements, and
+// a test publishes a request and waits for its acknowledgement before it
+// relies on the next. The order matters only when one poll finds several
+// requests pending at once, and then only for which of them runs before the
+// first failure stops the loop. The controls that existed when the
+// hand-written sequence became declarations keep that sequence through a
+// frozen rank (recordedControlOrder in control_order_test.go pins it), so no
+// existing behaviour moved. A control added later has no earlier position any
+// test could rely on: it declares controlAfterRanked and runs after every
+// ranked control, ordered by its unique name, so adding one edits no list.
+type controlOrder struct{ rank int }
+
+// controlAfterRanked is the order of every control added after the frozen
+// ranks were recorded.
+var controlAfterRanked = controlOrder{}
+
+// frozenControlRank is the recorded position of a control that existed when
+// the sequence became declarations. A new control never takes a rank:
+// TestDeclaredControlsKeepTheRecordedOrder refuses a ranked control that
+// recordedControlOrder does not list.
+func frozenControlRank(rank int) controlOrder {
+	if rank <= 0 {
+		panic("fixture control rank " + strconv.Itoa(rank) + " is not positive")
+	}
+	return controlOrder{rank: rank}
+}
+
+type fixtureControl struct {
+	name  string
+	order controlOrder
+	poll  controlPoll
+	// source is the function the declaration names, so one function is
+	// declared as at most one control.
+	source string
+}
+
+var controlName = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// declaredControls collects the declarations; controlSequence orders them
+// once every package-level declaration has run.
+var declaredControls []*fixtureControl
+
+// defineControl declares a control polled by the fixture's control loop. Call
+// it in a package-level declaration beside the control, in the control's own
+// file:
+//
+//	var _ = defineControl("osd-example", controlAfterRanked, (*fixtureCluster).controlOSDExampleRequest)
+//
+// The name is unique and lower-case words joined by hyphens. A duplicate
+// name, a nil poll or a function declared twice stops the fixture at start.
+func defineControl(name string, order controlOrder, poll controlPoll) bool {
+	if poll == nil {
+		panic("fixture control " + name + " has no poll function")
+	}
+	declaredControls = append(declaredControls, &fixtureControl{name: name, order: order, poll: poll, source: functionName(poll)})
+	return true
+}
+
+// defineRequestControl declares a control of one request file named name:
+// the poll consumes the request, runs handle with its fields and acknowledges
+// it as "<name>-completed.<request ID>". It is declared like defineControl.
+func defineRequestControl(name string, order controlOrder, handle func(c *fixtureCluster, ctx context.Context, out string, fields []string) error) bool {
+	if handle == nil {
+		panic("fixture control " + name + " has no request handler")
+	}
+	poll := func(c *fixtureCluster, ctx context.Context, out string) error {
+		fields, err := c.request(out, name)
+		if err != nil || fields == nil {
+			return err
+		}
+		if err = handle(c, ctx, out, fields); err != nil {
+			return err
+		}
+		return publishAck(out, name+"-completed."+fields[0])
+	}
+	declaredControls = append(declaredControls, &fixtureControl{name: name, order: order, poll: poll, source: functionName(handle)})
+	return true
+}
+
+func functionName(fn any) string {
+	return runtime.FuncForPC(reflect.ValueOf(fn).Pointer()).Name()
+}
+
+// sequenceControls checks the declarations and orders them: ranked controls
+// by their unique rank, then the others by name. Ranks need not be
+// contiguous, so removing a ranked control renumbers no other one.
+func sequenceControls(declared []*fixtureControl) ([]*fixtureControl, error) {
+	names := map[string]bool{}
+	sources := map[string]string{}
+	ranks := map[int]string{}
+	for _, control := range declared {
+		if !controlName.MatchString(control.name) {
+			return nil, fmt.Errorf("fixture control name %q is not lower-case words joined by hyphens", control.name)
+		}
+		if names[control.name] {
+			return nil, fmt.Errorf("fixture control %q is declared twice", control.name)
+		}
+		names[control.name] = true
+		if control.poll == nil || control.source == "" {
+			return nil, fmt.Errorf("fixture control %q has no function", control.name)
+		}
+		if other, ok := sources[control.source]; ok {
+			return nil, fmt.Errorf("function %s is declared as fixture controls %q and %q", control.source, other, control.name)
+		}
+		sources[control.source] = control.name
+		if rank := control.order.rank; rank != 0 {
+			if other, ok := ranks[rank]; ok {
+				return nil, fmt.Errorf("fixture controls %q and %q share rank %d", other, control.name, rank)
+			}
+			ranks[rank] = control.name
+		}
+	}
+	sequence := slices.Clone(declared)
+	slices.SortFunc(sequence, func(a, b *fixtureControl) int {
+		switch {
+		case a.order.rank != 0 && b.order.rank != 0:
+			return cmp.Compare(a.order.rank, b.order.rank)
+		case a.order.rank != 0:
+			return -1
+		case b.order.rank != 0:
+			return 1
+		}
+		return strings.Compare(a.name, b.name)
+	})
+	return sequence, nil
+}
+
+// controlSequence is the polling order of every declared control. It is built
+// in init, which runs after every package-level declaration of the package.
+var controlSequence []*fixtureControl
+
+func init() {
+	sequence, err := sequenceControls(declaredControls)
+	if err != nil {
+		panic(err)
+	}
+	controlSequence = sequence
+}
+
+// checkNativeOracleWorker stops the loop once the native oracle worker that
+// provider.go launches has recorded a failure.
+func (c *fixtureCluster) checkNativeOracleWorker(_ context.Context, out string) error {
+	if fileExists(filepath.Join(out, "native-oracles.error")) {
+		return errors.New("native oracle worker failed; inspect native-oracles.log")
+	}
+	return nil
+}
+
+var _ = defineControl("native-oracles-failure", frozenControlRank(3), (*fixtureCluster).checkNativeOracleWorker)
 
 // saveMetadata (diagnostics.go) collects the control loop's failure when it
 // exists.

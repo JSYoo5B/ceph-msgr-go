@@ -144,6 +144,8 @@ func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string
 	return nil
 }
 
+var _ = defineControl("osd-pool", frozenControlRank(46), (*fixtureCluster).controlOwnedPoolRequest)
+
 // Cold bootstrap admits only MON MgrMap observation and the bounded service
 // identity watch. It does not grant object/pool control to a MON-only fixture.
 // The pginterval mode is admitted only by its capability.

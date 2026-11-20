@@ -99,6 +99,8 @@ func (c *fixtureCluster) controlNamedManagerRequest(ctx context.Context, out str
 	return nil
 }
 
+var _ = defineControl("named-mgr", frozenControlRank(4), (*fixtureCluster).controlNamedManagerRequest)
+
 func (c *fixtureCluster) controlManagerFailoverRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -119,6 +121,8 @@ func (c *fixtureCluster) controlManagerFailoverRequest(ctx context.Context, out 
 	}
 	return nil
 }
+
+var _ = defineControl("mgr-failover", frozenControlRank(26), (*fixtureCluster).controlManagerFailoverRequest)
 
 func (c *fixtureCluster) controlManagerServiceConfigRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -141,6 +145,8 @@ func (c *fixtureCluster) controlManagerServiceConfigRequest(ctx context.Context,
 	return nil
 }
 
+var _ = defineControl("mgr-service-config", frozenControlRank(45), (*fixtureCluster).controlManagerServiceConfigRequest)
+
 func (c *fixtureCluster) controlManagerStartRequest(ctx context.Context, out string) error {
 	var err error
 	if fileExists(filepath.Join(out, "start-mgrs")) && !fileExists(filepath.Join(out, "mgrs-started")) {
@@ -160,6 +166,8 @@ func (c *fixtureCluster) controlManagerStartRequest(ctx context.Context, out str
 	}
 	return nil
 }
+
+var _ = defineControl("mgr-start", frozenControlRank(58), (*fixtureCluster).controlManagerStartRequest)
 
 func (c *fixtureCluster) controlManagerSecurityRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -190,6 +198,8 @@ func (c *fixtureCluster) controlManagerSecurityRequest(ctx context.Context, out 
 	}
 	return nil
 }
+
+var _ = defineControl("mgr-security", frozenControlRank(59), (*fixtureCluster).controlManagerSecurityRequest)
 
 // AddManager may return an owned descriptor and an error after creating its
 // container. Persist that attempt before returning, including partial failure.

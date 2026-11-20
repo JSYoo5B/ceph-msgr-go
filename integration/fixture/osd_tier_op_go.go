@@ -29,6 +29,8 @@ func (c *fixtureCluster) controlOSDTierOpRequest(ctx context.Context, out string
 	return publishAck(out, "osd-tier-op-verify."+fields[0])
 }
 
+var _ = defineControl("osd-tier-op", frozenControlRank(44), (*fixtureCluster).controlOSDTierOpRequest)
+
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.
 var _ = collectDiagnosticFiles(

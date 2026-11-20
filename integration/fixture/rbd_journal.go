@@ -1127,6 +1127,8 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	return c.rbdBaseFinish(m, nil)
 }
 
+var _ = defineRequestControl("rbd-journal", frozenControlRank(15), (*fixtureCluster).rbdJournalControl)
+
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.
 var _ = collectDiagnosticFiles(

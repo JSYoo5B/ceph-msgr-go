@@ -39,6 +39,8 @@ func (c *fixtureCluster) controlOSDBackoffRequest(ctx context.Context, out strin
 	return nil
 }
 
+var _ = defineControl("osd-backoff", frozenControlRank(31), (*fixtureCluster).controlOSDBackoffRequest)
+
 func (c *fixtureCluster) controlOSDObjectBackoffRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -62,6 +64,8 @@ func (c *fixtureCluster) controlOSDObjectBackoffRequest(ctx context.Context, out
 	return nil
 }
 
+var _ = defineControl("osd-object-backoff", frozenControlRank(32), (*fixtureCluster).controlOSDObjectBackoffRequest)
+
 func (c *fixtureCluster) controlOSDUpmapRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -76,6 +80,8 @@ func (c *fixtureCluster) controlOSDUpmapRequest(ctx context.Context, out string)
 	}
 	return nil
 }
+
+var _ = defineControl("osd-upmap", frozenControlRank(33), (*fixtureCluster).controlOSDUpmapRequest)
 
 func (c *fixtureCluster) controlOSDSplitRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -99,6 +105,8 @@ func (c *fixtureCluster) controlOSDSplitRequest(ctx context.Context, out string)
 	}
 	return nil
 }
+
+var _ = defineControl("osd-split", frozenControlRank(35), (*fixtureCluster).controlOSDSplitRequest)
 
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.

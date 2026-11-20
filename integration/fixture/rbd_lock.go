@@ -1354,6 +1354,8 @@ func (c *fixtureCluster) rbdLockControl(ctx context.Context, out string, fields 
 	return c.rbdBaseFinish(m, nil)
 }
 
+var _ = defineRequestControl("rbd-lock", frozenControlRank(13), (*fixtureCluster).rbdLockControl)
+
 // rbdLockOwnerAddresses returns the lock-owner addresses one action of the
 // lock-owner-loss sequence observed natively: the Go owner that is about to
 // lose its watch, and the native owner that is about to be killed. Each is

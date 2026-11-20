@@ -41,6 +41,8 @@ func (c *fixtureCluster) controlCopyFromErrorRequest(ctx context.Context, out st
 	return nil
 }
 
+var _ = defineControl("osd-copy-from-error", frozenControlRank(1), (*fixtureCluster).controlCopyFromErrorRequest)
+
 func (c *fixtureCluster) controlCachePoolsRequest(ctx context.Context, out string) error {
 	if fields, err := c.request(out, "osd-cache-pools"); err != nil {
 		return err
@@ -54,6 +56,8 @@ func (c *fixtureCluster) controlCachePoolsRequest(ctx context.Context, out strin
 	}
 	return nil
 }
+
+var _ = defineControl("osd-cache-pools", frozenControlRank(2), (*fixtureCluster).controlCachePoolsRequest)
 
 func (c *fixtureCluster) controlOSDReadyRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -75,6 +79,8 @@ func (c *fixtureCluster) controlOSDReadyRequest(ctx context.Context, out string)
 	}
 	return nil
 }
+
+var _ = defineControl("osd-ready", frozenControlRank(20), (*fixtureCluster).controlOSDReadyRequest)
 
 func (c *fixtureCluster) controlOSDEpochRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -142,6 +148,8 @@ func (c *fixtureCluster) controlOSDEpochRequest(ctx context.Context, out string)
 	}
 	return nil
 }
+
+var _ = defineControl("osd-epoch", frozenControlRank(60), (*fixtureCluster).controlOSDEpochRequest)
 
 // saveMetadata (diagnostics.go) collects these public receipts when they
 // exist: the OSD map control's, and those of OSD tests on the ordinary OSD

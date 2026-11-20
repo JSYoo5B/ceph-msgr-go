@@ -927,6 +927,8 @@ func (c *fixtureCluster) mdsCephFSDataControl(ctx context.Context, out string, f
 	return nil
 }
 
+var _ = defineRequestControl("mds-cephfs-data", frozenControlRank(10), (*fixtureCluster).mdsCephFSDataControl)
+
 // mdsCephFSDataExtra returns the plan values one native action receives.
 func (x *mdsCephFSDataScope) extra(action, target string) []string {
 	p := x.plan
