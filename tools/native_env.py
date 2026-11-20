@@ -34,6 +34,7 @@ joins it (tools/test_native_env.py).
 import json
 import os
 import re
+import subprocess
 import sys
 
 PREFIX = "CEPH_MSGR_TEST_"
@@ -184,6 +185,11 @@ def main(argv=None):
         print("native_env: %s" % error, file=sys.stderr)
         return 2
     sys.stdout.flush()
+    if os.name == "nt":
+        # Windows has no exec that replaces the process: os.execvpe starts a
+        # new one and ends this one at once, so the caller would not see the
+        # runner's status. Run it and return its status instead.
+        return subprocess.call(argv[1:], env=env)
     os.execvpe(argv[1], argv[1:], env)
 
 
