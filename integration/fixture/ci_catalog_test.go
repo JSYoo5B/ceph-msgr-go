@@ -123,7 +123,7 @@ type ciNativeSuite struct {
 
 var (
 	ciProductNativeTest = regexp.MustCompile(`^TestCeph\w*Integration$`)
-	ciRGWNativeTest     = regexp.MustCompile(`^TestRGWNative\w*Integration$`)
+	ciRGWNativeTest     = rgwNativeCheckpoint
 	ciNativeSuites      = []ciNativeSuite{
 		{"integration", "integration", ciProductNativeTest, false},
 		{"cephmsgr", "cephmsgr", ciProductNativeTest, false},
@@ -346,10 +346,25 @@ func ciCompiledRoutedTests(t *testing.T) []string {
 	return compiled
 }
 
-// TestCIRoutedTestsAreTheDeclaredRGWCheckpoints keeps the closed routing set
-// (rgwNativeTargets) equal to the RGW checkpoints this module declares: a
-// new checkpoint without a route, or a route to no test, fails.
+// TestCIRoutedTestsAreTheDeclaredRGWCheckpoints: the route admits every RGW
+// checkpoint this module declares by its exact selector, by the same name
+// rule that finds them, so a new checkpoint needs no route entry.
 func TestCIRoutedTestsAreTheDeclaredRGWCheckpoints(t *testing.T) {
+	declared := ciDeclaredRoutedTests(t)
+	if len(declared) == 0 {
+		t.Fatal("the module declares no RGW checkpoint")
+	}
+	for _, name := range declared {
+		if routed, ok := rgwNativeTarget("^" + name + "$"); !ok || routed != name {
+			t.Errorf("declared RGW checkpoint %s is not routed: %q %t", name, routed, ok)
+		}
+	}
+}
+
+// ciDeclaredRoutedTests is the sorted names of the RGW checkpoints this
+// module declares.
+func ciDeclaredRoutedTests(t *testing.T) []string {
+	t.Helper()
 	sources, err := ciNativeSources(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -361,9 +376,7 @@ func TestCIRoutedTestsAreTheDeclaredRGWCheckpoints(t *testing.T) {
 		}
 	}
 	slices.Sort(declared)
-	if want := slices.Sorted(slices.Values(rgwNativeTargets)); !slices.Equal(declared, want) {
-		t.Fatalf("declared RGW checkpoints %v, routed targets %v", declared, want)
-	}
+	return declared
 }
 
 func TestCIInventoryRefusesMissingStaleAndDuplicateEntries(t *testing.T) {

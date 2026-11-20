@@ -1,13 +1,13 @@
 # Bounded native RGW Messenger checkpoints
 
-`TestRGWNativeCheckpointIntegration` (small object),
-`TestRGWNativeMultiStripeIntegration` (multi-stripe object, manifest and
-garbage collection, described [below](#multi-stripe-manifest-and-gc-checkpoint))
-and `TestRGWNativeBackendFaultIntegration` (OSD and manager restart around
-S3 requests, described [below](#backend-fault-checkpoint)) are dedicated
-development-fixture tests using released ceph-testcontainers-go. They add no
-product API, S3 SDK or native runtime dependency. Each has one catalog row that the trusted native workflow
-routes to it ([Trusted catalog selection](#trusted-catalog-selection)).
+The `TestRGWNative...Integration` tests of this module are dedicated
+development-fixture checkpoints using released ceph-testcontainers-go. The
+sections up to [Evidence classes](#evidence-classes-and-remaining-work)
+describe the small-object `TestRGWNativeCheckpointIntegration`; every later
+checkpoint has a heading of its own. They add no product
+API, S3 SDK or native runtime dependency. Each has one catalog row that the
+trusted native workflow routes to it
+([Trusted catalog selection](#trusted-catalog-selection)).
 Issue [#13](https://github.com/JSYoo5B/ceph-msgr-go/issues/13) remains open for
 the remaining service-induced paths and failure campaigns.
 
@@ -223,23 +223,22 @@ this file, so the recorded commit is the tested one.
 
 ### Trusted catalog selection
 
-Each checkpoint has one row of group `rgw` in the scenario catalog:
-`rgw.aes256k.ip4.container.t-rgwcheckpoint`,
-`rgw.aes256k.ip4.container.t-rgwmultistripe` and
-`rgw.aes256k.ip4.container.t-rgwbackendfault`, each declared beside its
-checkpoint (`//scenario:row ... rgw_native=1` in the test's doc comment). A
+Each checkpoint has one row of group `rgw` in the scenario catalog, declared
+beside it (`//scenario:row ... rgw_native=1` in the test's doc comment), for
+example `rgw.aes256k.ip4.container.t-rgwmultistripe`. A
 reviewer requests them with `/ci run group:rgw` or
 by identifier, and the weekly periodic run selects them with the rest of the
 default coverage. The row parameter `rgw_native=1` routes the trusted
 native workflow (`.github/workflows/native-scenarios.yml`) to the fixture
-controller's closed RGW route (`rgw_native_route.go`): it admits only these
-three exact tests at the checkpoints' own fixed inputs, starts no fixture of
-its own, runs the selected test with `go test -json` in this module and keeps
+controller's RGW route (`rgw_native_route.go`): it admits only one exact
+checkpoint name that Go lists in this module, at the checkpoints' own fixed
+inputs, starts no fixture of its own, runs the selected test with `go test -json` in this module and keeps
 the raw stream as `rgw-native.jsonl` in the diagnostics directory. The
 trusted result gate (`tools/native_test_results.py --backend rgw-fixture`)
 binds the run to the tested revision and a clean fixture module, and requires
 both the checkpoint's verbose PASS line and this file's RGW gate
-(`tools/rgw_native_gate.py`) on the stream. The planner, fixture and gate
+(`tools/rgw_native_gate.py` with the checkpoint's own receipt check
+`tools/rgw_native_gate_<name>.py`) on the stream. The planner, fixture and gate
 rules are described in
 [the scenario README](../../.github/scenarios/README.md#routed-rgw-checkpoint-rows).
 A row reproduces as the workflow runs it from a clean checkout of the tested
@@ -261,8 +260,8 @@ python3 tools/native_test_results.py verify --expected ../rgw-run/expected-tests
   --log ../rgw-run/ceph-tests.log --output ../rgw-run/native-tests.json
 ```
 
-The development workflow above remains: it runs every checkpoint
-automatically for pull requests that change the RGW fixture files and keeps
+The development workflow above remains: it runs every checkpoint its
+revision's gate verifies automatically for pull requests that change the RGW fixture files and keeps
 its source-archive manifest, while a catalog row runs only on request or
 weekly.
 
@@ -275,7 +274,7 @@ and reuses their gateway identity discovery, bounded history polling,
 one-shot S3 input, independent oracle and cleanup gate. It needs
 `CEPH_MSGR_TEST_RGW_NATIVE=1` and is selected only by its exact name. Its
 three objects are deterministic 1,031-byte inputs (`rgwNativeFaultPayload`,
-mirrored by `tools/rgw_native_gate.py`).
+mirrored by `tools/rgw_native_gate_backend_fault.py`).
 
 1. Put `before-fault` once and require gateway-attributed index prepare,
    head WRITEFULL and index complete reception, as the small checkpoint

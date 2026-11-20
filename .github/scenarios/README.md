@@ -381,35 +381,38 @@ or `test_scenario_plan.py`.
 
 ### Routed RGW checkpoint rows
 
-Three rows of group `rgw` run a dedicated RGW checkpoint of the nested fixture
-module instead of the controller's own fixture:
-`rgw.aes256k.ip4.container.t-rgwcheckpoint`
-(`TestRGWNativeCheckpointIntegration`),
-`rgw.aes256k.ip4.container.t-rgwmultistripe`
-(`TestRGWNativeMultiStripeIntegration`) and
-`rgw.aes256k.ip4.container.t-rgwbackendfault`
-(`TestRGWNativeBackendFaultIntegration`, which stops and restarts the
-checkpoint cluster's own OSD and manager). Their recipes, receipts and limits
+A routed row runs a dedicated RGW checkpoint of the nested fixture module
+instead of the controller's own fixture. A checkpoint is a top-level
+`TestRGWNative...Integration` test of the fixture module. It declares its
+one row beside it (`//scenario:row ... rgw_native=1`), and its receipt check
+lives in its own module `tools/rgw_native_gate_<name>.py`, which names the
+test (`TEST`), the receipt line's `MARKER` and `check(line, gate)`. The
+receipt tests sit beside it in `tools/test_rgw_native_gate_<name>.py`, whose
+`SAMPLE` line the gate's common tests use. Adding a checkpoint adds these
+files and edits no list. The recipes, receipts and limits of each checkpoint
 are in [the RGW record](../../integration/fixture/RGW_NATIVE_VALIDATION.md).
 A row routes with the parameter `rgw_native=1`, which the native workflow
 forwards as `CEPH_MSGR_TEST_RGW_NATIVE`; every other row keeps the fallback
 `0`. The routing is closed at each step:
 
 - The trusted planner refuses a routed row whose `test_run` is not exactly
-  `^TestRGWNativeCheckpointIntegration$`,
-  `^TestRGWNativeMultiStripeIntegration$` or
-  `^TestRGWNativeBackendFaultIntegration$` (the tests
-  `tools/rgw_native_gate.py` verifies), a routed row with capabilities and
-  any other `rgw_native` value, on every catalog it reads, a pull request's
+  `^Name$` of a checkpoint the trusted `tools/rgw_native_gate.py` verifies
+  (the `TEST` of a `rgw_native_gate_<name>.py` module beside it, loaded from
+  the gate's own directory only), a routed row with capabilities and any
+  other `rgw_native` value, on every catalog it reads, a pull request's
   included. `validate` requires Go to list the routed test exactly once in the
   fixture module's root package and never resolves a routed row against the
   product suites, nor another row against the fixture module.
-- The fixture's `loadProfile` admits a routed row only with one of those three
-  selectors, no capability or sequence, and every other input at the value
+- The fixture's `loadProfile` admits a routed row only with a selector
+  `^Name$` whose name has the checkpoint form `TestRGWNative\w*Integration`
+  (word characters only, so the selector matches that one test), no
+  capability or sequence, and every other input at the value
   the checkpoint itself uses (pinned image, aes256k, secure, IPv4, container
   runtime, no OSD, MDS, RBD, MON-ping, cache-pool, MGR-service,
   authentication, stress or soak mode). The controller
-  (`integration/fixture/rgw_native_route.go`) then starts no fixture and runs
+  (`integration/fixture/rgw_native_route.go`) then starts no fixture,
+  refuses the name unless `go test -list ^Name$ .` lists exactly that test
+  in the fixture module, and runs
   `go test -json -count=1 -timeout=20m -run ^Name$ .` in the fixture module
   with `CEPH_MSGR_TEST_RGW_NATIVE=1`. It writes the raw test2json stream to
   `rgw-native.jsonl` in `CEPH_MSGR_TEST_DIAGNOSTICS`, refusing an existing
@@ -423,11 +426,10 @@ forwards as `CEPH_MSGR_TEST_RGW_NATIVE`; every other row keeps the fallback
   `--- PASS` line under the `fixture` suite and no other result, HEAD still
   at the tested revision, and the RGW gate's verdict on the stream: exactly
   one PASS of the test and a PASS of the fixture package, no skip or failure,
-  the receipt (for the multi-stripe test also the recomputed payload hash and
-  layout, for the backend-fault test the recomputed object hashes and the
-  fault, outcome, reception and reconnection relations) and the independent
-  owned-resource removal record, every event attributed to the fixture
-  package. A fixture result in a product-suite
+  the receipt as the checkpoint's own module checks it (it may recompute
+  deterministic payload hashes and check the layout or fault relations the
+  receipt claims) and the independent owned-resource removal record, every
+  event attributed to the fixture package. A fixture result in a product-suite
   request is refused. A later step fails the job when any container other
   than the Testcontainers reaper remains.
 
@@ -439,7 +441,7 @@ BlueStore OSDs, the four-minute soak, MDS multi-rank) are in `all` as well, and
 one checkpoint takes about 35 to 50 seconds of test time on its own
 one-MON, one-MGR, one-OSD, one-gateway cluster. The development workflow
 [`rgw-native.yml`](../workflows/rgw-native.yml) still runs every checkpoint
-automatically for pull requests that change the RGW fixture files, with its
+its own revision's gate verifies automatically for pull requests that change the RGW fixture files, with its
 source-archive manifest; a catalog row runs only on request or weekly. A
 routed row's job has a name of its own: `RGW-native-fixture`, the row ID and
 the checkpoint's fixed cluster (pinned 20.2.4 image, aes256k, secure, IPv4,
@@ -454,8 +456,8 @@ Basic CI verifies two inventories without starting a cluster:
 - The native test inventory is every top-level `TestCeph...Integration` declared
   in `integration` and `cephmsgr`, and every `TestRGWNative...Integration`
   declared in the fixture module, which only a routed row selects; there is no
-  list to edit. The fixture's routed targets must equal the declared RGW
-  checkpoints. Fixture tests parse
+  list to edit. The fixture's route must admit every declared RGW
+  checkpoint by the same name rule. Fixture tests parse
   Go declarations, reject duplicate names, and compare the source set with the
   compiled `go test -json -list` result. The current check requires these tests
   in the default build; adding platform-constrained tests needs an explicit
