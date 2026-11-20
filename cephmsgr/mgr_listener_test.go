@@ -715,3 +715,28 @@ func TestMgrListenerWorkerIsAccountedWhenPublished(t *testing.T) {
 		t.Fatal("listener survived its daemon", s)
 	}
 }
+
+// TestMgrListenerCanceledWaitsConsumeNothing calls Accept with a peer
+// queued and Next with a message queued, each with a canceled context.
+func TestMgrListenerCanceledWaitsConsumeNothing(t *testing.T) {
+	l := &MgrListener{changed: make(chan struct{}), options: MgrListenerOptions{MaxBufferedMessages: 4, MaxBufferedBytes: 1 << 20}}
+	p := &MgrPeer{listener: l, changed: make(chan struct{})}
+	l.pending = []*MgrPeer{p}
+	if err := p.enqueue(msgr.MessageData{Type: 0x700, Front: []byte{1}}); err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := l.Accept(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatal("Accept", err)
+	}
+	if _, err := p.Next(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatal("Next", err)
+	}
+	if got, err := l.Accept(context.Background()); err != nil || got != p {
+		t.Fatal("the queued peer was consumed", got, err)
+	}
+	if m, err := p.Next(context.Background()); err != nil || m.Type != 0x700 {
+		t.Fatal("the queued message was consumed", m, err)
+	}
+}

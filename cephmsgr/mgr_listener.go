@@ -462,11 +462,15 @@ func (l *MgrListener) handshake(conn net.Conn) {
 }
 
 // Accept returns the next published peer session in publication order.
-// ctx bounds only this wait; a canceled wait consumes nothing. After Close
-// or a listener failure it returns the terminal cause once no published
-// peer is waiting.
+// ctx bounds only this wait; a canceled wait consumes nothing, also with a
+// peer queued. After Close or a listener failure it returns the terminal
+// cause once no published peer is waiting.
 func (l *MgrListener) Accept(ctx context.Context) (*MgrPeer, error) {
 	for {
+		// Checked before the queue, also on a wake that raced ctx.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		l.mu.Lock()
 		if len(l.pending) > 0 {
 			p := l.pending[0]
@@ -619,9 +623,12 @@ func (p *MgrPeer) closed(err error) {
 
 // Next returns the oldest undelivered inbound message. Accepted messages
 // drain before the terminal cause. ctx bounds only this wait; a canceled
-// wait consumes nothing.
+// wait consumes nothing, also with a message queued.
 func (p *MgrPeer) Next(ctx context.Context) (MgrInboundMessage, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return MgrInboundMessage{}, err
+		}
 		p.mu.Lock()
 		if len(p.queue) > 0 {
 			m := p.queue[0]
