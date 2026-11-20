@@ -74,8 +74,8 @@ IMAGE = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997
 # pins now. Verification of a retained bundle also admits the earlier releases
 # named by bundles recorded before each move; a bundle never changes release.
 PROVIDER = "github.com/JSYoo5B/ceph-testcontainers-go"
-PROVIDER_VERSION = "v0.5.0"
-RETAINED_PROVIDER_VERSIONS = frozenset({"v0.3.0", "v0.4.0", PROVIDER_VERSION})
+PROVIDER_VERSION = "v1.0.1"
+RETAINED_PROVIDER_VERSIONS = frozenset({"v0.3.0", "v0.4.0", "v0.5.0", PROVIDER_VERSION})
 INPUT_LIMIT = 16 << 20
 FILE_LIMIT = 256 << 10
 TOTAL_LIMIT = 1 << 20
