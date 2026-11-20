@@ -277,6 +277,20 @@ func (o *OSDConnection) NextBackoff(ctx context.Context) (OSDBackoffEvent, error
 // restriction the client ignores (osd/PG.cc, osd/Session.cc). The OSD uses
 // the original epoch to discard stale ACKs after a split. Native Objecter
 // resends outstanding operations on UNBLOCK; this client never does.
+//
+// An ACK for a shard other than 0 of an optimized erasure-coded PG that has a
+// pg_temp does not reach that PG. This client does not advertise
+// SERVER_TENTACLE, so the OSD reads the shard of every such message as
+// primary-first numbering and undoes it while the pg_temp lasts
+// (osd/OSD.cc ms_fast_dispatch, dispatch_session_waiting; osd/OSDMap.cc
+// pgtemp_undo_primaryfirst), while the BLOCK names the actual shard and the
+// PG matches the ACK by the shard it carries (PrimaryLogPG::handle_backoff,
+// Session::ack_backoff); no shard satisfies both. The OSD then keeps the
+// restriction for the session after its UNBLOCK and drops later requests for
+// that PG on this connection without an answer (Session::check_backoff),
+// until the connection ends. Verified on Tentacle 20.2.4 for an optimized isa
+// k=2,m=2 PG led from parity shard 2 (integration
+// TestCephOSDErasureOptimizedK2M2ReplacementPGBackoffIntegration).
 func (o *OSDConnection) AckBackoff(ctx context.Context, event OSDBackoffEvent) error {
 	if err := ctx.Err(); err != nil {
 		return err
