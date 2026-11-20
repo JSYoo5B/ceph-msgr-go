@@ -378,6 +378,155 @@ func versionAfter(a, b cephmsgr.OSDVersion) bool {
 	return a.Epoch > b.Epoch || a.Epoch == b.Epoch && a.Version > b.Version
 }
 
+// TestCephOSDErasureOptimizedK2M2DegradedWaitAtDyingPrimaryIntegration: a
+// request held at the primary after do_op decoded it, when that primary's
+// OSD dies. The object is degraded as in
+// TestCephOSDErasureOptimizedK2M2DegradedWriteWaitIntegration and the
+// returned OSD is paused, so the Go APPEND+SETXATTR waits for the degraded
+// object, shown by a bracketed dump_ops_in_flight. The primary's OSD is then
+// killed through the fixture's forced kill while the returned OSD is still
+// paused, and the pause ends. The call must end with an OutcomeUnknownError
+// that keeps its original identity, and the client must open no further OSD
+// connection. The flags are unset; after the primary's restart and clean
+// PGs the native object must be unchanged, and the returned primary's PG log
+// must hold the overwrite's identity but not the held one. The caller then
+// resubmits the same operations once under the original transaction, which
+// must apply once and appear once in that log.
+//
+// The held op lived only in the dead primary's waiting_for_degraded_object;
+// no other shard had it. Not verified: an op held inside the EC backend
+// after its sub-writes were sent, which other shards may have applied, a
+// genuinely lagging primary, an orderly stop or partition, and other
+// shards' logs.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2degradedwaitatdyingprimary key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills and pauses OSDs and sets norecover/nobackfill; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK2M2DegradedWaitAtDyingPrimaryIntegration(t *testing.T) {
+	r := startECEpochRun(t, 900*time.Second)
+	const (
+		object          = "ec-degraded-wait-dying"
+		attr            = "ec-degraded-wait-dying"
+		heldIncarnation = 81
+		seeded          = 1700013000
+		degradedAt      = 1700013001
+		mutated         = 1700013002
+	)
+	d := r.degradedObject(object, seeded, degradedAt)
+
+	endpoint := osdEndpoint(t, d.now.Address)
+	fc := dialErasureFaultClient(t, r.ctx, r.hash, "")
+	defer fc.Close()
+	gid := fc.Snapshot().GlobalID
+	o := mutationConnection(t, fc.Client, r.ctx, d.now)
+	defer o.Close()
+	dialed := fc.dialSnapshot()
+	if dialed[endpoint] != 1 {
+		t.Fatal("the held write's connection was not dialed exactly once", dialed)
+	}
+	tail := []byte("degraded-wait-dying\x00\xff" + object)
+	value := []byte{0, 0xff, 'd'}
+	ops := degradedWaitOps(tail, value, attr)
+	held := r.request(d.now, ops...)
+	held.ClientIncarnation = heldIncarnation
+	held.ModificationTime = cephmsgr.OSDTime{Seconds: mutated}
+
+	p := r.pause(d.returned)
+	call := startHeldCall(r.ctx, o, held)
+	op := r.waitDegraded(d, p, call, gid, heldIncarnation)
+	primary := r.kill(d.now.ID)
+	p.resume()
+
+	// The killed daemon's socket closes, so the session ends the call; the
+	// caller's context stays live.
+	lost, ended, late := endWithin(call.finished, 30*time.Second, 5*time.Second, call.cancel)
+	if !ended {
+		t.Fatal("the session did not end the held write within 30 s after the primary's OSD was killed;", late)
+	}
+	var unknown *cephmsgr.OutcomeUnknownError
+	var server *cephmsgr.OSDError
+	sub := lost.reply.Submission
+	t.Logf("held write ended by the session: %v; submission tid %d global id %d incarnation %d epoch %d attempt %d placement %+v",
+		lost.err, sub.Transaction, sub.GlobalID, sub.ClientIncarnation, sub.MapEpoch, sub.Attempt, sub.Placement)
+	if !errors.As(lost.err, &unknown) || errors.As(lost.err, &server) || errors.Is(lost.err, context.Canceled) {
+		t.Fatal("expected an unknown outcome without a server result or a local cancellation", lost.err)
+	}
+	if sub.Transaction != op.TID || sub.GlobalID != gid || sub.ClientIncarnation != heldIncarnation || sub.MapEpoch != d.now.Epoch ||
+		sub.Attempt != 0 || sub.Placement == nil || sub.Placement.Primary != d.now.ID || int8(sub.Placement.Shard) != d.now.Shard {
+		t.Fatal("the unknown outcome lost the identity the primary held", sub, op.TID)
+	}
+	o.Close()
+	// The map marks the killed OSD down a moment after its socket closed.
+	away := r.place(object)
+	for attempt := 1; attempt < 30 && (away.Epoch <= d.now.Epoch || slices.Contains(away.Acting, d.now.ID)); attempt++ {
+		time.Sleep(time.Second)
+		away = r.place(object)
+	}
+	t.Logf("without the primary: epoch %d primary osd.%d shard %d acting %v pg_temp %v", away.Epoch, away.ID, away.Shard, away.Acting, away.PGTemp)
+	if away.Epoch <= d.now.Epoch || slices.Contains(away.Acting, d.now.ID) {
+		t.Fatal("the placement does not reflect the killed primary within 30 s", away)
+	}
+
+	r.unsetFlags(d)
+	back, _ := r.primaryBack(object, d.now, primary, d.nowSince)
+	t.Logf("restored: epoch %d primary osd.%d shard %d acting %v at %s (was %s)", back.Epoch, back.ID, back.Shard, back.Acting, back.Address, d.now.Address)
+	n := poolObserve(t, r.ctx, 1, object, "", "")
+	if n.Code != 0 || n.Version != d.pre.Version || !bytes.Equal(n.Data, d.data) || n.Seconds != d.pre.Seconds || n.Nanos != d.pre.Nanos || !maps.Equal(xattrInventory(n), xattrInventory(d.pre)) {
+		t.Fatal("native state after the return differs from the pre-state", n.Version, d.pre.Version, len(n.Data), n.Seconds)
+	}
+	if extra := newDials(dialed, fc.dialSnapshot(), endpoint); len(extra) != 0 {
+		t.Fatal("the client connected again before the caller's decision:", extra)
+	}
+	ws := d.written.Submission
+	writtenKey := pgHistoryTarget{Type: "client", Num: ws.GlobalID, Inc: int32(ws.ClientIncarnation), TID: ws.Transaction}
+	heldKey := pgHistoryTarget{Type: "client", Num: gid, Inc: heldIncarnation, TID: sub.Transaction}
+	nearMiss := pgHistoryTarget{Type: "client", Num: gid, Inc: heldIncarnation + 1, TID: sub.Transaction}
+	keys := []pgHistoryTarget{writtenKey, heldKey, nearMiss}
+	history := primaryPGHistory(t, r.ctx, 1, object, keys)
+	requirePGHistoryOnRoute(t, history, back)
+	if got := history.Targets[0].Locations; len(got) != 1 || got[0].Tier != "log" || got[0].Object != hobjectHead(back) || got[0].Version != replayVersion(d.written) {
+		t.Fatalf("the returned primary's log does not hold the overwrite once at %s: %+v", replayVersion(d.written), got)
+	}
+	if len(history.Targets[1].Locations) != 0 || len(history.Targets[2].Locations) != 0 {
+		t.Fatalf("the returned primary's log holds the held identity: %+v %+v", history.Targets[1].Locations, history.Targets[2].Locations)
+	}
+
+	// The caller's explicit decision: resubmit the same operations once
+	// under the original identity to the returned primary.
+	ro := mutationConnection(t, fc.Client, r.ctx, back)
+	defer ro.Close()
+	retry := r.request(back, ops...)
+	retry.ClientIncarnation = heldIncarnation
+	retry.ModificationTime = held.ModificationTime
+	retry.Resubmit, retry.RetryAttempt = &sub, 1
+	retryCtx, stop := context.WithTimeout(r.ctx, 30*time.Second)
+	reply, err := ro.Request(retryCtx, retry)
+	stop()
+	if err != nil {
+		t.Fatal("explicit resubmission to the returned primary:", err)
+	}
+	t.Logf("resubmission: tid %d code %d flags %#x user version %d replay %s attempt %d epoch %d", reply.Transaction, reply.Code, reply.Flags, reply.UserVersion, replayVersion(reply), reply.RetryAttempt, reply.MapEpoch)
+	if reply.Transaction != sub.Transaction || reply.Code != 0 || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || reply.RetryAttempt != 1 || reply.UserVersion <= d.pre.Version ||
+		reply.Submission.Transaction != sub.Transaction || reply.Submission.MapEpoch != back.Epoch || reply.Submission.GlobalID != gid || reply.Submission.ClientIncarnation != heldIncarnation {
+		t.Fatal("resubmission receipt differs", reply.Transaction, reply.Code, reply.Flags, reply.RetryAttempt, reply.UserVersion)
+	}
+	final := poolObserve(t, r.ctx, 1, object, "", "")
+	if final.Code != 0 || !bytes.Equal(final.Data, append(bytes.Clone(d.data), tail...)) || bytes.Count(final.Data, tail) != 1 || final.Version != reply.UserVersion ||
+		final.Seconds != mutated || xattrInventory(final)[attr] != string(value) {
+		t.Fatal("native state after the resubmission differs", len(final.Data), final.Version, reply.UserVersion, final.Seconds)
+	}
+	after := primaryPGHistory(t, r.ctx, 1, object, keys)
+	requirePGHistoryOnRoute(t, after, back)
+	if got := after.Targets[1].Locations; len(got) != 1 || got[0].Tier != "log" || got[0].Version != replayVersion(reply) || got[0].Object != hobjectHead(back) ||
+		len(after.Targets[0].Locations) != 1 || len(after.Targets[2].Locations) != 0 {
+		t.Fatalf("the returned primary's log after the resubmission: overwrite %+v held %+v near miss %+v", after.Targets[0].Locations, got, after.Targets[2].Locations)
+	}
+	if err := checkOneDial(dialed, fc.dialSnapshot(), endpoint, osdEndpoint(t, back.Address)); err != nil {
+		t.Fatal("the resubmission did not open exactly its one connection:", err)
+	}
+	t.Logf("applied once by the resubmission at %s, version %d -> %d; the original outcome stays unknown", replayVersion(reply), d.pre.Version, final.Version)
+}
+
 // degradedWaitSnapshot builds one synthetic receipt of PG 3.7's primary
 // osd.3 holding client.4171.71:5, decoded, waiting for the degraded object
 // at the placement's epoch 25. No daemon produced it.
