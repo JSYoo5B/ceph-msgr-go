@@ -101,6 +101,13 @@ var ErrKeepaliveTimeout = session.ErrKeepaliveTimeout
 // the resulting cluster state independently, or rely on an operation whose
 // repetition is harmless by its own definition. Failures that occur before
 // transmission starts return their cause without this wrapper.
+//
+// Transmission starts when the session's writer takes the command, before
+// its first byte leaves, so a failure such as setting the write deadline is
+// already uncertain; this errs toward uncertainty, never toward a false "not
+// sent". A call issued after the session recorded the loss of its connection,
+// or admitted but not yet taken by the writer, gets the session's cause
+// without this wrapper.
 type OutcomeUnknownError = session.OutcomeUnknownError
 
 // AuthenticationError is an explicit server rejection of authentication or

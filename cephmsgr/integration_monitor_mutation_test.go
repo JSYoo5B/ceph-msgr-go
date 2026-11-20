@@ -18,6 +18,16 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+// One applied MON command whose reply is withheld. Binary config-key set A is
+// sent once; the MON acknowledges it only after the update commits
+// (ceph/ceph/blob/v20.2.4/src/mon/KVMonitor.cc), and an independent native
+// librados read sees A while the caller is pending. A second Go caller writes
+// B, the original MON is restarted, and the original caller must end with
+// OutcomeUnknownError while a fresh read on another MON and the native read
+// both keep B: A was written locally once and not replayed. The key is a
+// random token proven absent before it is claimed. Local writes are not
+// server execution counts; exactly-once execution is not claimed.
+//
 //scenario:covers CLIENT to MON/MGR
 //fixture:shareable restarts one MON (control waits for 3-MON quorum); its config-key is removed and checked absent in cleanup
 func TestCephAppliedMonitorMutationIsNotReplayedIntegration(t *testing.T) {

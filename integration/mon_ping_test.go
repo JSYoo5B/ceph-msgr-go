@@ -39,6 +39,23 @@ type monPingObservation struct {
 	} `json:"mon_status"`
 }
 
+// PingMonitor against each named MON of a three-MON fixture, checked against
+// the independent native `ceph ping mon.<name>`, which ceph.in sends as MPing
+// through MonClient::ping_monitor on a temporary connection (not tell or
+// mon_command). Native process success alone is not enough, because
+// MonClientPinger can wake on reset without a payload: each native and Go
+// reply must carry the exact MON name and rank, the owned FSID, a nonzero
+// MonMap epoch and the three members. Dynamic fields are not compared between
+// separately timed calls. Also covered: concurrent pings beside ordinary MON
+// and MGR commands without disturbing the primary identity or subscriptions,
+// an injected dial failure that is known unsent and not retried elsewhere,
+// and admission of a minimally capable identity.
+//
+// Not covered: a native MON freeze or restart, interrupted authentication or
+// membership change during a ping, native malformed replies, older releases
+// and arbitrary address/security combinations. The JSON is the caller's to
+// interpret; an accepted raw reply is not a health verdict.
+//
 //scenario:row mon-ping.aes.ip4.crc.host.t-monping key=aes service=aes mode=crc family=4 stress= runtime=host mon_ping=1
 //scenario:row mon-ping.aes256k.ip6.container.t-monping key=aes256k service=aes256k family=6 stress= runtime=container mon_ping=1
 //scenario:covers CLIENT to MON/MGR

@@ -107,6 +107,10 @@ func (c *countedReader) Read(p []byte) (int, error) {
 // scanMonitorReclaimRefusals returns, sorted and unique, the global IDs one MON
 // log refused to reclaim for mgr.<name> at or after since. A matching line that
 // is not an exact native entry is an explicit error rather than silent absence.
+// The prefix covers the three reclaim refusals of
+// ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxServiceHandler.cc; timestamps
+// follow ceph/ceph/blob/v20.2.4/src/log/LogClock.h, and all daemons share the
+// Docker host's clock.
 func scanMonitorReclaimRefusals(r io.Reader, name string, since time.Time, limit int) ([]uint64, error) {
 	if name == "" || limit <= 0 || since.IsZero() {
 		return nil, errors.New("invalid native MON reclaim attribution scope")

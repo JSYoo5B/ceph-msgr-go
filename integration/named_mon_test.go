@@ -28,6 +28,13 @@ type namedMonStatus struct {
 	} `json:"monmap"`
 }
 
+// MonTellTo against each exact MON name. A dial to the named MON that the
+// test's dialer refuses returns that dial error as the cause, without an
+// unknown outcome and without dialing another MON; the product has no
+// sentinel of its own for a failed dial. ErrMonitorTargetChanged needs a
+// membership or address change between two map reads, which no fixture
+// control produces, so it is covered only by scripted peers.
+//
 //scenario:covers CLIENT to MON/MGR
 //fixture:isolated appends a cluster log entry and reads log history from version 1; the start-state check omits the log
 func TestCephNamedMonitorTellIntegration(t *testing.T) {

@@ -35,6 +35,19 @@ func fixtureBalancerModeWith(t *testing.T, c *Client, ctx context.Context, comma
 	return status.Mode
 }
 
+// One applied MGR module command whose reply is withheld: `balancer mode A`,
+// which the module stores through a MON `config set` of mgr/balancer/mode
+// before updating its cache (ceph/ceph/blob/v20.2.4/src/mgr/PyModule.cc), so a
+// native view of A follows the MON commit. Native views bracketed by one
+// unchanged active name and GID must show A (MGR mode, MON effective value and
+// one explicit entry) while the caller is pending; a second client writes B
+// (the baseline mode), `mgr fail` replaces the manager, and the original
+// caller must end with OutcomeUnknownError wrapping ErrManagerChanged while
+// the replacement and native views keep B. B equals the baseline because a
+// MON `config rm` does not refresh the running manager's cache
+// (ceph/ceph/blob/v20.2.4/src/common/config.cc set_mon_vals; source inference
+// only). Exactly-once server execution is not claimed.
+//
 //scenario:covers CLIENT to MON/MGR
 //fixture:isolated runs mgr fail (failover not undone); the balancer mode is restored and checked with fresh native views
 func TestCephAppliedManagerMutationIsNotReplayedIntegration(t *testing.T) {

@@ -1,4 +1,27 @@
 // Package cephx implements Tentacle credential and ticket cryptography.
+//
+// The exchanges ride Messenger AuthRequest/ReplyMore/RequestMore/Done frames
+// (the session's MonAuth and ServiceAuth adapters), not message types 17/18.
+// Only CLIENT identities are accepted. AUTH and MGR tickets are always
+// requested and OSD and MDS only when enabled; unsupported or incomplete
+// service masks and unrequested service authorizers are refused before any
+// proof is produced, and all services travel with the AUTH request (no
+// separate principal-session-key request). A MON ticket reply is parsed
+// completely before GlobalID and tickets are replaced, so an invalid later
+// entry publishes nothing, and an explicit server result is kept in
+// AuthenticationError. Secure mode requires a connection secret of at least
+// 40 bytes from the MON and a v2 AuthorizeReply with such a secret from a
+// service; CRC accepts an absent secret or a v1 reply, but a nonempty short
+// secret fails in both modes and CRC never skips verification of extra
+// tickets or of the service's nonce. An authorizer keeps its ticket snapshot
+// across renewal. A parsed ticket is a local receipt: it shows neither
+// permission, service availability nor native key generation.
+//
+// Source: ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxClientHandler.cc,
+// ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxServiceHandler.cc and
+// ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxProtocol.h. Proof paths and key
+// primitives are checked against source-derived and synthetic vectors, not a
+// native encoder.
 package cephx
 
 import (

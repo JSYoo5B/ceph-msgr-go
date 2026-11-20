@@ -49,6 +49,12 @@ func fixtureRecoveryRead(ctx context.Context, c *Client, mgr bool) error {
 	}
 }
 
+// All three MONs are stopped and started again, three times. While no MON is
+// reachable, MonCommand, MgrCommand, MonTell, MgrTell, MonTellTo and MgrTellTo
+// each end by their deadline without an unknown outcome: every channel first
+// waits for an admitted MON, and exact-name targets are resolved from maps
+// that need one, so the running manager is never reached.
+//
 //scenario:row mon-mgr.aes.ip4.crc.host.t-suite-afb7b2 key=aes service=aes mode=crc family=4 stress= runtime=host test_run=^TestCeph(CompleteMonitorOutage|NamedMonitorTell|NamedManagerTell)Integration$
 //scenario:row mon-mgr.aes256k.ip4.host.t-suite-afb7b2 key=aes256k service=aes256k family=4 stress= runtime=host test_run=^TestCeph(CompleteMonitorOutage|NamedMonitorTell|NamedManagerTell)Integration$
 //scenario:covers CLIENT to MON/MGR

@@ -23,6 +23,14 @@ type StatfsResult struct {
 // FSID mismatch or a removed pool it ignores the request and sends nothing, so
 // the call then ends only when ctx does, as an OutcomeUnknownError (the request
 // was sent but read-only, so nothing changed). Nothing is retried.
+//
+// The figures are returned unscaled (replication and CephFS rounding stay with
+// the caller). A reply with another FSID or size fails the session as a
+// protocol error. The FSID-mismatch ignore and a connected MON that dies
+// during a request are not verified natively. Source:
+// ceph/ceph/blob/v20.2.4/src/messages/MStatfs.h,
+// ceph/ceph/blob/v20.2.4/src/messages/MStatfsReply.h and
+// ceph/ceph/blob/v20.2.4/src/mon/MgrStatMonitor.cc (preprocess_statfs).
 func (c *Client) Statfs(ctx context.Context, dataPool *int64) (StatfsResult, error) {
 	var result StatfsResult
 	if dataPool != nil && *dataPool < 0 {
