@@ -14,6 +14,10 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+// An ONDISK write survives SIGKILL (exit 137, no OOM) and restart: bytes,
+// version and nanosecond mtime match through native and fresh Go reads. It
+// simulates daemon termination, not host or device power loss.
+//
 //scenario:covers CLIENT to OSD
 //scenario:covers Daemon-to-daemon
 //fixture:isolated writes the fixture object, kills and restarts the OSD; the single-OSD path has no clean wait

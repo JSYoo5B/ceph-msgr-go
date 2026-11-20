@@ -55,6 +55,13 @@ type enforceSnapNative struct {
 // between pool-provided and caller-enforced SnapContext. Native librados does
 // not expose ENFORCE_SNAPC: it supplies ordinary WRITEFULL+ORDERSNAP and
 // independent selected-snapshot STAT2/READ/LISTSNAPS observations only.
+// In pool-snapshot mode a write without ENFORCE_SNAPC gets the pool's
+// SnapContext; with it the caller's sequence is kept and its snaps filtered,
+// and ORDERSNAP refuses a sequence below the snapset's with -EOLDSNAPC before
+// any new version or mtime (src/osd/PrimaryLogPG.cc:4213-4229, v20.2.4). The
+// refusals keep a zero per-op result because WRITEFULL never ran. Versions of
+// different objects are never compared. Not verified: other writing opcodes,
+// EC, more snapshot combinations and live uncertain-outcome faults.
 //
 //scenario:covers CLIENT to OSD
 //fixture:shareable pool snapshot context writes in one owned pool; checked cleanups remove the snapshot and the pool

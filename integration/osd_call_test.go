@@ -24,6 +24,19 @@ func callXattrs(state omapWriteState) map[string][]byte {
 	return result
 }
 
+// Each Go CALL to the stock `hello` class (and a scoped `allow r` identity)
+// is compared with a native rados_read_op_exec using RETURNVEC: aggregate,
+// per-op result and output must be equal. Write methods run on a native mirror
+// seeded with the Go object's bytes and xattrs. The OSD classifies a CALL by
+// the method's registered flags, so a read-mode request to `record_hello`
+// still executes as a write. An unknown method or unloaded class is refused
+// before execution with ONDISK but no ACK (reply_op_error). After
+// `write_too_much_return_data` (-EOVERFLOW, output cleared) the primary's
+// cached object_info may report any newer version, because other writes in
+// the PG advance its last user version; data and xattrs stay unchanged. Not
+// verified: FAILOK CALL, -EAGAIN/-EINPROGRESS methods, positive read-path
+// results, EC pools, response loss and classes beyond hello, lock and rbd.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable class calls on its owned UUID objects and removed mirrors only; checked cleanup removes owned objects
 func TestCephOSDClassCallIntegration(t *testing.T) {

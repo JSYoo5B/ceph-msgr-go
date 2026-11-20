@@ -15,6 +15,11 @@ import (
 // A pool over its object quota is flagged full_quota. Writes without a full
 // flag are never answered; FULL_TRY gets the server's -EDQUOT with no effect;
 // FULL_FORCE proceeds. Native observation checks every outcome independently.
+// The unanswered default write ends as an unknown outcome with no native
+// object, which is why callers need FULL_TRY. -122 is the signed Linux code
+// the server sends and is kept raw, not translated to a host errno. Both
+// flags together, or a flag on a read vector, are refused before submission.
+// Not verified: FULL_FORCE on the MDS path or EC pools.
 //
 //scenario:covers CLIENT to OSD
 //fixture:shareable sets a quota on its owned pool only; checked owned-pool cleanup removes the pool and restores the config it changed
@@ -154,7 +159,8 @@ func hasPoolFlag(names, flag string) bool {
 // OSDs report full and the MON flag every pool full (not full_quota): a plain
 // write is never answered, FULL_TRY gets -ENOSPC, FULL_FORCE and reads
 // proceed, and after the ratios are restored and the flag clears a plain
-// write is answered again. The ratios are restored even on failure.
+// write is answered again. The ratios are restored even on failure. It needs
+// BlueStore: fullness is measured on the BlueStore devices, not MemStore.
 //
 //scenario:covers CLIENT to OSD
 //fixture:isolated lowers the OSDMap full ratios; the cleanup restores them but does not confirm the restored ratio values

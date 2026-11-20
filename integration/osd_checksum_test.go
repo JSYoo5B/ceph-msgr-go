@@ -54,14 +54,19 @@ func nativeChecksum(t *testing.T, ctx context.Context, object string, offset, le
 	return receipt
 }
 
-// TestCephOSDChecksumIntegration compares Go CRC32C CHECKSUM output bytes and
-// values with the independent C rados_checksum API on binary contents: one CRC
-// over the extent, seeded chunks, aligned EOF trimming, unaligned EOF trimming
-// (-EINVAL), exact and past EOF with no output, and a missing object
-// (-ENOENT). Object bytes and version stay unchanged, and echoed type and
-// chunk metadata survive successful and failed replies. Native librados may
-// route and retry its reads; that behavior is not part of the Go transport.
-// Not verified: scoped read-only credentials and mutation races.
+// TestCephOSDChecksumIntegration compares standalone head CHECKSUM for
+// CRC32C, xxHash32 and xxHash64 with the independent C rados_checksum API on
+// binary contents: raw output bytes, full-width values (xxHash64 seeds with
+// high bits set), aggregate codes and unchanged head bytes, version and mtime.
+// Cases cover zero and nonzero seeds, one value over the extent, seeded
+// chunks, aligned and unaligned (-EINVAL) EOF trimming, reads at and past EOF
+// with no output and a missing object (-ENOENT), whose per-op status is not
+// inferred from the C aggregate error. Echoed type and chunk metadata survive
+// successful and failed replies. Native librados may route and retry its
+// reads; that behaviour is not part of the Go transport. Pinned sources:
+// src/osd/PrimaryLogPG.cc (do_checksum) and src/common/Checksummer.h at
+// v20.2.4. Not verified: EC pools, scoped read-only credentials and mutation
+// races.
 //
 //scenario:covers CLIENT to OSD
 //fixture:shareable read-only checksums on its owned UUID objects; checked omap-write cleanup removes them

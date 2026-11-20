@@ -41,6 +41,12 @@ func nativeCompoundSnapshot(t *testing.T, ctx context.Context, label string) mut
 	return result.Snapshot
 }
 
+// Mixed read, stat and mutation vectors check ordered output boundaries,
+// staged size against committed read bytes, rollback with earlier outputs
+// kept, and FAILOK STAT before CREATE, with native stat2/read before and
+// after. The C write_op cannot reproduce mixed vectors, so this is execution
+// and readback evidence, not a native mixed-payload encoding.
+//
 //scenario:covers CLIENT to OSD
 //fixture:isolated rewrites and deletes the shared fixture object; the restore rewrites bytes and mtime only, unverified
 func TestCephOSDCompoundIntegration(t *testing.T) {

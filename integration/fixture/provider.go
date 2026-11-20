@@ -201,7 +201,9 @@ func fixtureBootstrapConfig(p profile) string {
 		config += "osd_pool_default_flag_hashpspool = " + hashPool + "\nosd_crush_update_on_start = false\nosd_beacon_report_interval = 1\n[mon]\npaxos_service_trim_min = 1\nmon_min_osdmap_epochs = 5\nmon_osd_force_trim_to = 5\n"
 		if p.osdPGV8() {
 			// Keep short ACK controls available for independent native
-			// history observation alongside the fixture's preparation work.
+			// history observation alongside the fixture's preparation work:
+			// TrackedOp.cc:101-117 (Ceph 20.2.4) retains the longest completed
+			// ops, so the default twenty entries can discard a fast ACK.
 			config += "[osd]\nosd_op_history_size = 1024\n"
 		}
 		if p.copyFromMultiChunkSelected() {

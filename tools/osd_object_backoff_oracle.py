@@ -56,7 +56,9 @@ COMMAND_SECONDS = 8
 WAIT_SECONDS = 60
 # The recipe's heartbeat grace is 60 seconds. A dead primary is reported
 # only after that grace, then MON commits a map and the surviving PG peers.
-# Keep a distinct DOWN phase budget rather than racing that first report.
+# Keep a distinct DOWN phase budget rather than racing that first report
+# (heartbeat, failure report, map commit and PG activation are separate steps:
+# OSD.cc:6171-6215,6247,6427-6442,7290-7311 and OSDMonitor.cc:3200-3285).
 DOWN_WAIT_SECONDS = 120
 # Also cover the 20-second in-flight poll and 60-second local Go outcome
 # wait before the native down observation, plus the completion join.

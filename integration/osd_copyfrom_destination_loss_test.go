@@ -232,6 +232,11 @@ func copyLossFrozen(acting []int32, primary, sourcePrimary int32, commits int) (
 // again, and a fresh-session read, a delayed native readback and its PG log
 // must show the same single copy.
 //
+// Not verified: the loss of a transaction staged on the primary alone (the
+// kept-seed outcome has only unit coverage), which paused replica applied the
+// copy or when, multi-chunk staging, OMAP, EC destinations, pinned source
+// versions, snapshot sources and host power loss.
+//
 //scenario:covers CLIENT to OSD
 //fixture:isolated pauses and SIGKILLs OSDs and restarts them, waits osd-ready clean without pg_temp proof; pool delete
 func TestCephOSDCopyFromStagedDestinationLossIntegration(t *testing.T) {

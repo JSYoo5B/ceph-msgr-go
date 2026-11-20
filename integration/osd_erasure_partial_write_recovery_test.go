@@ -403,6 +403,8 @@ func (r *partialWriteRun) leftOutShard(state partialOverwrite) int {
 // overwrite, past its last entry, and the partial-write range between them
 // in its own info. This states what each shard's own log holds at capture
 // time; it claims nothing about eviction, loss or replay.
+// Not run: a parity or primary shard outage, two members away, and a capture
+// while the member is away.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteshardreturnshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
 //scenario:covers CLIENT to OSD
@@ -524,6 +526,8 @@ func (r *partialWriteRun) recoveredShardLogs(label string, primary pgHistorySnap
 // read back natively and through the Go client. This states what each
 // shard's own log holds at capture time; it does not read the returned
 // shard's chunk and claims nothing about eviction, loss or replay.
+// Not run: a second degraded write, a write during recovery, and backfill
+// instead of log recovery.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritedegradedwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
 //scenario:covers CLIENT to OSD

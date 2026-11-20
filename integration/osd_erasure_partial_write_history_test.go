@@ -640,6 +640,9 @@ func (r *partialWriteRun) partialOverwrite() partialOverwrite {
 // control of what each shard's log holds after an acknowledged partial
 // write: it stops before any trimming, peering or resubmission and claims
 // nothing about eviction, loss or replay.
+// One geometry runs (stripe width 8192, a 14-byte overwrite at offset 5 of a
+// two-stripe object); other offsets, appends, truncates, more than one
+// skipped shard and plugins with a chunk mapping are not run natively.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-shard-history
 //scenario:covers CLIENT to OSD

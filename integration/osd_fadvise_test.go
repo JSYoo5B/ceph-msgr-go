@@ -12,6 +12,10 @@ import (
 
 // FADVISE cache hints ride on the data-path operations and change no result:
 // writes and reads carrying them match the native client's view of the object.
+// Read replies echo the requested hint flags, COPY_FROM2 echoes its source
+// hint mask in the union, and STAT or CREATE carrying a hint is refused
+// before submission. Not verified: any cache or I/O-pattern effect inside
+// BlueStore (the hints are advisory and invisible in results).
 //
 //scenario:covers CLIENT to OSD
 //fixture:shareable hinted I/O in one owned pool only; checked owned-pool cleanup removes it and restores the config it changed

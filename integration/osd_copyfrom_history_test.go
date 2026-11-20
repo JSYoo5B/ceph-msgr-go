@@ -71,6 +71,10 @@ func copyFromDestinationBinding(copyKey, sourceKey []pgHistoryLocation, want cop
 // readback checks the copied bytes and xattr independently. The copy-error
 // injector stays off. This is a positive control past the destination commit:
 // it times no crash and claims nothing about absence, replicas or replay.
+// Empty positions (the copy's key in the source PG, near-miss identities)
+// describe those two primary snapshots only. One fresh source write transfers
+// one identity; the ten-identity cap of COPY_GET, existing extra request IDs,
+// the duplicate index and trimmed logs are not exercised.
 //
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromdestinationhistory key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6
 //scenario:covers CLIENT to OSD
