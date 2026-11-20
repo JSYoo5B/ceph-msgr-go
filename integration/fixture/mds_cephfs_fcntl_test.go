@@ -77,7 +77,6 @@ func TestMDSCephFSHeldFcntlCapabilityAdmission(t *testing.T) {
 // declared on a fresh metadata fixture, and then only for the exact test
 // selected; the declaration on any other topology is refused.
 func TestMDSCephFSHeldFcntlAdmissionOverTheCatalog(t *testing.T) {
-	bindings := ciWorkflowBindings(t)
 	rows := ciRepositoryCatalog(t)
 	declares := func(capabilities string) bool {
 		return slices.Contains(strings.Split(capabilities, ","), capMDSHeldFcntl.name)
@@ -104,7 +103,7 @@ func TestMDSCephFSHeldFcntlAdmissionOverTheCatalog(t *testing.T) {
 		for s := range selections {
 			params := maps.Clone(row.Params)
 			params["test_run"], params["capabilities"] = s.selector, s.capabilities
-			env := rowEnvironment(params, bindings)
+			env := ciRowEnvironment(t, params)
 			p, err := loadProfile(func(k string) string { return env[k] })
 			probe := err == nil && admitMDSCephFSHeldFcntl("fcntl-probe", p) == nil
 			switch {

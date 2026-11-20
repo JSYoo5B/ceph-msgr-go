@@ -237,18 +237,17 @@ func TestSequenceThatSelectsNothingFails(t *testing.T) {
 // validate passes the planner's sequence jobs through the fixture; a job the
 // fixture would refuse at run time is reported before any run.
 func TestPlannedSequenceJobsAreAdmittedOrReported(t *testing.T) {
-	bindings := ciWorkflowBindings(t)
 	job := map[string]string{"scenario": "osd.a", "scenarios": "osd.a osd.b", "sequence_rows": "2",
 		"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container", "osd": "1",
 		"osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8", "capabilities": "osd-erasure-width",
 		"test_run": sequenceOptimized + "|" + sequenceCalibration, "test_sequence": sequenceOptimized + " " + sequenceCalibration}
-	if problems := plannedJobAdmissionProblems([]map[string]string{job}, bindings); len(problems) != 0 {
+	if problems := plannedJobAdmissionProblems([]map[string]string{job}); len(problems) != 0 {
 		t.Fatal(problems)
 	}
 	refused := maps.Clone(job)
 	refused["test_sequence"] = "^TestCephOSDErasureK2M2Integration$ " + sequenceOptimized
 	refused["test_run"] = "^TestCephOSDErasureK2M2Integration$|" + sequenceOptimized
-	problems := plannedJobAdmissionProblems([]map[string]string{refused}, bindings)
+	problems := plannedJobAdmissionProblems([]map[string]string{refused})
 	if len(problems) != 1 || !strings.Contains(problems[0], "planned sequence osd.a osd.b: the fixture refuses it") {
 		t.Fatal(problems)
 	}

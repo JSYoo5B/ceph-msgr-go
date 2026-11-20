@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"maps"
@@ -690,15 +689,6 @@ func legacyModes(p profile, err error) admissionModes {
 	return m
 }
 
-// rowEnvironment is the environment the trusted workflow gives a row.
-func rowEnvironment(params map[string]string, bindings map[string]ciBinding) map[string]string {
-	env := map[string]string{}
-	for name, binding := range bindings {
-		env[name] = cmp.Or(params[binding.Parameter], binding.Fallback)
-	}
-	return env
-}
-
 func loadBoth(env map[string]string) (current, legacy admissionModes) {
 	p, err := loadProfile(func(name string) string { return env[name] })
 	current = capabilityModes(p, err)
@@ -750,7 +740,6 @@ func historicalCatalogRows(t *testing.T) []ciScenario {
 // exactly as before, and a declared capability is admitted only where the old
 // admission admitted its test, or refused.
 func TestCapabilityAdmissionMatchesTheLegacySelectorAdmission(t *testing.T) {
-	bindings := ciWorkflowBindings(t)
 	rows := historicalCatalogRows(t)
 	declarations := map[string]string{"": ""}
 	for _, row := range rows {
@@ -772,7 +761,7 @@ func TestCapabilityAdmissionMatchesTheLegacySelectorAdmission(t *testing.T) {
 		}
 	}
 	for _, row := range rows {
-		current, legacy := loadBoth(rowEnvironment(row.Params, bindings))
+		current, legacy := loadBoth(ciRowEnvironment(t, row.Params))
 		if !current.Loaded || current != legacy {
 			t.Errorf("%s: capability admission\n%+v\nlegacy admission\n%+v", row.ID, current, legacy)
 		}
@@ -782,7 +771,7 @@ func TestCapabilityAdmissionMatchesTheLegacySelectorAdmission(t *testing.T) {
 		for selector, capabilities := range declarations {
 			params := maps.Clone(row.Params)
 			params["test_run"], params["capabilities"] = selector, capabilities
-			current, legacy := loadBoth(rowEnvironment(params, bindings))
+			current, legacy := loadBoth(ciRowEnvironment(t, params))
 			switch {
 			case current.Loaded && current != legacy:
 				t.Errorf("%s with %s [%s]: capability admission\n%+v\nlegacy admission\n%+v", row.ID, selector, capabilities, current, legacy)
@@ -801,7 +790,6 @@ func TestCapabilityAdmissionMatchesTheLegacySelectorAdmission(t *testing.T) {
 // with or without a declaration, MON SIGKILL and the four-OSD topology are
 // refused to them, and their tests run from the split rows instead.
 func TestJoinedLegacySelectionsNoLongerAdmitModes(t *testing.T) {
-	bindings := ciWorkflowBindings(t)
 	for _, row := range ciRepositoryCatalog(t) {
 		joined, ok := legacySplitSelectors[row.Params["test_run"]]
 		if !ok {
@@ -810,7 +798,7 @@ func TestJoinedLegacySelectionsNoLongerAdmitModes(t *testing.T) {
 		for _, capabilities := range []string{"", row.Params["capabilities"]} {
 			params := maps.Clone(row.Params)
 			params["test_run"], params["capabilities"] = joined, capabilities
-			env := rowEnvironment(params, bindings)
+			env := ciRowEnvironment(t, params)
 			p, err := loadProfile(func(name string) string { return env[name] })
 			if err == nil && (p.forcedKillAdmitted("mon") || p.osdTopology().erasureCapacity) {
 				t.Fatalf("%s: joined selection %s [%s] admitted a mode", row.ID, joined, capabilities)

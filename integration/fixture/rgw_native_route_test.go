@@ -141,10 +141,6 @@ func TestRGWNativeRouteKeepsTheStreamAndPrintsItsOutput(t *testing.T) {
 // checkpoints only, and an ordinary row never selects them, even when its
 // selector would match their names.
 func TestRGWNativeRouteSelectsOnlyItsOwnSuite(t *testing.T) {
-	bindings, err := ciBindings("  CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}\n  CEPH_MSGR_TEST_RGW_NATIVE: ${{ matrix.rgw_native || '0' }}")
-	if err != nil {
-		t.Fatal(err)
-	}
 	sources := map[string]string{
 		"integration/TestCephAIntegration":                "integration/a_test.go",
 		"fixture/TestRGWNativeCheckpointIntegration":      "integration/fixture/c_test.go",
@@ -157,7 +153,7 @@ func TestRGWNativeRouteSelectsOnlyItsOwnSuite(t *testing.T) {
 		{ID: "checkpoint", Params: map[string]string{"rgw_native": "1", "test_run": "^TestRGWNativeCheckpointIntegration$"}},
 		{ID: "multistripe", Params: map[string]string{"rgw_native": "1", "test_run": "^TestRGWNativeMultiStripeIntegration$"}},
 	}
-	selection, problems := ciSelection(sources, rows, bindings)
+	selection, problems := ciSelection(sources, rows)
 	if len(problems) != 0 {
 		t.Fatal(problems)
 	}
@@ -177,7 +173,7 @@ func TestRGWNativeRouteSelectsOnlyItsOwnSuite(t *testing.T) {
 			t.Errorf("%s: candidates %v, want %v", test, candidates[test], rows)
 		}
 	}
-	if _, problems := ciSelection(sources, rows[:1], bindings); !slices.Contains(problems, "no catalog selector includes fixture/TestRGWNativeCheckpointIntegration") {
+	if _, problems := ciSelection(sources, rows[:1]); !slices.Contains(problems, "no catalog selector includes fixture/TestRGWNativeCheckpointIntegration") {
 		t.Fatalf("an unrouted checkpoint was not reported: %v", problems)
 	}
 }
