@@ -56,7 +56,9 @@ func (c *fixtureCluster) cacheCopyFlagsNative(ctx context.Context, phase, name s
 
 // cacheCopyFlagsOverlay sets the base pool's overlay to the tier or removes
 // it, once, and confirms the result in the native OSDMap dump: both the read
-// and the write tier of the base pool name the tier, or neither does.
+// and the write tier of the base pool name the tier, or both are unset (-1).
+// A partial route (one of them still naming the tier, or naming another pool)
+// is neither state, so it refuses the change and its receipt.
 func (c *fixtureCluster) cacheCopyFlagsOverlay(ctx context.Context, set bool) error {
 	x := c.cachePools
 	if x == nil || x.Resources == nil {
@@ -66,8 +68,8 @@ func (c *fixtureCluster) cacheCopyFlagsOverlay(ctx context.Context, set bool) er
 	if err != nil {
 		return err
 	}
-	if before.overlay() == set || !before.attached() {
-		return errors.New("the base pool overlay is not in the state this change expects")
+	if err := cacheCopyFlagsOverlayReady(before, set); err != nil {
+		return err
 	}
 	argv, step := []string{"osd", "tier", "rm-overlay", x.Plan.Base}, "copy-flags-overlay-remove"
 	if set {
@@ -80,8 +82,8 @@ func (c *fixtureCluster) cacheCopyFlagsOverlay(ctx context.Context, set bool) er
 	if err != nil {
 		return err
 	}
-	if after.overlay() != set || !after.attached() || after.Epoch <= before.Epoch {
-		return errors.New("the native OSDMap does not show the requested base pool overlay")
+	if err := cacheCopyFlagsOverlayDone(before, after, set); err != nil {
+		return err
 	}
 	raw, err := json.Marshal(after)
 	if err != nil {
@@ -106,6 +108,39 @@ func (s cacheCopyFlagsTierState) attached() bool {
 
 func (s cacheCopyFlagsTierState) overlay() bool {
 	return s.ReadTier == s.TierID && s.WriteTier == s.TierID
+}
+
+// noOverlay is the explicit unset state: pg_pool_t dumps an unset read or
+// write tier as -1.
+func (s cacheCopyFlagsTierState) noOverlay() bool {
+	return s.ReadTier == -1 && s.WriteTier == -1
+}
+
+// routes reports whether the base pool has the overlay (set) or explicitly
+// none (!set); a partial route is neither.
+func (s cacheCopyFlagsTierState) routes(set bool) bool {
+	if set {
+		return s.overlay()
+	}
+	return s.noOverlay()
+}
+
+// cacheCopyFlagsOverlayReady accepts a change only from the opposite full
+// state: setting needs no overlay at all, removing needs the full overlay.
+func cacheCopyFlagsOverlayReady(before cacheCopyFlagsTierState, set bool) error {
+	if !before.attached() || !before.routes(!set) {
+		return errors.New("the base pool overlay is not in the state this change expects")
+	}
+	return nil
+}
+
+// cacheCopyFlagsOverlayDone confirms the change in a newer map: the full
+// overlay after a set, both routes unset after a removal.
+func cacheCopyFlagsOverlayDone(before, after cacheCopyFlagsTierState, set bool) error {
+	if !after.attached() || !after.routes(set) || after.Epoch <= before.Epoch {
+		return errors.New("the native OSDMap does not show the requested base pool overlay")
+	}
+	return nil
 }
 
 func cacheCopyFlagsTiers(ctx context.Context, c *fixtureCluster, plan ignoreCacheProbePlan) (cacheCopyFlagsTierState, error) {
