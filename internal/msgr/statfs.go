@@ -9,7 +9,10 @@ import (
 // messages/MStatfsReply.h, include/ceph_fs.h:218-227 and
 // mon/MgrStatMonitor.cc preprocess_statfs (LGPL-2.1; no code copied).
 const (
-	StatfsMessage      uint16 = 13
+	// StatfsMessage is sent with header 2/1.
+	StatfsMessage uint16 = 13
+	// StatfsReplyMessage is received without an additional header-version check;
+	// the front must be exactly 56 bytes and middle and data empty.
 	StatfsReplyMessage uint16 = 14
 )
 

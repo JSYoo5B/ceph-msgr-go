@@ -13,6 +13,11 @@ import re
 import subprocess
 import sys
 
+# The Go listings this tool runs: (subcommands that run Go, or None for every
+# invocation; the module directories Go loads). tools/test_workflow_toolchains.py
+# reads this declaration to require a Go that can list those modules.
+GO_LISTING = (None, (".",))
+
 ROOT = Path(__file__).resolve().parent.parent
 INVENTORY = Path(".github/scenarios/fuzz-targets.json")
 TEST = re.compile(r"Fuzz[A-Za-z0-9_]+\Z")

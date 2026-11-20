@@ -7,6 +7,8 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
+// MgrDigestMessage is received with header version at least 1 and compat at
+// most 1.
 const MgrDigestMessage uint16 = 0x705
 
 // Digest holds the two raw bufferlists in a MON's MMgrDigest. The returned

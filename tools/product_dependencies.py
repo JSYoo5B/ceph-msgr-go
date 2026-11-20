@@ -5,6 +5,11 @@ import os
 from pathlib import Path
 import subprocess
 
+# The Go listings this tool runs: (subcommands that run Go, or None for every
+# invocation; the module directories Go loads). tools/test_workflow_toolchains.py
+# reads this declaration to require a Go that can list those modules.
+GO_LISTING = (None, (".",))
+
 
 PRODUCT_MODULE = "github.com/JSYoo5B/ceph-msgr-go"
 APPROVED_MODULES = frozenset({"github.com/klauspost/compress"})

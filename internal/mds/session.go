@@ -16,6 +16,8 @@ import (
 // MDSCapAuth) and mds/cephfs_features.h. LGPL-2.1 sources; no code copied.
 
 const (
+	// ClientSessionMessage is sent and received with header version 1 or 7 and
+	// compat 1.
 	ClientSessionMessage uint16 = 22
 	// SessionHeadBytes is the packed ceph_mds_session_head size.
 	SessionHeadBytes          = 28
@@ -65,7 +67,9 @@ var ClientFeatures = []byte{0xff, 0x05, 0, 0, 0, 0, 0, 0}
 // request fields), NEW_SNAPREALM_INFO (19: SnapRealmInfoNew snap traces) and
 // HAS_OWNER_UIDGID (20: owner UID/GID in the v3 request head). Lazy wanted
 // caps, metrics, notify-session-state, getvxattr, client auth-cap checks,
-// charmap and blockdiff stay withheld.
+// charmap and blockdiff stay withheld, so the MDS refuses a session on a
+// filesystem that requires one of them. Not claimed: multi-rank or failover reclaim, use or
+// release of delegated inodes, and asynchronous directory operations.
 var CephFSClientFeatures = []byte{0xff, 0xb7, 0x1c, 0, 0, 0, 0, 0}
 
 // NoOldestClientTID is the native MClientSession default. The MDS ignores it

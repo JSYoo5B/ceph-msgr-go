@@ -118,6 +118,12 @@ import scenario_catalog
 import scenario_checks
 import scenario_declarations
 
+# The Go listings this tool runs: (subcommands that run Go, or None for every
+# invocation; the module directories Go loads). tools/test_workflow_toolchains.py
+# reads this declaration to require a Go that can list those modules.
+# Here: validate and sharing list the suites and run the fixture's TestCatalogRowsAreAdmittedByTheFixture.
+GO_LISTING = (("validate", "sharing"), (".", "integration/fixture"))
+
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CHECKS_WORKFLOW = ROOT / ".github" / "workflows" / "platform-checks.yml"

@@ -15,6 +15,7 @@ import (
 // osd/osd_types.h (spg_t), common/hobject.{h,cc}, include/rados.h and
 // osdc/Objecter.cc:3835-3920. LGPL-2.1 sources; no implementation copied.
 const (
+	// BackoffMessage is sent and received with header exactly 1/1.
 	BackoffMessage  uint16 = 61
 	BackoffBlock    uint8  = 1
 	BackoffAckBlock uint8  = 2

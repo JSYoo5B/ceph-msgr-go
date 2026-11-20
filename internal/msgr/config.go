@@ -9,7 +9,10 @@ import (
 )
 
 const (
-	ConfigMessage    uint16 = 62
+	// ConfigMessage is received with header version at least 1 and compat at
+	// most 1.
+	ConfigMessage uint16 = 62
+	// GetConfigMessage is sent with header 1/1.
 	GetConfigMessage uint16 = 63
 )
 

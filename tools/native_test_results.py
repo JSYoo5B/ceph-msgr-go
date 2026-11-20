@@ -47,6 +47,11 @@ import sys
 import go_test_list
 import rgw_native_gate
 
+# The Go listings this tool runs: (subcommands that run Go, or None for every
+# invocation; the module directories Go loads). tools/test_workflow_toolchains.py
+# reads this declaration to require a Go that can list those modules.
+GO_LISTING = (("snapshot",), (".",))
+
 SUITES = (("api", "integration"), ("client", "cephmsgr"))
 # The backend of a routed row: its suite name, the fixture package directory
 # and the closed set of tests it may run.

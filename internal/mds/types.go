@@ -8,7 +8,9 @@ import (
 )
 
 const (
-	FSMapUserMessage      uint16 = 103
+	// FSMapUserMessage is received in the exact current header form 1/1.
+	FSMapUserMessage uint16 = 103
+	// MDSMapMessageType is received in the exact current header form 2/1.
 	MDSMapMessageType     uint16 = 21
 	MaxMapEntries         uint32 = 4096
 	MaxFeatureNames       uint32 = 1024

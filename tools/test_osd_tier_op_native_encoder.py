@@ -1,16 +1,12 @@
-import csv
-from pathlib import Path
 import unittest
 
 import osd_tier_op_native_encoder as encoder
 
-ROOT = Path(__file__).resolve().parent.parent
-
 
 class TierOpNativeEncoderTests(unittest.TestCase):
-    def test_model_opcodes_match_the_pinned_catalog(self):
-        catalog = {row[0]: int(row[1], 16) for row in csv.reader(
-            (ROOT / "internal/osd/opcodes-tentacle.csv").read_text().splitlines()) if row and row[0].isupper()}
+    def test_model_opcodes_match_the_pinned_rados_values(self):
+        # include/rados.h CEPH_OSD_OP_* values at the pinned Tentacle tag.
+        catalog = {"TIER_PROMOTE": 0x2229, "TIER_FLUSH": 0x822b, "TIER_EVICT": 0x822c}
         names = {"promote": "TIER_PROMOTE", "flush": "TIER_FLUSH", "evict": "TIER_EVICT"}
         self.assertEqual(set(encoder.SHAPES), set(encoder.MODEL))
         for shape, (code, _, _) in encoder.MODEL.items():

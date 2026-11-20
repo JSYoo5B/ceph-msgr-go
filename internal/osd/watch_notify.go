@@ -11,9 +11,11 @@ import (
 // include/rados.h, osdc/Objecter.h, messages/MWatchNotify.h and osd/Watch.cc.
 // Upstream sources are LGPL-2.1; no implementation is copied.
 const (
-	Watch                uint16 = 0x220f
-	Notify               uint16 = 0x1206
-	NotifyAck            uint16 = 0x1207
+	Watch     uint16 = 0x220f
+	Notify    uint16 = 0x1206
+	NotifyAck uint16 = 0x1207
+	// WatchNotifyMessage is received with header exactly 3/1 and inner event
+	// version 1.
 	WatchNotifyMessage   uint16 = 44
 	WatchUnwatch         uint8  = 0
 	WatchRegister        uint8  = 3
