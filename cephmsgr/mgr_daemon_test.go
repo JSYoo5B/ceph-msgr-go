@@ -792,3 +792,139 @@ func TestMgrDaemonIgnoresFatalCauseOfReplacedSession(t *testing.T) {
 		t.Fatal("the current session's cause was discarded", d.failure, d.monReady)
 	}
 }
+
+// TestMgrDaemonSettlesFatalCauseBeforeCloseCallback ends the established MON
+// session with a MonMap of another cluster and holds that session's close
+// callback, so its Done is observable while sessionClosed has not run. The
+// supervisor must classify the session's own error and end the daemon with
+// it instead of reconnecting as after MON loss.
+func TestMgrDaemonSettlesFatalCauseBeforeCloseCallback(t *testing.T) {
+	f := newFakeMgrMon(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	hooks := &mgrDaemonHooks{beforeSessionClosed: func(generation uint64) {
+		if generation == 1 {
+			once.Do(func() { close(entered); <-release })
+		}
+	}}
+	d, err := DialMgrDaemon(context.WithValue(context.Background(), mgrDaemonHooksKey{}, hooks), f.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	defer close(release) // before Close, which waits for the held callback
+	first := f.next(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := d.WaitRotatingKeys(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.push(msgr.MessageData{Type: msgr.MonMapMessage, Front: mockMonMapAuthEpoch(20, [16]byte{2}, []msgr.Address{{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}}, 2, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("the close callback never ran")
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := d.NextMgrMap(ctx)
+		result <- err
+	}()
+	select {
+	case <-f.ready:
+		t.Fatal("the supervisor reconnected before the fatal cause was settled")
+	case err := <-result:
+		if !isFSIDMismatch(err) {
+			t.Fatal("terminal cause", err)
+		}
+	}
+	if state := d.State(); !isFSIDMismatch(state.Err) || state.Monitor.Generation != 1 {
+		t.Fatal("daemon state", state)
+	}
+}
+
+// TestMgrDaemonEndedSessionCannotPublish parks a verified rotating reply,
+// ends its session with transport loss and keeps the reconnection dialing,
+// so d.mon still names the ended session when the reply resumes. The reply
+// must count as stale instead of publishing a set of the ended session.
+func TestMgrDaemonEndedSessionCannotPublish(t *testing.T) {
+	f := newFakeMgrMon(t)
+	parked, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	hooks := &mgrDaemonHooks{beforeRotatingPublish: func(generation uint64) {
+		once.Do(func() { close(parked); <-resume })
+	}}
+	options := f.options()
+	dial := options.DialContext
+	var dials atomic.Int32
+	redial, hold := make(chan struct{}), make(chan struct{})
+	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+		if dials.Add(1) > 1 {
+			select {
+			case <-redial:
+			default:
+				close(redial)
+			}
+			select {
+			case <-hold:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return dial(ctx, network, endpoint)
+	}
+	d, err := DialMgrDaemon(context.WithValue(context.Background(), mgrDaemonHooksKey{}, hooks), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	defer close(hold)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	select {
+	case <-parked:
+	case <-ctx.Done():
+		t.Fatal("first rotating reply never arrived")
+	}
+	d.mu.Lock()
+	s := d.mon
+	d.mu.Unlock()
+	s.Fail(errors.New("test transport loss"))
+	select {
+	case <-redial:
+	case <-ctx.Done():
+		t.Fatal("no reconnection")
+	}
+	close(resume)
+	state := waitDaemon(t, d, func(s MgrDaemonState) bool { return s.StaleRotatingReplies == 1 })
+	if state.RotatingKeys.Generation != 0 || state.Err != nil {
+		t.Fatal("an ended session published its rotating set", state.RotatingKeys, state.Err)
+	}
+}
+
+// TestMgrDaemonCanceledWaitConsumesNothing calls NextMgrMap and NextDigest
+// with a canceled context while an event and a digest are queued.
+func TestMgrDaemonCanceledWaitConsumesNothing(t *testing.T) {
+	d := &MgrDaemon{changed: make(chan struct{}), options: MgrDaemonOptions{SubscribeDigest: true}}
+	d.events = []MgrMapEvent{{Null: true}}
+	d.digest = &ClusterDigest{MonStatus: []byte("{}")}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := d.NextMgrMap(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatal("NextMgrMap", err)
+	}
+	if _, err := d.NextDigest(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatal("NextDigest", err)
+	}
+	if len(d.events) != 1 || d.digest == nil {
+		t.Fatal("a canceled wait consumed a queued value", d.events, d.digest)
+	}
+	if event, err := d.NextMgrMap(context.Background()); err != nil || !event.Null {
+		t.Fatal("queued event", event, err)
+	}
+	if digest, err := d.NextDigest(context.Background()); err != nil || string(digest.MonStatus) != "{}" {
+		t.Fatal("queued digest", digest, err)
+	}
+}
