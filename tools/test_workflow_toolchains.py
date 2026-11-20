@@ -28,7 +28,6 @@ LISTERS = {
     # validate and sharing list the suites and run the fixture's
     # TestCatalogRowsAreAdmittedByTheFixture.
     "scenario_plan": (("validate", "sharing"), (".", "integration/fixture")),
-    "protocol_evidence": (None, (".", "integration/fixture")),  # a link's own module
     "native_path_coverage": (None, None),  # its MODULES, read below
     "fuzz_targets": (None, (".",)),
     "product_dependencies": (None, (".",)),
