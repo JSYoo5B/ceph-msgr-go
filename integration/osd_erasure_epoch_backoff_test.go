@@ -53,6 +53,7 @@ type ecBackoffAck struct {
 	MapEpoch  uint32   `json:"map_epoch"`
 	Client    string   `json:"client"`
 	ReachedPG bool     `json:"reached_pg"`
+	Done      bool     `json:"done"`
 	Events    []string `json:"events"`
 }
 
@@ -416,7 +417,7 @@ func TestCephOSDErasureOptimizedK2M2ReplacementPGBackoffIntegration(t *testing.T
 	// pg_temp lasts (shard 2 -> 3), and drops it: this OSD holds no shard 3
 	// of the PG. Its history shows it received and never reached the PG.
 	ack := r.backoffAck(object, fresh.ID, block, gid)
-	if ack.Shard != int(fresh.Shard) || ack.ReachedPG || !slices.Contains(ack.Events, "queued_for_pg") {
+	if ack.Shard != int(fresh.Shard) || ack.ReachedPG || !ack.Done || !slices.Contains(ack.Events, "queued_for_pg") {
 		t.Fatalf("the ACK in the replacement's op history %+v is not the received ACK of shard %d that never reached the PG", ack, fresh.Shard)
 	}
 

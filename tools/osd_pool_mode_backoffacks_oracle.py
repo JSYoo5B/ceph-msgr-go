@@ -18,7 +18,10 @@ active PG (src/osd/PrimaryLogPG.cc do_request, PG::handle_backoff in
 src/osd/PG.cc).
 
 The history is bounded (osd_op_history_size, osd_op_history_duration), so an
-ACK this mode does not report is not shown absent. It judges nothing.
+ACK this mode does not report is not shown absent. A matched ACK is reported
+only with its whole event list ending in "done"; an over-bound, malformed or
+unterminated list fails the observation rather than being projected, so
+reached_pg=false is read from a complete history. It judges nothing else.
 """
 import re
 
@@ -48,13 +51,35 @@ def acks(document, pgid):
             continue
         data = op.get("type_data") if isinstance(op.get("type_data"), dict) else {}
         client = data.get("client_info") if isinstance(data.get("client_info"), dict) else {}
-        events = data.get("events") if isinstance(data.get("events"), list) else []
-        names = [e.get("event") for e in events[:MAX_EVENTS] if isinstance(e, dict) and isinstance(e.get("event"), str)]
+        names = complete_events(data.get("events"))
         found.append({"pgid": match[1], "shard": -1 if match[2] is None else int(match[2]), "id": int(match[3]),
                       "begin": match[4], "end": match[5], "map_epoch": int(match[6]),
                       "client": client.get("client") if isinstance(client.get("client"), str) else "",
-                      "reached_pg": "reached_pg" in names, "events": names})
+                      "reached_pg": "reached_pg" in names, "done": names[-1] == "done", "events": names})
     return found
+
+
+def complete_events(events):
+    """The event names of a matched ACK, only when the list is whole.
+
+    A missing, over-bound or malformed event list raises instead of being
+    truncated or filtered, so the absence of reached_pg is read only from a
+    complete projection. The last event must be the terminal "done" that
+    TrackedOp::put marks on a live op before unregister_inflight_op moves it
+    into the history (src/common/TrackedOp.h); an entry without it is not
+    evidence that the op completed.
+    """
+    if not isinstance(events, list) or not events or len(events) > MAX_EVENTS:
+        raise ValueError("native op history of a matched ACK has no complete event list")
+    names = []
+    for event in events:
+        name = event.get("event") if isinstance(event, dict) else None
+        if not isinstance(name, str) or not name or len(name) > MAX_DESCRIPTION:
+            raise ValueError("native op history of a matched ACK has a malformed event")
+        names.append(name)
+    if names[-1] != "done":
+        raise ValueError("native op history of a matched ACK does not end with done")
+    return names
 
 
 @oracle_mode
