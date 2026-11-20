@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Check frame/message/role ledger links to tests and retained evidence.
 
+Each native receipt is one file in cephmsgr/receipts/ named by its ID; this
+module is the only reader of those files.
+
 This validates references, not the truth of a native observation. A linked
 unit test must be declared as a top-level test in the linked file and listed by
 Go for that file's package (go_test_list.declares: `go test -list` gives the
@@ -17,7 +20,15 @@ import go_test_list
 
 ROOT = Path(__file__).resolve().parent.parent
 EVIDENCE = Path("cephmsgr/PROTOCOL_EVIDENCE.md")
+RECEIPTS = Path("cephmsgr/receipts")
 LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+CATEGORIES = {"exact-commit", "file-attributed", "historical", "unjoined"}
+RECEIPT_FIELDS = ("Attribution", "Boundary", "Record")
+# Receipt IDs that predate one-file-per-receipt. Other documents cite them, so
+# they keep their names; no receipt joins this set. A later receipt takes a
+# descriptive name (RECEIPT_NAME), never the next number.
+NUMBERED_RECEIPTS = frozenset({"U"} | {"R%d" % number for number in range(1, 41) if number != 36})
+RECEIPT_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 def table(text, heading):
@@ -44,6 +55,56 @@ def indexed(rows, label, problems):
             problems.append(label + ": duplicate row " + key)
         result[key] = row
     return result
+
+
+def receipt_texts(root):
+    """Text of every receipt file, by ID (the file name without .md)."""
+    directory = Path(root) / RECEIPTS
+    if not directory.is_dir():
+        raise ValueError("missing receipt directory: " + str(RECEIPTS))
+    return {path.stem: path.read_text() for path in sorted(directory.glob("*.md"))}
+
+
+def parse_receipt(name, text, problems):
+    """[ID, attribution, boundary, record] of one receipt file, or None.
+
+    The file is a `# Native receipt <ID>` heading and one line per field in
+    RECEIPT_FIELDS, each written once as `Field: value`."""
+    prefix = "receipt " + name + ": "
+    if name not in NUMBERED_RECEIPTS:
+        if re.fullmatch(r"R[0-9]+", name):
+            problems.append(prefix + "numbered IDs are frozen; name a new receipt instead")
+            return None
+        if not RECEIPT_NAME.fullmatch(name):
+            problems.append(prefix + "ID must be lowercase words joined by hyphens")
+            return None
+    lines = text.splitlines()
+    if not lines or lines[0] != "# Native receipt " + name:
+        problems.append(prefix + "first line must be '# Native receipt " + name + "'")
+        return None
+    fields = {}
+    for line in lines[1:]:
+        field, separator, value = line.partition(": ")
+        if separator and field in RECEIPT_FIELDS:
+            if field in fields:
+                problems.append(prefix + "duplicate " + field)
+            fields[field] = value.strip()
+        elif line.strip():
+            problems.append(prefix + "unexpected line " + line[:40])
+    missing = [field for field in RECEIPT_FIELDS if not fields.get(field)]
+    if missing:
+        problems.append(prefix + "missing " + ", ".join(missing))
+        return None
+    return [name] + [fields[field] for field in RECEIPT_FIELDS]
+
+
+def receipt_rows(texts, problems):
+    rows = {}
+    for name, text in texts.items():
+        row = parse_receipt(name, text, problems)
+        if row is not None:
+            rows[name] = row
+    return rows
 
 
 def message_rows(root):
@@ -152,16 +213,22 @@ def local_file(root, document, target):
     return path
 
 
-def check(root=ROOT, text=None):
+def check(root=ROOT, text=None, receipts=None):
+    """Problems in the ledger. `text` replaces the document and `receipts`
+    (ID -> file text) the receipt directory, so tests can check variants."""
     root = Path(root)
     if text is None:
         text = (root / EVIDENCE).read_text()
+    if receipts is None:
+        receipts = receipt_texts(root)
     problems = []
     messages = indexed(table(text, "Message evidence"), "messages", problems)
     frames = indexed(table(text, "Frame evidence"), "frames", problems)
     opcodes = indexed(table(text, "Implemented opcode evidence"), "opcodes", problems)
     features = indexed(table(text, "Feature evidence"), "features", problems)
-    receipts = indexed(table(text, "Native receipts"), "receipts", problems)
+    for name in sorted(NUMBERED_RECEIPTS - set(receipts)):
+        problems.append("receipt " + name + ": cited numbered ID has no file")
+    receipts = receipt_rows(receipts, problems)
     expected = message_rows(root)
     catalog = opcode_rows(root)
     for label, actual, wanted in (("messages", set(messages), set(expected)),
@@ -173,14 +240,14 @@ def check(root=ROOT, text=None):
         for key in sorted(actual - wanted):
             problems.append(label + ": undeclared row " + key)
     for name, row in receipts.items():
-        if row[1] not in {"exact-commit", "file-attributed", "historical", "unjoined"}:
+        if row[1] not in CATEGORIES:
             problems.append("receipt " + name + ": unknown attribution category")
         links = LINK.findall(row[3])
         if row[1] != "unjoined" and not links:
             problems.append("receipt " + name + ": missing local record")
         for _, target in links:
             try:
-                path = local_file(root, EVIDENCE, target)
+                path = local_file(root, RECEIPTS / (name + ".md"), target)
                 if path.suffix != ".md":
                     problems.append("receipt " + name + ": record must be Markdown")
             except ValueError as error:

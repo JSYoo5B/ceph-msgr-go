@@ -102,11 +102,11 @@ answer.
    broad row may skip it. The scenario itself is declared beside its test,
    as a `//scenario:` line in the test's doc comment.
 5. **Observed native result.** Open the validation record linked from the
-   coverage row. The receipt row in
-   [PROTOCOL_EVIDENCE.md](cephmsgr/PROTOCOL_EVIDENCE.md#native-receipts)
+   coverage row. The receipt file named by the row's receipt ID in
+   [cephmsgr/receipts/](cephmsgr/receipts/) (described under
+   [Native receipts](cephmsgr/PROTOCOL_EVIDENCE.md#native-receipts))
    states its attribution category (exact commit, file hashes or historical
-   source), the profile and the actual boundary of the observation in one
-   line. Receipts are not all live Go exchanges: some are offline native
+   source), the profile and the actual boundary of the observation. Receipts are not all live Go exchanges: some are offline native
    encoder vectors, and the entry says so. A receipt belongs to the source
    and profile it names and to no other.
 6. **Remaining limits.** Read the "Not verified" section of the validation
@@ -196,8 +196,7 @@ No. The path that establishes this:
    part, so it is not evidence for the Go request.
 5. **Observed native result.**
    [OSD_SET_CHUNK_GO_VALIDATION.md](integration/fixture/OSD_SET_CHUNK_GO_VALIDATION.md#results),
-   summarized as receipt R27 under
-   [Native receipts](cephmsgr/PROTOCOL_EVIDENCE.md#native-receipts): one run
+   summarized as receipt [R27](cephmsgr/receipts/R27.md): one run
    at one named commit on one profile (secure, aes256k, IPv6, container,
    legacy-v6, one BlueStore OSD).
 6. **Remaining limits.**
