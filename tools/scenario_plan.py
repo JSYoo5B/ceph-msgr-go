@@ -120,6 +120,7 @@ import scenario_declarations
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CHECKS_WORKFLOW = ROOT / ".github" / "workflows" / "platform-checks.yml"
+NATIVE_WORKFLOW = ROOT / ".github" / "workflows" / "native-scenarios.yml"
 REQUIRED_PARAMS = ("key", "service", "family")
 SUPPORTED_RELEASE = re.compile(r"^20\.2\.\d+$")
 FIXTURE = ROOT / "integration" / "fixture"

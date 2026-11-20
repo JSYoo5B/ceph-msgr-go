@@ -14,18 +14,18 @@ import ci_row_catalog
 
 class CrossAreaRowsTest(ci_row_catalog.RowsTestCase):
     def test_closed_profile_and_selector_reach_the_fixture(self):
-        self.assertIn("CEPH_MSGR_TEST_OSD_PROFILE: ${{ matrix.osd_profile || 'legacy-v6' }}", self.workflow)
-        self.assertIn("CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}", self.workflow)
-        self.assertIn("CEPH_MSGR_TEST_CAPABILITIES: ${{ matrix.capabilities || '' }}", self.workflow)
-        self.assertIn("CEPH_MSGR_TEST_MDS_FRESH: ${{ matrix.mds_fresh || '0' }}", self.workflow)
-        self.assertIn("CEPH_MSGR_TEST_MDS_COMMANDS: ${{ matrix.mds_commands || '0' }}", self.workflow)
-        self.assertIn("CEPH_MSGR_TEST_MDS_SESSIONS: ${{ matrix.mds_sessions || '0' }}", self.workflow)
-        self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS: ${{ matrix.mds_cephfs || '0' }}", self.workflow)
-        self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS: ${{ matrix.mds_cephfs_ranks || '0' }}", self.workflow)
-        self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY: ${{ matrix.mds_cephfs_ranks_replay || '0' }}", self.workflow)
-        self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}", self.workflow)
-        self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
-        self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
+        self.assert_forwarded("osd_profile", "CEPH_MSGR_TEST_OSD_PROFILE", "legacy-v6")
+        self.assert_forwarded("test_run", "CEPH_MSGR_TEST_RUN", "")
+        self.assert_forwarded("capabilities", "CEPH_MSGR_TEST_CAPABILITIES", "")
+        self.assert_forwarded("mds_fresh", "CEPH_MSGR_TEST_MDS_FRESH", "0")
+        self.assert_forwarded("mds_commands", "CEPH_MSGR_TEST_MDS_COMMANDS", "0")
+        self.assert_forwarded("mds_sessions", "CEPH_MSGR_TEST_MDS_SESSIONS", "0")
+        self.assert_forwarded("mds_cephfs", "CEPH_MSGR_TEST_MDS_CEPHFS", "0")
+        self.assert_forwarded("mds_cephfs_ranks", "CEPH_MSGR_TEST_MDS_CEPHFS_RANKS", "0")
+        self.assert_forwarded("mds_cephfs_ranks_replay", "CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY", "0")
+        self.assert_forwarded("mds_cephfs_completion", "CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION", "0")
+        self.assert_forwarded("mds_cephfs_data", "CEPH_MSGR_TEST_MDS_CEPHFS_DATA", "0")
+        self.assert_forwarded("rbd", "CEPH_MSGR_TEST_RBD", "0")
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # A row selects tests explicitly exactly when its identifier says so
         # (a final ".t-" component), so a broad row cannot gain a selector
@@ -68,7 +68,7 @@ class CrossAreaRowsTest(ci_row_catalog.RowsTestCase):
         self.assertIn("$expected", step)
 
     def test_soak_row_keeps_its_separate_opt_in_and_original_profiles(self):
-        self.assertIn("CEPH_MSGR_TEST_OSD_SOAK: ${{ matrix.osd_soak || '' }}", self.workflow)
+        self.assert_forwarded("osd_soak", "CEPH_MSGR_TEST_OSD_SOAK", "")
         rows = [row for row in self.rows if row.get("osd_soak")]
         self.assertEqual(rows, [{
             "key": "aes256k", "service": "aes256k", "family": "4", "stress": "",

@@ -109,7 +109,7 @@ class MonMgrCommandRowsTest(ci_row_catalog.RowsTestCase):
                          {"TestCephNamedMonitorTellIntegration", "TestCephNamedManagerTellIntegration"})
 
     def test_mon_ping_rows_are_exclusive_and_reach_the_native_fixture(self):
-        self.assertIn("CEPH_MSGR_TEST_MON_PING: ${{ matrix.mon_ping || '0' }}", self.workflow)
+        self.assert_forwarded("mon_ping", "CEPH_MSGR_TEST_MON_PING", "0")
         rows = [row for row in self.rows if row.get("mon_ping") == "1"]
         self.assertEqual(len(rows), 2)
         observed = set()

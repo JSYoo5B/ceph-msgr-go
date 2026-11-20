@@ -11,7 +11,7 @@ import ci_row_catalog
 
 class MgrServiceRowsTest(ci_row_catalog.RowsTestCase):
     def test_mgr_service_rows_require_explicit_opt_in_and_only_the_declared_test(self):
-        self.assertEqual(self.workflow.count("CEPH_MSGR_TEST_MGR_SERVICE: ${{ matrix.mgr_service || '0' }}"), 1)
+        self.assert_forwarded("mgr_service", "CEPH_MSGR_TEST_MGR_SERVICE", "0")
         self.assertIn("matrix.mgr_service == '1' && 'MGR-service ' || ''", self.workflow)
         rows = [row for row in self.rows if row.get("mgr_service") == "1"]
         common = {
