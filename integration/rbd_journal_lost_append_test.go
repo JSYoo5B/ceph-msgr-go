@@ -42,7 +42,14 @@ import (
 // connection, open a new one, reattach its watch, release the lock and
 // unwatch. It never sends the append again, never applies the entry and never
 // commits a position. Native librbd finally acquires the lock and replays the
-// journal. See integration/fixture/RBD_JOURNAL_LOST_APPEND_VALIDATION.md.
+// journal. Pinned cls_journal journal_object_append
+// (ceph/ceph/blob/v20.2.4/src/cls/journal/cls_journal.cc) keeps no request
+// identity, so a second append of the same bytes would append again; a native
+// Objecter would resend with the original identity, but the Go client never
+// resends. On the secure row the withheld bytes are not attributed to a frame
+// or transaction. Not covered: explicit resubmission on one OSD, lock-owner
+// loss while uncertain, lost replies of other journal or lock calls, more than
+// one pending append, and watch pings while replies are withheld.
 //
 // Everything journal-specific is the test-only consumer code of
 // rbd_journal_test.go. The product is unchanged.
@@ -699,7 +706,13 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) { runRBDJournalL
 // unchanged version, and a further native observation must find the journal
 // byte-identical: the new primary answered from the replicated PG log and did
 // not append again. Release and native replay follow as in the single-OSD
-// sequence. See integration/fixture/RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md.
+// sequence. PrimaryLogPG::do_op answers a write whose request ID is in the
+// replicated PG log from the log (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc);
+// osd primary-affinity is not used because a non-default affinity makes
+// OSDMap::get_features require CEPH_FEATURE_OSD_PRIMARY_AFFINITY, which the
+// legacy-v6 client lacks. No daemon-side execution record is read. Not
+// covered: a dead or partitioned primary, a trimmed PG log, a second
+// resubmission, lock-owner loss after the change, and pools with several PGs.
 //
 //scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimarychange key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-primary-change
 //scenario:row rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimarychange key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-primary-change

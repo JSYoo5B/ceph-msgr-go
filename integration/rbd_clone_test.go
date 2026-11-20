@@ -35,8 +35,16 @@ import (
 // clone has a snapshot), the read-back of a native librbd copy-up, the OSD
 // clone state after a clone snapshot, and reads after a native flatten.
 // Native librbd and librados observe every step independently, and the
-// native clone write and flatten keep their Messenger request lines. See
-// integration/fixture/RBD_BASE_FIXTURE.md and RBD_CLONE_VALIDATION.md.
+// native clone write and flatten keep their Messenger request lines. The
+// restated forms follow v20.2.4 librbd image/RefreshRequest.cc,
+// io/ObjectRequest.cc, io/CopyupRequest.cc (prepare_copyup_data) and
+// operation/FlattenRequest.cc; cls_rbd sparse_copyup and copyup return 0
+// without writing when the object exists. librbd's copy-up input bytes appear
+// in no native log, so the comparison uses the input rebuilt from librbd's
+// logged extent map and the bytes native librados reads back. Not covered:
+// concurrent copy-ups, copy-on-read, object-map or exclusive-lock clones,
+// deep-flatten, clone v1, cross-pool or namespaced parents, overlap pruning
+// inside an object, and snapshot SPARSE_READ on EC pools.
 //
 // Everything RBD-specific below is test-only consumer logic: the striping
 // map, the parent fallback with overlap pruning, the copy-up construction,

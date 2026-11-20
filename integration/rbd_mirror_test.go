@@ -175,6 +175,11 @@ func rbdMirrorPeerWitness(osd []rbdMirrorSession, mons []rbdMirrorMonSession, ad
 // still reads the native oracle object. After the restore the distinguishable
 // patch arrives at the destination. The product implements no mirroring: the
 // Go session is the control that attributes the fault to one peer path.
+// Attribution relies on native session state, netem counters and mirror
+// status; the encrypted daemon-to-OSD frames are not captured. Only this one
+// profile, outbound loss from the source OSD, one fault and one restore are
+// exercised: journal mode, pool scope, IPv6, CRC mode and faults on the MON or
+// destination paths are not.
 //
 //scenario:row rbd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdmirrorpathrecovery key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=rbd-mirror
 //scenario:covers Service-induced paths
