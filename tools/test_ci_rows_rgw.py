@@ -34,7 +34,7 @@ def row(sid="r", **params):
 
 class RGWRowsTest(ci_row_catalog.RowsTestCase):
     def routed_ids(self):
-        """The routed rows' identifiers in the planner's order: identifier order."""
+        """The routed rows' identifiers in the planner's order."""
         return [entry["id"] for entry in self.entries if plan.routed(entry["params"])]
 
     def test_each_checkpoint_has_one_routed_row(self):

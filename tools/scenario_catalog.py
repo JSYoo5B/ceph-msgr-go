@@ -2,7 +2,7 @@
 """The native scenario catalog of a working tree or of a Git revision.
 
 The catalog is not a file. Its rows are the //scenario: declarations beside
-the native tests (scenario_declarations.py), in identifier order. Its fixed
+the native tests (scenario_declarations.py), in planning order. Its fixed
 checks are the selectable jobs of the reusable platform workflow
 (.github/workflows/platform-checks.yml): a job whose `if:` is
 `contains(fromJSON(inputs.matrix).fixed, '<job>')` is the check `<job>`.

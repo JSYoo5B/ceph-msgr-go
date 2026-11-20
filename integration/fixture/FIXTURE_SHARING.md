@@ -140,7 +140,7 @@ changes.
 
 `scenario_plan.py plan` groups the selected rows: the shareable rows of one
 configuration that have an explicit `test_run` form one job of at most eight
-rows, in catalog (identifier) order, at the place of its first row. An isolated row, a
+rows, in planning order, at the place of its first row. An isolated row, a
 broad row (no `test_run`), a row of another configuration and a request that
 selects one row of a configuration keep a job of their own with unchanged
 parameters, so `/ci run <row>` runs exactly that row. Because `plan` also

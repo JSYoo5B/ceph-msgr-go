@@ -19,7 +19,7 @@ class MgrServiceRowsTest(ci_row_catalog.RowsTestCase):
             "osd_profile": "legacy-v6", "mgr_service": "1",
             "test_run": "^TestCephMgrServiceRegistrationIntegration$",
         }
-        self.assertCountEqual(rows, [
+        self.assertEqual(rows, [
             dict(common, key="aes", service="aes", mode="crc", family="4", runtime="host"),
             dict(common, key="aes256k", service="aes256k", family="6", runtime="container"),
             dict(key="aes256k", service="aes256k", family="4", runtime="container", managers="0",

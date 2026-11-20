@@ -162,8 +162,11 @@ func TestCephOSDCopyFromSnapTruncateIntegration(t *testing.T) {
   ones in written order, then `test_run`, then `capabilities`.
 - Declarations are read from the `*_test.go` files of `integration`,
   `cephmsgr` and, for the routed RGW checkpoints only (`rgw_native=1`),
-  `integration/fixture`. The rows are in identifier order, so where a
-  declaration sits changes no plan.
+  `integration/fixture`. The rows are in planning order: the rows that
+  predate the declarations keep their recorded order
+  (`tools/scenario_order.py`, which no new row joins), and every later row
+  follows in identifier order, so where a declaration sits changes no plan
+  and a new row edits no list.
 
 `tools/scenario_declarations.py` reads the declarations as text, and
 `tools/scenario_catalog.py` composes them with the fixed check suites for

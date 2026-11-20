@@ -21,6 +21,8 @@ Declarations are read from the `*_test.go` files of the native suites:
 integration and cephmsgr (the product's API and client suites), and
 integration/fixture, where only the routed RGW checkpoints are declared
 (rgw_native=1; integration/fixture/rgw_native_route.go). Rows are returned in
+planning order: the rows that predate the declarations in their recorded order
+(scenario_order.py, which no new row joins), then every later row in
 identifier order, so where a test or its file sits changes no plan.
 
 The reading is text only and builds or runs nothing, because the trusted
@@ -35,6 +37,8 @@ rules of its kind above.
 """
 import re
 from pathlib import Path
+
+import scenario_order
 
 # (directory, native test name pattern, routed): the suites whose test files
 # hold declarations. Routed rows run one RGW checkpoint of the fixture module.
@@ -52,6 +56,7 @@ TEST_FUNCTION = re.compile(r"func (Test\w*)\(")
 ROUTING = "rgw_native"
 # The parameters that follow the written ones, in this order.
 TRAILING = ("test_run", "capabilities")
+RECORDED_RANK = {sid: rank for rank, sid in enumerate(scenario_order.RECORDED)}
 
 
 def suite_of(path):
@@ -164,7 +169,7 @@ def parse_file(path, text):
 
 
 def discover(sources):
-    """(rows in identifier order, problems) of {path: text} test sources.
+    """(rows in planning order, problems) of {path: text} test sources.
 
     A problem names the file and line of the declaration it refuses."""
     found, problems, where = [], [], {}
@@ -177,7 +182,14 @@ def discover(sources):
                 continue
             where[row["id"]] = location
             found.append(row)
-    return sorted(found, key=lambda row: row["id"]), problems
+    return sorted(found, key=planning_key), problems
+
+
+def planning_key(row):
+    """The rows that predate the declarations keep their recorded order
+    (scenario_order.RECORDED); every later row follows in identifier order."""
+    rank = RECORDED_RANK.get(row["id"])
+    return (0, rank, "") if rank is not None else (1, 0, row["id"])
 
 
 def tree_sources(root):

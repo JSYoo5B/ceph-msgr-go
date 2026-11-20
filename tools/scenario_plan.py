@@ -9,8 +9,9 @@ before the first dot) and its workflow matrix parameters; the fixed checks are
 the selectable jobs of the reusable platform workflow. This tool validates the
 catalog against those jobs, the tests it selects and the fixture, and prints
 the selected matrix with an explanation. Every row is in the default coverage
-(`all`); there is no separate list of required rows, and rows are planned in
-identifier order. `validate` resolves test selectors against the tests Go
+(`all`); there is no separate list of required rows. Rows are planned in
+planning order (scenario_declarations.planning_key): the rows that predate the
+declarations in their recorded order, then later rows by identifier. `validate` resolves test selectors against the tests Go
 lists for the native suites (go_test_list.py compiles them and executes no
 test body) and passes every row it read to the fixture's admission (one
 cluster-free Go test of integration/fixture, which needs the fixture module's
@@ -78,7 +79,7 @@ declaration, a misplaced declaration and a native test that Go does not list.
 A fixture configuration is a row's parameters without test_run.
 
 plan groups the selected rows: the shareable rows of one configuration with
-an explicit test_run, in catalog (identifier) order, run as one job of at most
+an explicit test_run, in planning order, run as one job of at most
 MAX_SEQUENCE_ROWS rows, a fixture sequence (integration/fixture/sequence.go).
 Every other selected row, and a configuration with one such row selected,
 keeps a job of its own, exactly as before; a request of one row is therefore

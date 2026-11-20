@@ -19,11 +19,12 @@ def declaring(*rows, test="TestCephXIntegration"):
 
 
 class RepositoryCatalogTests(unittest.TestCase):
-    def test_rows_are_the_declarations_in_identifier_order(self):
+    def test_rows_are_the_declarations_in_planning_order(self):
         document = catalog.load()
         rows = document["scenarios"]
         self.assertEqual(rows, scenario_declarations.discover(scenario_declarations.tree_sources(catalog.ROOT))[0])
-        self.assertEqual([row["id"] for row in rows], sorted(row["id"] for row in rows))
+        self.assertEqual([row["id"] for row in rows], sorted((row["id"] for row in rows),
+                                                             key=lambda sid: scenario_declarations.planning_key({"id": sid})))
         for row in rows:
             self.assertEqual(row["group"], row["id"].split(".", 1)[0])
         self.assertEqual(scenario_declarations.stray_declarations(catalog.ROOT), [])

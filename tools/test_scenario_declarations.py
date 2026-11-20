@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 import scenario_declarations as declarations
+import scenario_order
 
 
 def source(*doc, test="TestCephXIntegration", package="integration_test"):
@@ -60,6 +61,16 @@ class DeclarationTest(unittest.TestCase):
         })
         self.assertEqual(problems, [])
         self.assertEqual([row["id"] for row in rows], ["mon.c", "osd.a", "osd.b"])
+
+    def test_recorded_rows_keep_their_order_and_later_rows_follow_by_identifier(self):
+        recorded = scenario_order.RECORDED
+        self.assertEqual(len(recorded), len(set(recorded)), "a recorded row is listed twice")
+        declared = {row["id"] for row in declarations.discover(declarations.tree_sources(Path(__file__).resolve().parent.parent))[0]}
+        self.assertEqual(sorted(set(recorded) - declared), [], "a recorded row is no longer declared; remove its entry")
+        later = ["zz.new-b", "aa.new-a"]
+        rows = [{"id": sid} for sid in later + [recorded[2], recorded[0], recorded[1]]]
+        self.assertEqual([row["id"] for row in sorted(rows, key=declarations.planning_key)],
+                         [recorded[0], recorded[1], recorded[2], "aa.new-a", "zz.new-b"])
 
     def test_routed_rows_are_exactly_the_fixture_checkpoints(self):
         rows, problems = self.discover({"integration/fixture/r_test.go": source(
