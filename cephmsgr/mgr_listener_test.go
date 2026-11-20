@@ -740,3 +740,23 @@ func TestMgrListenerCanceledWaitsConsumeNothing(t *testing.T) {
 		t.Fatal("the queued message was consumed", m, err)
 	}
 }
+
+// TestMgrPeerQueuesNothingAfterItsTerminalCause delivers a message after
+// the session's close callback recorded its cause, as a reader still
+// holding a message when the session fails does: Next must keep returning
+// the cause, with nothing delivered after it.
+func TestMgrPeerQueuesNothingAfterItsTerminalCause(t *testing.T) {
+	l := &MgrListener{options: MgrListenerOptions{MaxBufferedMessages: 4, MaxBufferedBytes: 1 << 20}}
+	p := &MgrPeer{listener: l, changed: make(chan struct{})}
+	cause := errors.New("test transport loss")
+	p.closed(cause)
+	if _, err := p.Next(context.Background()); !errors.Is(err, cause) {
+		t.Fatal("Next before the late message", err)
+	}
+	if err := p.enqueue(msgr.MessageData{Type: 0x700, Front: []byte{1}}); !errors.Is(err, cause) {
+		t.Fatal("a message was queued after the terminal cause", err)
+	}
+	if _, err := p.Next(context.Background()); !errors.Is(err, cause) {
+		t.Fatal("Next after the late message", err)
+	}
+}

@@ -599,6 +599,12 @@ func (p *MgrPeer) enqueue(m msgr.MessageData) error {
 	size := len(m.Front) + len(m.Middle) + len(m.Data) + 64
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.err != nil {
+		// The session's close callback ran while its reader still held
+		// this message: Next may already have returned the terminal cause,
+		// so nothing is queued after it.
+		return p.err
+	}
 	if len(p.queue) >= p.listener.options.MaxBufferedMessages || p.bytes+size > p.listener.options.MaxBufferedBytes {
 		return fmt.Errorf("%w: %w", ErrMgrPeerOverflow, wire.ErrLimit)
 	}
@@ -622,8 +628,9 @@ func (p *MgrPeer) closed(err error) {
 }
 
 // Next returns the oldest undelivered inbound message. Accepted messages
-// drain before the terminal cause. ctx bounds only this wait; a canceled
-// wait consumes nothing, also with a message queued.
+// drain before the terminal cause, and none is accepted after the close
+// callback recorded that cause. ctx bounds only this wait; a canceled wait
+// consumes nothing, also with a message queued.
 func (p *MgrPeer) Next(ctx context.Context) (MgrInboundMessage, error) {
 	for {
 		if err := ctx.Err(); err != nil {
