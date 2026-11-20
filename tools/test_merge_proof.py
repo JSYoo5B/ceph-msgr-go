@@ -6,9 +6,10 @@ base and makes six branches from it. Each branch adds what the section
 "Adding a native test" of .github/scenarios/README.md tells an author to add,
 and only that:
 
-- a native test TestCeph<Name>Integration with its scenario row declared
-  beside it (//scenario:row in its doc comment), its //fixture: sharing line
-  and a cluster-free helper test, in a new integration/<name>_test.go;
+- a native test TestCeph<Name>Integration with its scenario row and the SPEC
+  path it covers declared beside it (//scenario:row and //scenario:covers in
+  its doc comment), its //fixture: sharing line and a cluster-free helper
+  test, in a new integration/<name>_test.go;
 - the fixture capability the row declares, in a new integration/fixture file
   (defineCapability, or defineExclusiveCapability on a fixture with its own
   default selection), with the public receipt its control writes
@@ -16,12 +17,10 @@ and only that:
 - a new owned-pool oracle mode, in its own module
   tools/osd_pool_mode_<name>_oracle.py (@oracle_mode), which the native test
   reads with nativePoolResult into a result type of its own;
-- a coverage row with its dated note, in a new row file
-  integration/fixture/coverage/<AREA>/<AREA>-<name>.md;
 - the row's own checks, in a new tools/test_ci_rows_<group>_<name>.py;
 - and, from the section "Adding other registrations", a fixture control
   declared beside its function (defineControl) in the capability file, a
-  native receipt cephmsgr/receipts/<name>.md, a catalog check
+  catalog check
   tools/scenario_checks/<name>.py with its tests, a successful-evidence
   family tools/native_evidence_<name>.py with its tests, and a routed RGW
   checkpoint (a TestRGWNative...Integration test of the fixture module with
@@ -31,8 +30,6 @@ and only that:
 Every branch is made from the base and its author's own name only: no
 number, name or file is allocated across the branches, and the test
 test_branches_are_independent rebuilds each one alone and compares the trees.
-Two authors of one area therefore pick their coverage row IDs without knowing
-each other.
 
 Case A merges an OSD branch with an MDS branch, which must merge without a
 textual conflict in any file. Case B merges two RBD branches and Case C
@@ -48,12 +45,13 @@ validators named below.
 
 Each merged tree of Cases A to C passes the repository's own validators, run
 from that tree: scenario_plan.py validate (catalog, selectors, the fixture's admission
-and sharing of every row), the cluster-free listing tools and the cluster-free
-tests with their result gate, native_path_coverage.py, every test of the
-fixture module, the coverage map's tests, every tools/test_ci_rows_* module
-and the owned-pool oracle's tests. It also requires that the merged oracle
-registers both branches' modes, that the fixture admits them from their
-declarations and that the fixture collects both branches' receipts. A
+and sharing of every row, and the SPEC path of every //scenario:covers line),
+the cluster-free listing tools and the cluster-free tests with their result
+gate, every test of the fixture module, every tools/test_ci_rows_* module and
+the owned-pool oracle's tests. It also requires that the merged tree reads
+both branches' covered paths, that the merged oracle registers both
+branches' modes, that the fixture admits them from their declarations and
+that the fixture collects both branches' receipts. A
 validator that needs a total, a global list or a test-name admission list for
 the selections the branches add to (single-OSD legacy rows, the MDS CephFS,
 RBD and four-OSD erasure fixtures), or a central list of oracle modes or
@@ -96,17 +94,18 @@ ID_PROFILE = "aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-le
 
 
 class Author:
-    """One branch's additions: one native test, one helper, one row, one
-    capability with one receipt, one owned-pool oracle mode, one coverage row
-    and the row's own checks."""
+    """One branch's additions: one native test with the SPEC path it covers,
+    one helper, one row, one capability with one receipt, one owned-pool
+    oracle mode and the row's own checks."""
 
-    def __init__(self, name, group, area, opt_ins, exclusive, requires, test=None, base=None, id_profile=ID_PROFILE, also=()):
-        self.args = (name, group, area, opt_ins, exclusive, requires)
+    def __init__(self, name, group, path, opt_ins, exclusive, requires, test=None, base=None, id_profile=ID_PROFILE, also=()):
+        self.args = (name, group, path, opt_ins, exclusive, requires)
         self.kwargs = dict(test=test, base=base, id_profile=id_profile, also=also)
         self.name = name                      # e.g. OSD, RBDA
         self.snake = "merge_proof_" + name.lower()
         self.slug = "merge-proof-" + name.lower()
-        self.group, self.area = group, area
+        # The SPEC.md environment scope path the test covers.
+        self.group, self.path = group, path
         self.test = test or "TestCephMergeProof%sIntegration" % name
         self.helper = "TestMergeProof%sHelper" % name
         self.capability = self.slug
@@ -118,17 +117,12 @@ class Author:
         self.declared = ",".join(sorted((self.capability,) + tuple(also)))
         self.params.update(test_run=self.selector, capabilities=self.declared)
         self.exclusive, self.requires = exclusive, requires
-        # The coverage row is named after this author's subject; no number
-        # is taken, so no other branch needs to be known.
-        self.coverage_id = "%s-merge-proof-%s" % (area, name.lower())
         # The owned-pool oracle mode and the public receipt of the control.
         self.mode = "mergeproof" + name.lower()
         self.receipt = "%s-results.json" % self.slug
-        # The other registrations: a fixture control, a native receipt of
-        # the protocol evidence ledger, a catalog check and an evidence
-        # family, each named after this author only.
+        # The other registrations: a fixture control, a catalog check and an
+        # evidence family, each named after this author only.
         self.control = self.slug
-        self.receipt_id = self.slug
         self.check = self.snake
         self.family = "mergeproof" + name.lower()
         self.checkpoint = "TestRGWNativeMergeProof%sIntegration" % name
@@ -144,6 +138,7 @@ class Author:
                 "// It exists only in that test's temporary repository.\n"
                 "//\n"
                 "%s\n"
+                "//scenario:covers %s\n"
                 "//fixture:shareable changes nothing outside the temporary repository of the merge proof\n"
                 "func %s(t *testing.T) {\n"
                 "\tt.Skip(\"merge proof test; selected only in the merge proof's temporary repository\")\n"
@@ -155,7 +150,7 @@ class Author:
                 "\tif selector := %s; selector[0] != '^' {\n"
                 "\t\tt.Fatal(selector)\n"
                 "\t}\n"
-                "}\n" % (self.test, self.declaration(), self.test, json.dumps(self.mode), self.helper, self.helper,
+                "}\n" % (self.test, self.declaration(), self.path, self.test, json.dumps(self.mode), self.helper, self.helper,
                          json.dumps(self.selector)))
 
     def declaration(self):
@@ -210,12 +205,6 @@ class Author:
                 "        self.assertEqual({name for name in self.declared if selector.search(name)}, {%r})\n\n\n"
                 "if __name__ == \"__main__\":\n"
                 "    unittest.main()\n" % (self.name, self.name, self.selector, self.declared, self.test))
-
-    def receipt_file(self):
-        return ("# Native receipt %s\n\n"
-                "Attribution: file-attributed\n\n"
-                "Boundary: merge proof receipt of %s; it exists only in the temporary repository of tools/test_merge_proof.py\n\n"
-                "Record: [merge proof coverage row](../../%s)\n" % (self.receipt_id, self.name, self.paths()["coverage"]))
 
     def scenario_check(self):
         return ('"""Catalog check of the merge proof\'s %s branch: its row is declared.\n\n'
@@ -311,31 +300,12 @@ class Author:
                 "if __name__ == \"__main__\":\n"
                 "    unittest.main()\n" % (self.checkpoint, self.snake, self.name))
 
-    def coverage_row(self):
-        return ("| %s | Merge proof path %s | `released` | Merge proof fixture | Merge proof observation "
-                "| Merge proof cleanup | `%s`, `%s` | dedicated row |"
-                % (self.coverage_id, self.name, self.id, self.test))
-
-    def coverage_file(self):
-        """The row file of the coverage map, as an author writes it."""
-        header = ["ID", "Path", "Class", "Setup and control", "Independent observation",
-                  "Fault and cleanup", "Evidence", "Visibility"]
-        return ("# %s\n\n"
-                "This file holds one `%s` row of the [native path coverage map](../README.md).\n\n"
-                "## Rows\n\n| %s |\n%s|\n%s\n\n"
-                "## Updates\n\n"
-                "Updated by the merge proof %s. %s is new, with one dedicated catalog row. No class changed.\n"
-                % (self.coverage_id, self.area, " | ".join(header), "| --- " * len(header), self.coverage_row(),
-                   self.name, self.coverage_id))
-
     def paths(self):
         return {
             "test": "integration/%s_test.go" % self.snake,
             "capability": "integration/fixture/%s.go" % self.snake,
-            "coverage": "integration/fixture/coverage/%s/%s.md" % (self.area, self.coverage_id),
             "checks": "tools/test_ci_rows_%s_%s.py" % (self.group.replace("-", "_"), self.snake),
             "mode": "tools/osd_pool_mode_%s_oracle.py" % self.mode,
-            "receipt": "cephmsgr/receipts/%s.md" % self.receipt_id,
             "scenario_check": "tools/scenario_checks/%s.py" % self.check,
             "scenario_check_test": "tools/test_scenario_check_%s.py" % self.check,
             "family": "tools/native_evidence_%s.py" % self.family,
@@ -349,8 +319,7 @@ class Author:
         """{path: text} of every file this author adds."""
         paths = self.paths()
         return {paths["test"]: self.native_test(), paths["capability"]: self.capability_source(),
-                paths["checks"]: self.row_checks(), paths["coverage"]: self.coverage_file(),
-                paths["mode"]: self.oracle_mode(), paths["receipt"]: self.receipt_file(),
+                paths["checks"]: self.row_checks(), paths["mode"]: self.oracle_mode(),
                 paths["scenario_check"]: self.scenario_check(), paths["scenario_check_test"]: self.scenario_check_test(),
                 paths["family"]: self.evidence_family(), paths["family_test"]: self.evidence_family_test(),
                 paths["checkpoint"]: self.checkpoint_test(), paths["gate"]: self.gate_module(),
@@ -365,14 +334,14 @@ ERASURE_PARAMS = {"key": "aes256k", "service": "aes256k", "family": "4", "stress
                   "osd": "1", "osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8"}
 ERASURE_ID_PROFILE = "aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8"
 AUTHORS = {
-    "osd": Author("OSD", "osd", "OSD", {}, None, "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=1 OSD_PROFILE=legacy-v6"),
-    "mds": Author("MDS", "mds-cephfs", "MDS", {"mds_fresh": "1", "mds_cephfs": "1"}, "fixtureMDSCephFS", "MDS_FRESH=1 MDS_CEPHFS=1"),
-    "rbda": Author("RBDA", "rbd", "RBD", {"rbd": "1"}, "fixtureRBD", "RBD=1"),
-    "rbdb": Author("RBDB", "rbd", "RBD", {"rbd": "1"}, "fixtureRBD", "RBD=1"),
-    "eca": Author("ECA", "osd", "OSD", {}, None, "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=4",
+    "osd": Author("OSD", "osd", "CLIENT to OSD", {}, None, "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=1 OSD_PROFILE=legacy-v6"),
+    "mds": Author("MDS", "mds-cephfs", "CLIENT to MDS/CephFS", {"mds_fresh": "1", "mds_cephfs": "1"}, "fixtureMDSCephFS", "MDS_FRESH=1 MDS_CEPHFS=1"),
+    "rbda": Author("RBDA", "rbd", "RBD underlying I/O", {"rbd": "1"}, "fixtureRBD", "RBD=1"),
+    "rbdb": Author("RBDB", "rbd", "RBD underlying I/O", {"rbd": "1"}, "fixtureRBD", "RBD=1"),
+    "eca": Author("ECA", "osd", "CLIENT to OSD", {}, None, "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=4",
                   test="TestCephOSDErasureMergeProofECAIntegration", base=ERASURE_PARAMS, id_profile=ERASURE_ID_PROFILE,
                   also=("osd-erasure-width",)),
-    "ecb": Author("ECB", "osd", "OSD", {}, "fixtureOSDErasureCapacity", "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=4",
+    "ecb": Author("ECB", "osd", "CLIENT to OSD", {}, "fixtureOSDErasureCapacity", "OSD=1 OSD_STORE=bluestore OSD_REPLICAS=4",
                   test="TestCephOSDErasureMergeProofECBIntegration", base=ERASURE_PARAMS, id_profile=ERASURE_ID_PROFILE),
 }
 
@@ -557,16 +526,12 @@ class MergeProofTest(unittest.TestCase):
         self.assertEqual(run.returncode, 0, "cluster-free tests failed:\n" + (run.stdout + run.stderr)[-6000:])
         repo.run(python, "tools/cluster_free_tests.py", "verify", "--log", str(log))
 
-        coverage = repo.run(python, "tools/native_path_coverage.py", check=False)
-        self.assertEqual(coverage.returncode, 0, "native_path_coverage.py refused the merged tree:\n" + coverage.stderr[-6000:])
-        released = int(re.search(r"released (\d+)", coverage.stdout).group(1))
-        self.assertEqual(released, self.base_released + len(authors))
-        # The coverage map's own tests, so that a check of the map that
-        # lists its files or rows fails once row files exist.
-        map_tests = repo.run(python, "-m", "unittest", "test_native_path_coverage.NativePathCoverageTests", "-v",
-                             check=False, cwd=repo.path / "tools")
-        self.assertEqual(map_tests.returncode, 0, "coverage map tests failed:\n" + map_tests.stderr[-6000:])
-        self.assertRegex(map_tests.stderr, r"test_current_map_is_consistent .*\.\.\. ok")
+        # The one reader of the //scenario: lines reads both branches'
+        # covered paths, which validate checked against SPEC.md above.
+        covered = repo.run(python, "-c", "import scenario_declarations as d; print('\\n'.join('%s %s' % c[:2] for c in"
+                           " d.coverage(d.tree_sources(d.Path('..')))))", cwd=repo.path / "tools").stdout.splitlines()
+        for author in authors:
+            self.assertIn("%s %s" % (author.test, author.path), covered)
 
         fixture = subprocess.run(["go", "test", "-mod=readonly", "-count=1", "-v", "./..."], cwd=str(repo.path / "integration" / "fixture"),
                                  env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=TIMEOUT)
@@ -589,12 +554,8 @@ class MergeProofTest(unittest.TestCase):
         polled = set(re.search(r"declared fixture controls after the recorded order: ([a-z0-9 -]*)", fixture.stdout).group(1).split())
         for author in authors:
             self.assertIn(author.control, polled, "the merged fixture does not poll control " + author.control)
-        # The ledger reads both branches' receipts, validate ran both
-        # branches' checks, and the collector reads both families.
-        evidence = repo.run(python, "tools/protocol_evidence.py", check=False)
-        self.assertEqual(evidence.returncode, 0, "protocol_evidence.py refused the merged tree:\n" + evidence.stderr[-6000:])
-        listing = repo.run(python, "-c", "import protocol_evidence as p; print(' '.join(sorted(p.receipt_texts(p.ROOT))))",
-                           cwd=repo.path / "tools").stdout.split()
+        # Validate ran both branches' checks, and the collector reads both
+        # families.
         checks = repo.run(python, "-c", "import scenario_checks as c; print(' '.join(path.stem for path in c.modules()))",
                           cwd=repo.path / "tools").stdout.split()
         families = repo.run(python, "-c", "import native_evidence as e; print(' '.join(sorted(e.families())))",
@@ -604,7 +565,6 @@ class MergeProofTest(unittest.TestCase):
             self.assertIn(author.checkpoint, routed, "the merged gate does not verify " + author.checkpoint)
             job = json.loads(repo.run(python, "tools/scenario_plan.py", "plan", "--select", author.checkpoint_id).stdout)["include"]
             self.assertEqual([entry.get("test_run") for entry in job], ["^%s$" % author.checkpoint])
-            self.assertIn(author.receipt_id, listing)
             self.assertIn(author.check, checks)
             self.assertIn(author.family, families)
             job = json.loads(repo.run(python, "tools/scenario_plan.py", "plan", "--select", author.id).stdout)["include"][0]
@@ -651,8 +611,6 @@ class MergeProofTest(unittest.TestCase):
             branch = self.author_branch(alone, "alone-" + key)
             self.assertEqual(self.repo.git("rev-parse", branch + "^{tree}").stdout,
                              self.repo.git("rev-parse", self.branches[key] + "^{tree}").stdout, key)
-        for first, second in (("rbda", "rbdb"), ("eca", "ecb")):
-            self.assertNotEqual(AUTHORS[first].coverage_id, AUTHORS[second].coverage_id)
         keys = list(AUTHORS)
         for index, first in enumerate(keys):
             for second in keys[index + 1:]:
@@ -663,7 +621,6 @@ class MergeProofTest(unittest.TestCase):
         # Case A and Case B run in this order in one test so that both merged
         # trees are validated in one directory and share the build cache.
         self.repo.git("checkout", "-q", "-f", "base")
-        self.base_released = int(re.search(r"released (\d+)", self.repo.run(sys.executable, "tools/native_path_coverage.py").stdout).group(1))
 
         # Case A: different areas, no textual conflict in any file.
         self.assertEqual(self.merge(self.branches["osd"], self.branches["mds"]), set(), "two branches of different areas conflict")
@@ -697,7 +654,7 @@ class MergeProofTest(unittest.TestCase):
         self.merge(self.branches[first], self.branches[second])
         for author in (ours, theirs):
             self.assertIn(author.declaration(), self.repo.read(author.paths()["test"]))
-            self.assertEqual(self.repo.read(author.paths()["coverage"]), author.coverage_file())
+            self.assertIn("//scenario:covers %s\n" % author.path, self.repo.read(author.paths()["test"]))
         self.validate([ours, theirs])
 
 
@@ -706,7 +663,7 @@ class AuthorInstructionsTest(unittest.TestCase):
         """Every file an author writes matches a README pattern, and every
         pattern names a file an author writes."""
         patterns = readme_patterns() + readme_patterns(section=OTHER_SECTION)
-        paths = Author("X", "g", "A", {}, None, "").paths().values()
+        paths = Author("X", "g", "CLIENT to OSD", {}, None, "").paths().values()
         for path in paths:
             self.assertTrue([pattern for pattern, compiled in patterns if compiled.match(path)], path)
         for pattern, compiled in patterns:
