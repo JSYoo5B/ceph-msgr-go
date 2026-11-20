@@ -65,7 +65,9 @@ def _environment():
 
 def _go(module, arguments, timeout):
     try:
-        return subprocess.run(["go"] + arguments, cwd=module, env=_environment(), text=True,
+        # Go writes UTF-8 whatever the console code page; decoding it with the
+        # locale's encoding (cp1252 on Windows) would corrupt test names.
+        return subprocess.run(["go"] + arguments, cwd=module, env=_environment(), text=True, encoding="utf-8",
                               capture_output=True, timeout=timeout)
     except FileNotFoundError as error:
         raise ListError("go is required to list Go tests: %s" % error) from error
