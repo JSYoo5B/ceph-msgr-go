@@ -206,7 +206,7 @@ class WorkflowToolchainTests(unittest.TestCase):
         self.assertIn("integration/fixture", suite_modules("test_*.py"))
         self.assertEqual(max(go_directive(module) for module in suite_modules("test_*.py")),
                          go_directive("integration/fixture"))
-        self.assertEqual(suite_modules("test_rgw_native_gate.py"), set())
+        self.assertEqual(suite_modules("test_rgw_native_gate*.py"), set())
 
     def test_old_platform_unit_layout_is_refused(self):
         # The layout of platform-checks.yml before this check: the whole suite

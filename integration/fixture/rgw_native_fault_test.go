@@ -29,7 +29,7 @@ const (
 )
 
 // rgwNativeFaultPayload is the deterministic 1,031-byte input of one object
-// of the backend-fault checkpoint; tools/rgw_native_gate.py mirrors it.
+// of the backend-fault checkpoint; tools/rgw_native_gate_backend_fault.py mirrors it.
 func rgwNativeFaultPayload(multiplier, offset int) []byte {
 	payload := make([]byte, 1031)
 	for i := range payload {

@@ -269,7 +269,7 @@ func TestRGWNativeFaultWaitObservesWithoutRepeating(t *testing.T) {
 }
 
 func TestRGWNativeFaultPayloadsAreDistinctAndMatchTheGate(t *testing.T) {
-	// tools/rgw_native_gate.py FAULT_OBJECTS recomputes these hashes.
+	// tools/rgw_native_gate_backend_fault.py FAULT_OBJECTS recomputes these hashes.
 	want := map[[2]int]string{
 		{13, 7}:  "f5ae8589d38de5ff5e7d3214338b062b60e477067a16e3efdf26ae28cbfa3eab",
 		{29, 11}: "6b267aa088720540c41f4522c44b9d19f81010617523fc1ea9795d47c6e59e4f",
