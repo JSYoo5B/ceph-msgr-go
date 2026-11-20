@@ -92,7 +92,11 @@ type MgrDaemonOptions struct {
 	SubscribeDigest bool
 	// ServiceTicketTTL is the cluster's auth_service_ticket_ttl, which the
 	// native rotating-secret refresh rule reads from its own configuration.
-	// Zero selects the native default of one hour.
+	// Zero selects the native default of one hour. It must be the value the
+	// MONs run with, which a ceph.conf setting can make differ from the
+	// central configuration database. A larger value delays each refresh up
+	// to 30 s after the held current key expired, so the MON can rotate past
+	// the held set and issue service tickets under a secret ID it lacks.
 	ServiceTicketTTL time.Duration
 	// MaxBufferedMaps bounds undelivered MgrMap events (default 64, at most
 	// 4096); see ErrMgrMapOverflow.

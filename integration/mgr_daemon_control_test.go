@@ -123,6 +123,45 @@ func adminCommand(t *testing.T, ctx context.Context, admin *cephmsgr.Client, com
 	return result.Data
 }
 
+// runningServiceTicketTTL returns the auth_service_ticket_ttl every MON of
+// the map runs with, read from each MON's own configuration through a
+// daemon-local `config get` tell, and fails unless they agree. The MON
+// command `config get <who> <key>` is not that value: it answers from the
+// central configuration database or the compiled default
+// (ceph/ceph/blob/v20.2.4/src/mon/ConfigMonitor.cc, "config get"), while
+// the fixture writes the lifetimes into each daemon's ceph.conf. The
+// database therefore reports the one-hour default, and a daemon given it
+// applies the 30 s cap of the native refresh rule instead of ttl/4.
+func runningServiceTicketTTL(t *testing.T, ctx context.Context, admin *cephmsgr.Client) time.Duration {
+	t.Helper()
+	database := strings.Trim(strings.TrimSpace(string(adminCommand(t, ctx, admin, map[string]any{"prefix": "config get", "who": "mon", "key": "auth_service_ticket_ttl"}))), `"`)
+	var ttl time.Duration
+	members := admin.Snapshot().Monitor.Members
+	if len(members) == 0 {
+		t.Fatal("no MON members to read auth_service_ticket_ttl from")
+	}
+	for _, member := range members {
+		result, err := admin.MonTellTo(ctx, member.Name, cephmsgr.Command{JSON: []byte(`{"prefix":"config get","var":"auth_service_ticket_ttl","format":"json"}`)})
+		var value struct {
+			TTL string `json:"auth_service_ticket_ttl"`
+		}
+		if err != nil || result.Code != 0 || json.Unmarshal(result.Data, &value) != nil {
+			t.Fatalf("MON %s running auth_service_ticket_ttl: code %d %q %v", member.Name, result.Code, result.Message, err)
+		}
+		seconds, err := strconv.ParseFloat(value.TTL, 64)
+		if err != nil || seconds < 1 {
+			t.Fatal("MON", member.Name, "running auth_service_ticket_ttl", value.TTL, err)
+		}
+		running := time.Duration(seconds * float64(time.Second))
+		if ttl != 0 && running != ttl {
+			t.Fatal("MONs run different auth_service_ticket_ttl values", ttl, running)
+		}
+		ttl = running
+	}
+	t.Logf("auth_service_ticket_ttl: %v on all %d MONs (central configuration database: %q)", ttl, len(members), database)
+	return ttl
+}
+
 // beaconLoop sends the current beacon every two seconds, the native
 // mgr_tick_period, until stopped. Beacon content is the test consumer's.
 type beaconLoop struct {
@@ -287,11 +326,26 @@ func observeOSDHello(listener net.Listener, hellos chan<- msgr.Address, types ch
 // or MGR reports, VIP addresses, IPv6 or CRC mode, or the auth-epoch
 // invalidation path natively (synthetic only). The fixture's ticket TTL is
 // short (12 s service and AUTH), so renewal and rotation happen within the
-// test; ServiceTicketTTL is checked against the native configuration.
+// test; ServiceTicketTTL is the value every MON runs with
+// (runningServiceTicketTTL).
+//
+// Why a refresh with a surviving and a new ID is guaranteed: the leader MON
+// adds one key when the current (middle) key has expired, on its tick
+// (KeyServer::_rotate_secret, AuthMonitor::tick), and adds more at once only
+// when its rotation runs a whole TTL late; the next middle key expires at
+// least one TTL after the previous one. The daemon requests a refresh
+// ttl/4 (3 s) after the held middle key expired and again every second while
+// the set is unchanged, so with the fixture's 5 s mon_tick_interval it
+// observes each ordinary rotation alone. Given the configuration database's
+// one-hour value instead, the native rule's 30 s cap let two or three
+// rotations pass between refreshes, and a run could replace all three IDs
+// every time.
 //
 // Pinned sources: ceph/ceph/blob/v20.2.4/src/mgr/MgrStandby.cc,
 // ceph/ceph/blob/v20.2.4/src/mon/MgrMonitor.cc (prepare_beacon, null map),
 // ceph/ceph/blob/v20.2.4/src/mon/MonClient.cc (_check_auth_rotating),
+// ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxKeyServer.cc (_rotate_secret),
+// ceph/ceph/blob/v20.2.4/src/mon/AuthMonitor.cc (tick, check_rotate),
 // ceph/ceph/blob/v20.2.4/src/mgr/MgrClient.cc (OSD reconnect on map change),
 // ceph/ceph/blob/v20.2.4/src/msg/async/ProtocolV2.cc (HELLO target address).
 //
@@ -315,12 +369,7 @@ func TestCephMgrDaemonControlIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer admin.Close()
-	ttlValue := strings.Trim(strings.TrimSpace(string(adminCommand(t, ctx, admin, map[string]any{"prefix": "config get", "who": "mon", "key": "auth_service_ticket_ttl"}))), `"`)
-	seconds, err := strconv.ParseFloat(ttlValue, 64)
-	if err != nil || seconds < 1 {
-		t.Fatal("native auth_service_ticket_ttl", ttlValue, err)
-	}
-	ttl := time.Duration(seconds * float64(time.Second))
+	ttl := runningServiceTicketTTL(t, ctx, admin)
 
 	// Scoped credential: MON profile mgr, as a native MGR keyring has.
 	name := fmt.Sprintf("gotest%d", time.Now().UnixNano()%1_000_000)
@@ -627,11 +676,11 @@ func TestCephMgrDaemonControlIntegration(t *testing.T) {
 		}
 		keys = next
 	}
-	final := daemon.State()
+	// In-session renewal: the 12 s AUTH and service tickets are renewed
+	// three quarters into their validity, so one arrives within seconds of
+	// admission; the rotation steps above can be observed sooner.
+	final := waitDaemonState(t, ctx, daemon, func(s cephmsgr.MgrDaemonState) bool { return s.Renewals > 0 })
 	mgrTicket := final.Tickets[slices.IndexFunc(final.Tickets, func(t cephmsgr.MgrDaemonTicket) bool { return t.Service == "mgr" })]
-	if final.Renewals == 0 {
-		t.Fatal("no in-session ticket renewal", final.Renewals)
-	}
 	t.Logf("%d in-session ticket renewals; MGR service ticket secret ID %d, held rotating IDs %v", final.Renewals, mgrTicket.SecretID, rotatingIDs(final.RotatingKeys))
 
 	// Restore a stock active MGR.
