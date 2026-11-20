@@ -43,6 +43,11 @@ class SnapTrimParsing(unittest.TestCase):
         with self.assertRaises(ValueError):
             snaptrim.query_state({"state": "active", "epoch": 1, "snap_trimq": "[]", "snap_trimq_len": 0})
 
+    def test_query_pgid_names_the_primary_shard(self):
+        self.assertEqual(snaptrim.query_pgid({"pgid": "3.0", "pg_shard": -1}), "3.0")
+        self.assertEqual(snaptrim.query_pgid({"pgid": "3.7", "pg_shard": 0}), "3.7s0")
+        self.assertEqual(snaptrim.query_pgid({"pgid": "3.7", "pg_shard": 2}), "3.7s2")
+
     def test_mode_is_registered(self):
         self.assertIs(osd_pool_oracle.HANDLERS["snaptrim"], snaptrim.mode_snaptrim)
 
