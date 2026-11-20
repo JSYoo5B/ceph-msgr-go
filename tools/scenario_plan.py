@@ -51,9 +51,9 @@ reads another revision's catalog and leaves that check to that revision's own
 validate and to its fixture, which refuses the same rows before it starts a
 cluster.
 
-`env ID` prints one `export NAME=value` line for every variable the native
-workflow binds to a matrix parameter, with the workflow's fallbacks, so a
-documented reproduction runs a row as CI does:
+`env ID` prints one `export NAME=value` line for every fixture input the
+native workflow forwards for the row's job (native_env.py, with its
+fallbacks), so a documented reproduction runs a row as CI does:
 
   (
     env_lines=$(python3 tools/scenario_plan.py env ID) &&
@@ -111,6 +111,7 @@ from pathlib import Path
 
 import fixture_sharing as sharing_sources
 import go_test_list
+import native_env
 import rgw_native_gate
 import scenario_catalog
 import scenario_checks
@@ -119,7 +120,6 @@ import scenario_declarations
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CHECKS_WORKFLOW = ROOT / ".github" / "workflows" / "platform-checks.yml"
-NATIVE_WORKFLOW = ROOT / ".github" / "workflows" / "native-scenarios.yml"
 REQUIRED_PARAMS = ("key", "service", "family")
 SUPPORTED_RELEASE = re.compile(r"^20\.2\.\d+$")
 FIXTURE = ROOT / "integration" / "fixture"
@@ -149,7 +149,6 @@ DOCUMENTED_RUNNER = re.compile(r"integration/run\.sh|integration/fixture run ")
 MAX_SEQUENCE_ROWS = 8
 # Matrix parameters only the planner sets, for a fixture sequence.
 SEQUENCE_PARAMS = ("test_sequence", "scenarios", "sequence_rows")
-WORKFLOW_BINDING = re.compile(r"(?m)^ +(CEPH_[A-Z0-9_]+): \$\{\{ matrix\.([a-z_]+)(?: \|\| '([^']*)')? \}\}\s*$")
 
 
 class PlanError(Exception):
@@ -173,11 +172,6 @@ def load_catalog(revision=None):
 def validate_catalog(scenarios):
     """Return a list of problems; empty when the catalog is consistent."""
     problems, seen = [], set()
-    # This file and workflow belong to the trusted calling revision, even
-    # when the catalog is read from a newer pull-request commit.
-    supported = set(re.findall(r"(?m)^ +CEPH_[A-Z0-9_]+: \$\{\{ matrix\.([a-z_]+)",
-                               NATIVE_WORKFLOW.read_text(encoding="utf-8")))
-    supported.add("release")  # Display/validated family; image selects the daemon.
     if not scenarios:
         problems.append("catalog has no scenarios")
     for index, entry in enumerate(scenarios):
@@ -196,8 +190,13 @@ def validate_catalog(scenarios):
         if not isinstance(params, dict) or not params:
             problems.append("%s has no parameters" % sid)
             continue
-        for name in sorted(params.keys() - supported):
-            problems.append("%s: trusted native runner does not support parameter %s" % (sid, name))
+        # The trusted revision's forwarding (native_env.py) decides which
+        # names a row may set, even for a newer pull-request catalog; which
+        # inputs exist is the fixture's admission (fixture_admission).
+        for name in sorted(params):
+            problem = native_env.parameter_problem(name)
+            if problem:
+                problems.append("%s: trusted native runner does not support parameter %s: %s" % (sid, name, problem))
         for name in SEQUENCE_PARAMS:
             if name in params:
                 problems.append("%s: parameter %s is set by the planner, not by a row" % (sid, name))
@@ -276,18 +275,6 @@ def declaration_problems(sid, params):
         problems.append("%s: capabilities %s require a test_run of exactly one anchored test (^TestName$), not %r"
                         % (sid, value, selector))
     return problems
-
-
-def workflow_bindings(text=None):
-    """{environment variable: (matrix parameter, fallback)} of the native job."""
-    if text is None:
-        text = NATIVE_WORKFLOW.read_text(encoding="utf-8")
-    return {name: (param, fallback) for name, param, fallback in WORKFLOW_BINDING.findall(text)}
-
-
-def row_environment(params, bindings):
-    """The environment the native workflow gives one row, in binding order."""
-    return [(name, params.get(param) or fallback) for name, (param, fallback) in bindings.items()]
 
 
 def markdown_chunks(text):
@@ -753,7 +740,11 @@ def main(argv=None):
             planned = jobs([entry for entry in scenarios if entry["id"] in args.id], plan_sources(args.revision))
             if len(planned) != 1:
                 raise PlanError("the rows %s do not form one fixture sequence (%d jobs)" % (" ".join(args.id), len(planned)))
-            for name, value in row_environment(job_parameters(planned[0]), workflow_bindings()):
+            try:
+                forwarded = native_env.environment(job_parameters(planned[0]))
+            except native_env.ForwardingError as error:
+                raise PlanError(str(error)) from None
+            for name, value in forwarded.items():
                 print("export %s=%s" % (name, shlex.quote(value)))
         else:
             document = load_catalog_document(args.revision)
