@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -431,7 +432,8 @@ func TestStartStateSnapshotFileOmitsSensitiveValues(t *testing.T) {
 		!strings.Contains(string(data), `"value": "0.000000"`) || !strings.Contains(string(data), `"value": "10000"`) {
 		t.Fatal("unexpected snapshot file", string(data))
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+	// Windows has no POSIX permission bits to check.
+	if info, err := os.Stat(path); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatal("snapshot file mode", info, err)
 	}
 	changed := raw

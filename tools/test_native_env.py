@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -189,8 +190,10 @@ class ForwardingRuleTests(unittest.TestCase):
 
     def test_exec_gives_the_command_the_forwarded_environment(self):
         script = Path(__file__).resolve().parent / "native_env.py"
-        env = {"PATH": os.environ.get("PATH", ""), "MATRIX_JSON": json.dumps(dict(self.base, new_input="7")),
-               "CEPH_MSGR_TEST_DIAGNOSTICS": "/d"}
+        # SYSTEMROOT is kept where it exists: a Windows Python started
+        # without it fails before running any code.
+        env = {name: os.environ[name] for name in ("PATH", "SYSTEMROOT") if name in os.environ}
+        env.update(MATRIX_JSON=json.dumps(dict(self.base, new_input="7")), CEPH_MSGR_TEST_DIAGNOSTICS="/d")
         out = subprocess.run([sys.executable, str(script), "--", sys.executable, "-c",
                               "import os, json; print(json.dumps({k: v for k, v in os.environ.items() if k.startswith('CEPH_')}))"],
                              env=env, capture_output=True, text=True, check=True)
@@ -200,6 +203,25 @@ class ForwardingRuleTests(unittest.TestCase):
                                  env=dict(env, MATRIX_JSON=json.dumps(dict(self.base, diagnostics="/tmp/x"))))
         self.assertEqual(refused.returncode, 2)
         self.assertIn("CEPH_MSGR_TEST_DIAGNOSTICS is set by the native workflow itself", refused.stderr)
+
+
+class WindowsRunnerTests(unittest.TestCase):
+    def test_windows_runs_the_command_and_returns_its_status(self):
+        """Windows has no process-replacing exec; the helper runs the command
+        with the forwarded environment and returns its status instead."""
+        calls = []
+
+        def call(args, env):
+            calls.append((args, env))
+            return 7
+
+        matrix = json.dumps({"key": "aes256k", "service": "aes256k", "family": "4", "new_input": "1"})
+        with mock.patch.object(native_env.os, "name", "nt"), mock.patch.object(native_env.subprocess, "call", call), \
+                mock.patch.object(native_env.os, "execvpe", side_effect=AssertionError("exec on Windows")), \
+                mock.patch.dict(native_env.os.environ, {"MATRIX_JSON": matrix}, clear=False):
+            self.assertEqual(native_env.main(["--", "runner", "arg"]), 7)
+        self.assertEqual(calls[0][0], ["runner", "arg"])
+        self.assertEqual(calls[0][1]["CEPH_MSGR_TEST_NEW_INPUT"], "1")
 
 
 class WorkflowTests(unittest.TestCase):

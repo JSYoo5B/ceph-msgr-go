@@ -126,7 +126,9 @@ class SourceTests(unittest.TestCase):
                                "integration/fixture/sub/y_test.go": "package sub\n", "tools/z_test.go": "package z\n",
                                "cephmsgr/b_test.go": "package cephmsgr_test\n"}.items():
                 (root / path).parent.mkdir(parents=True, exist_ok=True)
-                (root / path).write_text(text)
+                # Bytes, so that Windows newline translation does not change
+                # the blobs the test compares.
+                (root / path).write_bytes(text.encode("utf-8"))
             run("add", ".")
             run("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "x")
             sha = run("rev-parse", "HEAD").stdout.decode().strip()

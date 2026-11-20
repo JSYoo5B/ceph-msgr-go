@@ -645,7 +645,9 @@ class WatchersModeTest(unittest.TestCase):
             calls.append((args, options["timeout"]))
             return result
 
-        rados = type("R", (), {"root": pathlib.Path("/fixture")})()
+        # The oracle runs in the Linux fixture container, where its root is a
+        # POSIX path whatever host runs this test.
+        rados = type("R", (), {"root": pathlib.PurePosixPath("/fixture")})()
         request = dict({"slot": 1, "object": "ec-watch"}, **request)
         return oracle.mode_watchers(rados, None, request, None, run=run)["watchers"], calls
 
