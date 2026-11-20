@@ -517,6 +517,100 @@ func (r *ecEpochRun) write(label string, route osdFixtureOracle, data []byte, se
 	return reply
 }
 
+// watchers requires the native watcher list of object to hold want
+// entries: none, or exactly the registration of client gid with cookie.
+func (r *ecEpochRun) watchers(label, object string, want int, gid, cookie uint64) {
+	r.t.Helper()
+	got := nativePool(r.t, r.ctx, "watchers", map[string]any{"slot": 1, "object": object}).Watchers
+	if got == nil || got.Object != object || len(got.Entries) != want || want == 1 && (got.Entries[0].GlobalID != gid || got.Entries[0].Cookie != cookie) {
+		r.t.Fatalf("native watcher list %s: %+v; want %d entry of client.%d cookie %d", label, got, want, gid, cookie)
+	}
+	r.t.Logf("native watcher list %s: %+v", label, got.Entries)
+}
+
+// allocateSnap allocates the next self-managed snapshot id of the pool.
+func (r *ecEpochRun) allocateSnap() uint64 {
+	r.t.Helper()
+	allocated, err := r.c.PoolOp(r.ctx, cephmsgr.PoolOpRequest{Pool: uint32(r.facts.pool), Op: cephmsgr.SelfManagedSnapshotCreate})
+	if err != nil {
+		r.t.Fatal("allocate a self-managed snapshot id", err)
+	}
+	id, err := allocated.SnapshotID()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return id
+}
+
+// ecSnapView is what Go reads of an object's head and snapshots through one
+// primary.
+type ecSnapView struct {
+	data    map[uint64][]byte
+	version uint64
+	list    cephmsgr.OSDSnapshotList
+}
+
+// readSnaps reads the head and every snapshot id of want through at's
+// primary, with LIST_SNAPS, and compares each read with the native read.
+func (r *ecEpochRun) readSnaps(label, object string, at osdFixtureOracle, want map[uint64][]byte, headVersion uint64) ecSnapView {
+	t := r.t
+	t.Helper()
+	o := mutationConnection(t, r.c, r.ctx, at)
+	defer o.Close()
+	got := ecSnapView{data: map[uint64][]byte{}}
+	for _, snap := range slices.Sorted(maps.Keys(want)) {
+		request := r.request(at, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: 1 << 16})
+		if snap != cephmsgr.OSDHeadSnapshot {
+			request.ReadSnapshot = snap
+		}
+		reply, err := o.Request(r.ctx, request)
+		if err != nil || reply.Code != 0 || len(reply.Operations) != 1 || !bytes.Equal(reply.Operations[0].Data, want[snap]) {
+			t.Fatalf("%s: Go read at snapshot %#x through osd.%d: %v, code %d, %d operations; want %d bytes", label, snap, at.ID, err, reply.Code, len(reply.Operations), len(want[snap]))
+		}
+		native := poolObserve(t, r.ctx, 1, object, "", "")
+		if snap != cephmsgr.OSDHeadSnapshot {
+			native = poolObserveSnap(t, r.ctx, 1, object, "", "", snap)
+		}
+		if native.Code != 0 || !bytes.Equal(native.Data, want[snap]) {
+			t.Fatalf("%s: native read at snapshot %#x differs (%d bytes, code %d)", label, snap, len(native.Data), native.Code)
+		}
+		if snap == cephmsgr.OSDHeadSnapshot {
+			if reply.UserVersion != headVersion || native.Version != headVersion {
+				t.Fatalf("%s: head user version Go %d native %d; want %d", label, reply.UserVersion, native.Version, headVersion)
+			}
+			got.version = reply.UserVersion
+		}
+		got.data[snap] = reply.Operations[0].Data
+	}
+	listed, err := o.Request(r.ctx, r.request(at, cephmsgr.OSDOperation{Code: cephmsgr.OSDListSnapshots, ListSnapshots: cephmsgr.OSDListSnapshotsInput{MaxOutputBytes: 4096}}))
+	if err != nil || listed.Code != 0 || len(listed.Operations) != 1 {
+		t.Fatal(label, "LIST_SNAPS", err, listed.Code)
+	}
+	got.list = listed.Operations[0].Snapshots
+	t.Logf("%s through osd.%d (shard %d, primary-first %+v) at epoch %d: head version %d, snapset sequence %d, clones %+v",
+		label, at.ID, at.Shard, routePrimaryFirst(at), at.Epoch, got.version, got.list.Sequence, got.list.Clones)
+	return got
+}
+
+// checkECClones requires the listed clones, in order, to be one per
+// snapshot id with the bytes it preserved, then the head.
+func checkECClones(t *testing.T, label string, list cephmsgr.OSDSnapshotList, sizes map[uint64]int, sequence uint64) {
+	t.Helper()
+	ids := slices.Sorted(maps.Keys(sizes))
+	if list.Sequence != sequence || len(list.Clones) != len(ids)+1 {
+		t.Fatalf("%s: snapset sequence %d with %d entries; want %d with %d clones and the head", label, list.Sequence, len(list.Clones), sequence, len(ids))
+	}
+	for i, id := range ids {
+		c := list.Clones[i]
+		if c.ID != id || !slices.Equal(c.Snapshots, []uint64{id}) || c.Size != uint64(sizes[id]) {
+			t.Fatalf("%s: clone %d is %+v; want id %d for snapshot %d of %d bytes", label, i, c, id, id, sizes[id])
+		}
+	}
+	if head := list.Clones[len(ids)]; head.ID != cephmsgr.OSDHeadSnapshot || len(head.Snapshots) != 0 {
+		t.Fatalf("%s: the last entry %+v is not the head", label, head)
+	}
+}
+
 // TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration: a Go watch on an
 // object of the optimized pool, registered at the shard-0 primary, follows
 // two primary changes only through the caller's explicit RECONNECT. The
@@ -559,14 +653,7 @@ func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
 		t.Fatal("watch at the original primary", err)
 	}
 	cookie := watch.Cookie()
-	listed := func(label string, want int) {
-		t.Helper()
-		got := nativePool(t, r.ctx, "watchers", map[string]any{"slot": 1, "object": object}).Watchers
-		if got == nil || got.Object != object || len(got.Entries) != want || want == 1 && (got.Entries[0].GlobalID != gid || got.Entries[0].Cookie != cookie) {
-			t.Fatalf("native watcher list %s: %+v; want %d entry of client.%d cookie %d", label, got, want, gid, cookie)
-		}
-		t.Logf("native watcher list %s: %+v", label, got.Entries)
-	}
+	listed := func(label string, want int) { r.watchers(label, object, want, gid, cookie) }
 	listed("at the original primary", 1)
 	notify := func(label string, at osdFixtureOracle, w *cephmsgr.OSDWatch, payload, ack []byte) {
 		t.Helper()
@@ -684,18 +771,7 @@ func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 	third := bytes.Repeat([]byte("ec-snap-third\xfe\x00"), 500)
 	route, since := r.healthy(object)
 	seeded := r.write("first write", route, first, 1700008000, cephmsgr.OSDSnapContext{})
-	allocate := func() uint64 {
-		t.Helper()
-		allocated, err := r.c.PoolOp(r.ctx, cephmsgr.PoolOpRequest{Pool: uint32(r.facts.pool), Op: cephmsgr.SelfManagedSnapshotCreate})
-		if err != nil {
-			t.Fatal("allocate a self-managed snapshot id", err)
-		}
-		id, err := allocated.SnapshotID()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return id
-	}
+	allocate := r.allocateSnap
 	s1 := allocate()
 	cloned := r.write("overwrite under the first snapshot", route, second, 1700008001, cephmsgr.OSDSnapContext{Sequence: s1, Snapshots: []uint64{s1}})
 	route, since = r.healthy(object)
@@ -703,68 +779,11 @@ func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 		t.Fatal("the overwrite did not advance the user version", seeded.UserVersion, cloned.UserVersion)
 	}
 
-	type view struct {
-		data    map[uint64][]byte
-		version uint64
-		list    cephmsgr.OSDSnapshotList
+	read := func(label string, at osdFixtureOracle, want map[uint64][]byte, headVersion uint64) ecSnapView {
+		return r.readSnaps(label, object, at, want, headVersion)
 	}
-	// read reads the head and every snapshot id through route's primary,
-	// with LIST_SNAPS, and compares each with the native read.
-	read := func(label string, at osdFixtureOracle, want map[uint64][]byte, headVersion uint64) view {
-		t.Helper()
-		o := mutationConnection(t, r.c, r.ctx, at)
-		defer o.Close()
-		got := view{data: map[uint64][]byte{}}
-		for _, snap := range slices.Sorted(maps.Keys(want)) {
-			request := r.request(at, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: 1 << 16})
-			if snap != cephmsgr.OSDHeadSnapshot {
-				request.ReadSnapshot = snap
-			}
-			reply, err := o.Request(r.ctx, request)
-			if err != nil || reply.Code != 0 || len(reply.Operations) != 1 || !bytes.Equal(reply.Operations[0].Data, want[snap]) {
-				t.Fatalf("%s: Go read at snapshot %#x through osd.%d: %v, code %d, %d operations; want %d bytes", label, snap, at.ID, err, reply.Code, len(reply.Operations), len(want[snap]))
-			}
-			native := poolObserve(t, r.ctx, 1, object, "", "")
-			if snap != cephmsgr.OSDHeadSnapshot {
-				native = poolObserveSnap(t, r.ctx, 1, object, "", "", snap)
-			}
-			if native.Code != 0 || !bytes.Equal(native.Data, want[snap]) {
-				t.Fatalf("%s: native read at snapshot %#x differs (%d bytes, code %d)", label, snap, len(native.Data), native.Code)
-			}
-			if snap == cephmsgr.OSDHeadSnapshot {
-				if reply.UserVersion != headVersion || native.Version != headVersion {
-					t.Fatalf("%s: head user version Go %d native %d; want %d", label, reply.UserVersion, native.Version, headVersion)
-				}
-				got.version = reply.UserVersion
-			}
-			got.data[snap] = reply.Operations[0].Data
-		}
-		listed, err := o.Request(r.ctx, r.request(at, cephmsgr.OSDOperation{Code: cephmsgr.OSDListSnapshots, ListSnapshots: cephmsgr.OSDListSnapshotsInput{MaxOutputBytes: 4096}}))
-		if err != nil || listed.Code != 0 || len(listed.Operations) != 1 {
-			t.Fatal(label, "LIST_SNAPS", err, listed.Code)
-		}
-		got.list = listed.Operations[0].Snapshots
-		t.Logf("%s through osd.%d (shard %d, primary-first %+v) at epoch %d: head version %d, snapset sequence %d, clones %+v",
-			label, at.ID, at.Shard, routePrimaryFirst(at), at.Epoch, got.version, got.list.Sequence, got.list.Clones)
-		return got
-	}
-	// clones requires the listed clones, in order, to be one per snapshot
-	// id with the bytes it preserved, then the head.
 	clones := func(label string, list cephmsgr.OSDSnapshotList, sizes map[uint64]int, sequence uint64) {
-		t.Helper()
-		ids := slices.Sorted(maps.Keys(sizes))
-		if list.Sequence != sequence || len(list.Clones) != len(ids)+1 {
-			t.Fatalf("%s: snapset sequence %d with %d entries; want %d with %d clones and the head", label, list.Sequence, len(list.Clones), sequence, len(ids))
-		}
-		for i, id := range ids {
-			c := list.Clones[i]
-			if c.ID != id || !slices.Equal(c.Snapshots, []uint64{id}) || c.Size != uint64(sizes[id]) {
-				t.Fatalf("%s: clone %d is %+v; want id %d for snapshot %d of %d bytes", label, i, c, id, id, sizes[id])
-			}
-		}
-		if head := list.Clones[len(ids)]; head.ID != cephmsgr.OSDHeadSnapshot || len(head.Snapshots) != 0 {
-			t.Fatalf("%s: the last entry %+v is not the head", label, head)
-		}
+		checkECClones(t, label, list, sizes, sequence)
 	}
 	before := read("before the outage", route, map[uint64][]byte{s1: first, cephmsgr.OSDHeadSnapshot: second}, cloned.UserVersion)
 	clones("before the outage", before.list, map[uint64]int{s1: len(first)}, s1)
