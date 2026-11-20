@@ -135,7 +135,7 @@ func command(ctx context.Context, args []string) (result error) {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	p, err := loadProfile(os.Getenv)
+	p, err := loadEnvironmentProfile(os.Environ())
 	if err != nil {
 		return err
 	}

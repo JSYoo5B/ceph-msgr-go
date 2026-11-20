@@ -47,7 +47,7 @@ class RGWRowsTest(ci_row_catalog.RowsTestCase):
         # No other row names the routing parameter, so every existing row
         # keeps CEPH_MSGR_TEST_RGW_NATIVE at the workflow's fallback 0.
         self.assertEqual([entry["id"] for entry in self.entries if "rgw_native" in entry["params"]], self.routed_ids())
-        self.assertIn("CEPH_MSGR_TEST_RGW_NATIVE: ${{ matrix.rgw_native || '0' }}", self.workflow)
+        self.assert_forwarded("rgw_native", "CEPH_MSGR_TEST_RGW_NATIVE", "0")
 
     def test_routed_rows_are_default_coverage_and_each_runs_alone(self):
         chosen, _ = plan.select(self.entries, ["all"])

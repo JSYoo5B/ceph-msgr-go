@@ -10,6 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import native_env
 import scenario_plan as plan
 from test_go_test_list import SHAPES, module, tests_file
 
@@ -81,13 +82,6 @@ class CatalogTests(unittest.TestCase):
         text = "\n".join(plan.validate_catalog([bad]))
         self.assertIn("lacks required parameter service", text)
         self.assertIn("invalid test selector", text)
-
-    def test_workflow_bindings_cover_every_matrix_variable(self):
-        text = plan.NATIVE_WORKFLOW.read_text(encoding="utf-8")
-        bound = re.findall(r"(?m)^ +(CEPH_[A-Z0-9_]+): .*matrix\.", text)
-        bindings = plan.workflow_bindings(text)
-        self.assertEqual(sorted(bound), sorted(bindings), "a matrix binding the planner cannot read")
-        self.assertEqual(bindings["CEPH_MSGR_TEST_CAPABILITIES"], ("capabilities", ""))
 
     # The planner's own refusal: a capability on a selector of more than one
     # test. Every other refusal (an undefined capability, a missing capability
@@ -357,7 +351,7 @@ class CatalogTests(unittest.TestCase):
             name, _, value = line.partition("=")
             self.assertTrue(name.startswith("export CEPH_"), line)
             exported[name[len("export "):]] = shlex.split(value)[0] if value else ""
-        self.assertEqual(set(exported), set(plan.workflow_bindings()))
+        self.assertEqual(exported, native_env.environment(dict(row["params"], scenario=row["id"])))
         self.assertEqual(exported["CEPH_MSGR_TEST_CAPABILITIES"], row["params"]["capabilities"])
         self.assertEqual(exported["CEPH_MSGR_TEST_RUN"], row["params"]["test_run"])
         self.assertEqual(exported["CEPH_MSGR_TEST_OSD_REPLICAS"], row["params"]["osd_replicas"])
@@ -515,18 +509,12 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(plan.selector_problems([entry("client", test_run="^TestActual$")],
                                                 {"integration": {"TestActual": 1}, "cephmsgr": {"TestActual": 1}}), [])
 
-    def test_pr_catalog_cannot_silently_add_a_trusted_runner_parameter(self):
-        from unittest.mock import patch
-        future = entry("future", mgr_service="1")
-        # Simulate main's old runner reading a PR's newer catalog.
-        with patch("scenario_plan.NATIVE_WORKFLOW") as workflow:
-            workflow.read_text.return_value = "\n".join(
-                "  CEPH_TEST_%s: ${{ matrix.%s }}" % (name.upper(), name)
-                for name in ("key", "service", "family")) + "\nname: matrix.mgr_service"
-            self.assertIn("does not support parameter mgr_service", "\n".join(plan.validate_catalog([future])))
-        self.assertEqual(plan.validate_catalog([future]), [])
-        self.assertIn("CEPH_MSGR_TEST_MGR_SERVICE: ${{ matrix.mgr_service || '0' }}",
-                      plan.NATIVE_WORKFLOW.read_text(encoding="utf-8"))
+    def test_pr_catalog_may_add_an_input_but_never_a_workflow_variable(self):
+        # A newer catalog's new parameter is forwarded by the trusted rule;
+        # whether the fixture reads it is that revision's admission.
+        self.assertEqual(plan.validate_catalog([entry("future", osd_future_mode="1")]), [])
+        text = "\n".join(plan.validate_catalog([entry("own", diagnostics="/tmp/x")]))
+        self.assertIn("does not support parameter diagnostics: CEPH_MSGR_TEST_DIAGNOSTICS is set by the native workflow", text)
 
 
 class PlannerTests(unittest.TestCase):
