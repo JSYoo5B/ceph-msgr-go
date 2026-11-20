@@ -114,9 +114,11 @@ const (
 // over a live one clones the pre-copy head under the seq (the removed id)
 // holding only the live snapshots. Once the MON stopped queueing a trimmed
 // snapshot the PG drops it from purged_snaps (PG.cc on_active_advmap), and a
-// context naming it then clones the pre-copy head holding that snapshot,
-// which no trim removes (ceph/ceph/blob/v20.2.4/src/osd/PG.cc filter_snapc,
-// PrimaryLogPG.cc execute_ctx and make_writeable). The
+// context naming it then can clone the pre-copy head holding that snapshot,
+// readable at that id right after the copy. Whether a later purged-snapshot
+// scrub requeues and trims that clone is not verified
+// (ceph/ceph/blob/v20.2.4/src/osd/PG.cc filter_snapc, PrimaryLogPG.cc
+// execute_ctx and make_writeable). The
 // destination gets the source's user version, which can be lower than its
 // previous one. A copy that fails after the OSD started it reports its
 // aggregate code with per-op -EINPROGRESS. The OSD omits a source's empty

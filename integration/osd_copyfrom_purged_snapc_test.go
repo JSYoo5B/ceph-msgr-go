@@ -113,8 +113,9 @@ func TestCopyPurgedPhase(t *testing.T) {
 //   - pruned: after the MGRs resume, the native observation shows the
 //     snapshot in neither set and no longer queued. filter_snapc no longer
 //     knows it: a context naming it clones the pre-copy head under it, and the
-//     clone lists the removed snapshot and stays readable at its id. No
-//     trimmer will remove that clone; the owned pool is deleted afterwards.
+//     clone lists the removed snapshot and is readable at its id at the
+//     post-prune observation. Its later lifetime is not checked; the owned
+//     pool is deleted afterwards.
 //
 // Every cell copies the same native head into a fresh destination seeded by
 // Go, checked by independent native reads and rados listsnaps. The waits end
