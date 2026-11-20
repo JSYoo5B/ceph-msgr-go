@@ -628,3 +628,47 @@ func TestMgrDaemonBeaconSurvivesCallerCancellation(t *testing.T) {
 		}
 	}
 }
+
+// TestMgrDaemonRetiresSessionWithUnansweredAuthRequest withholds the first
+// rotating reply on a MON session that otherwise stays live. The request's
+// deadline (KeepaliveTimeout) must retire that session, and the next session
+// must refresh from an empty request queue.
+func TestMgrDaemonRetiresSessionWithUnansweredAuthRequest(t *testing.T) {
+	f := newFakeMgrMon(t)
+	f.onRotating = func(_ *fakeMgrMonConn, n int) bool { return n > 0 }
+	options := f.options()
+	options.KeepaliveTimeout = 1500 * time.Millisecond
+	d, err := DialMgrDaemon(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	first := f.next(t)
+	// Keep the first transport live, so only the request deadline can end it.
+	live := make(chan struct{})
+	defer close(live)
+	go func() {
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-live:
+				return
+			case <-tick.C:
+				if first.push(testMgrMap(2, 99, false, nil, 4242)) != nil {
+					return
+				}
+			}
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	keys, err := d.WaitRotatingKeys(ctx, 0)
+	if err != nil || keys.MonitorGeneration != 2 || keys.Keys[0].ID != 8 {
+		t.Fatal("refresh after the unanswered request", keys, err)
+	}
+	state := d.State()
+	if state.Err != nil || state.Identity.GlobalID != 4242 || state.Monitor.Generation != 2 {
+		t.Fatal("deadline ended the daemon or changed its identity", state)
+	}
+}

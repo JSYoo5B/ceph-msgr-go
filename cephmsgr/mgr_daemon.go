@@ -50,6 +50,10 @@ var ErrMgrDaemonIdentityChanged = errors.New("ceph: MGR daemon global ID changed
 // transition, so the daemon fails instead. Accepted events still drain.
 var ErrMgrMapOverflow = errors.New("ceph: MGR daemon map buffer exceeded")
 
+// errMgrAuthReplyTimeout retires a MON session that left an MAuth
+// unanswered past its deadline (mgrAuthRequest.deadline).
+var errMgrAuthReplyTimeout = errors.New("ceph: MON did not answer an MGR daemon auth request")
+
 // MgrDaemonOptions configures DialMgrDaemon. Fields mean what they mean on
 // Options unless stated otherwise.
 type MgrDaemonOptions struct {
@@ -250,9 +254,14 @@ type MgrDaemonState struct {
 }
 
 // mgrAuthRequest is one MAuth outstanding on a MON session. The MON answers
-// them in order without a transaction ID.
+// them in order without a transaction ID, so a reply is matched to the
+// oldest entry. An entry still unanswered at its deadline (KeepaliveTimeout
+// after it was queued, the silence bound of the session itself) retires the
+// session: its correlation cannot be trusted, and the next session renews
+// and refreshes with an empty queue.
 type mgrAuthRequest struct {
 	rotating      bool
+	deadline      time.Time
 	generation    uint64
 	authEpoch     uint32
 	invalidations uint64
@@ -322,7 +331,8 @@ type MgrDaemon struct {
 // Afterwards a worker renews tickets in session (MAuth with the handshake's
 // server challenge) when any ticket passes its renewal time, refreshes the
 // rotating secrets by the native rule, and on MON loss reconnects to a seed
-// or MonMap MON presenting the same global ID and AUTH ticket. An explicit
+// or MonMap MON presenting the same global ID and AUTH ticket. An MAuth the
+// MON leaves unanswered for KeepaliveTimeout counts as MON loss. An explicit
 // MON rejection, a different global ID or a fatal protocol error ends the
 // daemon; State reports the cause. No beacon is sent on the caller's
 // behalf, also not after reconnection.
@@ -638,7 +648,8 @@ func (d *MgrDaemon) supervise() {
 	}
 }
 
-// maintain sends at most one ticket renewal and one rotating request while
+// maintain retires a session whose oldest MAuth passed its deadline, and
+// otherwise sends at most one ticket renewal and one rotating request while
 // none of that kind is outstanding, each at most once a second.
 func (d *MgrDaemon) maintain(s *session.Session) {
 	now := time.Now()
@@ -648,18 +659,24 @@ func (d *MgrDaemon) maintain(s *session.Session) {
 		d.mu.Unlock()
 		return
 	}
+	if len(d.pending) > 0 && !now.Before(d.pending[0].deadline) {
+		d.mu.Unlock()
+		s.Fail(errMgrAuthReplyTimeout)
+		return
+	}
+	deadline := now.Add(d.options.KeepaliveTimeout)
 	outstanding := func(rotating bool) bool {
 		return slices.ContainsFunc(d.pending, func(r mgrAuthRequest) bool { return r.rotating == rotating })
 	}
 	if !outstanding(false) && now.Sub(d.lastRenewal) >= time.Second && ticketsNeedRenewal(d.auth, now) {
 		if payload, err := d.auth.RenewalRequest(); err == nil {
-			d.pending = append(d.pending, mgrAuthRequest{generation: d.monGeneration, authEpoch: d.monMap.AuthEpoch, invalidations: d.invalidations})
+			d.pending = append(d.pending, mgrAuthRequest{deadline: deadline, generation: d.monGeneration, authEpoch: d.monMap.AuthEpoch, invalidations: d.invalidations})
 			d.lastRenewal = now
 			messages = append(messages, msgr.AuthMessageRequest(payload, d.monMap.Epoch))
 		}
 	}
 	if !outstanding(true) && now.Sub(d.lastRotating) >= time.Second && d.ring.NeedsRefresh(now, d.options.ServiceTicketTTL) {
-		d.pending = append(d.pending, mgrAuthRequest{rotating: true, generation: d.monGeneration, authEpoch: d.monMap.AuthEpoch, invalidations: d.invalidations})
+		d.pending = append(d.pending, mgrAuthRequest{rotating: true, deadline: deadline, generation: d.monGeneration, authEpoch: d.monMap.AuthEpoch, invalidations: d.invalidations})
 		d.lastRotating = now
 		messages = append(messages, msgr.AuthMessageRequest(cephx.RotatingRequest(), d.monMap.Epoch))
 	}
