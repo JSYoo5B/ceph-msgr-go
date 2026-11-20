@@ -51,6 +51,14 @@ func TestProfileDefaults(t *testing.T) {
 		defaultRun:     "^TestCeph.*Integration$",
 		testTimeout:    "10m",
 	}
+	// Each declared input (defineInput) reads its fallback; the pinned
+	// fields are compared on their own.
+	for _, in := range fixtureInputs {
+		if got := p.input(in); got != in.fallback {
+			t.Fatalf("declared input %s = %q, want its fallback %q", in.name, got, in.fallback)
+		}
+	}
+	p.inputs = ""
 	if p != want {
 		t.Fatalf("profile = %#v, want %#v", p, want)
 	}
@@ -385,6 +393,14 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 		"CEPH_MSGR_TEST_OSD_STORE": "memstore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
 		"CEPH_MSGR_TEST_OSD_PROFILE": "legacy-v6",
 		"CEPH_MSGR_STRESS_DURATION":  "3m", "CEPH_MSGR_TEST_OSD_SOAK": "", "CEPH_MSGR_TEST_MON_FREEZE": "", "CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
+	}
+	// Each declared input reaches the container with its fallback; the
+	// pinned variables are compared on their own.
+	for variable, in := range fixtureInputs {
+		if container[variable] != in.fallback {
+			t.Fatalf("container environment %s = %q, want its fallback %q", variable, container[variable], in.fallback)
+		}
+		delete(container, variable)
 	}
 	if !reflect.DeepEqual(container, wantContainer) {
 		t.Fatalf("container environment = %v, want %v", container, wantContainer)

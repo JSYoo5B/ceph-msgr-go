@@ -73,7 +73,11 @@ func TestWaitOSDCleanReportsLastUncleanObservation(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"epoch":43,"nearfull_ratio":0.85,"backfillfull_ratio":0.9,"full_ratio":0.95,"osds":[{"osd":1,"up":1,"in":1,"state":["exists","up","backfillfull"]}]}`), &fullness); err != nil {
 		t.Fatal(err)
 	}
-	_, err := waitOSDClean(context.Background(), 50*time.Millisecond, time.Second, time.Millisecond, 3, func(context.Context) (osdCleanStatus, error) {
+	// One poll, then the deadline expires while the loop waits for the next
+	// one (the interval is longer than the budget): a 1 ms interval let a
+	// poll straddle the deadline under load and count as an invocation
+	// failure, so "0 status invocation failures" depended on scheduling.
+	_, err := waitOSDClean(context.Background(), 500*time.Millisecond, time.Second, time.Minute, 3, func(context.Context) (osdCleanStatus, error) {
 		s := cleanStatus("active+clean", "active+recovery_toofull+degraded")
 		s.Health.Checks = map[string]json.RawMessage{"PG_RECOVERY_FULL": nil, "OSD_BACKFILLFULL": nil}
 		s.Fullness = &fullness
@@ -82,7 +86,7 @@ func TestWaitOSDCleanReportsLastUncleanObservation(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("permanently unclean state succeeded")
 	}
-	for _, want := range []string{"restore native OSD fixture readiness", "deadline exceeded", "budget 50ms", "osdmap epoch 42", "1xactive+recovery_toofull+degraded", "OSD_BACKFILLFULL,PG_RECOVERY_FULL", "0 status invocation failures", "before the controller observed clean state", "toofull PG states in", "first at +", "last at +", "dump epoch 43", "ratios nearfull/backfillfull/full 0.85/0.9/0.95", "osd.1 up=1 in=1 [exists,up,backfillfull]"} {
+	for _, want := range []string{"restore native OSD fixture readiness", "deadline exceeded", "budget 500ms", "osdmap epoch 42", "1xactive+recovery_toofull+degraded", "OSD_BACKFILLFULL,PG_RECOVERY_FULL", "0 status invocation failures", "before the controller observed clean state", "toofull PG states in", "first at +", "last at +", "dump epoch 43", "ratios nearfull/backfillfull/full 0.85/0.9/0.95", "osd.1 up=1 in=1 [exists,up,backfillfull]"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("failure lacks %q: %v", want, err)
 		}

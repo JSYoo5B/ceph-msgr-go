@@ -111,7 +111,17 @@ class Author:
         self.capability = self.slug
         self.selector = "^%s$" % self.test
         self.id = "%s.%s.t-mergeproof%s" % (group, id_profile, name.lower())
+        # A fixture input of this author's own, declared beside its control
+        # (defineInput) and set by its row.
+        self.input = "merge_proof_" + name.lower()
+        self.input_variable = "CEPH_MSGR_TEST_" + self.input.upper()
         self.params = dict(base or BASE_PARAMS, **opt_ins)
+        # The four-OSD topology fixes its rows' configuration (its own row
+        # checks); a mode there is admitted by a capability, so that row
+        # declares the input without setting it.
+        self.sets_input = base is None
+        if self.sets_input:
+            self.params[self.input] = "1"
         # The declared list: this author's capability and any existing one
         # its topology requires, sorted as the catalog requires.
         self.declared = ",".join(sorted((self.capability,) + tuple(also)))
@@ -176,9 +186,12 @@ class Author:
                 "var _ = collectDiagnosticFiles(%s)\n\n"
                 "// controlMergeProof%s is the merge proof's fixture control; it serves no request.\n"
                 "func (c *fixtureCluster) controlMergeProof%s(ctx context.Context, out string) error { return nil }\n\n"
-                "var _ = defineControl(%s, controlAfterRanked, (*fixtureCluster).controlMergeProof%s)\n"
+                "var _ = defineControl(%s, controlAfterRanked, (*fixtureCluster).controlMergeProof%s)\n\n"
+                "// mergeProof%sInput is the merge proof's fixture input, set by its row.\n"
+                "var mergeProof%sInput = defineInput(%s, \"0\")\n"
                 % (variable, self.test, variable, call, json.dumps(self.requires), self.name, variable, self.name, variable,
-                   json.dumps(self.receipt), self.name, self.name, json.dumps(self.control), self.name))
+                   json.dumps(self.receipt), self.name, self.name, json.dumps(self.control), self.name,
+                   self.name, self.name, json.dumps(self.input)))
 
     def oracle_mode(self):
         return ('"""Owned-pool oracle mode %s of the merge proof (tools/test_merge_proof.py).\n\n'
@@ -501,6 +514,9 @@ class MergeProofTest(unittest.TestCase):
         for author in authors:
             plan = json.loads(repo.run(python, "tools/scenario_plan.py", "plan", "--select", author.id).stdout)
             self.assertEqual(plan["include"], [dict(author.params, scenario=author.id)])
+            # The row's own fixture input reaches the runner by rule.
+            env = repo.run(python, "tools/scenario_plan.py", "env", author.id).stdout
+            self.assertEqual("export %s=" % author.input_variable in env, author.sets_input, author.id)
         # A catalog file brought back next to the declarations is refused.
         for retired in (".github/scenarios/catalog.d/_catalog.json", ".github/scenarios/catalog.json"):
             repo.write(retired, "{}\n")

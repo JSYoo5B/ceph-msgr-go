@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import native_env
+import scenario_order
 import scenario_plan as plan
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,9 +109,19 @@ class ForwardingEquivalenceTests(unittest.TestCase):
         sequences = [job for job in jobs if "test_sequence" in job]
         self.assertGreater(len(jobs), len(rows))
         self.assertTrue(sequences, "the default coverage plans no fixture sequence")
+        # The old bindings describe the rows that existed when the rule
+        # replaced them (scenario_order.RECORDED). A row declared later may
+        # set an input the old workflow never had, so only jobs of recorded
+        # rows are compared; the rule's own tests cover new inputs.
+        recorded = set(scenario_order.RECORDED)
+        compared = 0
         for job in jobs:
+            if not set((job.get("scenarios") or job["scenario"]).split()) <= recorded:
+                continue
+            compared += 1
             with self.subTest(job=job["scenario"], rows=job.get("scenarios")):
                 self.assertEqual(new_environment(json.loads(json.dumps(job))), old_environment(job))
+        self.assertGreater(compared, len(recorded))
 
     def test_no_row_parameter_is_refused_that_the_old_workflow_forwarded(self):
         rows, _ = planner_jobs()

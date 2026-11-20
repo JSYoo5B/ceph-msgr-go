@@ -592,7 +592,13 @@ func environmentWithoutMarkers(p profile) string {
 	for _, marker := range fixtureMarkers {
 		delete(test, marker)
 	}
-	return fmt.Sprint(p.containerEnvironment(), test, fixtureBootstrapConfig(profile{osd: p.osd, osdStore: p.osdStore, osdReplicas: p.osdReplicas, osdProfile: p.osdProfile}))
+	// Inputs declared with defineInput postdate the selector-keyed
+	// admission, which had none, so they are not part of the comparison.
+	container := p.containerEnvironment()
+	for variable := range fixtureInputs {
+		delete(container, variable)
+	}
+	return fmt.Sprint(container, test, fixtureBootstrapConfig(profile{osd: p.osd, osdStore: p.osdStore, osdReplicas: p.osdReplicas, osdProfile: p.osdProfile}))
 }
 
 func capabilityModes(p profile, err error) admissionModes {
