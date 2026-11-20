@@ -1,0 +1,631 @@
+package integration_test
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
+)
+
+// nativeMgrAddress is one entry of a native `mgr dump` addrvec.
+type nativeMgrAddress struct {
+	Type  string `json:"type"`
+	Addr  string `json:"addr"`
+	Nonce uint32 `json:"nonce"`
+}
+
+// nativeMgrDump is the part of the native `ceph mgr dump --format json`
+// output this test compares, read by the fixture's own CLI (control
+// mgr-daemon-dump), never by the Go library.
+type nativeMgrDump struct {
+	Epoch       uint32 `json:"epoch"`
+	ActiveGID   uint64 `json:"active_gid"`
+	ActiveName  string `json:"active_name"`
+	Available   bool   `json:"available"`
+	ActiveAddrs struct {
+		Addrvec []nativeMgrAddress `json:"addrvec"`
+	} `json:"active_addrs"`
+	Standbys []struct {
+		GID  uint64 `json:"gid"`
+		Name string `json:"name"`
+	} `json:"standbys"`
+}
+
+func (d nativeMgrDump) standby(gid uint64, name string) bool {
+	return slices.ContainsFunc(d.Standbys, func(s struct {
+		GID  uint64 `json:"gid"`
+		Name string `json:"name"`
+	}) bool {
+		return s.GID == gid && s.Name == name
+	})
+}
+
+// mgrDaemonDump requests one native mgr dump. It reports false when the run
+// did not declare the mgr-daemon-control capability.
+func mgrDaemonDump(t *testing.T, ctx context.Context, control, label string) (nativeMgrDump, bool) {
+	t.Helper()
+	if err := testcluster.RequestControl(ctx, control, "mgr-daemon-dump", "mgr-daemon-dump-completed", label); err != nil {
+		t.Fatal("native mgr dump", label, err)
+	}
+	data, err := os.ReadFile(filepath.Join(control, "mgr-daemon-dump.json"))
+	var receipt struct {
+		Label    string          `json:"label"`
+		Admitted bool            `json:"admitted"`
+		Dump     json.RawMessage `json:"dump"`
+	}
+	if err != nil || json.Unmarshal(data, &receipt) != nil || receipt.Label != label {
+		t.Fatal("native mgr dump receipt", label, err)
+	}
+	var dump nativeMgrDump
+	if receipt.Admitted && (json.Unmarshal(receipt.Dump, &dump) != nil || dump.Epoch == 0) {
+		t.Fatal("native mgr dump content", label, string(receipt.Dump))
+	}
+	return dump, receipt.Admitted
+}
+
+// waitMgrDump repeats native dumps until ok holds.
+func waitMgrDump(t *testing.T, ctx context.Context, control, label string, ok func(nativeMgrDump) bool) nativeMgrDump {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		dump, _ := mgrDaemonDump(t, ctx, control, fmt.Sprintf("%s-%d", label, attempt))
+		if ok(dump) {
+			return dump
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("native MgrMap did not reach %s: %+v", label, dump)
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func sameNativeAddresses(native []nativeMgrAddress, advertised []cephmsgr.ManagerAddress) bool {
+	if len(native) != len(advertised) {
+		return false
+	}
+	for i, a := range advertised {
+		kind := map[uint32]string{1: "v1", 2: "v2"}[a.Type]
+		if native[i].Type != kind || native[i].Addr != a.Endpoint.String() || native[i].Nonce != a.Nonce {
+			return false
+		}
+	}
+	return true
+}
+
+func adminCommand(t *testing.T, ctx context.Context, admin *cephmsgr.Client, command map[string]any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := admin.MonCommand(ctx, cephmsgr.Command{JSON: encoded})
+	if err != nil || result.Code != 0 {
+		t.Fatalf("native fixture command %v: code %d %q %v", command["prefix"], result.Code, result.Message, err)
+	}
+	return result.Data
+}
+
+// beaconLoop sends the current beacon every two seconds, the native
+// mgr_tick_period, until stopped. Beacon content is the test consumer's.
+type beaconLoop struct {
+	mu      sync.Mutex
+	beacon  cephmsgr.MgrBeacon
+	stop    chan struct{}
+	done    chan struct{}
+	failure error
+}
+
+func startBeaconLoop(daemon *cephmsgr.MgrDaemon, beacon cephmsgr.MgrBeacon) *beaconLoop {
+	l := &beaconLoop{beacon: beacon, stop: make(chan struct{}), done: make(chan struct{})}
+	go func() {
+		defer close(l.done)
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		for {
+			l.mu.Lock()
+			current := l.beacon
+			l.mu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			err := daemon.SendBeacon(ctx, current)
+			cancel()
+			if err != nil {
+				l.mu.Lock()
+				l.failure = err
+				l.mu.Unlock()
+				return
+			}
+			select {
+			case <-l.stop:
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	return l
+}
+
+func (l *beaconLoop) set(beacon cephmsgr.MgrBeacon) {
+	l.mu.Lock()
+	l.beacon = beacon
+	l.mu.Unlock()
+}
+
+func (l *beaconLoop) close() error {
+	select {
+	case <-l.stop:
+	default:
+		close(l.stop)
+	}
+	<-l.done
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.failure
+}
+
+// nextMgrEvent waits for the first event that satisfies ok, logging the
+// events it passes over.
+func nextMgrEvent(t *testing.T, ctx context.Context, daemon *cephmsgr.MgrDaemon, label string, ok func(cephmsgr.MgrMapEvent) bool) cephmsgr.MgrMapEvent {
+	t.Helper()
+	for {
+		event, err := daemon.NextMgrMap(ctx)
+		if err != nil {
+			t.Fatalf("MgrMap event %s: %v", label, err)
+		}
+		t.Logf("MgrMap event: epoch %d null %v role %d active %s/%d available %v addrs %v (MON session %d)", event.Map.Epoch, event.Null, event.Role, event.Map.ActiveName, event.Map.ActiveGlobalID, event.Map.Available, event.Map.ActiveAddresses, event.MonitorGeneration)
+		if ok(event) {
+			return event
+		}
+	}
+}
+
+func rotatingIDs(keys cephmsgr.MgrRotatingKeys) []uint64 {
+	ids := make([]uint64, 0, len(keys.Keys))
+	for _, key := range keys.Keys {
+		ids = append(ids, key.ID)
+	}
+	return ids
+}
+
+// observeOSDHello accepts connections on the advertised listener and reads
+// the msgr2 banner and HELLO of each. A stock connector sends its entity type
+// and the exact target address it dialed (ProtocolV2's HELLO); nothing is
+// authenticated and every connection is closed, since accepting a session
+// is not part of this test.
+func observeOSDHello(listener net.Listener, hellos chan<- msgr.Address, types chan<- uint8) {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer conn.Close()
+			conn.SetDeadline(time.Now().Add(10 * time.Second))
+			local := msgr.Banner{Supported: msgr.Revision1 | msgr.Compression, Required: msgr.Revision1}
+			if msgr.WriteFull(conn, local.Encode()) != nil {
+				return
+			}
+			if _, err := msgr.ReadBanner(conn, local); err != nil {
+				return
+			}
+			frame, err := msgr.NewReader(conn, 4096).Read()
+			if err != nil || frame.Tag != msgr.Hello || len(frame.Segments) != 1 {
+				return
+			}
+			d := wire.NewDecoder(frame.Segments[0])
+			peer := d.U8()
+			target := msgr.DecodeAddress(d)
+			if d.Done() != nil {
+				return
+			}
+			select {
+			case types <- peer:
+			default:
+			}
+			select {
+			case hellos <- target:
+			default:
+			}
+		}()
+	}
+}
+
+// TestCephMgrDaemonControlIntegration drives the MGR daemon role's MON
+// control channel against stock Tentacle daemons on a disposable fixture.
+//
+// It creates a scoped mgr.<id> credential (MON profile mgr) and first shows
+// that a wrong key is refused explicitly. The daemon then authenticates as
+// the MGR entity, and an independent native `mgr dump` lists its
+// MON-assigned global ID and name as a standby after its unavailable beacon
+// (empty server addrvec). A deliberately premature available beacon while a
+// stock MGR is active must bring the MON's direct null MgrMap, which the
+// daemon surfaces without raising its epoch, while native dumps before and
+// after keep the stock active daemon and its endpoints. With both stock MGR
+// containers stopped and failed out of the map, MON selects the daemon by
+// global ID first (unavailable), then publishes the exact advertised addrvec
+// after an available beacon, compared entry by entry with the native dump. A
+// stock OSD then dials that published endpoint: the test's listener reads
+// the OSD's msgr2 HELLO, whose target address is the advertised entry with
+// its type and nonce. Stopping the MON that holds the session makes the
+// daemon reconnect to another MON with the same global ID; the map resent on
+// the new session is not delivered again, and native dumps keep the daemon
+// active. Rotating MGR secret IDs are recorded across a native refresh, with
+// a surviving and a new ID, and across the MON reconnect; in-session ticket
+// renewals are counted. No key material is logged. Finally the stopped
+// daemons restart and a stock MGR is active and available again.
+//
+// It does not verify accepting the OSD session (#135), service authorizers
+// or MGR reports, VIP addresses, IPv6 or CRC mode, or the auth-epoch
+// invalidation path natively (synthetic only). The fixture's ticket TTL is
+// short (12 s service and AUTH), so renewal and rotation happen within the
+// test; ServiceTicketTTL is checked against the native configuration.
+//
+// Pinned sources: ceph/ceph/blob/v20.2.4/src/mgr/MgrStandby.cc,
+// ceph/ceph/blob/v20.2.4/src/mon/MgrMonitor.cc (prepare_beacon, null map),
+// ceph/ceph/blob/v20.2.4/src/mon/MonClient.cc (_check_auth_rotating),
+// ceph/ceph/blob/v20.2.4/src/mgr/MgrClient.cc (OSD reconnect on map change),
+// ceph/ceph/blob/v20.2.4/src/msg/async/ProtocolV2.cc (HELLO target address).
+//
+//scenario:row mgr-daemon.aes256k.ip4.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrdaemoncontrol key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 capabilities=mgr-daemon-control
+//scenario:covers Messenger/CephX
+//scenario:covers Daemon-to-daemon
+//fixture:isolated stops both stock MGRs and one MON and makes a test MGR active; restarts them with new MGR global IDs
+func TestCephMgrDaemonControlIntegration(t *testing.T) {
+	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	if control == "" || os.Getenv("CEPH_MSGR_TEST_MGR_COUNT") != "2" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" {
+		t.Skip("requires the disposable one-OSD two-MGR fixture")
+	}
+	requireUsableFixture(t, control)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	if _, admitted := mgrDaemonDump(t, ctx, control, "admission"); !admitted {
+		t.Skip("stopping the stock MGRs requires this test alone with fixture capability mgr-daemon-control")
+	}
+	admin, err := cephmsgr.Dial(ctx, integrationOptions(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	ttlValue := strings.Trim(strings.TrimSpace(string(adminCommand(t, ctx, admin, map[string]any{"prefix": "config get", "who": "mon", "key": "auth_service_ticket_ttl"}))), `"`)
+	seconds, err := strconv.ParseFloat(ttlValue, 64)
+	if err != nil || seconds < 1 {
+		t.Fatal("native auth_service_ticket_ttl", ttlValue, err)
+	}
+	ttl := time.Duration(seconds * float64(time.Second))
+
+	// Scoped credential: MON profile mgr, as a native MGR keyring has.
+	name := fmt.Sprintf("gotest%d", time.Now().UnixNano()%1_000_000)
+	entity := "mgr." + name
+	var created []struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(adminCommand(t, ctx, admin, map[string]any{"prefix": "auth get-or-create", "entity": entity, "caps": []string{"mon", "allow profile mgr", "osd", "allow *", "mds", "allow *"}, "format": "json"}), &created); err != nil || len(created) != 1 {
+		t.Fatal("scoped MGR credential", err)
+	}
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stop()
+		adminCommand(t, cleanup, admin, map[string]any{"prefix": "auth rm", "entity": entity})
+	}()
+	key, err := cephmsgr.ParseKey(created[0].Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := integrationOptions(t)
+	var localMu sync.Mutex
+	var local netip.Addr
+	options := cephmsgr.MgrDaemonOptions{
+		Monitors: base.Monitors, Identity: entity, Key: key, ConnectionMode: base.ConnectionMode,
+		ExpectedFSID: base.ExpectedFSID, ServiceTicketTTL: ttl,
+		DialContext: func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+			conn, err := base.DialContext(ctx, network, endpoint)
+			if err == nil {
+				if tcp, ok := conn.LocalAddr().(*net.TCPAddr); ok {
+					localMu.Lock()
+					local = tcp.AddrPort().Addr().Unmap()
+					localMu.Unlock()
+				}
+			}
+			return conn, err
+		},
+	}
+
+	// A wrong key for the same principal is refused explicitly.
+	wrong := make([]byte, 44)
+	binary.LittleEndian.PutUint16(wrong, 2)
+	binary.LittleEndian.PutUint16(wrong[10:], 32)
+	if _, err := rand.Read(wrong[12:]); err != nil {
+		t.Fatal(err)
+	}
+	wrongOptions := options
+	if wrongOptions.Key, err = cephmsgr.ParseKey(base64.StdEncoding.EncodeToString(wrong)); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := cephmsgr.DialMgrDaemon(ctx, wrongOptions); err == nil {
+		d.Close()
+		t.Fatal("wrong MGR key admitted")
+	} else if rejection := (*cephmsgr.AuthenticationError)(nil); !errors.As(err, &rejection) {
+		t.Fatal("wrong MGR key was not an explicit MON refusal", err)
+	} else {
+		t.Logf("wrong key for %s: MON refused method %d with code %d", entity, rejection.Method, rejection.Code)
+	}
+
+	daemon, err := cephmsgr.DialMgrDaemon(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer daemon.Close()
+	identity := daemon.Identity()
+	if identity.Entity != entity || identity.Name != name || identity.GlobalID == 0 || identity.FSID != admin.Snapshot().FSID {
+		t.Fatal("daemon identity", identity, admin.Snapshot().FSID)
+	}
+	t.Logf("%s admitted as MGR(%d), FSID %s", entity, identity.GlobalID, identity.FSID)
+	state := daemon.State()
+	var ticketServices []string
+	for _, ticket := range state.Tickets {
+		ticketServices = append(ticketServices, ticket.Service)
+	}
+	if !slices.Equal(ticketServices, []string{"auth", "mon", "osd", "mds", "mgr"}) {
+		t.Fatal("native MgrStandby ticket set", ticketServices)
+	}
+	first, err := daemon.WaitRotatingKeys(ctx, 0)
+	if err != nil || len(first.Keys) != 3 {
+		t.Fatal("rotating MGR secrets", first, err)
+	}
+	t.Logf("rotating MGR secret IDs %v (max %d), MON session %d", rotatingIDs(first), first.MaxVersion, first.MonitorGeneration)
+
+	// Unavailable standby: empty server addrvec.
+	beacons := startBeaconLoop(daemon, cephmsgr.MgrBeacon{Metadata: map[string]string{"gotest": "standby"}})
+	defer func() {
+		if err := beacons.close(); err != nil {
+			t.Error("beacon loop", err)
+		}
+	}()
+	standby := nextMgrEvent(t, ctx, daemon, "standby", func(e cephmsgr.MgrMapEvent) bool { return e.Role == cephmsgr.MgrRoleStandby })
+	stock := waitMgrDump(t, ctx, control, "standby", func(d nativeMgrDump) bool {
+		return d.Epoch >= standby.Map.Epoch && d.standby(identity.GlobalID, name)
+	})
+	if stock.ActiveGID == 0 || stock.ActiveGID == identity.GlobalID || !stock.Available {
+		t.Fatal("expected a stock active MGR", stock)
+	}
+	t.Logf("native mgr dump epoch %d: %s/%d is a standby; stock %s/%d active at %v", stock.Epoch, name, identity.GlobalID, stock.ActiveName, stock.ActiveGID, stock.ActiveAddrs.Addrvec)
+
+	// A premature available beacon from a non-active daemon.
+	premature := []cephmsgr.ManagerAddress{{Type: 2, Nonce: 1, Endpoint: netip.AddrPortFrom(netip.MustParseAddr("192.0.2.77"), 6800)}}
+	if err := daemon.SendBeacon(ctx, cephmsgr.MgrBeacon{Available: true, Addresses: premature}); err != nil {
+		t.Fatal(err)
+	}
+	null := nextMgrEvent(t, ctx, daemon, "null map", func(e cephmsgr.MgrMapEvent) bool { return e.Null })
+	after, _ := mgrDaemonDump(t, ctx, control, "after-null")
+	if null.Role != cephmsgr.MgrRoleAbsent || after.ActiveGID != stock.ActiveGID || !after.standby(identity.GlobalID, name) || sameNativeAddresses(after.ActiveAddrs.Addrvec, premature) {
+		t.Fatal("premature available beacon changed the active MGR", null, after)
+	}
+	if s := daemon.State(); s.NullMgrMaps != 1 || s.MgrMapEpoch == ^uint32(0) {
+		t.Fatal("null map raised the delivered epoch", s.MgrMapEpoch, s.NullMgrMaps)
+	}
+	t.Logf("premature available beacon: MON sent the null MgrMap (epoch %d); native epoch %d still has %s/%d active", null.Map.Epoch, after.Epoch, after.ActiveName, after.ActiveGID)
+
+	// MON-driven selection: stop and fail the stock MGRs.
+	stockNames := []string{stock.ActiveName}
+	for _, s := range after.Standbys {
+		if s.GID != identity.GlobalID {
+			stockNames = append(stockNames, s.Name)
+		}
+	}
+	restored := false
+	defer func() {
+		if restored {
+			return
+		}
+		cleanup, stop := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer stop()
+		for _, n := range stockNames {
+			if err := testcluster.ControlDaemon(cleanup, control, "start", "mgr", n); err != nil {
+				t.Error("restart stock MGR", n, err)
+			}
+		}
+	}()
+	for _, n := range stockNames {
+		if err := testcluster.ControlDaemon(ctx, control, "stop", "mgr", n); err != nil {
+			t.Fatal("stop stock MGR", n, err)
+		}
+	}
+	for _, n := range append(stockNames[1:], stockNames[0]) {
+		adminCommand(t, ctx, admin, map[string]any{"prefix": "mgr fail", "who": n})
+	}
+	selected := nextMgrEvent(t, ctx, daemon, "selection", func(e cephmsgr.MgrMapEvent) bool { return e.Role == cephmsgr.MgrRoleActive })
+	if selected.Map.ActiveGlobalID != identity.GlobalID || selected.Map.ActiveName != name || selected.Map.Available {
+		t.Fatal("selection by global ID", selected.Map)
+	}
+	waitMgrDump(t, ctx, control, "selected", func(d nativeMgrDump) bool {
+		return d.ActiveGID == identity.GlobalID && d.ActiveName == name && !d.Available
+	})
+
+	// Availability and the exact advertised addrvec.
+	listener, err := net.Listen("tcp4", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	hellos, types := make(chan msgr.Address, 1), make(chan uint8, 1)
+	go observeOSDHello(listener, hellos, types)
+	localMu.Lock()
+	host := local
+	localMu.Unlock()
+	port := listener.Addr().(*net.TCPAddr).Port
+	var nonce [4]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	advertised := []cephmsgr.ManagerAddress{{Type: 2, Nonce: binary.LittleEndian.Uint32(nonce[:])&0x7fffffff | 1, Endpoint: netip.AddrPortFrom(host, uint16(port))}}
+	beacons.set(cephmsgr.MgrBeacon{Available: true, Addresses: advertised, Metadata: map[string]string{"gotest": "active"}})
+	available := nextMgrEvent(t, ctx, daemon, "available", func(e cephmsgr.MgrMapEvent) bool { return e.Role == cephmsgr.MgrRoleActive && e.Map.Available })
+	if !slices.Equal(available.Map.ActiveAddresses, advertised) {
+		t.Fatal("published addrvec differs from the advertised one", available.Map.ActiveAddresses, advertised)
+	}
+	published := waitMgrDump(t, ctx, control, "available", func(d nativeMgrDump) bool { return d.ActiveGID == identity.GlobalID && d.Available })
+	if !sameNativeAddresses(published.ActiveAddrs.Addrvec, advertised) {
+		t.Fatal("native active_addrs differ from the advertised addrvec", published.ActiveAddrs.Addrvec, advertised)
+	}
+	if got := daemon.State().Advertised; !slices.Equal(got, advertised) {
+		t.Fatal("advertised addresses", got)
+	}
+	t.Logf("native mgr dump epoch %d: %s/%d active and available at %v", published.Epoch, name, identity.GlobalID, published.ActiveAddrs.Addrvec)
+
+	// A stock OSD selects the published endpoint.
+	select {
+	case target := <-hellos:
+		peer := <-types
+		want := msgr.Address{Type: advertised[0].Type, Nonce: advertised[0].Nonce, Endpoint: advertised[0].Endpoint}
+		if peer != 4 || target != want {
+			t.Fatalf("connector HELLO: entity %d target %+v, want OSD and %+v", peer, target, want)
+		}
+		t.Logf("stock OSD dialed the published endpoint: HELLO entity type %d, target %v nonce %d", peer, target.Endpoint, target.Nonce)
+	case <-ctx.Done():
+		t.Fatal("no stock OSD connected to the published endpoint")
+	}
+
+	// MON loss: stop the MON holding the session.
+	before := daemon.State()
+	var mons struct {
+		Mons []struct {
+			Name  string `json:"name"`
+			Addrs struct {
+				Addrvec []nativeMgrAddress `json:"addrvec"`
+			} `json:"public_addrs"`
+		} `json:"mons"`
+	}
+	if err := json.Unmarshal(adminCommand(t, ctx, admin, map[string]any{"prefix": "mon dump", "format": "json"}), &mons); err != nil {
+		t.Fatal(err)
+	}
+	monName := ""
+	for _, mon := range mons.Mons {
+		for _, a := range mon.Addrs.Addrvec {
+			if a.Type == "v2" && a.Addr == before.Monitor.Endpoint {
+				monName = mon.Name
+			}
+		}
+	}
+	if monName == "" {
+		t.Fatal("held MON endpoint is not in the MonMap", before.Monitor.Endpoint)
+	}
+	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", monName); err != nil {
+		t.Fatal("stop MON", monName, err)
+	}
+	monStopped := true
+	defer func() {
+		if monStopped {
+			cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
+			defer stop()
+			if err := testcluster.ControlDaemon(cleanup, control, "start", "mon", monName); err != nil {
+				t.Error("restart MON", monName, err)
+			}
+		}
+	}()
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		s := daemon.State()
+		if s.Err != nil {
+			t.Fatal("daemon ended on MON loss", s.Err)
+		}
+		if s.Monitor.Ready && s.Monitor.Generation > before.Monitor.Generation && s.Monitor.Endpoint != before.Monitor.Endpoint {
+			if s.Identity.GlobalID != identity.GlobalID {
+				t.Fatal("global ID changed across MON reconnect", s.Identity)
+			}
+			t.Logf("MON %s stopped: session %d -> %d, %s -> %s, same global ID %d", monName, before.Monitor.Generation, s.Monitor.Generation, before.Monitor.Endpoint, s.Monitor.Endpoint, s.Identity.GlobalID)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("daemon did not reconnect to another MON", s.Monitor)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	waitMgrDump(t, ctx, control, "after-mon-loss", func(d nativeMgrDump) bool {
+		return d.ActiveGID == identity.GlobalID && d.Available && sameNativeAddresses(d.ActiveAddrs.Addrvec, advertised)
+	})
+	reconnected := waitDaemonState(t, ctx, daemon, func(s cephmsgr.MgrDaemonState) bool {
+		return s.StaleMgrMaps > before.StaleMgrMaps || s.MgrMapEpoch > before.MgrMapEpoch
+	})
+	t.Logf("after reconnection: delivered epoch %d -> %d, maps not delivered again %d -> %d", before.MgrMapEpoch, reconnected.MgrMapEpoch, before.StaleMgrMaps, reconnected.StaleMgrMaps)
+	if err := testcluster.ControlDaemon(ctx, control, "start", "mon", monName); err != nil {
+		t.Fatal("restart MON", monName, err)
+	}
+	monStopped = false
+
+	// Rotating refresh: a surviving and a new secret ID.
+	keys := first
+	for {
+		next, err := daemon.WaitRotatingKeys(ctx, keys.Generation)
+		if err != nil {
+			t.Fatal("rotating refresh", err)
+		}
+		t.Logf("rotating MGR secret IDs %v (generation %d, MON session %d)", rotatingIDs(next), next.Generation, next.MonitorGeneration)
+		survived, added := false, false
+		for _, id := range rotatingIDs(next) {
+			if slices.Contains(rotatingIDs(keys), id) {
+				survived = true
+			} else {
+				added = true
+			}
+		}
+		if survived && added && next.MonitorGeneration > first.MonitorGeneration {
+			break
+		}
+		keys = next
+	}
+	final := daemon.State()
+	mgrTicket := final.Tickets[slices.IndexFunc(final.Tickets, func(t cephmsgr.MgrDaemonTicket) bool { return t.Service == "mgr" })]
+	if final.Renewals == 0 {
+		t.Fatal("no in-session ticket renewal", final.Renewals)
+	}
+	t.Logf("%d in-session ticket renewals; MGR service ticket secret ID %d, held rotating IDs %v", final.Renewals, mgrTicket.SecretID, rotatingIDs(final.RotatingKeys))
+
+	// Restore a stock active MGR.
+	if err := beacons.close(); err != nil {
+		t.Fatal("beacon loop", err)
+	}
+	daemon.Close()
+	for _, n := range stockNames {
+		if err := testcluster.ControlDaemon(ctx, control, "start", "mgr", n); err != nil {
+			t.Fatal("restart stock MGR", n, err)
+		}
+	}
+	restored = true
+	adminCommand(t, ctx, admin, map[string]any{"prefix": "mgr fail", "who": name})
+	back := waitMgrDump(t, ctx, control, "restored", func(d nativeMgrDump) bool {
+		return d.Available && d.ActiveGID != identity.GlobalID && slices.Contains(stockNames, d.ActiveName)
+	})
+	t.Logf("restored: stock %s/%d active at native epoch %d", back.ActiveName, back.ActiveGID, back.Epoch)
+}
+
+func waitDaemonState(t *testing.T, ctx context.Context, daemon *cephmsgr.MgrDaemon, ok func(cephmsgr.MgrDaemonState) bool) cephmsgr.MgrDaemonState {
+	t.Helper()
+	for {
+		s := daemon.State()
+		if ok(s) {
+			return s
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("daemon state did not settle: %+v", s)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
