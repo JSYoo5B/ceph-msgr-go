@@ -21,7 +21,9 @@ entity type CLIENT). It opens outbound msgr2.1 connections to MON, MGR, OSD
 and MDS daemons that already exist. It has no listening Messenger, accepts no
 connection, and implements no daemon role: it cannot act as a MON, MGR, OSD or
 MDS, and it sends none of the daemon-to-daemon messages (quorum, heartbeat,
-peering, replication, recovery, metadata migration).
+peering, replication, recovery, metadata migration). This describes the code
+as it is: the protocols a daemon role uses are planned scope (stage 3 of
+[SPEC.md](SPEC.md) "Protocol stages"), and none has landed yet.
 
 | Peer | What the Go client does | What it never does |
 | --- | --- | --- |

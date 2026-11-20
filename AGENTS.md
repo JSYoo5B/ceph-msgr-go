@@ -2,11 +2,14 @@
 
 ## Product scope
 
-- Implement the Ceph Messenger client in native Go, independently of OS-specific Ceph installations.
+- Implement Ceph Messenger communication in native Go, independently of OS-specific Ceph installations: the client roles, and the protocols a daemon role (MON, MGR, OSD, MDS) uses to talk to other daemons. `SPEC.md` "Protocol stages" defines the three stages of this scope.
+- In every stage this is a protocol and communication library, not a higher-level library. A daemon-role protocol provides wire encoding, identity, authentication, sessions and bounded delivery; the consumer supplies the role's decisions and data (readiness, capabilities, beacon and report contents, command results), and aggregation, placement, modules, elections and orchestration stay above it.
+- A fake daemon that drives a daemon-role path for testing is a test fixture under `integration/fixture/`. Product code never grows daemon behaviour beyond the protocol boundary above to make such a fixture work.
+- The stages are scope, not gates. Work on a later stage starts whenever its own prerequisites exist, while an earlier stage is still open; do not hold it back until an earlier stage is complete.
 - Product builds, runtime, and transitive dependencies must not require CGO, go-ceph, librados, Ceph CLI subprocesses, or other native libraries.
 - The minimum supported Ceph release family is Tentacle (20.2). Do not add support for earlier release families.
 - Use the current Tentacle specification. Reject requests to preserve older public APIs when APIs change. Do not add compatibility wrappers, deprecated aliases, or legacy behavior for that purpose unless the user explicitly changes this policy.
-- This repository implements the communication layer: authentication, Messenger framing, raw commands, wire messages/maps, subscriptions, session handling and bounded OSD/MDS requests. Keep supported configurations and incomplete paths explicit in `SPEC.md` and the relevant contracts.
+- This repository implements the communication layer: authentication, Messenger framing, raw commands, wire messages/maps, subscriptions, session handling, bounded OSD/MDS requests and, for daemon roles, the matching accepting and daemon-to-daemon sessions. Keep supported configurations and incomplete paths explicit in `SPEC.md` and the relevant contracts.
 - Actual use belongs to a separate layer and repository: command construction and schema/result interpretation, text keyring/configuration loading, typed management operations, module/configuration policy, and operational workflows are outside the product scope. Keep raw command input/output and decoded wire metadata available to that layer.
 - The final test-environment goal is to reproduce all Messenger-based communication and I/O paths of the selected Ceph release, as defined in SPEC.md: MON/MGR/OSD/MDS, object mutations, CephFS/RBD underlying I/O, and real daemon-to-daemon paths. Track future fixture requirements separately from current Go implementation support; a limited successful profile is not the final environment boundary.
 - Callers supply OSD placement and routing metadata. Do not turn this repository into an autonomous RADOS client.

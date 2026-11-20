@@ -14,7 +14,9 @@ or test fixture is not a claim that the corresponding product feature is complet
 - Accept programmatic credentials and configuration. Identity selection, text
   keyrings, configuration files and environment policy belong to the consumer.
 - Provide communication primitives: framing, authentication, sessions, raw commands,
-  maps, subscriptions, targeted object operations and bounded MDS communication.
+  maps, subscriptions, targeted object operations and bounded MDS communication,
+  and, for a daemon role, the protocols that role uses with other daemons (see
+  "Protocol stages").
 - Keep command schemas, typed management APIs, operational workflows, CRUSH,
   automatic placement/routing, filesystem state and storage policy in another layer.
 - Preserve raw command output and wire metadata for that layer. Do not silently
@@ -22,6 +24,29 @@ or test fixture is not a claim that the corresponding product feature is complet
 - Expand product and fixture coverage through explicit contracts and independent
   native validation, rather than treating an initial successful profile as the
   final boundary.
+
+## Protocol stages
+
+The product scope has three stages. They say which role a protocol serves;
+they are not gates. Work on a later stage starts whenever its own
+prerequisites exist, while an earlier stage is still open.
+
+| Stage | Protocols | Purpose |
+| --- | --- | --- |
+| 1. Control | Messenger, CephX and the MON/MGR command, subscription and map protocols a command-line client uses | Control and management tools above the library |
+| 2. Client I/O | CLIENT to OSD, and the CLIENT to MDS communication CephFS data needs | A client that performs real object and file I/O above the library |
+| 3. Daemon roles | The protocols a MON, MGR, OSD or MDS role uses with other daemons: accepting sessions as that role, service authentication and the role's daemon messages | A daemon implementation above the library |
+
+Every stage provides protocol and communication only. A daemon-role protocol
+owns wire encoding, identity and session binding, authentication, bounded
+delivery and transport outcomes. The consumer supplies the role's readiness,
+capability decisions, beacon and report contents, command results and service
+lifecycle. Aggregation (such as PGMap), placement, modules, elections, Paxos,
+key serving and orchestration belong above the library; a stock daemon remains
+the authority for what the library only carries. A fake daemon used to drive a
+stage-3 path is a test fixture, not product code. Stage-3 protocols are
+verified against stock daemons like every other path. #131 specifies the MGR
+endpoint as the first stage-3 work.
 
 ## Implementation priorities
 
@@ -98,8 +123,9 @@ including paths not yet implemented in Go.
 
 RBD is not a separate Messenger server role. CephFS requires MDS metadata and
 OSD data paths together. Native service success does not establish the matching
-Go wire implementation. Daemon-to-daemon fixtures use actual Ceph daemons;
-this does not require the product to implement Ceph servers.
+Go wire implementation. Daemon-to-daemon fixtures use actual Ceph daemons. A
+Go stage-3 protocol is verified against those stock daemons, and a fake daemon
+stays a fixture.
 
 A native test names each path of this table that it gives native evidence for
 in a `//scenario:covers <Path>` line beside it, with the Path column's text.
