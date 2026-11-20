@@ -595,18 +595,18 @@ Artifact retention follows the purpose of each upload:
 | Failure diagnostics | 14 days | Failed native, race and unit-test logs/metadata; Windows evidence when the job fails |
 | Deployment evidence | 30 days | Policy for future deployment workflows; no deployment workflow currently uploads evidence |
 
-Successful explicit cap-send rows additionally request the closed
-[schema-v1 native evidence bundle](NATIVE_EVIDENCE.md). Its manifest joins
+A row that an evidence family claims additionally requests the closed
+[schema-v1 native evidence bundle](NATIVE_EVIDENCE.md). Each family is a
+trusted module of its own, `tools/native_evidence_<name>.py`, which says
+which rows it claims and what it projects; the workflow asks the trusted
+collector for the job's family. Its manifest joins
 tested/controller SHA, execution source, run ID/attempt, scenario/selector,
 normalized requested profile, configured image, observed runtime facts and
 included-file hashes. Only reviewed numeric/outcome/cleanup projections are
 uploaded for seven days; raw metadata, logs, configuration and credentials
 remain excluded. `result.json` distinguishes a native test PASS from incomplete
 required evidence, and the pilot's final gate requires both collection and
-upload. The single four-minute OSD soak row requests a second closed
-family (`native-soak-success`, a fixed projection of its raw receipts with
-hashes; see [the soak section](NATIVE_EVIDENCE.md#four-minute-osd-soak-family)).
-Other rows keep their previous retention boundary. This new trusted
+upload. Other rows keep their previous retention boundary. This new trusted
 collector becomes available to PR-comment execution after its workflow lands
 on the default branch; pre-merge native requests keep the older runner.
 
