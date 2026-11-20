@@ -1,0 +1,105 @@
+"""Receipt tests of TestRGWNativeMultiStripeIntegration (tools/rgw_native_gate_multi_stripe.py)."""
+import hashlib
+import json
+import unittest
+
+import rgw_native_gate as gate
+import rgw_native_gate_multi_stripe as multi
+from test_rgw_native_gate import IMAGE, stream
+
+MULTI = multi.TEST
+
+
+def receipt(**changes):
+    sizes = [4 << 20, 2 << 20]
+    stripes, offset = [], 0
+    for index, size in enumerate(sizes):
+        stripes.append({"index": index, "offset": offset, "size": size, "oid": "m_o%d" % index,
+                        "received_writes": 1, "received_write_bytes": size})
+        offset += size
+    value = {"image": IMAGE, "source": gate.SOURCE, "bytes": multi.MULTISTRIPE_SIZE,
+             "sha256": hashlib.sha256(multi.large_payload(multi.MULTISTRIPE_SIZE)).hexdigest(),
+             "stripes": stripes, "head_sentinel": None, "gc_chains": 1, "gc_removed_tails": 1,
+             "put_reception": [{"tid": 10}],
+             "delete_head_remove": [{"tid": 20, "description": "osd_op(x [call rgw.obj_remove in=13b])"}],
+             "delete_gc_enqueue": [{"tid": 21, "description": "osd_op(x [call rgw_gc.rgw_gc_queue_enqueue in=9b])"}]}
+    value.update(changes)
+    return value
+
+
+SAMPLE = multi.MARKER + json.dumps(receipt())
+
+
+class MultiStripeReceiptTest(unittest.TestCase):
+    def test_counts_the_stripes(self):
+        result = gate.verify(stream(MULTI), MULTI)
+        self.assertTrue(result["passed"], result["problems"])
+        self.assertEqual(result["stripes"], 2)
+
+    def test_rejects_receipts_that_contradict_the_layout_arithmetic(self):
+        short = receipt()
+        short["stripes"][1]["size"] -= 1
+        gap = receipt()
+        gap["stripes"][1]["offset"] += 1
+        unreceived = receipt()
+        unreceived["stripes"][1]["received_write_bytes"] = 1
+        single = receipt()
+        single["stripes"] = single["stripes"][:1]
+        for name, bad in {
+            "short": short, "gap": gap, "unreceived": unreceived, "single": single,
+            "hash": receipt(sha256="0" * 64), "size": receipt(bytes=1), "source": receipt(source="x"),
+            "image": receipt(image="quay.io/ceph/ceph:v20.2.4"), "no delete": receipt(delete_head_remove=[]),
+            "no gc enqueue": receipt(delete_gc_enqueue=[]), "no chain": receipt(gc_chains=0),
+            "tails": receipt(gc_removed_tails=2),
+            "startup gc init": receipt(delete_gc_enqueue=[{"tid": 5, "description": "osd_op(x [call rgw_gc.rgw_gc_queue_init in=23b])"}]),
+            "gc enqueue before PUT": receipt(delete_gc_enqueue=[{"tid": 9, "description": "[call rgw_gc.rgw_gc_queue_enqueue]"}]),
+            "wrong delete method": receipt(delete_head_remove=[{"tid": 20, "description": "[call rgw.bucket_complete_op]"}]),
+        }.items():
+            line = multi.MARKER + json.dumps(bad)
+            self.assertFalse(gate.verify(stream(MULTI, line=line), MULTI)["passed"], name)
+
+    def test_delete_methods_require_complete_call_tokens(self):
+        cases = (
+            ("delete_head_remove", "rgw.obj_remove"),
+            ("delete_gc_enqueue", "rgw_gc.rgw_gc_queue_enqueue"),
+            ("delete_gc_enqueue", "rgw.gc_set_entry"),
+        )
+        for field, method in cases:
+            for description in (
+                "osd_op(x [call %s in=9b])" % method,
+                "[create,call version.check_conds in=18b,call %s in=9b]" % method,
+            ):
+                with self.subTest(field=field, description=description):
+                    value = receipt(**{field: [{"tid": 21, "description": description}]})
+                    result = gate.verify(stream(MULTI, line=multi.MARKER + json.dumps(value)), MULTI)
+                    self.assertTrue(result["passed"], result["problems"])
+            for description in (
+                "[call %s_extra in=9b]" % method,
+                "[call prefix_%s in=9b]" % method,
+                "[setxattr user.%s (1)]" % method,
+                "[read %s in=9b]" % method,
+                "[not_call %s in=9b]" % method,
+                "[call %s.extra in=9b]" % method,
+                "[call %s9 in=9b]" % method,
+                "[" + ",".join(["call other.method in=1b"] * 8 + ["call %s in=9b" % method]) + "]",
+            ):
+                with self.subTest(field=field, description=description):
+                    value = receipt(**{field: [{"tid": 21, "description": description}]})
+                    result = gate.verify(stream(MULTI, line=multi.MARKER + json.dumps(value)), MULTI)
+                    self.assertFalse(result["passed"])
+                    self.assertTrue(any(field + " entry" in problem for problem in result["problems"]), result)
+
+    def test_head_sentinel_counts_every_stripe_as_a_tail(self):
+        bad = receipt(head_sentinel="m_head", gc_removed_tails=2)
+        result = gate.verify(stream(MULTI, line=multi.MARKER + json.dumps(bad)), MULTI)
+        self.assertTrue(result["passed"], result["problems"])
+
+    def test_payload_matches_the_documented_construction(self):
+        payload = multi.large_payload(100)
+        self.assertEqual(len(payload), 100)
+        self.assertEqual(payload[:32], hashlib.sha256(b"ceph-msgr-go rgw multistripe v1:" + bytes(8)).digest())
+        self.assertEqual(payload[32:64], hashlib.sha256(b"ceph-msgr-go rgw multistripe v1:" + bytes(7) + b"\x01").digest())
+
+
+if __name__ == "__main__":
+    unittest.main()

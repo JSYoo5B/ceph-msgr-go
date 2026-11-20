@@ -65,6 +65,8 @@ jobs:
           cp .trusted-native/tools/go_test_list.py "$RUNNER_TEMP/go_test_list.py"
           # It verifies a routed RGW checkpoint's stream with this gate.
           cp .trusted-native/tools/rgw_native_gate.py "$RUNNER_TEMP/rgw_native_gate.py"
+          # The RGW gate loads each checkpoint's receipt check from beside it.
+          cp .trusted-native/tools/rgw_native_gate_*.py "$RUNNER_TEMP/"
           cp .trusted-native/tools/native_terminal.py "$RUNNER_TEMP/native_terminal.py"
           cp .trusted-native/tools/native_evidence.py "$RUNNER_TEMP/native_evidence.py"
           # The soak collector imports this validator from its own directory;
