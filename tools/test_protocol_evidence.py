@@ -41,12 +41,11 @@ class ProtocolEvidenceTests(unittest.TestCase):
 
     def test_current_join_covers_messages_roles_and_real_unit_definitions(self):
         self.assertEqual(self.check(), [])
-        self.assertEqual(len(evidence.message_rows(evidence.ROOT)), 50)
-        self.assertEqual(len(evidence.feature_rows(evidence.ROOT)), 11)
-        self.assertEqual(len(evidence.frame_rows(evidence.ROOT)), 22)
-        catalog = evidence.opcode_rows(evidence.ROOT)
-        self.assertEqual(len(catalog), 80)
-        self.assertEqual(sum(row["status"] == "implemented" for row in catalog.values()), 56)
+        # The source ledgers parse to something; exact coverage of each is
+        # what check() compares, so no stored total is repeated here.
+        for rows in (evidence.message_rows(evidence.ROOT), evidence.feature_rows(evidence.ROOT),
+                     evidence.frame_rows(evidence.ROOT), evidence.opcode_rows(evidence.ROOT)):
+            self.assertTrue(rows)
         self.assertLessEqual(evidence.NUMBERED_RECEIPTS, set(self.receipts))
 
     def test_every_implemented_opcode_needs_its_own_join(self):
