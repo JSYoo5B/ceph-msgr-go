@@ -22,6 +22,11 @@ func (c *fixtureCluster) controlMDSFreshRequest(ctx context.Context, out string)
 
 var _ = defineControl("mds-fresh", frozenControlRank(17), (*fixtureCluster).controlMDSFreshRequest)
 
+// controlMDSMapsRequest runs the closed start, observe and finish actions of
+// tools/mds_maps_oracle.py. The pinned CLI has no getmap command, so native
+// fs dump and fs get JSON fields are the comparison; byte equality of the raw
+// maps is left to the native codec vectors. finish removes pools only when
+// mon_allow_pool_delete is already true and never changes that policy.
 func (c *fixtureCluster) controlMDSMapsRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error

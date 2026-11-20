@@ -22,15 +22,6 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
-// TestCephMDSCephFSRanksIntegration accepts one Go client's CephFS sessions
-// with two active MDS ranks of one filesystem: explicit per-rank targets, a
-// request forward answered by resubmitting to the destination rank, the
-// capability EXPORT/IMPORT of a subtree migration between the ranks, and a
-// standby takeover of rank 0 followed by a CephFS reconnect to the new daemon,
-// against live Tentacle daemons with native oracles. See
-// integration/fixture/MDS_CEPHFS_RANKS_FIXTURE.md and
-// MDS_CEPHFS_RANKS_VALIDATION.md.
-
 // CEPH_STAT_RSTAT (CEPH_CAP_FILE_WREXTEND): a getattr asking for it requires
 // the authoritative MDS (Server::handle_client_getattr), so a non-auth rank
 // forwards it.
@@ -576,6 +567,18 @@ type ranksStatusSample struct {
 	ArmedBlocklist  []nativeMDSSessionsBlock
 }
 
+// TestCephMDSCephFSRanksIntegration accepts one Go client's CephFS sessions
+// with two active MDS ranks of one filesystem: explicit per-rank targets, a
+// request forward answered by resubmitting to the destination rank, the
+// capability EXPORT/IMPORT of a subtree migration between the ranks, and a
+// standby takeover of rank 0 followed by a CephFS reconnect to the new daemon,
+// against live Tentacle daemons with native oracles. Both sessions share one
+// GlobalID and address instance. A forward resolves the call as
+// MDSRequestForwardedError without ending the session; FLUSHMSG precedes each
+// EXPORT, and EXPORT and IMPORT of one cap arrive on different connections in
+// either order. Not exercised: migration back to rank 0, takeover of rank 1
+// and caps of dirty files across a migration.
+//
 //scenario:row mds-cephfs-ranks.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsranks key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_ranks=1
 //scenario:row mds-cephfs-ranks.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsranks key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_ranks=1
 //scenario:covers CLIENT to MDS/CephFS

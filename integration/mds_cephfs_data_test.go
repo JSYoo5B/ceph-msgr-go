@@ -25,18 +25,6 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
-// TestCephMDSCephFSDataIntegration accepts CephFS file data I/O through the
-// Go client's MDS session and its own OSD requests against live Tentacle
-// daemons, compared with a native LibCephFS client: striped writes with a cap
-// flush, a native sparse file read through the layout, a native truncate and
-// its TRUNC push, a buffered write flushed on a concurrent reader's revoke,
-// a write after a snapshot that clones the objects, and pending dirty cap
-// snapshots explicitly flushed after an owned MDS restart. File layout striping,
-// object naming, snap contexts, size and time bookkeeping and cap flush
-// decisions are test-only consumer logic. See
-// integration/fixture/MDS_CEPHFS_DATA_FIXTURE.md and
-// MDS_CEPHFS_DATA_VALIDATION.md.
-
 // cephfsStriping restates the striping fields of file_layout_t (test-only).
 type cephfsStriping struct{ StripeUnit, StripeCount, ObjectSize uint64 }
 
@@ -981,6 +969,27 @@ const (
 	cephfsDataMixedWritebackRestart
 )
 
+// TestCephMDSCephFSDataIntegration accepts CephFS file data I/O through the Go
+// client's MDS session and its own OSD requests against live Tentacle daemons,
+// compared with a native LibCephFS client: striped writes with a cap flush, a
+// native sparse file read through the layout, a native truncate and its TRUNC
+// push, a buffered write flushed on a concurrent reader's revoke, a write
+// after a snapshot that clones the objects, and pending dirty cap snapshots
+// explicitly flushed after an owned MDS restart. File layout striping, object
+// naming, snap contexts, size and time bookkeeping and cap flush decisions are
+// test-only consumer logic.
+//
+// Flushes are dirty UPDATEs as native Client::send_cap sends them, every OSD
+// op carries the inode truncate state, and a FLUSHSNAP follows its completed
+// writeback and needs an exact inode, follows, TID and dirty ACK. Cap snaps
+// not sent before the restart are first sent after adoption, as
+// Client::early_kick_flushing_caps defers pure cap snaps; resubmission and the
+// completed-flush branch are attributed from the MDS's own cap log lines,
+// never from SendCaps success, and no object request is repeated. Not
+// verified: non-directory layouts, pool namespaces, inline data, O_TRUNC,
+// several writers, concurrent server execution of two FLUSHSNAPs and
+// persistence across an OSD restart.
+//
 //scenario:row mds-cephfs-data.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsdata key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1
 //scenario:row mds-cephfs-data.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsdata key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1
 //scenario:covers CLIENT to MDS/CephFS
@@ -989,8 +998,14 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 	runCephMDSCephFSDataAcceptance(t, cephfsDataCapSnapRestart)
 }
 
-// TestCephMDSCephFSCapSendRecoveryIntegration runs the same owned data
-// fixture with the cap-send recovery restart instead of the cap-snap one.
+// TestCephMDSCephFSCapSendRecoveryIntegration runs the same owned data fixture
+// with the cap-send recovery restart instead of the cap-snap one. The first
+// head UPDATE is admitted while the MDS drops client messages after Messenger
+// receipt, attributed by one ProtocolV2 blackhole line of its exact tuple and
+// nonce; the second is refused on the Lost session with the session's terminal
+// cause. After reconnect both must be applied as new flushes, with no "already
+// flushed" branch. Only head UPDATE is exercised: a FLUSHSNAP refused by a
+// Lost session and a frame lost before Messenger receipt are not.
 //
 //scenario:row mds-cephfs-capsend.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscapsendrecovery key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=exclusive-mds-cephfs-data
 //scenario:row mds-cephfs-capsend.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscapsendrecovery key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=exclusive-mds-cephfs-data
@@ -1002,7 +1017,13 @@ func TestCephMDSCephFSCapSendRecoveryIntegration(t *testing.T) {
 
 // TestCephMDSCephFSWritebackFenceIntegration runs the same owned data fixture
 // with the interrupted-writeback, revoke, restart and eviction recipe instead
-// of the cap-snap restart.
+// of the cap-snap restart. The interrupted OSD write ends with
+// OutcomeUnknownError and is never resent, and the consumer flushes no size
+// beyond its gap-free committed end. The eviction blocklists the shared
+// ip:0/nonce, so the next write on the existing OSD connection returns
+// -EBLOCKLISTED (PrimaryLogPG::do_op). The OSD drop happens after Messenger
+// receipt only: a write applied while its reply was lost and partial
+// application are not reproduced.
 //
 //scenario:row mds-cephfs-writeback.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfswritebackfence key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence
 //scenario:row mds-cephfs-writeback.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfswritebackfence key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence
@@ -1015,7 +1036,10 @@ func TestCephMDSCephFSWritebackFenceIntegration(t *testing.T) {
 // TestCephMDSCephFSMixedWritebackRecoveryIntegration runs the same owned data
 // fixture with the mixed-extent writeback recipe: a confirmed prefix, an
 // unknown gap and a confirmed extent beyond it, a metadata flush of the prefix
-// only and an owned MDS restart.
+// only and an owned MDS restart. Native statx and a native read must then show
+// the prefix alone while the native object view holds both completed writes,
+// and no write is resent. A withheld reply after apply, a loss before receipt
+// and partial application are not reproduced.
 //
 //scenario:row mds-cephfs-mixed-writeback.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsmixedwritebackrecovery key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence,mds-writeback-mixed
 //scenario:row mds-cephfs-mixed-writeback.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsmixedwritebackrecovery key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence,mds-writeback-mixed
