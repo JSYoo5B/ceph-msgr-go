@@ -29,7 +29,6 @@ LISTERS = {
     # TestCatalogRowsAreAdmittedByTheFixture.
     "scenario_plan": (("validate", "sharing"), (".", "integration/fixture")),
     "protocol_evidence": (None, (".", "integration/fixture")),  # a link's own module
-    "native_path_coverage": (None, None),  # its MODULES, read below
     "fuzz_targets": (None, (".",)),
     "product_dependencies": (None, (".",)),
     "workflow_lint": (None, (".",)),  # pinned Go tool under the product toolchain
@@ -39,11 +38,7 @@ SUITE = re.compile(r"-m unittest discover -s tools(?: -p '([^']+)')?")
 
 
 def modules_of(name):
-    subcommands, modules = LISTERS[name]
-    if modules is None:
-        import native_path_coverage
-        modules = native_path_coverage.MODULES
-    return modules
+    return LISTERS[name][1]
 
 
 def go_directive(module):

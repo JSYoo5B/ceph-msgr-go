@@ -18,6 +18,7 @@ import (
 // This is a native oracle prerequisite, not a test of Go xattr support.
 // Product xattr opcodes remain unsupported until their separate milestone.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable the native oracle writes a -native-xattr object and removes it with a checked delete
 func TestCephOSDXattrNativeOracleIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {

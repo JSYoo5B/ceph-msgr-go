@@ -20,6 +20,7 @@ import (
 // primary, and an OMAP compare-then-set vector whose reply was lost resolves
 // through an explicit resubmission: re-executing it would fail its compare.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills and restarts an OSD; recovery has no pg_temp proof and rewrites the fixture object
 func TestCephOSDOmapDurabilityIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

@@ -4,15 +4,57 @@
 This module holds the bundle mechanics every family shares: the run context,
 input reading, privacy and size bounds, the observed runtime file, the
 manifest and its hash inventory. A family is a module named
-native_evidence_<name>.py beside this one; it declares the matrices it
-claims, the profiles it admits and how it projects and re-validates its
-files (see family_problems). Each projects numeric identity/time/outcome
-fields, cleanup results and hashes, not raw logs, endpoints, commands,
-configuration, credentials, full capability objects or raw workload bytes.
-Hashes bind the projected files and name the omitted raw receipts; they do
-not let a reader recompute omitted native bytes or xattrs, nor establish the
-truth of a native assertion. Families are imported only from this module's
-own directory, which the workflow fills from the trusted controller.
+native_evidence_<name>.py beside this one; it declares KIND, FILES (always
+with tests.json and runtime.json), PROFILES, CAPABILITIES and claims,
+scenario_id, selector, runtime_facts, gate, project and validate (see
+family_problems). Families are imported only from this module's own
+directory, which the workflow fills from the trusted controller before it
+checks out tested code; the tested checkout supplies data only. The
+collector refuses every family when one declaration is incomplete or
+imported from elsewhere, when two families share a KIND or admit one
+profile, and a matrix two families claim (ambiguous-evidence-family). A
+request no family claims has its test result classified with the cap-send
+gate (UNCLAIMED_GATE) and is then refused. The workflow lists no family: the step
+`native_evidence.py family` prints the claimed family's name, or nothing.
+
+The fixture's metadata directory is input only: a family reads the files it
+names and the trusted gate's native-tests.json, and projects numeric
+identity/time/outcome fields, closed labels, cleanup results and hashes, not
+raw logs, endpoints, commands, configuration, credentials, full capability
+objects or raw workload bytes. Hashes bind the projected files and name the
+omitted raw receipts; they do not let a reader recompute omitted native bytes
+or xattrs, nor establish the truth of a native assertion, and they are not a
+signature.
+
+Every bundle has manifest.json (schema_version 1, the family's kind, the
+execution context: execution_source, tested and controller SHA, run ID and
+attempt, scenario, selector, normalized requested profile, configured image,
+observed runtime, and the size and SHA-256 of each payload file), tests.json
+and runtime.json (inspected image ID and architecture, native daemon version,
+provider version, fixture-reported profile). Every field is required and
+unknown fields are refused. Collection requires the pinned SOURCE, IMAGE and
+PROVIDER_VERSION; verification also admits the provider releases of bundles
+recorded earlier. verify requires an expected run request (--request, or the
+workflow's EXECUTION_SOURCE, TESTED_SHA, CONTROLLER_SHA, RUN_ID, RUN_ATTEMPT
+and MATRIX_JSON) supplied independently of the manifest; the manifest's own
+identity given back establishes only self-consistency.
+
+Bounds: INPUT_LIMIT per source document, FILE_LIMIT per gate document and
+exported file, TOTAL_LIMIT per bundle including its manifest. Duplicate JSON
+keys, invalid JSON, nonregular files, symlinks, missing or oversized inputs,
+unexpected files, bad hashes, mismatched context, profile or runtime facts,
+incomplete cleanup and unreviewed path or address strings (PRIVATE) are
+refused, and an existing output directory is never overwritten. A native
+PASS with failed collection or upload stays test_result=passed with
+evidence_result=incomplete and a fixed public failure code; the final
+evidence step then fails the job. Missing required-test evidence is unknown,
+never PASS, and no retry replaces the first attempt. The collector uses only
+Python's standard library, executes nothing it reads, and its daemon-free
+tests are tools/test_native_*evidence*.py.
+
+    native_evidence.py collect --request REQUEST --receipts METADATA \
+        --tests native-tests.json --output BUNDLE --status STATUS
+    native_evidence.py verify --request REQUEST --bundle BUNDLE
 """
 import argparse
 import hashlib

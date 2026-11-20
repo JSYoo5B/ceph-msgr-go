@@ -25,6 +25,7 @@ func fixtureFDCount() int {
 	return len(entries)
 }
 
+//scenario:covers Messenger/CephX
 //fixture:shareable sends status and pg stat reads while repeatedly closing its own clients
 func TestCephRepeatedShutdownUnderTrafficIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {

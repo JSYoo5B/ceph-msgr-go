@@ -223,6 +223,7 @@ func decodeOmapRead(t *testing.T, code cephmsgr.OSDOpcode, data []byte) ([]omapN
 	return entries, more
 }
 
+//scenario:covers CLIENT to OSD
 //fixture:shareable reads OMAP of its owned UUID object; checked osd-omap cleanup removes it
 func TestCephOSDOmapReadsIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

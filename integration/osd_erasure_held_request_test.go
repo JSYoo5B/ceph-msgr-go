@@ -208,6 +208,7 @@ func checkHeldRequest(s opsInFlightSnapshot, route osdFixtureOracle, gid uint64,
 // the original transaction, which must apply once and appear once in that log.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2requestheldatdyingprimary key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *testing.T) {
 	width := erasureK2M2

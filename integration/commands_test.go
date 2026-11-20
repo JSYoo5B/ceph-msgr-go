@@ -13,6 +13,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable sets one central config entry and removes it as the last step; a leftover fails the start-state config check
 func TestCephConfigCommandsIntegration(t *testing.T) {
 	c, ctx := fixtureClient(t, 20*time.Second)

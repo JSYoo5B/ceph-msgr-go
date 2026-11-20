@@ -189,6 +189,7 @@ func objectBackoffHeldDegraded(op objectBackoffOp, client string) bool {
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdobjectbackofffailover key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdobjectbackofffailover key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
+//scenario:covers CLIENT to OSD
 //fixture:isolated pauses and stops OSDs and changes flags and config; cleanup waits active+clean without a pg_temp proof
 func TestCephOSDObjectBackoffFailoverIntegration(t *testing.T) {
 	if !isReplicatedPGFixtureProfile() || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

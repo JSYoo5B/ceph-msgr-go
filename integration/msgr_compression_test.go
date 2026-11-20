@@ -26,6 +26,7 @@ import (
 // unverified; codec/frame tests are synthetic.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6
+//scenario:covers Messenger/CephX
 //fixture:shareable reads MON status and OSD version over CRC connections only
 func TestCephMsgrCompressionOfferIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_CONNECTION_MODE") != "crc" {

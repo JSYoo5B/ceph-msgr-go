@@ -18,6 +18,7 @@ from pathlib import Path
 
 import ci_row_catalog
 import rgw_native_gate as gate
+import scenario_declarations
 import scenario_plan as plan
 
 # Two existing rows and their tests, for the checks of one row.
@@ -43,7 +44,7 @@ class RGWRowsTest(ci_row_catalog.RowsTestCase):
         for entry in routed:
             self.assertEqual(entry, row(entry["id"], test_run=entry["params"]["test_run"]))
         self.assertIn(row(CHECKPOINT_ROW, test_run="^%s$" % CHECKPOINT), routed)
-        self.assertEqual(self.routed_ids(), sorted(self.routed_ids()))
+        self.assertEqual(self.routed_ids(), sorted(self.routed_ids(), key=lambda sid: scenario_declarations.planning_key({"id": sid})))
         # No other row names the routing parameter, so every existing row
         # keeps CEPH_MSGR_TEST_RGW_NATIVE at the workflow's fallback 0.
         self.assertEqual([entry["id"] for entry in self.entries if "rgw_native" in entry["params"]], self.routed_ids())

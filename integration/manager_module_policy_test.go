@@ -13,6 +13,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated force-disables always-on modules and runs mgr fail; the active MGR is not restored
 func TestCephManagerModulePolicyIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

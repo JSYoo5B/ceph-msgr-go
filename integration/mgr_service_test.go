@@ -76,6 +76,7 @@ func TestServiceWatchRequestMatchesNativeOracleInputs(t *testing.T) {
 //
 //scenario:row mgr-service.aes.ip4.crc.host.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrserviceregistration key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mgr_service=1
 //scenario:row mgr-service.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrserviceregistration key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mgr_service=1
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated its recovery subtest runs mgr fail; the active MGR is not restored
 func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MGR_SERVICE") != "1" {

@@ -17,6 +17,7 @@ import (
 // cached OSD service ticket), and on a newly dialed client with fresh tickets.
 // The client never refreshes tickets because of a capability change.
 //
+//scenario:covers Messenger/CephX
 //fixture:isolated creates an auth entity before its cleanup and ignores the auth rm code; auth is not in the start-state check
 func TestCephOSDCommandCapsChangeIntegration(t *testing.T) {
 	fixture := osdFixture

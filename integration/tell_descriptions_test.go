@@ -14,6 +14,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable reads tell command catalogs and a version tell only
 func TestCephTellDescriptionsIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

@@ -13,6 +13,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated disables and enables iostat, then runs mgr fail; the active MGR is not restored
 func TestCephManagerModulesIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

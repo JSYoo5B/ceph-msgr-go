@@ -4,8 +4,8 @@ The rows select TestCephMDSCephFSSharedFlockRecoveryIntegration on the CRC/AES
 IPv4 host BlueStore and secure/aes256k IPv6 container MemStore profiles. The
 bundle retains flock.json (the ordered shared acquires and unlocks checked
 against the request ledger, and the post-restart native probes) and the
-metadata and fresh-filesystem cleanup flags. See
-.github/scenarios/NATIVE_EVIDENCE.md#shared-flock-recovery.
+metadata and fresh-filesystem cleanup flags. The request ledger, native
+addresses, paths, error text and reconnect blob stay outside the bundle.
 """
 import native_evidence as evidence
 from native_evidence import integer, keys, need

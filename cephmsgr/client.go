@@ -541,6 +541,10 @@ func (c *Client) publishMonitorAdmission(s *session.Session, attempt monAttempt,
 		// MON's lock. This handshake may have used pre-wipe service
 		// keys; its MonMap reply now proves the refresh, so discard
 		// the tickets and authenticate to the same MON once more.
+		// Source: ceph/ceph/blob/v20.2.4/src/mon/AuthMonitor.cc (the wipe
+		// and epoch bump commit together), MonmapMonitor.cc (the MonMap
+		// push during refresh) and Monitor.cc (handshakes take only
+		// auth_lock; a native MonClient renews in-session under mon.lock).
 		return monPublication{}, errAuthRefreshBarrier
 	}
 	if (attempt.knownEpoch && c.monMap.AuthEpoch > attempt.authEpoch) || admitted.AuthEpoch < c.monMap.AuthEpoch {

@@ -7,6 +7,14 @@
 //	msgrcap parity -reference ref.json -candidate cand.json [-reference-cross a.json
 //	        -candidate-cross b.json] [-json parity.json] [-require-full]
 //	msgrcap probe -mon v2:IP:3300 -entity client.x -key-file key -mode crc|secure -trace probe.json
+//
+// Build it with `go -C tools/msgrcap build -o <path outside the checkout> .`.
+// It reads classic pcap only (pcapng is refused). Reports hold identities,
+// lengths, tags, message header fields, TCP events and digests, never
+// segment payloads, keys, tickets or connection secrets. A key file is read
+// only with -key-file; supply only a disposable fixture key and never commit
+// or upload it. The disposable live recipe is live-poc.sh, run by
+// .github/workflows/msgr-capture-poc.yml.
 package main
 
 import (

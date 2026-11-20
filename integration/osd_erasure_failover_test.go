@@ -17,6 +17,8 @@ import (
 // the primary is killed the new primary holds a different shard, and only a
 // request carrying that new shard is answered.
 //
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
 //fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureFailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M1, false, "")
@@ -26,6 +28,7 @@ func TestCephOSDErasureFailoverIntegration(t *testing.T) {
 // primary: when the primary is lost the MON picks a parity shard instead, and
 // the caller's placement must carry that shard.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedFailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M1, true, "")
@@ -38,6 +41,8 @@ func TestCephOSDErasureOptimizedFailoverIntegration(t *testing.T) {
 // the request carries that shard in primary-first numbering for pool size 4.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2failover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
 //fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2FailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M2, true, "isa")

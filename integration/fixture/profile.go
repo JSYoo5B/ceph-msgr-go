@@ -58,7 +58,8 @@ type profile struct {
 	// module (rgw_native_route.go) instead of the controller's fixture.
 	rgwNative string
 	// monFreeze opts in to the connected-MON freeze tests, which can leave the
-	// OSD on an old OSDMap (integration/fixture/MON_FREEZE_FIXTURE_ISSUE.md).
+	// OSD on an old OSDMap (an unexplained fixture failure; see
+	// integration/mon_connected_stall_test.go).
 	monFreeze string
 	// inputs holds the inputs declared with defineInput (input.go), the one
 	// field for all of them. The fields above are frozen: a new input is

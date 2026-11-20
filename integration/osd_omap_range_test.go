@@ -14,6 +14,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//scenario:covers CLIENT to OSD
 //fixture:shareable edits owned UUID objects and native mirrors in the fixture pool; checked cleanup removes them
 func TestCephOSDOmapRangeRemovalIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

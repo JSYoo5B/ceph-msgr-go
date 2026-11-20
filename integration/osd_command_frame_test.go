@@ -17,6 +17,7 @@ import (
 // with no partial output. That client's next command, on a new connection, is
 // answered.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable reads OSD config help and version only, through new client sessions
 func TestCephOSDCommandFrameLimitIntegration(t *testing.T) {
 	fixture := osdFixture

@@ -51,6 +51,7 @@ const (
 //
 //scenario:row mon-mgr.aes.ip4.crc.host.t-monservicemaplargemap key=aes service=aes mode=crc family=4 stress= runtime=host
 //scenario:row mon-mgr.aes256k.ip4.t-monservicemaplargemap key=aes256k service=aes256k family=4 stress=
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated cleanup kills live holders without proving their service map entries are gone; the service map is not checked
 func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 	if selected := flag.Lookup("test.run"); selected == nil || selected.Value.String() != serviceMapLargeSelector {

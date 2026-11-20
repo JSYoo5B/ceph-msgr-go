@@ -1,8 +1,30 @@
 #!/usr/bin/env python3
 """Record one native attempt even when its test step was interrupted.
 
-The result describes evidence available before result-artifact publication.
-Only the Actions API can establish whether that subsequent upload completed.
+The trusted workflow runs this in an always() step. It re-evaluates the
+original required-test snapshot against whatever log exists, including one
+whose test command ended before writing native-tests.json, and writes
+scenario-result/tests.json and result.json (tested and controller SHA,
+scenarios, run ID and attempt, job and step outcomes):
+
+- test_evidence is missing without a snapshot or log, partial when required
+  results are missing, completed when every required parent has a terminal
+  result; a completed FAIL or SKIP still fails the gate.
+- test_result=passed needs both the reconstructed gate and a successful test
+  step, so a cancelled step can keep a completed PASS while its attempt stays
+  unaccepted, and missing evidence never yields acceptance.
+- evidence_collection and evidence_upload keep their own step outcomes; a
+  requested bundle needs both. native_cleanup is verified only when
+  collection validated the family's cleanup fields, never for an interrupted
+  job whose containers were removed later.
+- result_artifact_upload is unobserved: this result precedes its own upload,
+  and only the Actions API or artifact listing establishes publication.
+
+The recorder refuses an existing result directory and exits unsuccessfully
+for an unaccepted attempt. always() cannot run when GitHub terminates the
+runner or cancels before the trusted tools are copied; an absent result then
+establishes nothing about whether the test ran or cleaned up, and a later
+attempt's artifacts never fill it.
 """
 import argparse
 import json

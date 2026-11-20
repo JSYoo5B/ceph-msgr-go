@@ -19,6 +19,7 @@ import (
 // clone and the new head survive SIGKILL and restart of the object's primary,
 // and LIST_SNAPS still names the snapshot.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills and restarts an OSD; restart waits osd-ready clean without a pg_temp proof
 func TestCephOSDSnapshotDurabilityIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
@@ -103,6 +104,7 @@ func TestCephOSDSnapshotDurabilityIntegration(t *testing.T) {
 // resubmission answered from the PG log; the clone exists once, holding the
 // original bytes, and the head holds the new ones.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable client-side lost reply in one owned pool with a self-managed snap; checked owned-pool cleanup removes it
 func TestCephOSDSnapshotLostReplyIntegration(t *testing.T) {
 	fixture := osdFixture

@@ -3,5 +3,5 @@
 //
 // The repository's Python inventory checks use it to tie a test name to the
 // file that declares it; they take the set of runnable tests from
-// `go test -list`, never from this command. See tools/quality/README.md.
+// `go test -list`, never from this command (tools/go_test_list.py).
 package main

@@ -18,6 +18,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable restarts one MON (control waits for 3-MON quorum); its config-key is removed and checked absent in cleanup
 func TestCephAppliedMonitorMutationIsNotReplayedIntegration(t *testing.T) {
 	observer, ctx := fixtureClient(t, 2*time.Minute)

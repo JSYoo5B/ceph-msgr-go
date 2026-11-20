@@ -15,6 +15,7 @@ import (
 // a known -107 (ENOTCONN) and creates no registration; the client does not fall
 // back to a new WATCH.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable the watch expires by timeout (verified gone); checked cleanup removes the owned object
 func TestCephOSDWatchExpiredReconnectIntegration(t *testing.T) {
 	modern := isReplicatedPGFixtureProfile()

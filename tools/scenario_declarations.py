@@ -5,6 +5,7 @@ A row is one comment directive in the doc comment of a native test function:
 
   //scenario:row <id> [<parameter>=<value> ...]
   //scenario:suite <id> [<parameter>=<value> ...]
+  //scenario:covers <path>
   //fixture:shareable <reason>
   func TestCeph<Name>Integration(t *testing.T) {
 
@@ -16,6 +17,13 @@ declared beside the test that configuration exists for, or beside its group's
 base test. The row's group is its identifier before the first dot. Its
 parameters are the written ones in written order, followed by test_run and
 then capabilities, the order the matrix entry keeps.
+
+A `covers` line has no parameters: it names the path of SPEC.md's final
+test-environment scope table (its first column, for example `CLIENT to OSD`)
+that its owner gives native evidence for, one line per path. It claims no
+result and no completeness; open gaps of a path are tracked by issues. Which
+paths exist is checked by validate (scenario_checks/covers.py), the one
+reader of that table.
 
 Declarations are read from the `*_test.go` files of the native suites:
 integration and cephmsgr (the product's API and client suites), and
@@ -32,8 +40,8 @@ fixture's catalog tests take the rows it returns (`scenario_plan.py rows`,
 integration/fixture/ci_rows_test.go) and never parse the directives. A
 directive is refused when it is
 malformed, indented, not in the doc comment of a top-level native test
-function of its suite, duplicates an identifier or a parameter, or breaks the
-rules of its kind above.
+function of its suite, duplicates an identifier, a parameter or a covered
+path of its owner, or breaks the rules of its kind above.
 """
 import re
 from pathlib import Path
@@ -49,6 +57,7 @@ SUITES = (
 )
 PREFIX = "//scenario:"
 DIRECTIVE = re.compile(r"//scenario:(row|suite) (\S+)((?: \S+)*)")
+COVERS = re.compile(r"//scenario:covers (\S(?:[ \S]*\S)?)")
 IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9._-]{0,159}")
 GROUP = re.compile(r"[a-z0-9][a-z0-9-]*")
 PARAMETER = re.compile(r"([a-z][a-z0-9_]*)=(\S*)")
@@ -87,10 +96,11 @@ def _owner(lines, index):
 
 
 def parse_file(path, text):
-    """([(row, owner, location)], problems) of one test file."""
+    """([(row, owner, location)], [(owner, covered path, location)], problems)
+    of one test file."""
     suite = suite_of(path)
     lines = text.splitlines()
-    rows, problems = [], []
+    rows, covers, problems = [], [], []
     for index, line in enumerate(lines):
         if not line.lstrip().startswith(PREFIX):
             continue
@@ -105,9 +115,20 @@ def parse_file(path, text):
         if line != line.lstrip():
             refuse("an indented scenario declaration")
             continue
+        covered = COVERS.fullmatch(line)
+        if covered:
+            owner = _owner(lines, index)
+            if owner is None or not native.fullmatch(owner):
+                refuse("covers %s is not in the doc comment of a native test of %s" % (covered[1], directory))
+            elif any(entry[:2] == (owner, covered[1]) for entry in covers):
+                refuse("%s covers %s twice" % (owner, covered[1]))
+            else:
+                covers.append((owner, covered[1], location))
+            continue
         match = DIRECTIVE.fullmatch(line)
         if not match:
-            refuse("a malformed scenario declaration (//scenario:row|suite <id> [name=value ...])")
+            refuse("a malformed scenario declaration (//scenario:row|suite <id> [name=value ...]"
+                   " or //scenario:covers <path>)")
             continue
         kind, sid, written = match[1], match[2], match[3].split()
         owner = _owner(lines, index)
@@ -165,7 +186,7 @@ def parse_file(path, text):
         ordered = {name: value for name, value in params.items() if name not in TRAILING}
         ordered.update((name, params[name]) for name in TRAILING if name in params)
         rows.append(({"id": sid, "group": sid.split(".", 1)[0], "params": ordered}, owner, location))
-    return rows, problems
+    return rows, covers, problems
 
 
 def discover(sources):
@@ -174,7 +195,7 @@ def discover(sources):
     A problem names the file and line of the declaration it refuses."""
     found, problems, where = [], [], {}
     for path in sorted(sources):
-        rows, refused = parse_file(path, sources[path])
+        rows, _, refused = parse_file(path, sources[path])
         problems += refused
         for row, _, location in rows:
             if row["id"] in where:
@@ -183,6 +204,12 @@ def discover(sources):
             where[row["id"]] = location
             found.append(row)
     return sorted(found, key=planning_key), problems
+
+
+def coverage(sources):
+    """[(owner, covered path, location)] of {path: text} test sources, in
+    file and line order. Malformed lines are refused by discover()."""
+    return [entry for path in sorted(sources) for entry in parse_file(path, sources[path])[1]]
 
 
 def planning_key(row):

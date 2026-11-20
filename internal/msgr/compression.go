@@ -1,3 +1,24 @@
+// msgr2.1 on-wire compression, translated from Ceph v20.2.4
+// (ceph/ceph/blob/v20.2.4/src/msg/async/ProtocolV2.cc, frames_v2.h,
+// frames_v2.cc, compression_onwire.cc and the Compressor plugins).
+//
+// The client offers SupportedCompressionMethods in CompressionRequest only on
+// CRC connections whose peer banner advertises compression; secure connections
+// send is_compress=0 with no methods (internal/session/handshake.go). Once a
+// method is negotiated, each segment of a frame at least compMin bytes long is
+// compressed separately, the preamble carries the compressed lengths and
+// FrameEarlyDataCompressed, and compression runs before CRC or encryption;
+// the reader decompresses after them and bounds the decompressed total by its
+// frame limit. Frames below the minimum stay uncompressed, so both kinds mix
+// on one connection. The on-wire payload is the codec plugin's output with no
+// added framing.
+//
+// Limits: zlib (whose format depends on compressor_zlib_winsize) and
+// secure-mode compression are not implemented. Codec and frame round trips
+// are unit evidence only. The pinned daemons decline compression toward
+// client peers, so the live test observes the declined offer, not compressed
+// frames from a daemon; live compressed-frame interoperability is unverified.
+
 package msgr
 
 import (

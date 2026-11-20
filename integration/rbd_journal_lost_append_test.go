@@ -679,6 +679,7 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 
 //scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-lost-append
 //scenario:row rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-lost-append
+//scenario:covers RBD underlying I/O
 //fixture:isolated creates a journaling image in the fixture's RBD pool and appends to it; image not removed
 func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) { runRBDJournalLostAppend(t, false) }
 
@@ -702,6 +703,7 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) { runRBDJournalL
 //
 //scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimarychange key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-primary-change
 //scenario:row rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimarychange key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-primary-change
+//scenario:covers RBD underlying I/O
 //fixture:isolated marks the PG primary OSD out (marked in only at fixture teardown) and leaves a journaling image
 func TestCephRBDJournalPrimaryChangeIntegration(t *testing.T) { runRBDJournalLostAppend(t, true) }
 

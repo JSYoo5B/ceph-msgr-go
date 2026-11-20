@@ -47,6 +47,7 @@ func sentMgrStatCommand(padding int) Command {
 //
 //scenario:row mon-mgr.aes.ip4.crc.host.t-senttellcancellation key=aes service=aes mode=crc family=4 stress= runtime=host
 //scenario:row mon-mgr.aes256k.ip4.host.t-senttellcancellation key=aes256k service=aes256k family=4 stress= runtime=host
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable sends only read-only version and pg stat commands, then cancels them or closes its own clients
 func TestCephSentTellCancellationIntegration(t *testing.T) {
 	if selected := flag.Lookup("test.run"); selected == nil || selected.Value.String() != sentTellCancellationSelector {

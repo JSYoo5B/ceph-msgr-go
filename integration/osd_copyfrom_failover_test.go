@@ -24,6 +24,7 @@ import (
 // completes the copy. The caller only waits: one request, one ONDISK reply,
 // and the destination equals the source natively.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated pauses, kills and restarts an OSD; restart waits osd-ready clean without a pg_temp proof
 func TestCephOSDCopyFromSourceFailoverIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
@@ -114,6 +115,7 @@ func TestCephOSDCopyFromSourceFailoverIntegration(t *testing.T) {
 // destination is either absent or an exact copy, never partial, and it does
 // not change afterwards.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated pauses and kills OSDs and restarts them; restart waits osd-ready clean without a pg_temp proof
 func TestCephOSDCopyFromDestinationCrashIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

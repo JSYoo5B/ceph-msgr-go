@@ -12,6 +12,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//scenario:covers CLIENT to OSD
 //fixture:shareable writes only its owned UUID objects in the fixture pool; checked omap-write cleanup removes them
 func TestCephOSDAllocationHintIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

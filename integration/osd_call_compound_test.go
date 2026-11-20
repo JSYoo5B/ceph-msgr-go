@@ -359,6 +359,7 @@ func compoundOmapPage(state omapWriteState) []omapNativeEntry {
 	return state.Omap.Operations[0].Entries
 }
 
+//scenario:covers CLIENT to OSD
 //fixture:shareable class calls on owned UUID objects and removed native mirrors only; checked cleanup removes owned objects
 func TestCephOSDClassCallCompoundIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

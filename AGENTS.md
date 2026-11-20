@@ -51,6 +51,12 @@ pull request and issue descriptions, reviews and comments.
   information unrelated to the point being demonstrated. Retain only the details
   needed to explain or reproduce that point.
 
+## Quality checks
+
+- Merging needs the basic CI checks, the Code quality `Quality tooling tests` and every `Vulnerabilities (...)` job. Static analysis and the structural review report are advisory; their metrics point at where to look and are never targets or acceptance criteria.
+- The vulnerability policy is `.github/scripts/check_vulns.py`: package- and symbol-level findings fail, module-only findings are informational. The Go 1.25 product scan, a compatibility target for the product minimum, reports stdlib findings as ADVISORY only; that does not certify Go 1.25 as safe, and release builds use a patched toolchain covered by the strict scans. Fix a finding by upgrading the dependency; never suppress an advisory ID.
+- These checks do not establish protocol correctness or native interoperability, and a check skipped by the documentation-only policy is not a pass.
+
 ## Documentation
 
 - Write documentation, code comments, commit messages, release notes and issue/PR descriptions in English. Preserve intentional non-ASCII test inputs.

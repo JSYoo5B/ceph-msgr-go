@@ -232,6 +232,7 @@ func copyLossFrozen(acting []int32, primary, sourcePrimary int32, commits int) (
 // again, and a fresh-session read, a delayed native readback and its PG log
 // must show the same single copy.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated pauses and SIGKILLs OSDs and restarts them, waits osd-ready clean without pg_temp proof; pool delete
 func TestCephOSDCopyFromStagedDestinationLossIntegration(t *testing.T) {
 	ctx, pools, recovery := copyPrimaryChangeFixture(t, 1500*time.Second)

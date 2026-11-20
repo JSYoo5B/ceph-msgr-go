@@ -33,6 +33,7 @@ const rgwNativeOverlapWindow = 5 * time.Second
 // routes the trusted native workflow to this test (rgw_native_route.go).
 //
 //scenario:row rgw.aes256k.ip4.container.t-rgwbackendfault key=aes256k service=aes256k family=4 stress= rgw_native=1
+//scenario:covers Service-induced paths
 //fixture:isolated starts its own owned RGW cluster and stops and restarts its OSD and manager
 func TestRGWNativeBackendFaultIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_RGW_NATIVE") == "" {

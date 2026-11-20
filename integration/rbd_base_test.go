@@ -498,6 +498,7 @@ func waitRBDWatchState(ctx context.Context, path, phase string, finished <-chan 
 
 //scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-37bcdb key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 rbd=1 test_run=^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$
 //scenario:row rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-suite-37bcdb key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 rbd=1 test_run=^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$
+//scenario:covers RBD underlying I/O
 //fixture:isolated native librbd resizes the fixture's RBD image twice and leaves it resized
 func TestCephRBDBaseIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")

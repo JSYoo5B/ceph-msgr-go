@@ -4,6 +4,20 @@
 Build the existing tools once, inspect exact base/head archives, and retain raw
 measurements alongside a bounded summary. Nothing runs containers or changes a
 lint policy. The publisher consumes data only, never this job's executables.
+
+The report covers production, non-generated Go of the root library module
+(not tests, testdata, integration, internal/testcluster, tools, nested
+modules or hidden paths), linted on Linux amd64 with CGO disabled and no
+extra tags; a pull request that changes none of it gets no report. Metrics
+are navigation aids, not a design score or a merge gate: moves and unmatched
+identities are not improvements, and a missing measurement is not zero. A
+failed collection is unavailable, never clean, and a result never certifies
+a newer base or another merge candidate. Locally, with both commits present
+and a new output directory outside the checkout:
+
+    CGO_ENABLED=0 GOWORK=off python3 .github/scripts/structural_review.py \
+      --base BASE_SHA --head HEAD_SHA --output REPORT_DIRECTORY \
+      --golangci-lint GOLANGCI_LINT_BINARY
 """
 import argparse
 import hashlib

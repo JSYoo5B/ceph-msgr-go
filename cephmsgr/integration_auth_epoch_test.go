@@ -29,6 +29,7 @@ import (
 
 //scenario:suite mon-mgr.aes.ip4.auth-epoch-1 key=aes service=aes family=4 stress= auth_epoch=1
 //scenario:suite mon-mgr.aes256k.ip6.auth-epoch-1 key=aes256k service=aes256k family=6 stress= auth_epoch=1
+//scenario:covers Messenger/CephX
 //fixture:isolated wipes the rotating service keys each cycle and advances the auth epoch; nothing restores it
 func TestCephServiceKeyEpochIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_AUTH_EPOCH") != "1" {

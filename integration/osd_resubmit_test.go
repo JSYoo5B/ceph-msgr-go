@@ -18,6 +18,7 @@ import (
 // and incarnation with FLAG_RETRY, so the OSD answers from its PG log instead of
 // appending again. A new request with a new ID executes again (the control).
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable mutates owned UUID objects in the fixture pool; checked cleanup removes them
 func TestCephOSDResubmitIntegration(t *testing.T) {
 	fixture, request := osdFixture, osdObjectRequest

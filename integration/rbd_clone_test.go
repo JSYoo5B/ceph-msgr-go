@@ -746,6 +746,7 @@ func TestRBDCloneTestOnlyEncodings(t *testing.T) {
 	}
 }
 
+//scenario:covers RBD underlying I/O
 //fixture:isolated creates parent and clone images and snapshots in the fixture's RBD pool, flattens; none removed
 func TestCephRBDCloneIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")

@@ -191,6 +191,7 @@ func pushArrivals(s cephfsAgentSnapshot, from int) []pushArrival {
 	return out
 }
 
+//scenario:covers CLIENT to MDS/CephFS
 //fixture:isolated leaves a CephFS snapshot, quota and files when an earlier step fails; CephFS state is not checked
 func TestCephMDSCephFSPushIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS") != "1" {

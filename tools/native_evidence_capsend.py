@@ -5,7 +5,9 @@ IPv4 host BlueStore and secure/aes256k IPv6 container MemStore profiles. The
 bundle retains cap-send.json (client and MDS identities, flush and ACK
 identities and order, native apply branches, object-request counts and
 selected native stat fields) and the metadata and fresh-filesystem cleanup
-flags. See .github/scenarios/NATIVE_EVIDENCE.md#cap-send-recovery.
+flags. Full native stat and capability objects are omitted; the cleanup
+flags describe owned native state before fixture termination, not a Docker
+inventory after it.
 """
 import native_evidence as evidence
 from native_evidence import integer, keys, need

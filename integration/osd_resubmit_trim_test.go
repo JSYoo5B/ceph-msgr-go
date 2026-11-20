@@ -17,6 +17,7 @@ import (
 // its original identity: the client cannot tell, which is why resubmission is
 // never a replay guarantee and is never automatic.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable sets OSD pg log options, removed by a checked config rm; checked owned-pool cleanup removes its pool
 func TestCephOSDResubmitAfterTrimIntegration(t *testing.T) {
 	fixture := osdFixture

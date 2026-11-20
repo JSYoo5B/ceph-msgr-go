@@ -64,6 +64,7 @@ func waitGoManager(t *testing.T, ctx context.Context, c *Client, want nativeMgrT
 //
 //scenario:row mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell key=aes service=aes mode=crc family=4 stress= runtime=host
 //scenario:row mon-mgr.aes256k.ip4.host.t-suite-e9be0b key=aes256k service=aes256k family=4 stress= runtime=host test_run=^TestCephApplied(Named|Current)ManagerTellIsNotReplayedIntegration$
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable sets an active MGR runtime override; cleanup restores it and a fresh read shows the baseline
 func TestCephAppliedNamedManagerTellIsNotReplayedIntegration(t *testing.T) {
 	appliedManagerTellIsNotReplayed(t, false)
@@ -74,6 +75,7 @@ func TestCephAppliedNamedManagerTellIsNotReplayedIntegration(t *testing.T) {
 // is bound to the manager whose connection actually carried the command.
 //
 //scenario:row mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell key=aes service=aes mode=crc family=4 stress= runtime=host
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable sets an active MGR runtime override; cleanup restores it and a fresh read shows the baseline
 func TestCephAppliedCurrentManagerTellIsNotReplayedIntegration(t *testing.T) {
 	appliedManagerTellIsNotReplayed(t, true)

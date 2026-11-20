@@ -2,7 +2,7 @@
 
 This report records a bounded, development-only evaluation of packet-capture
 analysis for this project's Messenger implementation. It answers the questions
-of issue #48 with evidence from [msgrcap](README.md) and its
+of issue #48 with evidence from [msgrcap](main.go) and its
 [live workflow](../../.github/workflows/msgr-capture-poc.yml). Nothing here
 changes product behavior, product dependencies or supported configurations.
 
@@ -222,7 +222,7 @@ coordination only:
   ready, so the reconnect handshake cannot precede the capture.
 - `msgrcap analyze -segments` fails on any undeclared gap, overlap, unstopped
   or retargeted segment, digest or count mismatch, partial file or unknown
-  drop counter (README.md, "Capture manifests"). The unit tests cover each of
+  drop counter (coverage.go). The unit tests cover each of
   these, and a mutation check of the new conditions (23 single-condition
   mutations of coverage, parity, dial hold, packet numbering and helper
   cleanup) failed the tests every time.

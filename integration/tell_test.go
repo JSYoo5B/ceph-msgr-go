@@ -19,6 +19,7 @@ type tellVersion struct {
 	ReleaseType string `json:"release_type"`
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable version tells and reads; the read-only client gets a -13 refusal
 func TestCephTellIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")

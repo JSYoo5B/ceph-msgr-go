@@ -21,6 +21,7 @@ import (
 // server-answered/lost-reply coverage, not an unprocessed server request or a
 // forced SIGKILL. No elapsed-time guess establishes the request fault phase.
 //
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable stops a peon MON, restarts it and waits for a settled full quorum (cleanup does the same)
 func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
 	runMapVersionConnectedLoss(t, "stop")

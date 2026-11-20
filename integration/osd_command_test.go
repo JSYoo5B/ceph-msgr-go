@@ -115,6 +115,7 @@ func osdDumpAddresses(t *testing.T, ctx context.Context, c *cephmsgr.Client) map
 
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b300c0 key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 test_run=^TestCephOSDCommand(s|Crash)Integration$
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b300c0 key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 test_run=^TestCephOSDCommand(s|Crash)Integration$
+//scenario:covers CLIENT to OSD
 //fixture:isolated pauses the primary OSD and resumes it without waiting for OSD up or PGs active+clean
 func TestCephOSDCommandsIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

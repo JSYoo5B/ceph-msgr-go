@@ -16,6 +16,7 @@ import (
 // watcher client's next request to that OSD gets a known -108 (ESHUTDOWN). The
 // blocklist entry is removed in cleanup.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated adds an OSD blocklist entry before its cleanup is registered; blocklist is not in the start-state check
 func TestCephOSDWatchBlocklistIntegration(t *testing.T) {
 	modern := isReplicatedPGFixtureProfile()

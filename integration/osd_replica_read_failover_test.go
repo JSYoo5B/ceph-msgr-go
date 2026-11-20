@@ -21,6 +21,8 @@ import (
 // still valid) and one after the lease has expired but before the cluster
 // marks the primary down; the test then waits for the new primary.
 //
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
 //fixture:isolated pauses, kills and restarts the primary OSD without a pg_temp proof; owned-pool cleanup leaves config set
 func TestCephOSDReplicaReadPrimaryFailoverIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

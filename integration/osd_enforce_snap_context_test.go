@@ -56,6 +56,7 @@ type enforceSnapNative struct {
 // not expose ENFORCE_SNAPC: it supplies ordinary WRITEFULL+ORDERSNAP and
 // independent selected-snapshot STAT2/READ/LISTSNAPS observations only.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable pool snapshot context writes in one owned pool; checked cleanups remove the snapshot and the pool
 func TestCephOSDEnforceSnapContextIntegration(t *testing.T) {
 	fixture := osdFixture

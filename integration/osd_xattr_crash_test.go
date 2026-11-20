@@ -18,6 +18,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills the metadata primary OSD and restarts it; the clean wait lacks a pg_temp proof
 func TestCephOSDXattrCrashIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

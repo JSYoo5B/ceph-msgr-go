@@ -7,8 +7,12 @@ counters, worker observations and fault phases), cleanup.json, and
 receipts.json, the size and hash of every raw receipt. Raw receipts are
 validated with osd_soak_receipts.py imported from this module's own
 directory, which the workflow fills from the trusted controller; the tested
-checkout's copy is never used. See
-.github/scenarios/NATIVE_EVIDENCE.md#four-minute-osd-soak-family.
+checkout's copy is never used. The expected test pair, duration, revision
+and image are fixed here, never taken from a receipt. Raw receipts can exceed
+the bundle limit, so the bundle keeps a projection plus hashes: a reader can
+match a raw receipt obtained elsewhere against them but cannot recompute the
+native byte or xattr comparison, and retained times are the validator's
+accepted values, not re-measured ones.
 """
 import hashlib
 from pathlib import Path

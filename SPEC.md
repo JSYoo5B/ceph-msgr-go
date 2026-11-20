@@ -4,9 +4,6 @@ This document defines the communication-layer contract, implementation prioritie
 and acceptance requirements. [README.md](README.md) describes usage; contracts
 beside the implementation define individual wire/API boundaries. A requirement
 or test fixture is not a claim that the corresponding product feature is complete.
-[DOCUMENTATION.md](DOCUMENTATION.md) names the authoritative document for each
-kind of information and the path from a public contract to its observed native
-result.
 
 ## Product policy
 
@@ -73,7 +70,7 @@ constitute complete RADOS, RBD or CephFS clients.
 | MON subscriptions | Log/config/digest and raw map APIs in `cephmsgr/` | No authorization ACK, complete event history or autonomous map application |
 | OSD operations | [core](internal/osd/CONTRACT.md), [completion](internal/osd/O4_CONTRACT.md), [EC](internal/osd/ERASURE_CONTRACT.md) | Explicit target/profile/version/feature requirements; no automatic placement or universal durability claim |
 | MDS/CephFS transport | [MDS wire](internal/mds/CONTRACT.md), [CephFS](cephmsgr/MDS_CEPHFS_CONTRACT.md) | Consumer-owned state, selected recovery profiles and incomplete high-level filesystem semantics |
-| Compression | [compression contract and plan](internal/msgr/COMPRESSION_PLAN.md) | Snappy/zstd codec/frame unit coverage; selected live CRC MON/OSD sessions report no negotiated compression and working commands, with the enabled request and the daemon's disabled response decoded on the serving connections of one profile; live compressed frames, zlib and secure compression remain unverified or deferred |
+| Compression | [compression contract](internal/msgr/compression.go) | Snappy/zstd codec/frame unit coverage; selected live CRC MON/OSD sessions report no negotiated compression and working commands, with the enabled request and the daemon's disabled response decoded on the serving connections of one profile; live compressed frames, zlib and secure compression remain unverified or deferred |
 | Native development tools | `integration/fixture/`, `tools/`, native-vector provenance | Product interoperability, fixture capability and higher-level consumer behaviour are separate results |
 
 A later passing retry does not explain an earlier failure. Long-duration failures
@@ -101,6 +98,10 @@ RBD is not a separate Messenger server role. CephFS requires MDS metadata and
 OSD data paths together. Native service success does not establish the matching
 Go wire implementation. Daemon-to-daemon fixtures use actual Ceph daemons;
 this does not require the product to implement Ceph servers.
+
+A native test names each path of this table that it gives native evidence for
+in a `//scenario:covers <Path>` line beside it, with the Path column's text.
+Open gaps of the paths are tracked by issues #9 to #14.
 
 ### Environment acceptance
 
@@ -282,8 +283,8 @@ small uncompressed frames can coexist with compressed frames. Native codec/frame
 round trips are not live compression interoperability. The live CRC test
 observes no negotiated compression and working MON/OSD commands, and on one
 CRC profile decodes the enabled request and the daemon's disabled response
-from the connections that served them. It retains no frame bytes. See
-[compression details](internal/msgr/COMPRESSION_PLAN.md).
+from the connections that served them. It retains no frame bytes. The
+codec formats and their source are documented in `internal/msgr/compression.go`.
 
 Preserve feature negotiation, addresses, nonces, request/session identity,
 sequence/ACK, keepalive, reconnect/reset and loss semantics. Apply bounded parser
