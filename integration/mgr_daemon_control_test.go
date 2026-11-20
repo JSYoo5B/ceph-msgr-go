@@ -131,6 +131,15 @@ type beaconLoop struct {
 	stop    chan struct{}
 	done    chan struct{}
 	failure error
+	sent    int
+	last    time.Time
+}
+
+// status reports how many beacons were queued and when the last one was.
+func (l *beaconLoop) status() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return fmt.Sprintf("%d beacons queued, last at %s, failure %v", l.sent, l.last.Format(time.RFC3339Nano), l.failure)
 }
 
 func startBeaconLoop(daemon *cephmsgr.MgrDaemon, beacon cephmsgr.MgrBeacon) *beaconLoop {
@@ -146,12 +155,15 @@ func startBeaconLoop(daemon *cephmsgr.MgrDaemon, beacon cephmsgr.MgrBeacon) *bea
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			err := daemon.SendBeacon(ctx, current)
 			cancel()
+			l.mu.Lock()
 			if err != nil {
-				l.mu.Lock()
 				l.failure = err
 				l.mu.Unlock()
 				return
 			}
+			l.sent++
+			l.last = time.Now()
+			l.mu.Unlock()
 			select {
 			case <-l.stop:
 				return
@@ -189,7 +201,7 @@ func nextMgrEvent(t *testing.T, ctx context.Context, daemon *cephmsgr.MgrDaemon,
 		if err != nil {
 			t.Fatalf("MgrMap event %s: %v", label, err)
 		}
-		t.Logf("MgrMap event: epoch %d null %v role %d active %s/%d available %v addrs %v (MON session %d)", event.Map.Epoch, event.Null, event.Role, event.Map.ActiveName, event.Map.ActiveGlobalID, event.Map.Available, event.Map.ActiveAddresses, event.MonitorGeneration)
+		t.Logf("%s MgrMap event: epoch %d null %v role %d active %s/%d available %v addrs %v (MON session %d)", time.Now().Format("15:04:05.000"), event.Map.Epoch, event.Null, event.Role, event.Map.ActiveName, event.Map.ActiveGlobalID, event.Map.Available, event.Map.ActiveAddresses, event.MonitorGeneration)
 		if ok(event) {
 			return event
 		}
@@ -393,6 +405,31 @@ func TestCephMgrDaemonControlIntegration(t *testing.T) {
 
 	// Unavailable standby: empty server addrvec.
 	beacons := startBeaconLoop(daemon, cephmsgr.MgrBeacon{Metadata: map[string]string{"gotest": "standby"}})
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		// Diagnostics only: the beacon schedule and the MON's recent
+		// cluster log about managers.
+		t.Log("beacon loop:", beacons.status())
+		diag, stop := context.WithTimeout(context.Background(), 20*time.Second)
+		defer stop()
+		encoded, _ := json.Marshal(map[string]any{"prefix": "log last", "num": 200, "channel": "cluster", "format": "json"})
+		result, err := admin.MonCommand(diag, cephmsgr.Command{JSON: encoded})
+		var entries []struct {
+			Stamp   string `json:"stamp"`
+			Message string `json:"message"`
+		}
+		if err == nil && json.Unmarshal(result.Data, &entries) == nil {
+			for _, entry := range entries {
+				if strings.Contains(entry.Message, "anager") || strings.Contains(entry.Message, "mgr") {
+					t.Log("cluster log:", entry.Stamp, entry.Message)
+				}
+			}
+		} else {
+			t.Log("cluster log unavailable", err)
+		}
+	}()
 	defer func() {
 		if err := beacons.close(); err != nil {
 			t.Error("beacon loop", err)

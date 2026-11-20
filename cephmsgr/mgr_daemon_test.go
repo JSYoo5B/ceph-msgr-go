@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -592,5 +593,38 @@ func TestMgrDaemonMapOverflowFailsClosedAfterDraining(t *testing.T) {
 	}
 	if _, err := d.NextMgrMap(ctx); !errors.Is(err, ErrMgrMapOverflow) {
 		t.Fatal("overflow", err)
+	}
+}
+
+// TestMgrDaemonBeaconSurvivesCallerCancellation cancels each beacon's context
+// as soon as SendBeacon returns, as a consumer's per-call timeout does. Every
+// admitted beacon must still reach the MON.
+func TestMgrDaemonBeaconSurvivesCallerCancellation(t *testing.T) {
+	f := newFakeMgrMon(t)
+	d, err := DialMgrDaemon(context.Background(), f.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	f.next(t)
+	const beacons = 50
+	for i := range beacons {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := d.SendBeacon(ctx, MgrBeacon{Metadata: map[string]string{"n": strconv.Itoa(i)}})
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		f.mu.Lock()
+		n := len(f.beacons)
+		f.mu.Unlock()
+		if n == beacons {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of %d admitted beacons reached the MON", n, beacons)
+		}
 	}
 }

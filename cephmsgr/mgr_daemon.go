@@ -1030,9 +1030,11 @@ func (d *MgrDaemon) NextDigest(ctx context.Context) (ClusterDigest, error) {
 
 // SendBeacon queues one MMgrBeacon with this daemon's global ID, name and
 // FSID on the current MON session, waiting under ctx for one to be ready.
-// Success means the beacon was admitted to the session writer, not that
-// MON accepted it: MON never acknowledges a beacon, and an unchanged beacon
-// need not change the map. A frame-size violation is ErrLimitExceeded.
+// ctx bounds only that wait and queue admission: once SendBeacon returns
+// nil, canceling ctx no longer discards the beacon, which the session writer
+// sends in order unless the session fails first. Success is not MON
+// acceptance: MON never acknowledges a beacon, and an unchanged beacon need
+// not change the map. A frame-size violation is ErrLimitExceeded.
 func (d *MgrDaemon) SendBeacon(ctx context.Context, beacon MgrBeacon) error {
 	content := maps.MgrBeacon{
 		Available: beacon.Available, ServerAddresses: wireAddresses(beacon.Addresses), Features: beacon.Features,
@@ -1061,7 +1063,9 @@ func (d *MgrDaemon) SendBeacon(ctx context.Context, beacon MgrBeacon) error {
 			if uint64(len(message.Front))+41 > uint64(d.options.MaxFrameSize) {
 				return fmt.Errorf("ceph: MGR beacon exceeds frame limit: %w", wire.ErrLimit)
 			}
-			if err := s.Send(ctx, message); err != nil {
+			// A beacon's caller commonly cancels its context on return; an
+			// ordinary Send would let the writer discard it as abandoned.
+			if err := s.SendControl(ctx, message); err != nil {
 				return err
 			}
 			d.mu.Lock()
