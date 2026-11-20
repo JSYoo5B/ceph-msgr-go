@@ -62,6 +62,48 @@ type profile struct {
 	monFreeze string
 }
 
+// profileInputPrefix begins the name of every fixture input a catalog row
+// sets: the trusted native workflow forwards a row parameter p as
+// CEPH_MSGR_TEST_<P> (tools/native_env.py).
+const profileInputPrefix = "CEPH_MSGR_TEST_"
+
+// loadEnvironmentProfile loads the profile from environ ("NAME=value"
+// entries, the first of a repeated name winning as in os.Getenv) and refuses
+// a CEPH_MSGR_TEST_ name that loadProfile does not read. The names loadProfile
+// reads are the fixture's input vocabulary, and there is no other list of
+// them: a new input is admitted by the code that reads it, and a row
+// parameter or a variable that no input reads is refused instead of ignored.
+// tools/scenario_plan.py validate passes every catalog row through this
+// admission (TestCatalogRowsAreAdmittedByTheFixture).
+func loadEnvironmentProfile(environ []string) (profile, error) {
+	values := map[string]string{}
+	for _, entry := range environ {
+		name, value, _ := strings.Cut(entry, "=")
+		if _, seen := values[name]; !seen {
+			values[name] = value
+		}
+	}
+	read := map[string]bool{}
+	p, err := loadProfile(func(name string) string {
+		read[name] = true
+		return values[name]
+	})
+	if err != nil {
+		return profile{}, err
+	}
+	var unread []string
+	for name := range values {
+		if strings.HasPrefix(name, profileInputPrefix) && !read[name] {
+			unread = append(unread, name)
+		}
+	}
+	if len(unread) != 0 {
+		slices.Sort(unread)
+		return profile{}, fmt.Errorf("no fixture input reads %s", strings.Join(unread, ", "))
+	}
+	return p, nil
+}
+
 // loadProfile reads one row's fixture profile, or a sequence of rows that
 // share it (CEPH_MSGR_TEST_SEQUENCE, sequence.go).
 func loadProfile(getenv func(string) string) (profile, error) {
