@@ -93,13 +93,38 @@ no list, count or file of another area:
   `ci_row_catalog.RowsTestCase`.
 
 A row's description belongs in its fixture record and its coverage row, not
-in this document. `tools/test_merge_proof.py` makes two such pull requests in
-a temporary Git repository, once in two areas and once in one area, merges
-them and runs the validators on the merged tree. Every case must merge without
-a conflict, including two RBD registrations and two four-OSD registrations.
-The proof requires Git to create each merge without repairs, requires that no
-two branches edit one file, and requires the planner to refuse a catalog file
-brought back beside the declarations.
+in this document.
+
+## Adding other registrations
+
+Work that comes with a native test, or on its own, is registered the same
+way: in files of its own, never in a shared list, count or sequence.
+
+- `integration/fixture/<name>.go`: a fixture control, declared beside its
+  function with `defineControl("<name>", controlAfterRanked, ...)` or, for one
+  request and one acknowledgement, `defineRequestControl` (see
+  `integration/fixture/control.go`). A new control takes no rank.
+- `cephmsgr/receipts/<name>.md`: a native receipt of the
+  [protocol evidence ledger](../../cephmsgr/PROTOCOL_EVIDENCE.md#native-receipts),
+  named after its subject; numbered receipt IDs are frozen.
+- `tools/scenario_checks/<name>.py`: a new validation of the catalog, a module
+  with a `check(context)` function, which `scenario_plan.py validate` runs.
+- `tools/test_scenario_check_<name>.py`: the tests of that check.
+- `tools/native_evidence_<name>.py`: a successful-evidence family, a trusted
+  module that says which rows it claims and what it projects; the workflow
+  asks the collector for a job's family.
+- `tools/test_native_<name>_evidence.py`: the tests of that family.
+
+`tools/test_merge_proof.py` makes pull requests that add a native test with
+every file of the section above and every registration of this section, in a
+temporary Git repository. It merges them once in two areas and once in one
+area, including two RBD registrations and two four-OSD registrations, and
+runs the validators on each merged tree. It then merges all of them into one
+tree and runs the whole tools test suite there. The proof requires Git to
+create each merge without repairs, requires that no two branches edit one
+file, requires every registration of each branch to be found in the merged
+tree, and requires the planner to refuse a catalog file brought back beside
+the declarations.
 
 ## Catalog and planner
 

@@ -18,7 +18,12 @@ and only that:
   reads with nativePoolResult into a result type of its own;
 - a coverage row with its dated note, in a new row file
   integration/fixture/coverage/<AREA>/<AREA>-<name>.md;
-- the row's own checks, in a new tools/test_ci_rows_<group>_<name>.py.
+- the row's own checks, in a new tools/test_ci_rows_<group>_<name>.py;
+- and, from the section "Adding other registrations", a fixture control
+  declared beside its function (defineControl) in the capability file, a
+  native receipt cephmsgr/receipts/<name>.md, a catalog check
+  tools/scenario_checks/<name>.py with its tests, and a successful-evidence
+  family tools/native_evidence_<name>.py with its tests.
 
 Every branch is made from the base and its author's own name only: no
 number, name or file is allocated across the branches, and the test
@@ -77,6 +82,7 @@ NESTED = "CEPH_MSGR_MERGE_PROOF_NESTED"
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / ".github" / "scenarios" / "README.md"
 SECTION = "## Adding a native test"
+OTHER_SECTION = "## Adding other registrations"
 TIMEOUT = 1800
 
 BASE_PARAMS = {
@@ -115,6 +121,13 @@ class Author:
         # The owned-pool oracle mode and the public receipt of the control.
         self.mode = "mergeproof" + name.lower()
         self.receipt = "%s-results.json" % self.slug
+        # The other registrations: a fixture control, a native receipt of
+        # the protocol evidence ledger, a catalog check and an evidence
+        # family, each named after this author only.
+        self.control = self.slug
+        self.receipt_id = self.slug
+        self.check = self.snake
+        self.family = "mergeproof" + name.lower()
 
     # The files, as an author writes them.
 
@@ -151,6 +164,7 @@ class Author:
         else:
             call = "defineCapability(%s," % json.dumps(self.capability)
         return ("package main\n\n"
+                "import \"context\"\n\n"
                 "// %s admits the mode of the merge proof's test %s.\n"
                 "var %s = %s\n"
                 "\t\"admit the merge proof's mode for one test\",\n"
@@ -158,9 +172,12 @@ class Author:
                 "// mergeProof%sMode is the mode that %s admits.\n"
                 "func mergeProof%sMode(p profile) bool { return p.admits(%s) }\n\n"
                 "// The public receipt of the merge proof's control.\n"
-                "var _ = collectDiagnosticFiles(%s)\n"
+                "var _ = collectDiagnosticFiles(%s)\n\n"
+                "// controlMergeProof%s is the merge proof's fixture control; it serves no request.\n"
+                "func (c *fixtureCluster) controlMergeProof%s(ctx context.Context, out string) error { return nil }\n\n"
+                "var _ = defineControl(%s, controlAfterRanked, (*fixtureCluster).controlMergeProof%s)\n"
                 % (variable, self.test, variable, call, json.dumps(self.requires), self.name, variable, self.name, variable,
-                   json.dumps(self.receipt)))
+                   json.dumps(self.receipt), self.name, self.name, json.dumps(self.control), self.name))
 
     def oracle_mode(self):
         return ('"""Owned-pool oracle mode %s of the merge proof (tools/test_merge_proof.py).\n\n'
@@ -188,6 +205,70 @@ class Author:
                 "if __name__ == \"__main__\":\n"
                 "    unittest.main()\n" % (self.name, self.name, self.selector, self.declared, self.test))
 
+    def receipt_file(self):
+        return ("# Native receipt %s\n\n"
+                "Attribution: file-attributed\n\n"
+                "Boundary: merge proof receipt of %s; it exists only in the temporary repository of tools/test_merge_proof.py\n\n"
+                "Record: [merge proof coverage row](../../%s)\n" % (self.receipt_id, self.name, self.paths()["coverage"]))
+
+    def scenario_check(self):
+        return ('"""Catalog check of the merge proof\'s %s branch: its row is declared.\n\n'
+                "It exists only in the temporary repository of tools/test_merge_proof.py.\n"
+                '"""\n'
+                "ROW = %r\n\n\n"
+                "def check(context):\n"
+                "    return [] if any(row[\"id\"] == ROW for row in context.scenarios) else [ROW + \" is not declared\"]\n"
+                % (self.name, self.id))
+
+    def scenario_check_test(self):
+        return ('"""Tests of the merge proof\'s %s catalog check."""\n'
+                "import unittest\n"
+                "from pathlib import Path\n\n"
+                "import scenario_checks\n"
+                "from scenario_checks import %s as check\n\n\n"
+                "class MergeProof%sCheckTest(unittest.TestCase):\n"
+                "    def test_check_refuses_a_catalog_without_the_row(self):\n"
+                "        context = scenario_checks.ScenarioContext(root=Path(\".\"), document={}, scenarios=[{\"id\": check.ROW}])\n"
+                "        self.assertEqual(check.check(context), [])\n"
+                "        self.assertEqual(check.check(scenario_checks.ScenarioContext(root=Path(\".\"), document={}, scenarios=[])),\n"
+                "                         [check.ROW + \" is not declared\"])\n\n\n"
+                "if __name__ == \"__main__\":\n"
+                "    unittest.main()\n" % (self.name, self.check, self.name))
+
+    def evidence_family(self):
+        return ('"""Successful-evidence family of the merge proof\'s %s row.\n\n'
+                "It exists only in the temporary repository of tools/test_merge_proof.py\n"
+                "and claims only that row; it never collects a bundle.\n"
+                '"""\n'
+                "import native_evidence as evidence\n\n"
+                "KIND = %r\n"
+                "ROW = %r\n"
+                "TEST = %r\n"
+                "FILES = {\"tests.json\", \"runtime.json\"}\n"
+                "CAPABILITIES = %r\n"
+                "PARAMS = %r\n"
+                "PROFILES = [dict(evidence.DEFAULTS, **{key: value for key, value in PARAMS.items() if key in evidence.DEFAULTS})]\n\n\n"
+                "def claims(matrix):\n    return matrix.get(\"scenario\") == ROW\n\n\n"
+                "def scenario_id(profile):\n    return ROW\n\n\n"
+                "def selector(profile):\n    return profile[\"test_run\"]\n\n\n"
+                "def runtime_facts(raw, ctx):\n    raise evidence.EvidenceError(\"merge-proof-family\")\n\n\n"
+                "def gate(raw_tests):\n    return evidence.tests_projection(raw_tests, TEST)\n\n\n"
+                "def project(receipts, tests, ctx):\n    raise evidence.EvidenceError(\"merge-proof-family\")\n\n\n"
+                "def validate(payloads, ctx):\n    raise evidence.EvidenceError(\"merge-proof-family\")\n"
+                % (self.name, "%s-success" % self.slug, self.id, self.test, self.declared, self.params))
+
+    def evidence_family_test(self):
+        return ('"""Tests of the merge proof\'s %s evidence family."""\n'
+                "import unittest\n\n"
+                "import native_evidence as evidence\n\n\n"
+                "class MergeProof%sFamilyTest(unittest.TestCase):\n"
+                "    def test_family_claims_only_its_row(self):\n"
+                "        family = evidence.families()[%r]\n"
+                "        self.assertTrue(family.claims({\"scenario\": family.ROW}))\n"
+                "        self.assertFalse(family.claims({\"scenario\": family.ROW + \".other\"}))\n\n\n"
+                "if __name__ == \"__main__\":\n"
+                "    unittest.main()\n" % (self.name, self.name, self.family))
+
     def coverage_row(self):
         return ("| %s | Merge proof path %s | `released` | Merge proof fixture | Merge proof observation "
                 "| Merge proof cleanup | `%s`, `%s` | dedicated row |"
@@ -212,7 +293,21 @@ class Author:
             "coverage": "integration/fixture/coverage/%s/%s.md" % (self.area, self.coverage_id),
             "checks": "tools/test_ci_rows_%s_%s.py" % (self.group.replace("-", "_"), self.snake),
             "mode": "tools/osd_pool_mode_%s_oracle.py" % self.mode,
+            "receipt": "cephmsgr/receipts/%s.md" % self.receipt_id,
+            "scenario_check": "tools/scenario_checks/%s.py" % self.check,
+            "scenario_check_test": "tools/test_scenario_check_%s.py" % self.check,
+            "family": "tools/native_evidence_%s.py" % self.family,
+            "family_test": "tools/test_native_%s_evidence.py" % self.family,
         }
+
+    def files(self):
+        """{path: text} of every file this author adds."""
+        paths = self.paths()
+        return {paths["test"]: self.native_test(), paths["capability"]: self.capability_source(),
+                paths["checks"]: self.row_checks(), paths["coverage"]: self.coverage_file(),
+                paths["mode"]: self.oracle_mode(), paths["receipt"]: self.receipt_file(),
+                paths["scenario_check"]: self.scenario_check(), paths["scenario_check_test"]: self.scenario_check_test(),
+                paths["family"]: self.evidence_family(), paths["family_test"]: self.evidence_family_test()}
 
 
 # Two controls of the four-OSD erasure topology, the most frequent kind of
@@ -305,12 +400,13 @@ def remove_tree(path):
         shutil.rmtree(path, onerror=writable)
 
 
-def readme_patterns(text=None):
-    """The file patterns of the README section "Adding a native test"."""
+def readme_patterns(text=None, section=SECTION):
+    """The file patterns of a README section ("Adding a native test", or
+    "Adding other registrations")."""
     text = README.read_text(encoding="utf-8") if text is None else text
-    if SECTION not in text:
-        raise AssertionError("the scenario README has no section %r" % SECTION)
-    body = text.split(SECTION, 1)[1].split("\n## ", 1)[0]
+    if section not in text:
+        raise AssertionError("the scenario README has no section %r" % section)
+    body = text.split(section, 1)[1].split("\n## ", 1)[0]
     patterns = re.findall(r"(?m)^- `([^`]+)`", body)
     # A <placeholder> is one path component part; the rest is literal.
     return [(pattern, re.compile("^%s$" % "[A-Za-z0-9_.-]+".join(map(re.escape, re.split(r"<[^<>/]+>", pattern)))))
@@ -353,11 +449,8 @@ class MergeProofTest(unittest.TestCase):
         repo, paths = cls.repo, author.paths()
         branch = branch or "add-" + author.name.lower()
         repo.git("checkout", "-q", "-f", "-b", branch, "base")
-        repo.write(paths["test"], author.native_test())
-        repo.write(paths["capability"], author.capability_source())
-        repo.write(paths["checks"], author.row_checks())
-        repo.write(paths["coverage"], author.coverage_file())
-        repo.write(paths["mode"], author.oracle_mode())
+        for path, text in author.files().items():
+            repo.write(path, text)
         repo.git("add", "--", *paths.values())
         repo.git("commit", "-q", "--no-verify", "-m", "add " + author.test)
         return branch
@@ -444,6 +537,29 @@ class MergeProofTest(unittest.TestCase):
         for author in authors:
             self.assertTrue(author.mode in admitted, "the merged fixture does not admit mode " + author.mode)
             self.assertTrue(author.receipt in collected, "the merged fixture does not collect " + author.receipt)
+        # The fixture polls both branches' controls, though neither edited a
+        # sequence.
+        polled = set(re.search(r"declared fixture controls after the recorded order: ([a-z0-9 -]*)", fixture.stdout).group(1).split())
+        for author in authors:
+            self.assertIn(author.control, polled, "the merged fixture does not poll control " + author.control)
+        # The ledger reads both branches' receipts, validate ran both
+        # branches' checks, and the collector reads both families.
+        evidence = repo.run(python, "tools/protocol_evidence.py", check=False)
+        self.assertEqual(evidence.returncode, 0, "protocol_evidence.py refused the merged tree:\n" + evidence.stderr[-6000:])
+        listing = repo.run(python, "-c", "import protocol_evidence as p; print(' '.join(sorted(p.receipt_texts(p.ROOT))))",
+                           cwd=repo.path / "tools").stdout.split()
+        checks = repo.run(python, "-c", "import scenario_checks as c; print(' '.join(path.stem for path in c.modules()))",
+                          cwd=repo.path / "tools").stdout.split()
+        families = repo.run(python, "-c", "import native_evidence as e; print(' '.join(sorted(e.families())))",
+                            cwd=repo.path / "tools").stdout.split()
+        for author in authors:
+            self.assertIn(author.receipt_id, listing)
+            self.assertIn(author.check, checks)
+            self.assertIn(author.family, families)
+            job = json.loads(repo.run(python, "tools/scenario_plan.py", "plan", "--select", author.id).stdout)["include"][0]
+            step = subprocess.run([python, "tools/native_evidence.py", "family"], cwd=str(repo.path), capture_output=True,
+                                  text=True, env=dict(repo.env, MATRIX_JSON=json.dumps(job)), timeout=TIMEOUT)
+            self.assertEqual((step.returncode, step.stdout), (0, "family=%s\n" % author.family), step.stderr)
         # The oracle itself registers both modes, and its own tests pass.
         registered = repo.run(python, "-c", "import osd_pool_oracle as o; print(' '.join(sorted(o.HANDLERS)))",
                               cwd=repo.path / "tools").stdout.split()
@@ -461,15 +577,18 @@ class MergeProofTest(unittest.TestCase):
                              % (author.snake, author.name))
 
     def test_branches_edit_only_the_files_the_readme_names(self):
-        patterns = readme_patterns(self.repo.read(".github/scenarios/README.md"))
-        self.assertTrue(patterns)
+        text = self.repo.read(".github/scenarios/README.md")
+        native, other = readme_patterns(text), readme_patterns(text, OTHER_SECTION)
+        self.assertTrue(native)
+        self.assertTrue(other)
         for key, branch in self.branches.items():
             changed = self.changed(branch)
             self.assertEqual(changed, set(AUTHORS[key].paths().values()))
             for path in changed:
-                self.assertTrue([pattern for pattern, compiled in patterns if compiled.match(path)],
-                                "%s edits %s, which the README section does not name" % (branch, path))
-            for pattern, compiled in patterns:
+                self.assertTrue([pattern for pattern, compiled in native + other if compiled.match(path)],
+                                "%s edits %s, which the README sections do not name" % (branch, path))
+            # Every file a native test needs, and every other registration.
+            for pattern, compiled in native + other:
                 self.assertTrue([path for path in changed if compiled.match(path)], "%s edits no %s" % (branch, pattern))
 
     def test_branches_are_independent(self):
@@ -532,9 +651,15 @@ class MergeProofTest(unittest.TestCase):
 
 
 class AuthorInstructionsTest(unittest.TestCase):
-    def test_readme_section_names_the_files(self):
-        patterns = [pattern for pattern, _ in readme_patterns()]
-        self.assertEqual(len(patterns), len(Author("X", "g", "A", {}, None, "").paths()), patterns)
+    def test_readme_sections_name_the_files(self):
+        """Every file an author writes matches a README pattern, and every
+        pattern names a file an author writes."""
+        patterns = readme_patterns() + readme_patterns(section=OTHER_SECTION)
+        paths = Author("X", "g", "A", {}, None, "").paths().values()
+        for path in paths:
+            self.assertTrue([pattern for pattern, compiled in patterns if compiled.match(path)], path)
+        for pattern, compiled in patterns:
+            self.assertTrue([path for path in paths if compiled.match(path)], pattern)
 
 
 if __name__ == "__main__":

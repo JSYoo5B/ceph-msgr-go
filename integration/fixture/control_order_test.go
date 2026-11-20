@@ -112,6 +112,9 @@ func TestDeclaredControlsKeepTheRecordedOrder(t *testing.T) {
 	if !slices.IsSorted(later) {
 		t.Fatal("controls added after the recorded order do not run by name", later)
 	}
+	// tools/test_merge_proof.py reads this line to see that a merged tree
+	// polls every branch's control.
+	t.Logf("declared fixture controls after the recorded order: %s", strings.Join(later, " "))
 }
 
 func TestRequestControlConsumesAndAcknowledgesItsRequest(t *testing.T) {
