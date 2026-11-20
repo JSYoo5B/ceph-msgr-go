@@ -7,36 +7,56 @@ import (
 	"testing"
 )
 
-// The native flag byte has six defined bits; the public API only constructs
-// zero or TRUNCATE_SEQ. Exercise every byte, including mixed known/unknown bits.
+// The native flag byte has six defined bits. Both opcodes admit any
+// combination of IGNORE_OVERLAY (2), IGNORE_CACHE (4) and MAP_SNAP_CLONE (8),
+// and COPY_FROM2 also TRUNCATE_SEQ (32); FLUSH (1), RWORDERED (16) and the
+// undefined bits 64 and 128 are refused alone and in every mix. Exercise every
+// byte at a clone snap id, and MAP_SNAP_CLONE again at the head.
 func TestCopyFromFlagClassification(t *testing.T) {
 	for _, code := range []uint16{CopyFrom, CopyFrom2} {
 		for flag := 0; flag < 256; flag++ {
-			t.Run(fmt.Sprintf("%x/%02x", code, flag), func(t *testing.T) {
-				op := copyFromOperation(code)
-				op.CopyFrom.Flags = uint8(flag)
-				if flag&32 != 0 {
-					op.CopyFrom.TruncateSequence = 2
+			for _, snap := range []uint64{5, 0, NoSnap} {
+				if snap != 5 && flag&int(CopyFromMapSnapClone) == 0 {
+					continue
 				}
-				admitted := flag == 0 || code == CopyFrom2 && flag == 32
-				r := Request{MapEpoch: 11, Object: "destination", Locator: Locator{Pool: 7, Hash: -1}, Operations: []Operation{op}}
-				for name, encode := range inactiveCopyFromEncoders() {
-					m, err := encode(r)
-					if admitted {
-						if err != nil || m.Type == 0 {
-							t.Fatalf("%s admitted form: %v", name, err)
-						}
-					} else if !errors.Is(err, ErrOperation) || m.Type != 0 || len(m.Front)+len(m.Middle)+len(m.Data) != 0 {
-						t.Fatalf("%s refused flag emitted message: %v", name, err)
-					}
-				}
-				_, _, err := ValidateOperations(r.Operations, wire.DefaultLimit)
-				if admitted != (err == nil) {
-					t.Fatal("validator classification", err)
-				}
-			})
+				copyFromFlagCell(t, code, flag, snap)
+			}
 		}
 	}
+}
+
+func copyFromFlagCell(t *testing.T, code uint16, flag int, snap uint64) {
+	t.Helper()
+	t.Run(fmt.Sprintf("%x/%02x/%x", code, flag, snap), func(t *testing.T) {
+		op := copyFromOperation(code)
+		op.CopyFrom.Flags = uint8(flag)
+		op.CopyFrom.Snap = snap
+		if flag&32 != 0 {
+			op.CopyFrom.TruncateSequence = 2
+		}
+		readFlags := flag &^ 32
+		admitted := readFlags&^0x0e == 0 && (flag&32 == 0 || code == CopyFrom2) && (flag&8 == 0 || snap == 5)
+		r := Request{MapEpoch: 11, Object: "destination", Locator: Locator{Pool: 7, Hash: -1}, Operations: []Operation{op}}
+		for name, encode := range inactiveCopyFromEncoders() {
+			m, err := encode(r)
+			// A clone id at the head is a refused input, not a refused flag.
+			want := ErrOperation
+			if readFlags&^0x0e == 0 && (flag&32 == 0 || code == CopyFrom2) {
+				want = ErrRequest
+			}
+			if admitted {
+				if err != nil || m.Type == 0 {
+					t.Fatalf("%s admitted form: %v", name, err)
+				}
+			} else if !errors.Is(err, want) || m.Type != 0 || len(m.Front)+len(m.Middle)+len(m.Data) != 0 {
+				t.Fatalf("%s refused flag emitted message: %v", name, err)
+			}
+		}
+		_, _, err := ValidateOperations(r.Operations, wire.DefaultLimit)
+		if admitted != (err == nil) {
+			t.Fatal("validator classification", err)
+		}
+	})
 }
 
 // Numeric validity is independent of whether a snapshot/version exists on an

@@ -18,27 +18,69 @@ const (
 	CopyFrom  uint16 = 0x221a
 	CopyFrom2 uint16 = 0x222d
 
-	// CopyFromTruncateSequence is the only copy flag admitted: it tells a
-	// COPY_FROM2 destination to use the supplied truncate sequence and size
-	// instead of the source's (rados.h CEPH_OSD_COPY_FROM_FLAG_TRUNCATE_SEQ).
+	// CopyFromTruncateSequence tells a COPY_FROM2 destination to use the
+	// supplied truncate sequence and size instead of the source's (rados.h
+	// CEPH_OSD_COPY_FROM_FLAG_TRUNCATE_SEQ).
 	CopyFromTruncateSequence uint8 = 32
+	// CopyFromIgnoreOverlay, CopyFromIgnoreCache and CopyFromMapSnapClone
+	// (rados.h CEPH_OSD_COPY_FROM_FLAG_IGNORE_OVERLAY, IGNORE_CACHE and
+	// MAP_SNAP_CLONE) only change how the destination OSD reads the source.
+	// _copy_some turns each into the CEPH_OSD_FLAG_* bit of its own Objecter
+	// read; nothing else in the copy path reads them
+	// (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc).
+	//
+	// IGNORE_OVERLAY keeps that Objecter from redirecting the read to the
+	// source pool's read tier (Objecter::_calc_target,
+	// ceph/ceph/blob/v20.2.4/src/osdc/Objecter.cc), so the base pool is read
+	// even where a writeback tier holds newer data. IGNORE_CACHE makes the
+	// source PG skip maybe_handle_cache: a cache-tier miss is -ENOENT instead
+	// of a promotion. Neither changes a read of a pool without an overlay or a
+	// cache mode.
+	//
+	// MAP_SNAP_CLONE makes find_object_context take the snap id as a clone id:
+	// an id above the source snapset seq still selects the head, an id at or
+	// below it must be one of the snapset's clones exactly (-ENOENT otherwise)
+	// and the clone's own snapshot list and the OSDMap removed_snaps_queue are
+	// not consulted, so a clone whose snapshots are removed but not yet
+	// trimmed is still read (PrimaryLogPG.cc find_object_context).
+	CopyFromIgnoreOverlay uint8 = 2
+	CopyFromIgnoreCache   uint8 = 4
+	CopyFromMapSnapClone  uint8 = 8
+
+	// copyFromFlush and copyFromRWOrdered are the two defined flags that stay
+	// refused. FLUSH makes the source read skip maybe_await_blocked_head and
+	// the object's read/write lock when the source PG has a cache flush of
+	// that object in progress, and answers -EINVAL otherwise (do_op); it is
+	// the cache tier's own flush path, never a client copy. RWORDERED orders
+	// the source read as a write: an exclusive lock, a wait for a degraded
+	// source, and a silent drop while the OSD is failsafe full or the pool was
+	// marked full after the read's map (do_op, get_rw_locks), which would leave
+	// the copy unanswered. Its result on a quiescent source equals the
+	// flagless copy, so no native observation separates it.
+	copyFromFlush     uint8 = 1
+	copyFromRWOrdered uint8 = 16
+
+	// copyFromReadFlags are the admitted source-read flags of both opcodes.
+	copyFromReadFlags = CopyFromIgnoreOverlay | CopyFromIgnoreCache | CopyFromMapSnapClone
 )
 
 // CopyFromInput is the COPY_FROM/COPY_FROM2 union and indata. The source is
 // named by an explicit pool, key and namespace; the OSD maps it to its own PG.
 // Snap zero (or NoSnap) selects the head and 1 through MaxSnap a snapshot the
 // OSD resolves to the covering clone. Version zero disables the source version
-// check. Only the librados flags (zero) and COPY_FROM2's TRUNCATE_SEQ are
-// admitted; SourceFadvise admits the source-read FADVISE hints. Cache-tier
-// flags are not admitted. Flagless COPY_FROM2 omits the unused 12-byte
+// check. The admitted flags are COPY_FROM2's TRUNCATE_SEQ and, on both
+// opcodes, the source-read flags IGNORE_OVERLAY, IGNORE_CACHE and
+// MAP_SNAP_CLONE (see their constants); SourceFadvise admits the source-read
+// FADVISE hints. MAP_SNAP_CLONE needs a snap id other than the head, where it
+// changes nothing. Flagless COPY_FROM2 omits the unused 12-byte
 // truncate tail emitted by the native Objecter builder, which PrimaryLogPG
 // decodes only with TRUNCATE_SEQ set, so it is not byte-identical to the
 // native request.
 //
-// The copy flags FLUSH, IGNORE_OVERLAY, IGNORE_CACHE, MAP_SNAP_CLONE and
-// RWORDERED are internal cache-tier and clone modes and are refused, as are
-// the undefined bits; the pinned handler's check of unknown bits applies to
-// COPY_FROM2 only (ceph/ceph/blob/v20.2.4/src/include/rados.h,
+// The copy flags FLUSH and RWORDERED stay refused (see copyFromFlush), as do
+// the undefined bits 64 and 128; the pinned handler's check of unknown bits
+// applies to COPY_FROM2 only, and COPY_FROM passes every bit to the source
+// read (ceph/ceph/blob/v20.2.4/src/include/rados.h,
 // src/osd/PrimaryLogPG.cc). SnapDir and the (1, all ones) truncate pair the
 // OSD rewrites to (0, 0) are refused. A nonzero version pins the source
 // version, which the OSD checks like ASSERT_VER. A CopyFrom input on any
@@ -181,11 +223,15 @@ func validateCopyFromOperation(op Operation, limit uint32) (uint64, uint64, erro
 		return 0, 0, ErrRequest
 	}
 	switch {
-	case input.Flags&^CopyFromTruncateSequence != 0:
+	case input.Flags&^(CopyFromTruncateSequence|copyFromReadFlags) != 0:
 		return 0, 0, ErrOperation
-	case input.Flags != 0 && op.Code != CopyFrom2:
+	case copyFromTruncates(input) && op.Code != CopyFrom2:
 		return 0, 0, ErrOperation
 	case !copyFromTruncates(input) && (input.TruncateSequence != 0 || input.TruncateSize != 0):
+		return 0, 0, ErrRequest
+	// find_object_context returns the head for CEPH_NOSNAP before it looks
+	// at the flag, so MAP_SNAP_CLONE names no clone there.
+	case input.Flags&CopyFromMapSnapClone != 0 && (input.Snap == 0 || input.Snap == NoSnap):
 		return 0, 0, ErrRequest
 	}
 	// A size without a sequence has no effect on the OSD, and (1, all-ones)
