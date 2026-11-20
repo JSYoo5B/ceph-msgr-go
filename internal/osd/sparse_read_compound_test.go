@@ -2,6 +2,7 @@ package osd
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"math"
 	"testing"
@@ -171,8 +172,12 @@ func TestSparseReadCompoundAggregateBudgets(t *testing.T) {
 func TestSparseReadCompoundRequestScope(t *testing.T) {
 	ops := sparseReadCompoundAdmitted()["read-first"]
 	for name, edit := range map[string]func(*Request){
-		"snapshot":  func(r *Request) { r.ReadSnap = 3 },
+		"snapdir":   func(r *Request) { r.ReadSnap = SnapDir },
+		"snapc":     func(r *Request) { r.ReadSnap, r.SnapSeq, r.Snaps = 3, 3, []uint64{3} },
+		"ordersnap": func(r *Request) { r.ReadSnap, r.OrderSnap = 3, true },
 		"balance":   func(r *Request) { r.BalanceReads = true },
+		"snapbal":   func(r *Request) { r.ReadSnap, r.BalanceReads = 3, true },
+		"snapretry": func(r *Request) { r.ReadSnap, r.RetryAttempt = 3, 1 },
 		"localize":  func(r *Request) { r.LocalizeReads = true },
 		"resubmit":  func(r *Request) { r.RetryAttempt = 1 },
 		"enforce":   func(r *Request) { r.EnforceSnapContext = true },
@@ -183,15 +188,6 @@ func TestSparseReadCompoundRequestScope(t *testing.T) {
 		for version, encode := range inactiveCopyFromEncoders() {
 			if m, err := encode(r); err == nil || len(m.Front) != 0 {
 				t.Fatal("compound scope extension admitted", name, version)
-			}
-		}
-		// Standalone SPARSE_READ keeps its own snapshot policy.
-		if name == "snapshot" {
-			r.Operations = ops[1:]
-			for version, encode := range inactiveCopyFromEncoders() {
-				if _, err := encode(r); err != nil {
-					t.Fatal("standalone snapshot SPARSE_READ changed", version, err)
-				}
 			}
 		}
 	}
@@ -318,5 +314,51 @@ func TestSparseReadCompoundReplySuccessPrefixAndAmbiguity(t *testing.T) {
 	}
 	if err := ValidateSparseReadCompoundReply(ops[:1], sparseReadCompoundReply(ops[:1])); !errors.Is(err, ErrOperation) {
 		t.Fatal("standalone vector routed through compound validator", err)
+	}
+}
+
+// TestSparseReadCompoundSnapshotScope admits the compound at every read snap a
+// pool can allocate, as librbd sends it at its read snap, and transmits that
+// id as the hobject snap on every encoder. The standalone SPARSE_READ policy
+// is unchanged.
+func TestSparseReadCompoundSnapshotScope(t *testing.T) {
+	for _, shape := range []string{"librbd-mixed", "read-first", "sparse-pair", "fadvise-each", "eof-layout"} {
+		ops := sparseReadCompoundAdmitted()[shape]
+		for _, snap := range []uint64{1, 3, MaxSnap} {
+			r := sparseReadCompoundRequest(ops)
+			r.ReadSnap = snap
+			if err := ValidateSparseReadCompoundRequest(r); err != nil {
+				t.Fatal("snapshot compound refused", shape, snap, err)
+			}
+			for version, encode := range inactiveCopyFromEncoders() {
+				m, err := encode(r)
+				if err != nil || len(m.Front) == 0 {
+					t.Fatal("snapshot compound not encoded", shape, snap, version, err)
+				}
+			}
+			got, err := EncodeRequest(r, oracleFeatures, wire.DefaultLimit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			head := sparseReadCompoundRequest(ops)
+			want, err := EncodeRequest(head, oracleFeatures, wire.DefaultLimit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Only the eight snap bytes differ from the head request.
+			var noSnap, at [8]byte
+			binary.LittleEndian.PutUint64(noSnap[:], NoSnap)
+			binary.LittleEndian.PutUint64(at[:], snap)
+			if len(got.Front) != len(want.Front) || bytes.Count(want.Front, noSnap[:]) != 1 || !bytes.Equal(bytes.Replace(want.Front, noSnap[:], at[:], 1), got.Front) {
+				t.Fatal("snapshot compound differs from the head request beyond its snap id", shape, snap)
+			}
+		}
+	}
+	alone := sparseReadCompoundRequest(sparseReadCompoundAdmitted()["read-first"][1:])
+	alone.ReadSnap = 3
+	for version, encode := range inactiveCopyFromEncoders() {
+		if _, err := encode(alone); err != nil {
+			t.Fatal("standalone snapshot SPARSE_READ changed", version, err)
+		}
 	}
 }
