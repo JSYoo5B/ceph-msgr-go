@@ -16,19 +16,21 @@ configuration, platform or higher-level storage operation.
 
 ## Which side of the connection Go implements
 
-The product is always the connecting CLIENT entity (`client.<id>`, CephX
+`Dial` makes the product the connecting CLIENT entity (`client.<id>`, CephX
 entity type CLIENT). It opens outbound msgr2.1 connections to MON, MGR, OSD
-and MDS daemons that already exist. It has no listening Messenger, accepts no
-connection, and implements no daemon role: it cannot act as a MON, MGR, OSD or
-MDS, and it sends none of the daemon-to-daemon messages (quorum, heartbeat,
-peering, replication, recovery, metadata migration). This describes the code
-as it is: the protocols a daemon role uses are planned scope (stage 3 of
-[SPEC.md](SPEC.md) "Protocol stages"), and none has landed yet.
+and MDS daemons that already exist. The one daemon-role protocol so far
+(stage 3 of [SPEC.md](SPEC.md) "Protocol stages") is opt-in and separate:
+`DialMgrDaemon` authenticates a `mgr.<id>` principal to MON as the MGR entity
+and carries that daemon's MON control channel (beacons, MgrMap role, ticket
+renewal, rotating MGR secrets). Nothing listens or accepts a connection yet,
+and none of the other daemon-to-daemon messages (quorum, heartbeat, peering,
+replication, recovery, metadata migration, MGR reports) is sent. The consumer
+that uses `DialMgrDaemon` supplies the daemon's decisions and beacon content.
 
 | Peer | What the Go client does | What it never does |
 | --- | --- | --- |
-| MON | Authenticates, runs raw commands and Tell, receives maps and subscriptions | Join quorum or serve maps |
-| MGR | Runs raw commands and Tell on the active MGR; optionally registers a service daemon as a CLIENT | Become an MGR or a module |
+| MON | Authenticates, runs raw commands and Tell, receives maps and subscriptions; with `DialMgrDaemon`, acts as a MGR daemon's MON channel | Join quorum or serve maps |
+| MGR | Runs raw commands and Tell on the active MGR; optionally registers a service daemon as a CLIENT | Run modules, accept OSD or client sessions, aggregate reports |
 | OSD | Sends object requests and raw commands to a target the caller names | Peer, replicate, recover, store objects or choose placement |
 | MDS | Runs raw commands and the opt-in CephFS session, metadata and capability messages | Hold a rank, journal or migrate metadata |
 
@@ -132,6 +134,7 @@ service rows are refused unless their option was set at `Dial`.
 | Send a raw MDS command | `OpenMDS`, then `MDSConnection.Command` | `EnableMDS` |
 | Open a CephFS session and send metadata requests | `MDSConnection.OpenSession`, `MDSSession.Submit` | `EnableMDS`, `EnableCephFS` for metadata and capabilities |
 | Register a service daemon with the active MGR | `OpenMgrService` | `EnableMgrService` |
+| Act as a MGR daemon toward MON | `DialMgrDaemon`, then `SendBeacon`, `NextMgrMap`, `WaitRotatingKeys` | its own `MgrDaemonOptions` |
 
 The Go documentation of each name states its exact inputs, bounds, outcomes
 and wire subset (`go doc github.com/JSYoo5B/ceph-msgr-go/cephmsgr`).
@@ -205,6 +208,11 @@ and wire subset (`go doc github.com/JSYoo5B/ceph-msgr-go/cephmsgr`).
   service metadata and status with the active MGR on a dedicated CLIENT
   connection; the handle fails on connection loss or an active-MGR change and
   never re-registers by itself.
+- **MGR daemon role.** `DialMgrDaemon` covers only the MON control channel.
+  MON decides which daemon is active; the consumer decides availability, the
+  advertised addresses and what an active daemon does, and sends every
+  beacon itself. There is no listener, no verification of incoming service
+  authorizers and no MGR report or PG statistics path yet.
 
 ## Lifetime and recovery
 
