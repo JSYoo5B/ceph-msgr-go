@@ -928,3 +928,69 @@ func TestMgrDaemonCanceledWaitConsumesNothing(t *testing.T) {
 		t.Fatal("queued digest", digest, err)
 	}
 }
+
+// sampledContext reports, by closing sampled, the first Err call that saw a
+// live context, so a test can cancel only after a wait has sampled ctx.
+type sampledContext struct {
+	context.Context
+	once    sync.Once
+	sampled chan struct{}
+}
+
+func newSampledContext() (*sampledContext, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &sampledContext{Context: ctx, sampled: make(chan struct{})}, cancel
+}
+
+func (c *sampledContext) Err() error {
+	err := c.Context.Err()
+	if err == nil {
+		c.once.Do(func() { close(c.sampled) })
+	}
+	return err
+}
+
+// contendedCancel holds mu while call samples a live ctx, then cancels ctx,
+// publishes under mu and releases it. It returns the call's error.
+func contendedCancel(t *testing.T, mu *sync.Mutex, call func(context.Context) error, publish func()) error {
+	t.Helper()
+	ctx, cancel := newSampledContext()
+	defer cancel()
+	mu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- call(ctx) }()
+	<-ctx.sampled
+	cancel()
+	publish()
+	mu.Unlock()
+	return <-done
+}
+
+// TestMgrDaemonCanceledContendedWaitConsumesNothing cancels NextMgrMap and
+// NextDigest after they sampled a live context but before they acquired
+// daemon.mu, and publishes an event and a digest under that lock. Neither
+// value existed before cancellation, so each call must return the context
+// error and leave the value queued.
+func TestMgrDaemonCanceledContendedWaitConsumesNothing(t *testing.T) {
+	d := &MgrDaemon{changed: make(chan struct{}), options: MgrDaemonOptions{SubscribeDigest: true}}
+	err := contendedCancel(t, &d.mu, func(ctx context.Context) error {
+		_, err := d.NextMgrMap(ctx)
+		return err
+	}, func() {
+		d.events = append(d.events, MgrMapEvent{Null: true})
+		d.signal()
+	})
+	if !errors.Is(err, context.Canceled) || len(d.events) != 1 {
+		t.Fatal("NextMgrMap consumed an event published after cancellation", err, d.events)
+	}
+	err = contendedCancel(t, &d.mu, func(ctx context.Context) error {
+		_, err := d.NextDigest(ctx)
+		return err
+	}, func() {
+		d.digest = &ClusterDigest{MonStatus: []byte("{}")}
+		d.signal()
+	})
+	if !errors.Is(err, context.Canceled) || d.digest == nil {
+		t.Fatal("NextDigest consumed a digest published after cancellation", err, d.digest)
+	}
+}
