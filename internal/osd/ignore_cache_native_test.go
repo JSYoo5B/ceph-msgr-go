@@ -171,7 +171,8 @@ func ignoreCacheNativeBytes(t *testing.T, encoded, hash string) []byte {
 // This suite and the other request oracles built on its helpers (cache-op,
 // set-chunk, tier-op, sparse-read-compound, checksum-compound and
 // enforce-snap-context) are regenerated the same way: copy the driver
-// tools/osd_<suite>_native_encoder.py, its .cc wrapper,
+// tools/osd_<suite>_native_encoder.py (suite name with underscores, such as
+// osd_cache_op_native_encoder.py), its .cc wrapper,
 // tools/mon_ping_native_encoder.{py,cc} and tools/osd_ignore_cache_native_encoder.py
 // into one directory and run, on a Linux amd64 Docker host with an empty work
 // directory (an existing encoded output is refused),
