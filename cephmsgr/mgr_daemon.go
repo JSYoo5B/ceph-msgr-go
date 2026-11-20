@@ -51,6 +51,31 @@ var ErrMgrDaemonIdentityChanged = errors.New("ceph: MGR daemon global ID changed
 // transition, so the daemon fails instead. Accepted events still drain.
 var ErrMgrMapOverflow = errors.New("ceph: MGR daemon map buffer exceeded")
 
+// mgrDaemonTerminal marks a MON session cause that ends the daemon because
+// every other MON session would meet it again: a MonMap of another cluster,
+// or a committed MonMap or MgrMap this library cannot decode.
+type mgrDaemonTerminal struct{ err error }
+
+func (e *mgrDaemonTerminal) Error() string { return e.err.Error() }
+func (e *mgrDaemonTerminal) Unwrap() error { return e.err }
+
+// mgrDaemonFatal reports whether a MON session cause ends the daemon instead
+// of being retried as MON loss: an explicit refusal, a changed global ID, a
+// minimum release earlier than Tentacle, map overflow or a terminal cause.
+// Transport loss, a missing auth reply and a reply that does not answer the
+// oldest request retire only that session; the next one starts with no
+// outstanding requests.
+func mgrDaemonFatal(err error) bool {
+	var rejection *AuthenticationError
+	var terminal *mgrDaemonTerminal
+	return errors.As(err, &rejection) || errors.As(err, &terminal) || errors.Is(err, ErrMgrDaemonIdentityChanged) ||
+		errors.Is(err, maps.ErrRelease) || errors.Is(err, ErrMgrMapOverflow)
+}
+
+// errMgrAuthReplyTimeout retires a MON session that left an MAuth
+// unanswered past its deadline (mgrAuthRequest.deadline).
+var errMgrAuthReplyTimeout = errors.New("ceph: MON did not answer an MGR daemon auth request")
+
 // MgrDaemonOptions configures DialMgrDaemon. Fields mean what they mean on
 // Options unless stated otherwise.
 type MgrDaemonOptions struct {
@@ -68,7 +93,11 @@ type MgrDaemonOptions struct {
 	SubscribeDigest bool
 	// ServiceTicketTTL is the cluster's auth_service_ticket_ttl, which the
 	// native rotating-secret refresh rule reads from its own configuration.
-	// Zero selects the native default of one hour.
+	// Zero selects the native default of one hour. It must be the value the
+	// MONs run with, which a ceph.conf setting can make differ from the
+	// central configuration database. A larger value delays each refresh up
+	// to 30 s after the held current key expired, so the MON can rotate past
+	// the held set and issue service tickets under a secret ID it lacks.
 	ServiceTicketTTL time.Duration
 	// MaxBufferedMaps bounds undelivered MgrMap events (default 64, at most
 	// 4096); see ErrMgrMapOverflow.
@@ -251,9 +280,14 @@ type MgrDaemonState struct {
 }
 
 // mgrAuthRequest is one MAuth outstanding on a MON session. The MON answers
-// them in order without a transaction ID.
+// them in order without a transaction ID, so a reply is matched to the
+// oldest entry. An entry still unanswered at its deadline (KeepaliveTimeout
+// after it was queued, the silence bound of the session itself) retires the
+// session: its correlation cannot be trusted, and the next session renews
+// and refreshes with an empty queue.
 type mgrAuthRequest struct {
 	rotating      bool
+	deadline      time.Time
 	generation    uint64
 	authEpoch     uint32
 	invalidations uint64
@@ -326,10 +360,17 @@ type MgrDaemon struct {
 // Afterwards a worker renews tickets in session (MAuth with the handshake's
 // server challenge) when any ticket passes its renewal time, refreshes the
 // rotating secrets by the native rule, and on MON loss reconnects to a seed
-// or MonMap MON presenting the same global ID and AUTH ticket. An explicit
-// MON rejection, a different global ID or a fatal protocol error ends the
-// daemon; State reports the cause. No beacon is sent on the caller's
-// behalf, also not after reconnection.
+// or MonMap MON presenting the same global ID and AUTH ticket. An MAuth the
+// MON leaves unanswered for KeepaliveTimeout counts as MON loss. These causes
+// end the daemon instead, whether they arrive while a session is admitted or
+// while it is established, and State reports them: an explicit MON
+// rejection (AuthenticationError), a different global ID
+// (ErrMgrDaemonIdentityChanged), a MonMap whose minimum release is earlier
+// than Tentacle or whose FSID differs from the expected or first
+// authenticated one, a MonMap or MgrMap that does not decode, and
+// ErrMgrMapOverflow. A cause of a session that was already replaced is
+// ignored. No beacon is sent on the caller's behalf, also not after
+// reconnection.
 func DialMgrDaemon(ctx context.Context, options MgrDaemonOptions) (*MgrDaemon, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -510,8 +551,7 @@ func (d *MgrDaemon) connect(ctx context.Context) error {
 			return nil
 		}
 		failures = append(failures, err)
-		var rejection *AuthenticationError
-		if errors.As(err, &rejection) || errors.Is(err, ErrMgrDaemonIdentityChanged) || errors.Is(err, maps.ErrRelease) || ctx.Err() != nil {
+		if mgrDaemonFatal(err) || ctx.Err() != nil {
 			return errors.Join(failures...)
 		}
 	}
@@ -608,6 +648,10 @@ func (d *MgrDaemon) attempt(ctx context.Context, target monTarget) error {
 	d.mu.Lock()
 	if d.mon != s || s.Err() != nil {
 		d.mu.Unlock()
+		if err := s.Err(); err != nil {
+			// The session's own cause, which sessionClosed classified.
+			return err
+		}
 		return errors.New("ceph: MGR daemon MON session lost during admission")
 	}
 	if d.identity.GlobalID == 0 {
@@ -627,14 +671,22 @@ func (d *MgrDaemon) attempt(ctx context.Context, target monTarget) error {
 	return nil
 }
 
-func (d *MgrDaemon) sessionClosed(s *session.Session, _ error) {
+// sessionClosed runs once per MON session with its cause. Only the current
+// session's cause can end the daemon (mgrDaemonFatal); a replaced session's
+// cause belongs to state the daemon already left.
+func (d *MgrDaemon) sessionClosed(s *session.Session, cause error) {
 	d.mu.Lock()
-	if d.mon == s {
+	current := d.mon == s
+	if current {
 		d.monReady = false
 		d.pending = nil
 		d.signal()
 	}
+	terminal := current && d.failure == nil && !d.closed && mgrDaemonFatal(cause)
 	d.mu.Unlock()
+	if terminal {
+		d.fail(cause)
+	}
 	d.wakeWorker()
 }
 
@@ -653,8 +705,7 @@ func (d *MgrDaemon) supervise() {
 		}
 		if s == nil || !ready || s.Err() != nil {
 			err := d.connect(d.ctx)
-			var rejection *AuthenticationError
-			if err != nil && (errors.As(err, &rejection) || errors.Is(err, ErrMgrDaemonIdentityChanged) || errors.Is(err, maps.ErrRelease)) {
+			if err != nil && mgrDaemonFatal(err) {
 				d.fail(err)
 				return
 			}
@@ -678,7 +729,8 @@ func (d *MgrDaemon) supervise() {
 	}
 }
 
-// maintain sends at most one ticket renewal and one rotating request while
+// maintain retires a session whose oldest MAuth passed its deadline, and
+// otherwise sends at most one ticket renewal and one rotating request while
 // none of that kind is outstanding, each at most once a second.
 func (d *MgrDaemon) maintain(s *session.Session) {
 	now := time.Now()
@@ -688,18 +740,24 @@ func (d *MgrDaemon) maintain(s *session.Session) {
 		d.mu.Unlock()
 		return
 	}
+	if len(d.pending) > 0 && !now.Before(d.pending[0].deadline) {
+		d.mu.Unlock()
+		s.Fail(errMgrAuthReplyTimeout)
+		return
+	}
+	deadline := now.Add(d.options.KeepaliveTimeout)
 	outstanding := func(rotating bool) bool {
 		return slices.ContainsFunc(d.pending, func(r mgrAuthRequest) bool { return r.rotating == rotating })
 	}
 	if !outstanding(false) && now.Sub(d.lastRenewal) >= time.Second && ticketsNeedRenewal(d.auth, now) {
 		if payload, err := d.auth.RenewalRequest(); err == nil {
-			d.pending = append(d.pending, mgrAuthRequest{generation: d.monGeneration, authEpoch: d.monMap.AuthEpoch, invalidations: d.invalidations})
+			d.pending = append(d.pending, mgrAuthRequest{deadline: deadline, generation: d.monGeneration, authEpoch: d.monMap.AuthEpoch, invalidations: d.invalidations})
 			d.lastRenewal = now
 			messages = append(messages, msgr.AuthMessageRequest(payload, d.monMap.Epoch))
 		}
 	}
 	if !outstanding(true) && now.Sub(d.lastRotating) >= time.Second && d.ring.NeedsRefresh(now, d.options.ServiceTicketTTL) {
-		d.pending = append(d.pending, mgrAuthRequest{rotating: true, generation: d.monGeneration, authEpoch: d.monMap.AuthEpoch, invalidations: d.invalidations})
+		d.pending = append(d.pending, mgrAuthRequest{rotating: true, deadline: deadline, generation: d.monGeneration, authEpoch: d.monMap.AuthEpoch, invalidations: d.invalidations})
 		d.lastRotating = now
 		messages = append(messages, msgr.AuthMessageRequest(cephx.RotatingRequest(), d.monMap.Epoch))
 	}
@@ -762,7 +820,7 @@ func (h *mgrDaemonSession) handle(m msgr.MessageData) error {
 			if errors.Is(err, maps.ErrRelease) {
 				return err
 			}
-			return fmt.Errorf("%w: invalid MON map: %w", msgr.ErrFrame, err)
+			return &mgrDaemonTerminal{fmt.Errorf("%w: invalid MON map: %w", msgr.ErrFrame, err)}
 		}
 		d.mu.Lock()
 		defer d.mu.Unlock()
@@ -770,7 +828,7 @@ func (h *mgrDaemonSession) handle(m msgr.MessageData) error {
 			return nil
 		}
 		if d.fsid != [16]byte{} && d.fsid != mon.FSID {
-			return errors.New("ceph: monitor FSID mismatch")
+			return &mgrDaemonTerminal{errors.New("ceph: monitor FSID mismatch")}
 		}
 		d.fsid = mon.FSID
 		d.identity.FSID = fmt.Sprintf("%x-%x-%x-%x-%x", mon.FSID[:4], mon.FSID[4:6], mon.FSID[6:8], mon.FSID[8:10], mon.FSID[10:])
@@ -797,7 +855,7 @@ func (h *mgrDaemonSession) handle(m msgr.MessageData) error {
 		}
 		mgr, err := maps.DecodeMgr(m.Front)
 		if err != nil {
-			return fmt.Errorf("%w: invalid MGR map: %w", msgr.ErrFrame, err)
+			return &mgrDaemonTerminal{fmt.Errorf("%w: invalid MGR map: %w", msgr.ErrFrame, err)}
 		}
 		d.mu.Lock()
 		defer d.mu.Unlock()
@@ -884,13 +942,11 @@ func (h *mgrDaemonSession) authReply(m msgr.MessageData) error {
 	d.mu.Unlock()
 	if reply.Result != 0 {
 		// An explicit refusal of a renewal or rotating request: the
-		// principal's key or caps changed. The daemon cannot keep serving.
-		err := &AuthenticationError{Method: 2, Code: reply.Result}
-		go d.fail(err)
-		return err
+		// principal's key or caps changed. The daemon cannot keep serving;
+		// sessionClosed ends it with this cause.
+		return &AuthenticationError{Method: 2, Code: reply.Result}
 	}
 	if reply.GlobalID != 0 && reply.GlobalID != gid {
-		go d.fail(ErrMgrDaemonIdentityChanged)
 		return ErrMgrDaemonIdentityChanged
 	}
 	kind, err := cephx.ResponseType(reply.ResultBL)
