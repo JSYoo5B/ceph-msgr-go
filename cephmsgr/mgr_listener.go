@@ -36,9 +36,11 @@ import (
 // ceph/ceph/blob/v20.2.4/src/mon/MonClient.cc handle_auth_request.
 //
 // Only OSD peers are admitted, in the one ConnectionMode selected, and no
-// compression is negotiated. MDS and CLIENT peers, which native MGR also
-// accepts, and sending messages to a peer (MMgrConfigure, command replies)
-// are not implemented. A peer session is lossy, like native: its loss ends
+// compression is negotiated. MON, MDS and CLIENT peers, which native MGR
+// also accepts, are refused at HELLO; stock MONs do connect to the active
+// MGR (their MgrClient), so their refusals appear in the listener's
+// records. Sending messages to a peer (MMgrConfigure, command replies) is
+// not implemented. A peer session is lossy, like native: its loss ends
 // it, and the stock OSD reconnects on its own as a new session with a new
 // Generation; nothing is resumed or replayed.
 
