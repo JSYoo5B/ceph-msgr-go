@@ -16,10 +16,15 @@ import (
 // scrub_ls and osd/PrimaryLogPG.cc do_scrub_ls. LGPL-2.1; no code copied.
 const ScrubList uint16 = 0x1507
 
-// ScrubListRequest is one SCRUBLS page. Interval zero accepts the PG's
+// ScrubListRequest is one SCRUBLS page, sent in the PGNLS PG-op envelope of
+// the selected profile with a scrub_ls_arg_t v1 as input. The OSD requires
+// the request PG to equal its own, so PG.Seed is the actual folded seed in
+// every profile (a raw hash is -EINVAL). Interval zero accepts the PG's
 // current interval; a nonzero interval the OSD no longer has is refused with
-// -EAGAIN. StartAfter names the last object of the previous page. Snapsets
-// selects inconsistent snapsets instead of objects.
+// -EAGAIN, and a primary without scrub results since it became primary
+// answers -ENOENT. StartAfter names the last object of the previous page.
+// Snapsets selects inconsistent snapsets instead of objects. The request only
+// reads: it never starts a scrub or repair.
 type ScrubListRequest struct {
 	ClientInc, MapEpoch uint32
 	PG                  PG

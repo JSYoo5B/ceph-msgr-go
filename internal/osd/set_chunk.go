@@ -12,7 +12,7 @@ import (
 // set_chunk (the indata), tools/rados/rados.cc set-chunk (the native request
 // flags) and osd/PrimaryLogPG.cc do_osd_ops, inc_refcount_by_set and
 // finish_set_manifest_refcount (the handler). Those sources carry LGPL-2.1
-// notices; no native implementation is copied. See MANIFEST_CONTRACT.md.
+// notices; no native implementation is copied.
 //
 // The packed union is zero and the indata is u64 src_offset, u64 src_length,
 // object_locator_t of the target, object_t target name and u64 tgt_offset.
@@ -21,6 +21,20 @@ import (
 // no mtime. On success the OSD has its own Objecter increment the target's
 // cls_cas reference before it records the chunk in the source's manifest, so a
 // lost reply leaves an unknown outcome that is never replayed.
+//
+// The CACHE mode makes SET_CHUNK write-ordered without a read or write
+// capability check, it is not a user-visible modification (the source's user
+// version stays), and its data stays local, so reads still return the
+// source's own bytes. No feature or opt-in is needed: the OSD checks
+// OSD_CACHEPOOL only for pools in a tier relation, which SET_CHUNK refuses.
+// The handler refuses a tier pool, a redirect manifest or a zero length with
+// -EINVAL, an absent source with -ENOENT, an extent past the object size with
+// -ERANGE, and a missing WITH_REFERENCE, an erasure-coded pool or an
+// overlapping chunk with -EOPNOTSUPP. The target must exist: a failed
+// reference increment answers with its code (-ENOENT) as the aggregate beside
+// the per-op -EINPROGRESS the handler stored, and the pair is kept as
+// received. Deleting the source or UNSET_MANIFEST drops its references after
+// commit. Snapshot clone reference arithmetic is not covered.
 const (
 	SetChunk uint16 = 0x8228
 

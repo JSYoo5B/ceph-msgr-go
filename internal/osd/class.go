@@ -13,6 +13,30 @@ import (
 // 7f793731f1b39eb4f465e960113d2363c311b964: include/rados.h:600-605 (cls
 // union), osdc/Objecter.h:227-242 (add_call) and osd/PrimaryLogPG.cc:6207-6257.
 // Those sources carry LGPL-2.1 notices; no native implementation is copied.
+//
+// CALL is a raw transport primitive: the caller names the class and method,
+// supplies the input and receives the signed per-op return (positive values
+// kept) and raw output. No class schema is added and a call is never resent.
+// A class outside osd_class_load_list is -EPERM and an unknown method
+// -EOPNOTSUPP before execution (PrimaryLogPG.cc maybe_init_op_info); a method
+// reading without its RD flag or writing without WR gets -EIO. In a writing
+// vector an operation output above osd_max_write_op_reply_len turns that
+// operation and the aggregate into -EOVERFLOW with the output cleared and
+// nothing committed, although the primary's cached object_info may already
+// report a newer user version. A method returning -EAGAIN or -EINPROGRESS
+// produces no reply, so the caller's context ends the wait as unknown.
+//
+// Method helpers are sub-operations of the vector's transaction
+// (osd/objclass.cc): stat and read lengths see staged state, read bytes come
+// from committed storage and a full read is checked against the staged digest.
+// A write method followed by a full-reading method made a three-replica
+// primary loop on digest repairs without replying. A CALL is therefore
+// admitted after guards, reads, read-mode CALLs and a non-FAILOK CREATE, and
+// refused after a write-mode CALL, a FAILOK CALL or any other staged write.
+// Read mode is the caller's declaration that the method is registered
+// read-only; the OSD classifies by registration. With FAILOK a failing method
+// keeps the writes it staged, which commit with the rest of the vector, so a
+// caller needing all-or-nothing must not set it.
 const (
 	Call uint16 = 0x1401
 
@@ -59,8 +83,8 @@ func validateClassOperation(op Operation, limit uint32) (uint64, uint64, error) 
 	if input.MaxOutputBytes > limit || uint64(len(op.Data)) > math.MaxUint32 {
 		return 0, 0, wire.ErrLimit
 	}
-	// FAILOK continues the vector after a failing method; see
-	// CLASS_CONTRACT.md for what such a method's own staged writes do.
+	// FAILOK continues the vector after a failing method, whose own staged
+	// writes then commit (see the Call constant).
 	if op.Flags&^OpFailOK != 0 {
 		return 0, 0, ErrOperation
 	}

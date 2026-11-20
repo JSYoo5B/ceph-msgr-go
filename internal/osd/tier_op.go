@@ -7,8 +7,7 @@ package osd
 // and tier-evict (the native request flags) and osd/PrimaryLogPG.cc
 // do_osd_ops, start_copy, process_copy_chunk_manifest, finish_promote,
 // start_flush, start_dedup and finish_set_dedup (the handlers). Those sources
-// carry LGPL-2.1 notices; no native implementation is copied. See
-// MANIFEST_CONTRACT.md.
+// carry LGPL-2.1 notices; no native implementation is copied.
 //
 // None carries input: the packed union and payload are zero. TIER_PROMOTE is
 // a write-mode opcode that native callers submit as a write (WRITE, with the
@@ -27,6 +26,16 @@ package osd
 // replies require ONDISK without changing their wire mode; that bit
 // identifies no state transition. A lost reply leaves an unknown outcome that
 // is never replayed.
+//
+// No feature bit or EnableOSDCachePools is needed: the OSD checks
+// OSD_CACHEPOOL only for pools in a cache-tier relation
+// (PrimaryLogPG.cc:1942-1945), where a session without it gets EOPNOTSUPP before any handler;
+// that path is not exercised live. The dedup TIER_FLUSH success is aggregate
+// 0 with the per-op EAGAIN (TierFlushDeferredSuccess), and its ONDISK is the
+// request's own bit echoed by reply_op_error before the CLEAN transaction
+// commits, so it proves neither the new manifest on disk nor persistence.
+// Erasure-coded placement is refused because the dedup flush cannot read an
+// erasure-coded object and no native caller targets a shard.
 const (
 	TierPromote uint16 = 0x2229
 	TierFlush   uint16 = 0x822b

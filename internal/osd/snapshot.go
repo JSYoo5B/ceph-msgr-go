@@ -15,6 +15,41 @@ import (
 // osd/PrimaryLogPG.cc:2176-2183, 2321-2337, 4211-4229, 6571-6656 and
 // 8373-8811, osd/osd_types.h:6786-6869. Those sources carry LGPL-2.1
 // notices; no native implementation is copied.
+//
+// The client transmits caller-supplied snapshot metadata only: it never
+// allocates or removes snap ids (a MON pool operation), compares them with
+// the pool's state or selects a snapshot. The server decode validates none of
+// the request's snapshot fields, so they are checked here.
+//
+// A read resolves its snap through find_object_context: no snapset is
+// -ENOENT, a snap above the snapset seq returns the head, otherwise the first
+// clone at or above the id must list it, else -ENOENT; a missing or
+// recovering clone waits without a reply. The reply carries the clone's user
+// version and does not echo the snap id. A vector that may write at a snap is
+// -EINVAL on the server and is refused here.
+//
+// Writes use the caller's SnapContext unless the pool is in pool-snapshot
+// mode without ENFORCE_SNAPC. An invalid context (SnapContext::is_valid: seq
+// at most MaxSnap, snaps strictly descending and not above seq) is refused,
+// as is a zero snap id, which is_valid accepts but the MON never allocates; a
+// read-only vector refuses a context or ORDERSNAP because the server ignores
+// them. make_writeable clones a non-whiteout head when snaps[0] is newer than
+// the snapset seq, and the seq advances even without a clone; DELETE under
+// such a context or with clones leaves a whiteout. With ORDERSNAP an older
+// context is refused with EOLDSNAPC before execution; without it the write
+// proceeds without a clone. With ENFORCE_SNAPC an empty or older context is
+// the caller's choice and may get EOLDSNAPC or no clone.
+//
+// ROLLBACK must stand alone with a snap id 1 to MaxSnap, because no covering
+// clone (snap 0 among them) deletes the head, or leaves a whiteout with
+// clones, and still returns 0; a covering clone replaces data, xattrs and
+// OMAP, a snap above the seq only advances the version, a watched head is
+// -EBUSY and a missing object succeeds through the log-only path. The request
+// SnapContext applies first. LIST_SNAPS must stand alone at SnapDir; a
+// whiteout head is listed without a head entry and an inconsistent snapset is
+// -EINVAL. A lost reply to ROLLBACK or a write with a SnapContext leaves an
+// unknown outcome (a clone may exist, the head may be restored or deleted)
+// that is never replayed.
 const (
 	ListSnaps uint16 = 0x120a
 	Rollback  uint16 = 0x220e
