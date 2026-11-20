@@ -29,8 +29,9 @@ import (
 // for a newer context seq, with no overlap with the new head. A stale context
 // with ORDERSNAP is refused with -EOLDSNAPC before any operation runs (per-op
 // zero, not -EINPROGRESS). Sources: src/osd/PrimaryLogPG.cc and
-// src/osd/osd_types.cc at v20.2.4. Not verified: removed snapshots
-// (filter_snapc), multi-chunk truncated copies and fault timing.
+// src/osd/osd_types.cc at v20.2.4. Contexts naming removed snapshots
+// (filter_snapc) are TestCephOSDCopyFromSnapshotEdgesIntegration's. Not
+// verified: multi-chunk truncated copies and fault timing.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdcopyfromsnaptruncate key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
 //scenario:covers CLIENT to OSD

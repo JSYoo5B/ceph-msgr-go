@@ -61,6 +61,9 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 	if err := ValidateSetChunkRequest(r.Request); err != nil {
 		return msgr.MessageData{}, err
 	}
+	if err := ValidateCopyFromRequest(r.Request); err != nil {
+		return msgr.MessageData{}, err
+	}
 	if err := ValidateTierRequest(r.Request); err != nil {
 		return msgr.MessageData{}, err
 	}
