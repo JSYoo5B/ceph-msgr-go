@@ -42,7 +42,7 @@ import (
 //     The MON sets pauserd only together with pausewr, as `osd set pause`
 //     (src/mon/OSDMonitor.cc:11995-11996); this client and the oracle's observations do
 //     not consult either flag, and the oracle reads no object while it is set.
-//   - Explicit resubmission follows internal/osd/RESUBMIT_CONTRACT.md: the
+//   - Explicit resubmission follows the OSDRequest.Resubmit contract: the
 //     original transaction and incarnation, a raised RetryAttempt, a fresh
 //     connection and the caller's new placement. The OSD answers a request
 //     whose identity its PG log holds from that log and executes it otherwise.
