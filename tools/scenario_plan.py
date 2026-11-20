@@ -69,7 +69,7 @@ environment, and the subshell keeps one row's environment from the next.
 
 Every native test declares whether it may share a fixture with the tests
 after it, beside its function (//fixture:shareable <reason> or
-//fixture:isolated <reason>; integration/fixture/FIXTURE_SHARING.md). A row is
+//fixture:isolated <reason>; the rule is in fixture_sharing.py). A row is
 shareable only when every test its effective selector selects is. The
 declarations have one reader, fixture_sharing.py; the fixture reports each
 row's effective selector (its own default when the row has no test_run) from

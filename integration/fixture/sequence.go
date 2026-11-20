@@ -17,17 +17,29 @@ import (
 )
 
 // A fixture sequence runs the tests of several catalog rows that share one
-// fixture configuration on one fixture (FIXTURE_SHARING.md). The planner
-// forwards the rows' selectors, in catalog (identifier) order, as
-// CEPH_MSGR_TEST_SEQUENCE and their union as CEPH_MSGR_TEST_RUN, which the
-// result gate snapshots.
-// The fixture runs every selected top-level test alone (-test.run ^Name$),
-// in row order, then suite order (api, client), then the suite's listing
-// order, each test once, and requires the start-state check
-// (FIXTURE_START_STATE.md) to pass after every test before the next one
-// runs and after the last one. A failed test or a failed check stops the
-// sequence; the check's failure is reported against the test that ran
-// before it.
+// fixture configuration on one fixture. The planner (tools/scenario_plan.py
+// plan) groups the selected shareable rows of one configuration that have an
+// explicit test_run into one job of at most MAX_SEQUENCE_ROWS rows; an isolated or broad
+// row, and a request that selects one row of a configuration, keeps a job of
+// its own (tools/fixture_sharing.py holds the classification rule). It
+// forwards the rows' selectors, in planning order, as CEPH_MSGR_TEST_SEQUENCE
+// and their union as CEPH_MSGR_TEST_RUN, which the result gate snapshots.
+//
+// A sequence is admitted only when every member alone is admitted and loads
+// the same profile; it declares a capability only when every member is one
+// exact test, and a member that is its fixture's default selection or a soak
+// runs alone. The fixture runs every selected top-level test alone
+// (-test.run ^Name$), in row order, then suite order (api, client), then the
+// suite's listing order, each test once, and requires the start-state check
+// (start_state.go) to pass within sequenceStartStateBudget after every test
+// before the next one runs and after the last one. A failed test or a failed
+// check stops the sequence; the check's failure is printed as
+// "Fixture start state after <suite>/<Test>: FAILED: ..." and the result gate
+// (tools/native_test_results.py snapshot --sequence) reports it against the
+// test that ran before it and every later test as missing. Every selected
+// test still needs its own PASS line. sequenceRecordFile records each test's
+// window, result and the check after it, so a daemon log line can be placed
+// in the test whose window holds it.
 
 const (
 	sequenceEnv = "CEPH_MSGR_TEST_SEQUENCE"

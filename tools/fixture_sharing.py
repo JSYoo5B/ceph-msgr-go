@@ -1,22 +1,59 @@
 #!/usr/bin/env python3
 """Fixture sharing: the one reader of the `//fixture:` declarations.
 
-Every native test declares beside its function, as the last line of its doc
-comment, whether a later test may use the fixture it ran on
-(integration/fixture/FIXTURE_SHARING.md):
+Every native test (TestCeph...Integration in integration and cephmsgr, and
+the routed RGW checkpoints TestRGWNative...Integration of integration/fixture)
+declares beside its function, as the last line of its doc comment, whether a
+later test may use the fixture it ran on:
 
     //fixture:shareable <reason>
     //fixture:isolated <reason>
 
-This module is the only code that reads those lines. It reads them as text,
-because the trusted planner plans a pull request's revision from its Git
-blobs and must not build or run that revision's code. The fixture module does
-not read them: it supplies the one fact only it knows, each row's effective
-selector (TestCatalogRowsAreAdmittedByTheFixture, loadProfile), and
+The reason is one line of printable ASCII, at most MAX_REASON bytes, naming
+what the test changes and what its cleanup proves. A test is classified by
+what it does when it runs, not by its skip conditions.
+
+A test is shareable only if it changes nothing outside the pools, objects,
+images or filesystem entries it creates and removes again with a checked
+cleanup, or its cleanup proves the start state: it restores the change with
+a checked command and, for a daemon it stopped, waits for the state the
+change disturbed (a settled full MON quorum, every OSD up and in, every PG
+active+clean and no pg_temp). Everything else is isolated: killing, stopping
+or pausing a daemon without that proof, `mgr fail`, or leaving a
+configuration entry, CRUSH rule, blocklist entry, pool flag or self-managed
+snapshot behind.
+
+The fixture's start-state check (integration/fixture/start_state.go) runs
+between the tests of a fixture sequence and stops it on a leftover in a
+category it compares (daemons and containers, quorum and MGR availability,
+the OSD set, clean PGs, pools and pool flags, erasure-code profiles and CRUSH
+rules, OSDMap flags, central configuration and the snapshot's daemon
+overrides). A change in a category it does not compare (config-key, auth
+entities, the blocklist, the CRUSH hierarchy, other pool properties, the
+fixture object, CephFS entries, the service map, health mutes, in-memory
+daemon state) keeps a test shareable only if its restoration is registered
+(t.Cleanup or defer) before the first change, uses a context still usable
+after the body's, and fails the test unless it confirms the restored state.
+Upmap, primary affinity, CRUSH weights, MGR modules and the active MGR are
+changed by no shareable test. The cluster log cannot be restored, so a test
+that appends entries or reads log history (a WatchLogs from version 1) is
+isolated. Owned UUID objects do not make a test isolated when its checked
+cleanup is registered before the first object is created, because no test
+reads another's leftover object as a precondition.
+
+A row is shareable only when every test its effective selector selects is.
+This module is the only code that reads the declarations. It reads them as
+text, because the trusted planner plans a pull request's revision from its
+Git blobs and must not build or run that revision's code. The fixture module
+does not read them: it supplies the one fact only it knows, each row's
+effective selector (TestCatalogRowsAreAdmittedByTheFixture, loadProfile), and
 row_values derives every row's value here from that selector and these
 declarations. The planner groups rows with an explicit test_run by the same
 rule (shareable_row), and validate requires the fixture's effective selector
-of such a row to be its test_run, so the two uses cannot differ.
+of such a row to be its test_run, so the two uses cannot differ. validate
+refuses a native test without exactly one valid last-line declaration, a
+`//fixture:` comment elsewhere, a native test Go does not list (or one it
+lists that this reader does not find) and a row without a value.
 """
 import re
 from pathlib import Path
