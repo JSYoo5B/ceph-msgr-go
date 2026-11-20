@@ -760,3 +760,34 @@ func TestMgrPeerQueuesNothingAfterItsTerminalCause(t *testing.T) {
 		t.Fatal("Next after the late message", err)
 	}
 }
+
+// TestMgrListenerCanceledContendedWaitsConsumeNothing cancels Accept and
+// Next after they sampled a live context but before they acquired their
+// queue lock, and publishes a peer and a message under that lock. Neither
+// existed before cancellation, so each call must return the context error
+// and leave it queued.
+func TestMgrListenerCanceledContendedWaitsConsumeNothing(t *testing.T) {
+	l := &MgrListener{changed: make(chan struct{}), options: MgrListenerOptions{MaxBufferedMessages: 4, MaxBufferedBytes: 1 << 20}}
+	p := &MgrPeer{listener: l, changed: make(chan struct{})}
+	err := contendedCancel(t, &l.mu, func(ctx context.Context) error {
+		_, err := l.Accept(ctx)
+		return err
+	}, func() {
+		l.pending = append(l.pending, p)
+		l.signal()
+	})
+	if !errors.Is(err, context.Canceled) || len(l.pending) != 1 {
+		t.Fatal("Accept consumed a peer published after cancellation", err, l.pending)
+	}
+	err = contendedCancel(t, &p.mu, func(ctx context.Context) error {
+		_, err := p.Next(ctx)
+		return err
+	}, func() {
+		p.queue = append(p.queue, MgrInboundMessage{Type: 0x700, Front: []byte{1}})
+		p.bytes += 1 + 64
+		p.signal()
+	})
+	if !errors.Is(err, context.Canceled) || len(p.queue) != 1 {
+		t.Fatal("Next consumed a message published after cancellation", err, p.queue)
+	}
+}

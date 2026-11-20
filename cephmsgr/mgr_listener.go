@@ -463,15 +463,21 @@ func (l *MgrListener) handshake(conn net.Conn) {
 
 // Accept returns the next published peer session in publication order.
 // ctx bounds only this wait; a canceled wait consumes nothing, also with a
-// peer queued. After Close or a listener failure it returns the terminal
-// cause once no published peer is waiting.
+// peer queued. Cancellation is decided under the listener lock immediately
+// before the dequeue, so a peer published after ctx ends, even one
+// published while this call waits for the lock, stays queued. After Close
+// or a listener failure it returns the terminal cause once no published
+// peer is waiting.
 func (l *MgrListener) Accept(ctx context.Context) (*MgrPeer, error) {
 	for {
-		// Checked before the queue, also on a wake that raced ctx.
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		l.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			l.mu.Unlock()
+			return nil, err
+		}
 		if len(l.pending) > 0 {
 			p := l.pending[0]
 			l.pending = l.pending[1:]
@@ -630,13 +636,18 @@ func (p *MgrPeer) closed(err error) {
 // Next returns the oldest undelivered inbound message. Accepted messages
 // drain before the terminal cause, and none is accepted after the close
 // callback recorded that cause. ctx bounds only this wait; a canceled wait
-// consumes nothing, also with a message queued.
+// consumes nothing, also with a message queued. As in Accept, cancellation
+// is decided under the peer's queue lock immediately before the dequeue.
 func (p *MgrPeer) Next(ctx context.Context) (MgrInboundMessage, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return MgrInboundMessage{}, err
 		}
 		p.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			p.mu.Unlock()
+			return MgrInboundMessage{}, err
+		}
 		if len(p.queue) > 0 {
 			m := p.queue[0]
 			p.queue[0] = MgrInboundMessage{}
