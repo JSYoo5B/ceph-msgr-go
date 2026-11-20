@@ -489,7 +489,8 @@ func TestMgrDaemonRenewsTicketsInSessionAndRefreshesOnInvalidation(t *testing.T)
 
 // TestMgrDaemonStaleRotatingReplyCannotRepublish parks a verified rotating
 // reply of the first MON session before its publication, replaces the
-// session, lets the new session publish, then releases the old reply.
+// session with one whose MonMap raises the auth epoch, lets the new session
+// publish, then releases the old reply: the visible set must not change.
 func TestMgrDaemonStaleRotatingReplyCannotRepublish(t *testing.T) {
 	f := newFakeMgrMon(t)
 	parked, release := make(chan struct{}), make(chan struct{})
@@ -511,12 +512,17 @@ func TestMgrDaemonStaleRotatingReplyCannotRepublish(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("first rotating reply never arrived")
 	}
-	first.conn.Close() // MON loss while the old reply waits
+	// MON loss while the old reply waits; the next MON also reports a
+	// service-key wipe (a higher auth epoch), which invalidates the set.
+	f.mu.Lock()
+	f.authEpoch = 1
+	f.mu.Unlock()
+	first.conn.Close()
 	f.next(t)
 	wait, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	current, err := d.WaitRotatingKeys(wait, 0)
-	if err != nil || current.MonitorGeneration != 2 || current.Keys[0].ID != 8 {
+	if err != nil || current.MonitorGeneration != 2 || current.Keys[0].ID != 8 || current.Invalidations != 1 {
 		t.Fatal("new session set", current, err)
 	}
 	close(release)
