@@ -176,8 +176,19 @@ type Options struct {
 	// EnableCephFS selects the CephFS client profile for every MDS connection
 	// (requires EnableMDS): the CephFS Messenger features and client feature
 	// set required by metadata requests, capability/lease/snapshot/quota
-	// pushes and their answers. See cephmsgr/MDS_CEPHFS_CONTRACT.md. Without
-	// it, MDS connections stay command/session-only.
+	// pushes and their answers. An MDS lacking a required Messenger feature is
+	// refused during the handshake, without falling back to older encodings.
+	// MDS connections become lossless: a transport fault resumes the same
+	// Messenger session at the same address and retransmits unacknowledged
+	// frames; RESET, an identity change or an exhausted 30 s episode makes the
+	// session Lost. All MDS and OSD connections share one address nonce
+	// (State.CephFSNonce), so an MDS eviction blocklist also fences OSD I/O
+	// from that IP. Selecting a new MDS incarnation, request replay and cap
+	// flush resubmission happen only through explicit calls. Path walking,
+	// inode/dentry/capability caches, lease expiry, snapshot realm trees,
+	// writeback ordering, file locks, delegated inode allocation, async
+	// operations and file data layout remain the consumer's. Without it, MDS
+	// connections stay command/session-only.
 	EnableCephFS bool
 	// EnableMgrService permits OpenMgrService: an explicit service-daemon
 	// registration on a dedicated MGR connection (MMgrOpen/Update/Report/Close).
