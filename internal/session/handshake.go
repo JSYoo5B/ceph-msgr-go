@@ -1,4 +1,5 @@
-// Package session coordinates authenticated msgr2.1 client connections.
+// Package session coordinates authenticated msgr2.1 client connections and,
+// for the MGR daemon role, accepted ones (accept.go).
 package session
 
 import (
