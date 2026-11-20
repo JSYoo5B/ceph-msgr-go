@@ -182,7 +182,7 @@ type Options struct {
 	// EnableMgrService permits OpenMgrService: an explicit service-daemon
 	// registration on a dedicated MGR connection (MMgrOpen/Update/Report/Close).
 	// It adds no Messenger feature bit and changes no MON/MGR command behavior;
-	// see cephmsgr/MGR_SERVICE_CONTRACT.md.
+	// see MgrService for the lifecycle and its limits.
 	EnableMgrService bool
 	// MaxMDSConnections bounds cached MDS handles and concurrent setups.
 	// Defaults to 16; valid values are 1 through 1024. Close releases a slot.

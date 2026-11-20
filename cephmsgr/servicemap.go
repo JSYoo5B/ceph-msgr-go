@@ -28,6 +28,9 @@ type ServiceMapOptions struct {
 // ServiceDaemon is one daemon registered under a service (for example an RGW
 // or rbd-mirror instance): its client GID, address, the service map epoch it
 // started in, its start time and its raw metadata and task status strings.
+// Native service daemons can carry an unset (AF_UNSPEC) address, which decodes
+// as no endpoint. StartEpoch can move when the daemon's MGR session
+// re-registers, so compare it only between maps of the same epoch.
 type ServiceDaemon struct {
 	GID                  uint64
 	Address              MDSMapAddress
@@ -74,6 +77,21 @@ func publicServiceMap(m msgr.ServiceMap) ServiceMap {
 // lossless delivery are not guaranteed, and the epoch lets the caller see
 // skips or repeats. Close ends only this watch, without a remote unsubscribe.
 // Accepted data drains before the stable first terminal error.
+//
+// Three bounds apply to a received map, at different scopes. A decodable map
+// whose raw size plus 512 bytes exceeds MaxBufferedBytes ends only this watch
+// with ErrServiceMapOverflow; the MON session stays admitted. A frame above
+// Options.MaxFrameSize (front plus 41 header bytes) fails the MON session with
+// ErrLimitExceeded. A map with more than 65536 services, daemons per service,
+// or metadata or task-status entries per daemon fails the MON session with
+// ErrLimitExceeded and ErrMalformedMessage. Native Ceph has no such count cap:
+// v20.2.4 DaemonServer::handle_open copies a client's metadata unchecked and
+// ServiceMap::encode writes 32-bit counts (ceph/ceph/blob/v20.2.4/src/mgr/ServiceMap.cc).
+// After a session failure the watch reports that error, the client reconnects
+// and the ended watch is not resubscribed. Only the metadata cap and the byte
+// and frame bounds have been exercised with native maps; the service, daemon
+// and task-status caps need more simultaneous native registrations than a
+// test produces and are checked daemon-free only.
 type ServiceMapStream struct {
 	watch monSnapshotWatch[ServiceMapStream]
 
