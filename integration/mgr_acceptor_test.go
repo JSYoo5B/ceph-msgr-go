@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -172,7 +171,9 @@ func acceptOSD(t *testing.T, ctx context.Context, listener *cephmsgr.MgrListener
 // sequence; repeated reconnections run until the OSD presents a ticket
 // sealed with a newer rotating MGR secret (the fixture's service tickets
 // last 12 s), each secret ID held by the daemon when accepted (key
-// rollover). A raw connection that sends nothing holds a handshake slot
+// rollover). The daemon is given the service ticket TTL every MON runs with
+// (runningServiceTicketTTL), so it refreshes on the native rule's ttl/4
+// schedule and holds the key the MON currently issues tickets under. A raw connection that sends nothing holds a handshake slot
 // while the OSD's next session is admitted, and ends at the handshake
 // timeout as a failure (slow-peer isolation, timeout). With osd.0's
 // ms_mon_cluster_mode set to the other mode only, its reconnection is
@@ -220,11 +221,7 @@ func TestCephMgrAcceptorIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer admin.Close()
-	ttlValue := strings.Trim(strings.TrimSpace(string(adminCommand(t, ctx, admin, map[string]any{"prefix": "config get", "who": "mon", "key": "auth_service_ticket_ttl"}))), `"`)
-	seconds, err := strconv.ParseFloat(ttlValue, 64)
-	if err != nil || seconds < 1 {
-		t.Fatal("native auth_service_ticket_ttl", ttlValue, err)
-	}
+	ttl := runningServiceTicketTTL(t, ctx, admin)
 
 	name := fmt.Sprintf("goacc%d", time.Now().UnixNano()%1_000_000)
 	entity := "mgr." + name
@@ -247,7 +244,7 @@ func TestCephMgrAcceptorIntegration(t *testing.T) {
 	var local netip.Addr
 	daemon, err := cephmsgr.DialMgrDaemon(ctx, cephmsgr.MgrDaemonOptions{
 		Monitors: base.Monitors, Identity: entity, Key: key, ConnectionMode: base.ConnectionMode,
-		ExpectedFSID: base.ExpectedFSID, ServiceTicketTTL: time.Duration(seconds * float64(time.Second)),
+		ExpectedFSID: base.ExpectedFSID, ServiceTicketTTL: ttl,
 		DialContext: func(ctx context.Context, network, endpoint string) (net.Conn, error) {
 			conn, err := base.DialContext(ctx, network, endpoint)
 			if err == nil {
