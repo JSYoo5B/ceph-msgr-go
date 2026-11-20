@@ -179,7 +179,7 @@ func TestOSDSetChunkPublicTransportAndUnknownOutcome(t *testing.T) {
 // TestOSDSetChunkSuccessRequiresOnDisk keeps the native READ request mode but
 // requires OSD ONDISK before a successful SET_CHUNK completes: it changes the
 // source manifest and the target's references. ACK-only and ONNVRAM-only
-// successes leave the outcome unknown (CONTRACT.md) on v6, v8/v8 and v9/v8.
+// successes leave the outcome unknown (see the internal/osd package doc) on v6, v8/v8 and v9/v8.
 func TestOSDSetChunkSuccessRequiresOnDisk(t *testing.T) {
 	type result struct {
 		r OSDReply
