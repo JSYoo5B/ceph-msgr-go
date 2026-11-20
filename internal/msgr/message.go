@@ -14,10 +14,13 @@ const (
 	SubscribeMessage uint16 = 15
 	// SubscribeAckMessage is defined only: no encoder or decoder exists.
 	SubscribeAckMessage uint16 = 16
-	// AuthMessage is defined only: CephX runs inside msgr2 authentication
+	// AuthMessage is sent by the MGR daemon role only, with header 1/1, for an
+	// in-session CephX renewal or rotating-secret request on its MON session
+	// (AuthMessageRequest). CLIENT authentication runs inside msgr2 authentication
 	// frames, not this message.
 	AuthMessage uint16 = 17
-	// AuthReplyMessage is defined only, as AuthMessage.
+	// AuthReplyMessage is received by the MGR daemon role only; header compat
+	// above 1 is refused (DecodeAuthReply).
 	AuthReplyMessage uint16 = 18
 	// OSDMapMessage is received with header 1/1 or 4/3.
 	OSDMapMessage uint16 = 41
@@ -38,6 +41,9 @@ const (
 	// TellCommandReplyMessage is received with header compat at most 1 and
 	// matched by type and transaction.
 	TellCommandReplyMessage uint16 = 98
+	// MgrBeaconMessage is sent by the MGR daemon role with header 11/8 and high
+	// priority (maps.EncodeMgrBeacon).
+	MgrBeaconMessage uint16 = 0x703
 	// MgrMapMessage is received; header compat above 1 is refused.
 	MgrMapMessage uint16 = 0x704
 	// MgrCommandMessage is sent with header 1/0.

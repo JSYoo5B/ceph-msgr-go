@@ -23,7 +23,8 @@ func mockMgrMapWithStandbys(active maps.Mgr, epoch uint32, standbys []StandbyMan
 		info := wire.Encoder{}
 		info.U64(standby.GlobalID)
 		info.String(standby.Name)
-		info.U32(0) // available modules
+		info.U32(0) // v2 legacy module-name set
+		info.U32(0) // v3 available modules
 		info.U64(0) // features
 		e.Struct(4, 1, info.Data)
 	}
