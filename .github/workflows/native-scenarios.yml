@@ -67,9 +67,20 @@ jobs:
           cp .trusted-native/tools/rgw_native_gate.py "$RUNNER_TEMP/rgw_native_gate.py"
           cp .trusted-native/tools/native_terminal.py "$RUNNER_TEMP/native_terminal.py"
           cp .trusted-native/tools/native_evidence.py "$RUNNER_TEMP/native_evidence.py"
+          # The collector imports its families (native_evidence_<name>.py)
+          # from its own directory only.
+          cp .trusted-native/tools/native_evidence_*.py "$RUNNER_TEMP/"
           # The soak collector imports this validator from its own directory;
           # the tested checkout's copy is never used for retained evidence.
           cp .trusted-native/tools/osd_soak_receipts.py "$RUNNER_TEMP/osd_soak_receipts.py"
+      - name: Ask the trusted collector for the job's evidence family
+        id: evidence_family
+        env:
+          MATRIX_JSON: ${{ toJSON(matrix) }}
+        run: |
+          # Empty when no family claims this matrix; later evidence steps run
+          # only for a claimed family.
+          python3 "$RUNNER_TEMP/native_evidence.py" family >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
@@ -247,7 +258,7 @@ jobs:
           compression-level: 9
       - name: Collect reviewed successful-native evidence
         id: evidence
-        if: steps.ceph.outcome == 'success' && (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || matrix.test_run == '^TestCephMDSCephFSSharedFlockRecoveryIntegration$' || (matrix.osd_soak || '') != '')
+        if: steps.ceph.outcome == 'success' && steps.evidence_family.outputs.family != ''
         continue-on-error: true
         env:
           TESTED_SHA: ${{ inputs.ref || github.sha }}
@@ -272,7 +283,7 @@ jobs:
           retention-days: 7
           compression-level: 9
       - name: Require complete evidence for the admitted successful rows
-        if: always() && steps.ceph.outcome == 'success' && (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || matrix.test_run == '^TestCephMDSCephFSSharedFlockRecoveryIntegration$' || (matrix.osd_soak || '') != '')
+        if: always() && steps.ceph.outcome == 'success' && steps.evidence_family.outputs.family != ''
         env:
           COLLECTION: ${{ steps.evidence.outcome }}
           UPLOAD: ${{ steps.evidence_upload.outcome }}
@@ -289,7 +300,7 @@ jobs:
           SCENARIOS: ${{ matrix.scenarios || matrix.scenario }}
           RESULT: ${{ job.status }}
           TEST_OUTCOME: ${{ steps.ceph.outcome }}
-          EVIDENCE_PILOT: ${{ (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || matrix.test_run == '^TestCephMDSCephFSSharedFlockRecoveryIntegration$' || (matrix.osd_soak || '') != '') }}
+          EVIDENCE_PILOT: ${{ steps.evidence_family.outputs.family != '' }}
           EVIDENCE_COLLECTION: ${{ steps.evidence.outcome }}
           EVIDENCE_UPLOAD: ${{ steps.evidence_upload.outcome }}
           TESTED_SHA: ${{ inputs.ref || github.sha }}
