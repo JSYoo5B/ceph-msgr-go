@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/cephx"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/maps"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/session"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
@@ -39,6 +41,9 @@ type fakeMgrMon struct {
 	authTTL    time.Duration
 	authEpoch  uint32
 	onRotating func(conn *fakeMgrMonConn, n int) bool // false withholds the reply
+	// monMap overrides the minimum release and FSID of the MonMap sent on
+	// the index-th connection (from 0); nil sends release 20 and fsid.
+	monMap func(index int) (release uint8, fsid [16]byte)
 }
 
 type fakeMgrMonConn struct {
@@ -117,6 +122,10 @@ func (f *fakeMgrMon) serve(conn net.Conn) {
 	index := len(f.conns)
 	gid := f.gids[min(index, len(f.gids)-1)]
 	authTTL, authEpoch := f.authTTL, f.authEpoch
+	release, fsid := uint8(20), f.fsid
+	if f.monMap != nil {
+		release, fsid = f.monMap(index)
+	}
 	f.mu.Unlock()
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	cfg := peerConfig{fsid: f.fsid, release: 20, role: 1, clientID: gid, entity: 0x10, name: "x", services: cephx.MgrDaemonServices, authTTL: authTTL, mgrTTL: authTTL,
@@ -143,7 +152,7 @@ func (f *fakeMgrMon) serve(conn net.Conn) {
 	f.mu.Lock()
 	f.conns = append(f.conns, c)
 	f.mu.Unlock()
-	if c.push(msgr.MessageData{Type: msgr.MonMapMessage, Front: mockMonMapAuthEpoch(20, f.fsid, []msgr.Address{{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}}, 1, authEpoch)}) != nil {
+	if c.push(msgr.MessageData{Type: msgr.MonMapMessage, Front: mockMonMapAuthEpoch(release, fsid, []msgr.Address{{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}}, 1, authEpoch)}) != nil {
 		return
 	}
 	f.ready <- c
@@ -670,5 +679,116 @@ func TestMgrDaemonRetiresSessionWithUnansweredAuthRequest(t *testing.T) {
 	state := d.State()
 	if state.Err != nil || state.Identity.GlobalID != 4242 || state.Monitor.Generation != 2 {
 		t.Fatal("deadline ended the daemon or changed its identity", state)
+	}
+}
+
+// TestMgrDaemonFatalMonMapCausesEndTheDaemon sends a MonMap of another
+// cluster, one below Tentacle, or an undecodable MgrMap, on an established
+// session and on a reconnecting session's admission. Each must end the
+// daemon with that cause, without another MON session.
+func TestMgrDaemonFatalMonMapCausesEndTheDaemon(t *testing.T) {
+	other := [16]byte{2}
+	invalidMgrMap := msgr.MessageData{Type: msgr.MgrMapMessage, Front: testMgrMap(2, 99, false, nil, 4242).Front[:20]}
+	for _, test := range []struct {
+		name      string
+		reconnect bool
+		release   uint8
+		fsid      [16]byte
+		message   *msgr.MessageData
+		cause     func(error) bool
+	}{
+		{name: "established FSID", fsid: other, cause: isFSIDMismatch},
+		{name: "established release", release: 19, cause: isReleaseRejection},
+		{name: "established MgrMap", message: &invalidMgrMap, cause: isTerminalFrame},
+		{name: "reconnect FSID", reconnect: true, fsid: other, cause: isFSIDMismatch},
+		{name: "reconnect release", reconnect: true, release: 19, cause: isReleaseRejection},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newFakeMgrMon(t)
+			release, fsid := test.release, test.fsid
+			if release == 0 {
+				release = 20
+			}
+			if fsid == [16]byte{} {
+				fsid = f.fsid
+			}
+			if test.reconnect {
+				f.monMap = func(index int) (uint8, [16]byte) {
+					if index == 0 {
+						return 20, f.fsid
+					}
+					return release, fsid
+				}
+			}
+			d, err := DialMgrDaemon(context.Background(), f.options())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			c := f.next(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := d.WaitRotatingKeys(ctx, 0); err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case test.reconnect:
+				c.conn.Close()
+			case test.message != nil:
+				if err := c.push(*test.message); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				if err := c.push(msgr.MessageData{Type: msgr.MonMapMessage, Front: mockMonMapAuthEpoch(release, fsid, []msgr.Address{{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}}, 2, 0)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			state := waitDaemon(t, d, func(s MgrDaemonState) bool { return s.Err != nil })
+			if !test.cause(state.Err) {
+				t.Fatal("terminal cause", state.Err)
+			}
+			if _, err := d.NextMgrMap(ctx); !test.cause(err) {
+				t.Fatal("waits do not report the cause", err)
+			}
+			// No retry as MON loss: no session after the failing one.
+			time.Sleep(700 * time.Millisecond)
+			f.mu.Lock()
+			sessions := len(f.conns)
+			f.mu.Unlock()
+			want := 1
+			if test.reconnect {
+				want = 2
+			}
+			if sessions != want {
+				t.Fatalf("%d MON sessions, want %d", sessions, want)
+			}
+		})
+	}
+}
+
+func isFSIDMismatch(err error) bool {
+	var terminal *mgrDaemonTerminal
+	return errors.As(err, &terminal) && strings.Contains(err.Error(), "FSID mismatch")
+}
+
+func isReleaseRejection(err error) bool { return errors.Is(err, maps.ErrRelease) }
+
+func isTerminalFrame(err error) bool {
+	var terminal *mgrDaemonTerminal
+	return errors.As(err, &terminal) && errors.Is(err, msgr.ErrFrame)
+}
+
+// TestMgrDaemonIgnoresFatalCauseOfReplacedSession checks that only the
+// current MON session's cause can end the daemon.
+func TestMgrDaemonIgnoresFatalCauseOfReplacedSession(t *testing.T) {
+	replaced, current := &session.Session{}, &session.Session{}
+	d := &MgrDaemon{changed: make(chan struct{}), wake: make(chan struct{}, 1), cancel: func() {}, sessions: map[*session.Session]struct{}{}, mon: current, monReady: true}
+	d.sessionClosed(replaced, maps.ErrRelease)
+	if d.failure != nil || !d.monReady {
+		t.Fatal("a replaced session's cause changed the daemon", d.failure, d.monReady)
+	}
+	d.sessionClosed(current, maps.ErrRelease)
+	if !errors.Is(d.failure, maps.ErrRelease) || d.monReady {
+		t.Fatal("the current session's cause was discarded", d.failure, d.monReady)
 	}
 }
