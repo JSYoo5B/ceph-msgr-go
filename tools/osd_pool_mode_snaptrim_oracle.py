@@ -3,7 +3,8 @@
 Test-only; never product code. One read-only observation, sending nothing
 that changes the cluster: the native `osd dump` (the pool's snap_seq and its
 entry of the OSDMap removed_snaps_queue), one placement record and `pg query`
-of the primary of an owned object's PG (its snap_trimq and info.purged_snaps,
+of the primary of an owned object's PG, replicated or erasure-coded (its
+snap_trimq and info.purged_snaps,
 Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964,
 src/osd/PrimaryLogPG.cc do_command "query", src/osd/osd_types.cc
 pg_info_t::dump), and `rados listsnaps` of up to eight owned objects.
@@ -87,6 +88,14 @@ def query_state(document):
             "snap_trimq": snaps, "purged_snaps": purged(info.get("purged_snaps"))}
 
 
+def query_pgid(placement):
+    """The PG id the primary's `pg query` reports: an erasure-coded PG's
+    info.pgid is the spg_t of the primary's own shard, "<pgid>s<shard>"
+    (src/osd/osd_types.h spg_t operator<<); a replicated PG's has no shard."""
+    shard = placement["pg_shard"]
+    return placement["pgid"] if shard < 0 else "%ss%d" % (placement["pgid"], shard)
+
+
 @oracle_mode
 def mode_snaptrim(rados, cluster, request, out, run=subprocess.run):
     """Where removed snapshots of an owned pool are, for one object's PG.
@@ -117,7 +126,7 @@ def mode_snaptrim(rados, cluster, request, out, run=subprocess.run):
     if code != 0 or oversized is not None:
         raise RuntimeError("native pg query failed (%d): %s" % (code, status))
     state = query_state(history.strict_document(raw, MAX_QUERY))
-    if state["pgid"] != placement["pgid"]:
+    if state["pgid"] != query_pgid(placement):
         raise ValueError("pg query answered for another PG")
     listings = {}
     for name in objects:
@@ -132,4 +141,5 @@ def mode_snaptrim(rados, cluster, request, out, run=subprocess.run):
             entry["json"] = json.loads(result.stdout)
         listings[name] = entry
     return {"snap_trim": dict(state, osdmap_epoch=dump["epoch"], pool_id=descriptor["pool"], snap_seq=descriptor["snap_seq"],
-                              removed_snaps_queue=queue(dump, descriptor["pool"]), primary=placement["primary_id"], listsnaps=listings)}
+                              removed_snaps_queue=queue(dump, descriptor["pool"]), primary=placement["primary_id"],
+                              primary_shard=placement["pg_shard"], listsnaps=listings)}
