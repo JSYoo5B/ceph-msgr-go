@@ -38,9 +38,7 @@ func copyFromSyntheticReply(t *testing.T, input OSDRequest, results []int32, agg
 			binary.LittleEndian.PutUint64(u, snap)
 			binary.LittleEndian.PutUint64(u[8:], op.CopyFrom.SourceVersion)
 			clear(u[16:28])
-			if op.CopyFrom.TruncateSequence != 0 {
-				u[16] = osd.CopyFromTruncateSequence
-			}
+			u[16] = copyFromWireInput(op).Flags
 		}
 	}
 	return m

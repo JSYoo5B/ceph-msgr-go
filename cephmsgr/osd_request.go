@@ -215,8 +215,10 @@ type OSDOperation struct {
 // object the snapshot selected. TruncateSequence selects COPY_FROM2's
 // TRUNCATE_SEQ form: the destination gets TruncateSequence (nonzero) and
 // TruncateSize instead of the source's values; it is refused on OSDCopyFrom.
-// SourceFadvise carries FADVISE hints for the source read; cache-tier copy
-// flags are unsupported.
+// SourceFadvise carries FADVISE hints for the source read. SourceCloneID,
+// SourceIgnoreOverlay and SourceIgnoreCache select the copy's source-read
+// flags on both opcodes (see their fields); the cache-tier flush and
+// read-ordering copy flags are refused before submission.
 // A reply with success reports server completion of the copy as ONDISK;
 // a cancelled or failed local wait leaves the outcome unknown. A copy that
 // fails after the OSD started it reports its aggregate code with per-op
@@ -238,6 +240,21 @@ type OSDCopyFromInput struct {
 	// SourceFadvise is the FADVISE hint mask for the OSD's read of the
 	// source (librados copy_from src_fadvise_flags); the reply echoes it.
 	SourceFadvise OSDOperationFlags
+	// SourceCloneID (MAP_SNAP_CLONE) makes the OSD take SourceSnapshot as a
+	// clone id instead of resolving it to the clone that covers it. An id
+	// above the source's snapset seq still copies the head; at or below it the
+	// id must be one of the source's clones exactly, or the copy fails with
+	// ENOENT. The clone's snapshot list and the pool's snapshot removals are
+	// not checked, so a clone whose snapshots are removed but not yet trimmed
+	// is copied. It needs a SourceSnapshot other than the head.
+	SourceCloneID bool
+	// SourceIgnoreOverlay (IGNORE_OVERLAY) makes the OSD read SourcePool
+	// itself even when the pool has an overlay tier, so dirty data held in a
+	// writeback tier is not seen. SourceIgnoreCache (IGNORE_CACHE) makes a
+	// source in a cache pool read without promotion: a cache miss fails with
+	// ENOENT. Both change nothing for a pool without an overlay or cache mode,
+	// and both require ClientOptions.EnableOSDCachePools.
+	SourceIgnoreOverlay, SourceIgnoreCache bool
 }
 
 // OSDRedirectInput is the active input for OSDSetRedirect: the target head

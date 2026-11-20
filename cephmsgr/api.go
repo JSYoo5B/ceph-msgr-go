@@ -169,8 +169,10 @@ type Options struct {
 	// to OSDMap or enable placement, routing or automatic object retries.
 	EnableOSD bool
 	// EnableOSDCachePools negotiates OSD_CACHEPOOL on MON and OSD sessions.
-	// It requires EnableOSD and permits the bounded IgnoreCache request flag;
-	// it adds no cache-tier discovery, routing, promotion or replay policy.
+	// It requires EnableOSD and permits the bounded IgnoreCache request flag
+	// and the copy source cache flags (OSDCopyFromInput SourceIgnoreOverlay,
+	// SourceIgnoreCache); it adds no cache-tier discovery, routing, promotion
+	// or replay policy.
 	EnableOSDCachePools bool
 	// EnableMDSMaps opts MON sessions into the current Tentacle MDSENC map
 	// encoding before Dial. It permits explicit raw filesystem/MDS map watches;
