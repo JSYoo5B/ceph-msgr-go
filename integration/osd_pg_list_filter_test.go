@@ -15,6 +15,19 @@ import (
 // attribute equals the value; rejected objects still advance the cursor. The
 // expected set comes from native xattr observation of every seeded object.
 //
+// The filtered listing must return exactly the objects whose value equals the
+// filter value (not prefix matches); the object-class filter hello.hello
+// (cls_hello's registered PGLS filter, same input as plain) returns the same
+// set. A class outside osd_class_load_list is a known -1 (EPERM); an unknown
+// filter of a loaded class and plain input whose length runs past the end are
+// a known -22 (EINVAL). A short declared plain input length is not tested: the
+// filter input and the cursor share one stream, so the OSD reads cursor bytes
+// as the value and answers successfully, which the client cannot detect.
+//
+// Not verified: other object-class filters, the legacy unordered PGLS_FILTER,
+// and filtered listing across PG splits.
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable filtered PG listing of seeded objects in one owned pool; checked owned-pool cleanup removes it
 func TestCephOSDPGListFilterIntegration(t *testing.T) {
 	fixture := osdFixture

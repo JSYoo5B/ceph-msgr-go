@@ -15,6 +15,9 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//scenario:suite mon-mgr.aes.ip4.short-tickets-1 key=aes service=aes family=4 stress= short_tickets=1
+//scenario:suite mon-mgr.aes256k.ip6.short-tickets-1 key=aes256k service=aes256k family=6 stress= short_tickets=1
+//scenario:covers Messenger/CephX
 //fixture:shareable ticket renewals and reads only; the MGR keyring gate is a read
 func TestCephFractionalTicketRenewalIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_SHORT_TICKETS") != "1" {

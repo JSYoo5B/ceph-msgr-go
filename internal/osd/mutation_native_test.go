@@ -8,6 +8,15 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
+// TestMutationRequestMatchesIndependentNativeDecoderInput compares the
+// mutation-request-v6-all decoder fixture (see oracleBytes). Regenerate the
+// mutation-* fixtures by running tools/osd_mutation_codec_oracle.py inside a
+// disposable container of the pinned image (one MON, no MGR/OSD); it prints
+// bounded JSON with the validated front/data bytes and the
+// mutation-provenance.json content, and fails on another release or a changed
+// native export. The all-operations vector and the replies (EEXIST -17,
+// CMPEXT mismatch at byte 2 as -4095-2, ZERO normalized to TRUNCATE at 1)
+// isolate wire decoding; they claim no execution, atomicity or durability.
 func TestMutationRequestMatchesIndependentNativeDecoderInput(t *testing.T) {
 	// Independent Python field definitions and the pinned native decoder,
 	// not a native payload encoder or a self-generated Go roundtrip.

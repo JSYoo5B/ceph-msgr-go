@@ -207,6 +207,16 @@ func checkHeldRequest(s opsInFlightSnapshot, route osdFixtureOracle, gid uint64,
 // not the held one. The caller then resubmits the same operations once under
 // the original transaction, which must apply once and appear once in that log.
 //
+// A PG below min_size cannot hold this client's request: the replicated-PG
+// profiles advertise RADOS_BACKOFF, so a peered, inactive PG installs a
+// PG-wide backoff and drops the op (PrimaryLogPG.cc:1868-1893) instead of
+// queueing it in waiting_for_active. Not verified: the other PG wait queues,
+// an op held inside the EC backend after do_op, a genuinely lagging primary,
+// an orderly stop or partition, other shards' logs, and a primary-first
+// renumbered held request (the held op is on shard 0).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2requestheldatdyingprimary key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *testing.T) {
 	width := erasureK2M2

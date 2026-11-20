@@ -66,6 +66,17 @@ func sortedPGList(entries []cephmsgr.OSDPGListEntry) []cephmsgr.OSDPGListEntry {
 	return result
 }
 
+// TestCephOSDPGListIntegration compares the union of count-one Go PGNLS pages
+// for one explicitly targeted PG with an independent native complete inventory
+// of the same PG, in the default, an isolated and an empty namespace, and
+// checks local rejection of a request addressed to a different primary. Empty
+// intermediate pages are allowed; completion is the aggregate result one, not
+// the cursor sentinel or a per-operation result.
+//
+// Not verified: native and Go page boundaries (not compared), an atomic
+// inventory, an automatic pool scan, and mutation races during enumeration.
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable writes owned UUID objects and one namespace head; deletes the head and removes owned objects, checked
 func TestCephOSDPGListIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

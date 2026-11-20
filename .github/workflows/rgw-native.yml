@@ -1,21 +1,23 @@
 name: RGW native fixture run
 
 # Development-only runner for the dedicated native RGW fixture checkpoints in
-# integration/fixture (see RGW_NATIVE_VALIDATION.md). It is not the trusted
+# integration/fixture (TestRGWNative*Integration). It is not the trusted
 # `/ci run` catalog and does not gate the product. It executes the pull
 # request's own fixture code with read-only permissions, so it runs only for
 # changes that touch the RGW fixture files or this workflow, or on explicit
 # manual dispatch. A passing run is evidence for the exact tested commit only.
-# The trusted catalog rows of group rgw select the same three checkpoints
+# The trusted catalog rows with rgw_native=1 select the same checkpoints
 # through native-scenarios.yml on request or weekly; this runner remains the
-# automatic run for pull requests that change the RGW fixture files.
+# automatic run for pull requests that change the RGW fixture files. Its
+# matrix is every checkpoint the result gate of the workflow's own revision
+# verifies (tools/rgw_native_gate_<name>.py), so no list here names them.
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - 'integration/fixture/rgw_native_*'
       - 'integration/fixture/RGW_NATIVE_*'
-      - 'tools/rgw_native_gate.py'
+      - 'tools/rgw_native_gate*.py'
       - '.github/workflows/rgw-native.yml'
 
 permissions:
@@ -37,17 +39,37 @@ env:
   CEPH_IMAGE: 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9'
 
 jobs:
+  checkpoints:
+    name: List the checkpoints the result gate verifies
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tests: ${{ steps.list.outputs.tests }}
+    steps:
+      # The workflow's own revision, as the result gate below: the list
+      # imports only the gate and its checkpoint modules and runs no test.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .trusted-gate
+          persist-credentials: false
+      - name: List the checkpoints
+        id: list
+        run: |
+          set -euo pipefail
+          tests=$(python3 -c 'import json, sys; sys.path.insert(0, sys.argv[1]); import rgw_native_gate; print(json.dumps(list(rgw_native_gate.TESTS)))' .trusted-gate/tools)
+          test "$tests" != "[]"
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+
   native:
     name: ${{ matrix.test }}
+    needs: checkpoints
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        test:
-          - TestRGWNativeCheckpointIntegration
-          - TestRGWNativeMultiStripeIntegration
-          - TestRGWNativeBackendFaultIntegration
+        test: ${{ fromJSON(needs.checkpoints.outputs.tests) }}
     steps:
       # Copy the result gate from the workflow's own revision before the
       # tested checkout and its test code exist. This is a development run of
@@ -58,7 +80,10 @@ jobs:
           path: .trusted-gate
           persist-credentials: false
       - name: Preserve the trusted result gate
-        run: cp .trusted-gate/tools/rgw_native_gate.py "$RUNNER_TEMP/rgw_native_gate.py"
+        run: |
+          cp .trusted-gate/tools/rgw_native_gate.py "$RUNNER_TEMP/rgw_native_gate.py"
+          # The gate loads each checkpoint's receipt check from beside it.
+          cp .trusted-gate/tools/rgw_native_gate_*.py "$RUNNER_TEMP/"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -92,7 +117,7 @@ jobs:
           diff "$out/go-files-on-disk.txt" "$out/go-files-tracked.txt"
           go -C integration/fixture vet -mod=readonly .
           go -C integration/fixture test -mod=readonly -count=1 -run 'RGWNative' .
-          python3 -m unittest discover -s tools -p 'test_rgw_native_gate.py'
+          python3 -m unittest discover -s tools -p 'test_rgw_native_gate*.py'
       - name: Pull the pinned images
         timeout-minutes: 10
         run: |

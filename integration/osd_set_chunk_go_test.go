@@ -126,6 +126,32 @@ type setChunkGoRecord struct {
 	Unknown bool                `json:"unknown_outcome"`
 }
 
+// TestCephOSDSetChunkGoIntegration sends every SET_CHUNK, UNSET_MANIFEST and
+// source deletion from the Go client once, to the native placement's primary,
+// between natively seeded and observed objects in the two owned pools (slot 1
+// sources, slot 2 chunk targets). The expected cls_cas chunk_refs bytes are
+// built here from the native placement hashes and the owned pool ID, in
+// hobject_t order. Refusals: an absent source is -2 with per-op 0 (early
+// object-context refusal), an extent beyond the source -34, an absent target
+// -2 with per-op -115 (RefCountCallback answers through reply_op_error while
+// the op keeps -EINPROGRESS), overlaps -95; a non-zero source offset, a target
+// equal to the source and a missing WITH_REFERENCE are refused locally.
+//
+// UNSET_MANIFEST on a chunked source clears the manifest without truncating
+// the source and schedules the reference drop on the target without a
+// completion back to the caller
+// (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc), so the target is polled;
+// the kept source's new version and mtime are recorded, not predicted. A no-op
+// leaves both references and the poll expires; a deleted or emptied source
+// fails setChunkGoSourceKept.
+//
+// Not verified: other profiles, a live lost reply (the synthetic transport
+// test covers it), scoped identities, EC and tier source pools, snapshot
+// clones, overwrites of a chunked manifest, a source with several chunks or no
+// local bytes, and replay after a lost UNSET_MANIFEST reply.
+//
+//scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdsetchunkgo key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6
+//scenario:covers CLIENT to OSD
 //fixture:shareable SET_CHUNK manifests in two owned pools only; checked owned-pool cleanup removes them and restores the config
 func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 	fixture := osdFixture

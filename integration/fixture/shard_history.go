@@ -384,6 +384,8 @@ func (c *fixtureCluster) controlOSDShardHistoryRequest(ctx context.Context, out 
 	return publishAck(out, "osd-shard-history."+fields[0])
 }
 
+var _ = defineControl("osd-shard-history", frozenControlRank(47), (*fixtureCluster).controlOSDShardHistoryRequest)
+
 // dockerShardHistory implements the capture with the fixture's own Docker
 // client and the provider's pause lease, which the cluster also resumes
 // during Terminate.

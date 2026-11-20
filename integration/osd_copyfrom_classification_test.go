@@ -20,7 +20,17 @@ import (
 // Independently read a real clone and head before crossing source snapshots
 // with version assertions. This extends the separate head-version and unpinned
 // snapshot cases, without sending any unsupported copy flag to the daemon.
+// Each of the sixteen cells (opcode x clone/head x version zero, exact, lower,
+// higher) starts from its own native sentinel destination, so success must
+// replace it with the selected source and refusal must preserve it entirely.
+// A lower version gets -ERANGE and a higher one -EOVERFLOW, both with per-op
+// -EINPROGRESS. The same connections refuse FAILOK/EXCL, non-FADVISE source
+// hints, SNAPDIR, invalid truncate forms and destination read snapshots
+// known-unsent. Not verified: cache-tier flags, direct clone mapping, removed
+// snapshots and extreme version or snapshot values.
 //
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdcopyfromclassification key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
+//scenario:covers CLIENT to OSD
 //fixture:isolated allocates self-managed snapshots, leaving the fixture pool flag set
 func TestCephOSDCopyFromClassificationIntegration(t *testing.T) {
 	fixture, request := osdFixture, osdObjectRequest

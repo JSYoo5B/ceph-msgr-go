@@ -5,6 +5,14 @@ Pinned 20.2.4 7f793731f1b39eb4f465e960113d2363c311b964 (LGPL-2.1):
 OSDMonitor.cc:8593-8757 sets target counts; mgr/DaemonServer.cc:3340-3595
 advances actual counts and merges one PG at a time; PG.cc:1926-1988 drops
 pre-split-epoch ops without a reply; OSD.cc:7616-7745 dispatches explicit spg.
+A successful pool configuration command alone proves no split or merge; the
+recipe waits for every actual/target/pending PG and PGP count to agree with
+clean PGs. MOSDOp.h:622-641 prints a partially decoded envelope, so a native
+completed-operation history entry with ``reached_pg`` proves reception of a
+stale envelope only: it does not decode the APPEND, establish execution or
+non-execution. A stale request input left by a completed scope is validated
+against that scope and archived under its token before a new scope observes
+anything, so retained daemon history is never attributed to a new token.
 No upstream implementation is copied. The worker restores 8/8 actual/target/
 pending counts after timeout or uncertain configuration results. No daemon
 execution has been established merely by adding this recipe or its mock tests.

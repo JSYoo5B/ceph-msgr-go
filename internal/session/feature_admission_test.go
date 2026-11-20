@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
-	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -157,63 +154,132 @@ func TestEveryLocalRequiredFeatureIsCheckedBeforeTransportPublication(t *testing
 	}
 }
 
-func TestAdvertisedFeatureIncarnationsIncludeTheirMarkers(t *testing.T) {
-	// Active incarnations in the pinned header; the old retired meanings of
-	// these bits must never be inferred from an incomplete reused mask.
-	markers := map[uint]uint64{
-		2:  1<<28 | 1<<57, // SERVER_NAUTILUS, incarnation 3.
-		21: 1 << 57,       // SERVER_LUMINOUS and its aliases, incarnation 2.
-		28: 1 << 57,       // SERVER_MIMIC, incarnation 2.
-		49: 1 << 57,       // SERVER_SQUID, incarnation 2.
+// featureBit is one Messenger feature bit of the pinned source: its active
+// names, their incarnation, and what this repository promises when a session
+// profile advertises the bit. An empty obligation means no profile advertises
+// it.
+type featureBit struct {
+	names       string // Active DEFINE_CEPH_FEATURE names; "-" when only retired names remain.
+	incarnation int    // 0 when no name is active.
+	obligation  string
+}
+
+// tentacleFeatureBits is the closed 64-bit feature set of Ceph v20.2.4
+// (commit 7f793731f1b39eb4f465e960113d2363c311b964) include/ceph_features.h,
+// one line per bit with its active names and incarnation; retired meanings
+// are excluded. Advertising a bit changes its own line. Incarnation 1 has no
+// marker, 2 also needs bit 57 and 3 also needs bits 57 and 28, so
+// SERVER_NAUTILUS means 2+28+57, SERVER_MIMIC 28+57, SERVER_LUMINOUS and its
+// aliases 21+57 and SERVER_SQUID 49+57. These names select encodings; they do
+// not establish a peer release. Names that share a mask cannot be told apart
+// by negotiation, so a profile advertising bit 21 bounds the whole promise of
+// its aliases. The role/profile masks in TestFeatureMasksByRole, not a union
+// of these names, are what ClientIdent advertises. Admission, codec parity and
+// operation results are separate evidence; the checks below cannot prove an
+// obligation's statement correct.
+var tentacleFeatureBits = [64]featureBit{
+	0:  {"UID", 1, ""},
+	1:  {"NOSRCADDR", 1, "base header2 has no legacy source-entity field; the authenticated connection identifies the peer"},
+	2:  {"SERVER_NAUTILUS", 3, "base current-encoding marker with 28+57; no support for older families or daemon roles"},
+	3:  {"FLOCK", 1, "CephFS flock and reconnect wire fields; the consumer owns lock state, waits and interrupts"},
+	4:  {"SUBSCRIBE2", 1, "base current MON subscription encoding; a watch ACK is not authorization or delivered data"},
+	5:  {"MONNAMES", 1, "base keeps named MON-map members and exact named targets, with no silent fallback"},
+	6:  {"RECONNECT_SEQ", 1, ""},
+	7:  {"DIRLAYOUTHASH", 1, "CephFS directory layout metadata; hash and rank selection stay with the caller"},
+	8:  {"OBJECTLOCATOR", 1, "OSD locator pool, namespace, key and hash encoding; the caller supplies placement"},
+	9:  {"PGID64", 1, "MON and OSD 64-bit pool and PG; map acquisition applies no inner map and computes no placement"},
+	10: {"INCSUBOSDMAP", 1, ""},
+	11: {"PGPOOL3", 1, ""},
+	12: {"OSDREPLYMUX", 1, ""},
+	13: {"OSDENC", 1, ""},
+	14: {"SERVER_KRAKEN", 2, ""},
+	15: {"MONENC", 1, "base current MON map and address forms; envelope parsing does not prove older-release support"},
+	16: {"SERVER_OCTOPUS, OSD_REPOP_MLCOD", 3, ""},
+	17: {"OS_PERF_STAT_NS", 3, ""},
+	18: {"CRUSH_TUNABLES", 1, "MON-only admission; never placement capability on another role"},
+	19: {"OSD_PGLOG_HARDLIMIT", 2, ""},
+	20: {"SERVER_PACIFIC", 3, ""},
+	21: {"SERVER_LUMINOUS, RESEND_ON_SPLIT, RADOS_BACKOFF, OSDMAP_PG_UPMAP, CRUSH_CHOOSE_ARGS", 2, "modern OSD profiles with actual-PG framing and bounded backoff; upmap changes and broader CRUSH semantics are unverified"},
+	22: {"OSD_FIXED_COLLECTION_LIST", 2, ""},
+	23: {"MSG_AUTH", 1, "base msgr2 transcript verification and CRC/secure framing; no msgr1 transport or per-message signature"},
+	24: {"RECOVERY_RESERVATION_2", 2, ""},
+	25: {"CRUSH_TUNABLES2", 1, "MON-only admission; no CRUSH computation"},
+	26: {"CREATEPOOLID", 1, "CephFS current create/reply layout with the inode layout pool; not pool management"},
+	27: {"REPLY_CREATE_INODE", 1, "CephFS keeps the create reply's inode identity; the consumer keeps inode state"},
+	28: {"SERVER_MIMIC", 2, "base, with its bit-57 marker; supplies the incarnation-3 marker of bit 2, not a release claim"},
+	29: {"MDSENC", 1, "EnableMDSMaps adds and requires it on MON only, for current MDS maps; fresh MDS transport does not inherit it"},
+	30: {"OSDHASHPSPOOL", 1, "modern OSD profile on MON and OSD; the caller supplies raw hash and actual PG, nothing is folded or mapped"},
+	31: {"SERVER_REEF", 3, ""},
+	32: {"STRETCH_MODE", 3, ""},
+	33: {"SERVER_QUINCY", 3, ""},
+	34: {"RANGE_BLOCKLIST", 3, ""},
+	35: {"OSD_CACHEPOOL", 1, "EnableOSDCachePools on MON and OSD only; bounded IGNORE_CACHE, no flush/evict/pin/overlay policy"},
+	36: {"CRUSH_V2", 1, "MON and OSD admission once any EC rule exists; computes no placement and establishes no EC I/O"},
+	37: {"EXPORT_PEER", 1, "CephFS keeps cap export/import peer metadata; the consumer owns handoff and per-rank state"},
+	38: {"CRUSH_MSR", 2, ""}, // Not enabled by the request-v9 profile.
+	39: {"OSDMAP_ENC", 1, ""},
+	40: {"MDS_INLINE_DATA", 1, "CephFS keeps inline inode data and version; OSD I/O and file/cache policy are separate"},
+	41: {"CRUSH_TUNABLES3, OSD_PRIMARY_AFFINITY", 1, "MON-only admission; no primary selection or placement"},
+	42: {"MSGR_KEEPALIVE2", 1, "base keepalive and ACK timestamps for liveness; no execution or durability acknowledgement"},
+	43: {"OSD_POOLRESEND", 1, ""},
+	44: {"NVMEOFHA", 2, ""},
+	45: {"NVMEOFHAMAP", 2, ""},
+	46: {"OSD_FADVISE_FLAGS", 1, ""},
+	47: {"MDS_QUOTA", 1, "CephFS decodes quota and rstat pushes; the consumer enforces limits and keeps inode state"},
+	48: {"CRUSH_V4", 1, "MON-only admission; no CRUSH computation"},
+	49: {"SERVER_SQUID", 2, "only the untraced request-v9/reply-v8 OSD profile requires 49+57; no OTEL, trace acceptance or CRUSH_MSR"},
+	50: {"SERVER_TENTACLE", 2, ""}, // Deliberately absent: a Tentacle-only client need not promise every Tentacle daemon feature.
+	51: {"-", 0, ""},
+	52: {"-", 0, ""},
+	53: {"-", 0, ""},
+	54: {"-", 0, ""},
+	55: {"-", 0, ""},
+	56: {"NEW_OSDOP_ENCODING", 1, "modern OSD actual-PG request v8/v9; the base v6 profile refuses the requirement and never picks v8 from an optional peer bit"},
+	57: {"MON_STATEFUL_SUB, SERVER_JEWEL", 1, "base subscription cursor and incarnation marker; a cursor is not full history and renewal replays nothing"},
+	58: {"CRUSH_TUNABLES5, NEW_OSDOPREPLY_ENCODING, FS_FILE_LAYOUT_V2", 1, "MON admission; OSD reply-v8/v9 profiles require strict reply v8; CephFS requires current layouts; the old OSD profile never gains reply v8"},
+	59: {"FS_BTIME, FS_CHANGE_ATTR, MSG_ADDR2", 1, "base requires address vectors; CephFS also keeps birth/change metadata; other sessions are not filesystem clients"},
+	60: {"OSD_RECOVERY_DELETES", 1, ""},
+	61: {"CEPHX_V2", 1, "base CephX v2 authorizer and proof; requested tickets are not permissions or completion"},
+	62: {"RESERVED", 1, ""}, // A sentinel; never used.
+	63: {"-", 0, ""},
+}
+
+// TestFeatureBitTableMatchesTheAdvertisedProfiles binds tentacleFeatureBits
+// to handshakeFeatures through the admission profiles: the bits with an
+// obligation are exactly the union the profiles advertise, a bit with no
+// active name is never advertised, and every advertised or required mask
+// carries the incarnation markers of each of its bits. Unsupported required
+// bits, including CRUSH_MSR, SERVER_TENTACLE and reserved 62/63, are refused
+// by the admission matrix above.
+func TestFeatureBitTableMatchesTheAdvertisedProfiles(t *testing.T) {
+	markers := map[int]uint64{1: 0, 2: 1 << 57, 3: 1<<57 | 1<<28}
+	var advertised, stated uint64
+	for bit, feature := range tentacleFeatureBits {
+		if feature.names == "" || (feature.names == "-") != (feature.incarnation == 0) {
+			t.Errorf("bit %d: names %q and incarnation %d disagree", bit, feature.names, feature.incarnation)
+		}
+		if _, ok := markers[feature.incarnation]; !ok && feature.incarnation != 0 {
+			t.Errorf("bit %d: unknown incarnation %d", bit, feature.incarnation)
+		}
+		if strings.TrimSpace(feature.obligation) != "" {
+			if feature.incarnation == 0 {
+				t.Errorf("bit %d has no active name but states an obligation", bit)
+			}
+			stated |= uint64(1) << bit
+		}
 	}
 	for _, profile := range featureAdmissionProfiles() {
+		advertised |= profile.supported
 		for _, mask := range []uint64{profile.supported, profile.required} {
-			for bit, marker := range markers {
+			for bit, feature := range tentacleFeatureBits {
+				marker := markers[feature.incarnation]
 				if mask&(uint64(1)<<bit) != 0 && mask&marker != marker {
-					t.Errorf("%s mask %#x has incomplete incarnation for bit %d", profile.name, mask, bit)
+					t.Errorf("%s mask %#x lacks the incarnation %d markers of bit %d", profile.name, mask, feature.incarnation, bit)
 				}
 			}
 		}
 	}
-}
-
-func TestFeatureSemanticsCoversEveryAdvertisedBit(t *testing.T) {
-	doc, err := os.ReadFile("FEATURE_SEMANTICS.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var advertised uint64
-	for _, profile := range featureAdmissionProfiles() {
-		advertised |= profile.supported
-	}
-	var documented uint64
-	for _, line := range strings.Split(string(doc), "\n") {
-		cells := strings.Split(line, "|")
-		if len(cells) < 6 {
-			continue
-		}
-		bit, err := strconv.ParseUint(strings.TrimSpace(cells[1]), 10, 6)
-		if err != nil {
-			continue
-		}
-		mask := uint64(1) << bit
-		if documented&mask != 0 {
-			t.Errorf("duplicate feature bit %d", bit)
-		}
-		for _, cell := range cells[2 : len(cells)-1] {
-			if strings.TrimSpace(cell) == "" {
-				t.Errorf("bit %d has an empty semantic boundary", bit)
-			}
-		}
-		documented |= mask
-	}
-	if documented != advertised {
-		t.Fatalf("semantic rows missing %#x; undeclared %#x", advertised&^documented, documented&^advertised)
-	}
-	for _, link := range regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`).FindAllStringSubmatch(string(doc), -1) {
-		info, err := os.Stat(link[1])
-		if err != nil || info.IsDir() {
-			t.Errorf("missing code/contract reference %s", link[1])
-		}
+	if stated != advertised {
+		t.Fatalf("obligations missing for %#x; stated for unadvertised %#x", advertised&^stated, stated&^advertised)
 	}
 }

@@ -3,6 +3,7 @@ import copy
 import unittest
 
 import native_evidence as evidence
+import native_evidence_flock as flock
 import scenario_plan
 
 
@@ -11,7 +12,7 @@ def raw_receipt():
     for index, tid in enumerate((13, 16, 42, 45)):
         op = "acquire" if index < 2 else "unlock"
         name = "flock-shared-%s-owner-%d" % (op, index % 2)
-        calls.append({"Name": name, "Owner": evidence.FLOCK_OWNERS[index % 2], "Rule": 2, "Type": 1 if index < 2 else 4,
+        calls.append({"Name": name, "Owner": flock.OWNERS[index % 2], "Rule": 2, "Type": 1 if index < 2 else 4,
                       "TID": tid, "Outcome": "reply result 0"})
         ledger.append({"Name": name, "Op": 0x01109, "Transaction": tid, "FirstArrival": index + 1, "FirstResult": 0,
                        "Session": "restart" if index < 2 else "reconnected"})
@@ -33,8 +34,8 @@ class SharedFlockEvidenceTests(unittest.TestCase):
         for row in rows:
             ctx = evidence.context({"execution_source": "linux-runner", "tested_sha": "a" * 40, "controller_sha": "b" * 40,
                                     "run_id": 5, "attempt": 2, "matrix": dict(row["params"], scenario=row["id"])})
-            self.assertEqual(ctx["selector"], evidence.FLOCK_SELECTOR)
-        projection = evidence.flock_projection(raw_receipt())
+            self.assertEqual(ctx["selector"], flock.SELECTOR)
+        projection = flock.flock_projection(raw_receipt())
         self.assertEqual(projection["accepted_tids"], [13, 16, 42, 45])
         self.assertEqual([p["after_unlock_tid"] for p in projection["post_restart_probes"]], [None, None, 42, 45])
         self.assertNotIn("omitted", str(projection))
@@ -67,15 +68,15 @@ class SharedFlockEvidenceTests(unittest.TestCase):
                 elif change == "duplicate probe":
                     probes[3]["RequestID"] = probes[2]["RequestID"]
                 with self.assertRaises(evidence.EvidenceError):
-                    evidence.flock_projection(raw)
+                    flock.flock_projection(raw)
 
     def test_download_verifier_rechecks_order_and_sizes(self):
         for field in ("operations", "accepted_tids", "post_restart_probes"):
             with self.subTest(field=field):
-                value = evidence.flock_projection(raw_receipt())
+                value = flock.flock_projection(raw_receipt())
                 value[field][2], value[field][3] = value[field][3], value[field][2]
                 with self.assertRaises(evidence.EvidenceError):
-                    evidence.validate_flock(value)
+                    flock.validate_flock(value)
                 value[field].append(value[field][0])
                 with self.assertRaises(evidence.EvidenceError):
-                    evidence.validate_flock(value)
+                    flock.validate_flock(value)

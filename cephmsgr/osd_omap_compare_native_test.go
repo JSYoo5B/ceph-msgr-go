@@ -12,10 +12,19 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/osd"
 )
 
-// Fresh native SDK objects encoded these payloads independently of Go. The
-// synthetic peer verifies public submission, ONDISK acceptance, FAILOK and
-// known-refusal conversion. It does not establish live OMAP comparison,
-// execution, staging, durability or authentication.
+// Fresh native SDK objects encoded these payloads independently of Go: the five
+// omap-cmp-native-* vectors (regenerate with `encode-osd-omap-cmp`, see
+// runNativeEncoder in integration/fixture; provenance in
+// internal/osd/testdata/omap-cmp-native-provenance.json). The wrapper passes each
+// assertion set as a native std::map, so native byte order is the reference for
+// Go's sorting. Refusal shapes follow ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc:
+// a failed write vector takes update_log_only and gets ACK|ONDISK, a read-only
+// refusal through complete_read_ctx gets ACK|ONDISK, and the ENOENT vector is the
+// OMAP_CMP handler's own missing-object check (the no-object-context
+// reply_op_error path is not encoded). The synthetic peer verifies public
+// submission, ONDISK acceptance, FAILOK and known-refusal conversion. It does not
+// establish live OMAP comparison, execution, staging, durability or
+// authentication.
 func TestOSDOmapComparePublicResultsMatchFreshNativePayloads(t *testing.T) {
 	// Deliberately unsorted; the native request received a std::map.
 	compare := OSDOperation{Code: OSDCompareOmap, Omap: OSDOmapInput{Assertions: []OSDOmapAssertion{

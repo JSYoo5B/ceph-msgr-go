@@ -13,6 +13,17 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
+// nativeAllocHintFixture reads a fresh native vector from internal/osd/testdata.
+// The alloc-hint-native-* suite (regenerate with `encode-osd-alloc-hint`, see
+// runNativeEncoder in integration/fixture; provenance in
+// alloc-hint-native-provenance.json) has one request (two FAILOK SETALLOCHINT
+// around a WRITEFULL) and replies for success, FAILOK -EOPNOTSUPP then
+// WRITEFULL, -ENOSPC and the maximum sizes with all eleven pinned flag bits.
+// Reply shapes follow ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc: success
+// commits through the on-commit ACK|ONDISK callback; the -EOPNOTSUPP shape is an
+// older OSD's do_osd_ops default, kept per op by FAILOK; -ENOSPC is a logical
+// refusal on the update_log_only path with the unchanged user version. The pinned
+// SETALLOCHINT handler always returns 0, so no live ENOSPC source is claimed.
 func nativeAllocHintFixture(t *testing.T, name, segment string) []byte {
 	t.Helper()
 	p, err := os.ReadFile("../internal/osd/testdata/" + name + "." + segment + ".hex")

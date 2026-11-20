@@ -45,6 +45,18 @@ func sentMgrStatCommand(padding int) Command {
 // so the cell runs in CRC and secure modes alike and attributes no byte to a
 // reply.
 //
+// After a cancellation the test closes the withheld connection under a live
+// session, so the next invocation may meet the ended connection: only a
+// net.ErrClosed cause, bare or inside an unknown outcome, with no result, is
+// tolerated there (which side it falls on depends on whether the session has
+// recorded the loss), and the invocation after it must be answered. Not
+// shown: that a daemon executed the command, a mutating command ended by the
+// caller, cancellation of a partially written command or of a call still
+// waiting for admission, and a server execution count.
+//
+//scenario:row mon-mgr.aes.ip4.crc.host.t-senttellcancellation key=aes service=aes mode=crc family=4 stress= runtime=host
+//scenario:row mon-mgr.aes256k.ip4.host.t-senttellcancellation key=aes256k service=aes256k family=4 stress= runtime=host
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable sends only read-only version and pg stat commands, then cancels them or closes its own clients
 func TestCephSentTellCancellationIntegration(t *testing.T) {
 	if selected := flag.Lookup("test.run"); selected == nil || selected.Value.String() != sentTellCancellationSelector {

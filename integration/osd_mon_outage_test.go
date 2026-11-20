@@ -20,6 +20,7 @@ import (
 // the client's MON session recovers on its own, and native bytes match every
 // acknowledged write.
 //
+//scenario:covers Daemon-to-daemon
 //fixture:shareable stops and restarts the MON leader; waits for a settled election with the original quorum
 func TestCephOSDIOAcrossMonLeaderStopIntegration(t *testing.T) {
 	fixture, request := osdFixture, osdObjectRequest

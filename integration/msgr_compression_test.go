@@ -25,6 +25,17 @@ import (
 // payload, key, address or message. Live compressed frames remain
 // unverified; codec/frame tests are synthetic.
 //
+// The refusal is what the pinned source prescribes: the daemon takes its
+// compression policy from the connecting peer's entity type and has none for
+// a client, also toward an OSD (ceph/ceph/blob/v20.2.4/src/msg/async/ProtocolV2.cc
+// and ceph/ceph/blob/v20.2.4/src/msg/compressor_registry.cc). A daemon that
+// enables compression toward a client, secure-mode compression and zlib are
+// not covered. The reader decodes only the negotiation payloads and message
+// type fields; the command is attributed to a connection by its message type
+// and that of its reply.
+//
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6
+//scenario:covers Messenger/CephX
 //fixture:shareable reads MON status and OSD version over CRC connections only
 func TestCephMsgrCompressionOfferIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_CONNECTION_MODE") != "crc" {

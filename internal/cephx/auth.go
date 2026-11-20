@@ -71,6 +71,10 @@ type Client struct {
 // NewClient selects the service tickets requested in each MON exchange.
 // Zero selects AUTH/MGR. OSD and MDS are independent optional additions.
 // A requested service ticket does not establish that service transport support.
+// The selection travels in the Authenticate v3 other_keys mask on initial
+// authentication and renewal (ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxClientHandler.cc).
+// AUTH and MGR cannot be removed, and MON, CLIENT, unknown or combined service
+// identities are rejected.
 func NewClient(name string, key Key, services uint32) (*Client, error) {
 	if !strings.HasPrefix(name, "client.") || len(name) <= 7 || len(name) > 1024 || strings.ContainsAny(name, "\x00\r\n") {
 		return nil, errors.New("cephx: identity must be client.<id>")
@@ -311,6 +315,11 @@ type Authorizer struct {
 	nonce  uint64
 }
 
+// Authorizer builds a service authorizer (CephXAuthorize v2 with nonce and
+// challenge, src/auth/cephx/CephxProtocol.h at v20.2.4) for one requested MGR,
+// OSD or MDS service from its current ticket. A ticket parsed for a service that
+// was not requested enables no authorizer. An authorizer keeps the service key
+// it was built with when a renewal publishes a new ticket snapshot.
 func (c *Client) Authorizer(service uint32) (*Authorizer, error) {
 	if (service != ServiceMgr && service != ServiceOSD && service != ServiceMDS) || c.services&service == 0 {
 		return nil, ErrTicket

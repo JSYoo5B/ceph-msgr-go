@@ -48,6 +48,20 @@ func watcherOracle(t *testing.T, ctx context.Context, action string) nativeWatch
 	return result
 }
 
+// TestCephOSDListWatchersIntegration lists watchers registered by a native
+// watch3 worker with distinct timeouts: the Go result matches their cookies,
+// native global ID and timeout, and a separate rados listwatchers request
+// matches cookie, global ID and address. The CLI does not expose the timeout,
+// so it is checked against the native registration inputs. An over-budget
+// listing on an independent client fails with an uncertain outcome and its raw
+// reply, while the original client still lists both watchers (OpenOSD returns
+// the existing handle, so budget isolation needs a second client). A completed
+// native watcher scope can be started again on the same fixture.
+//
+// Not verified: read-only credentials, removal or snapshot races, and EC
+// pools.
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable the native watcher worker is stopped and owned objects are removed in checked cleanup
 func TestCephOSDListWatchersIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

@@ -21,17 +21,6 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
-// TestCephMDSCephFSRanksReplayIntegration extends the multi-rank acceptance
-// to three active ranks and a standby-replay follower of rank 0: a mutation
-// forwarded across ranks and resubmitted with its TID on each destination
-// (ResubmitForwarded), Go mutations submitted while their subtree is frozen
-// for export (the exporter's FLUSHMSG acknowledgement held), and the
-// follower's takeover of rank 0 with ReconnectSession and the resubmission of
-// requests whose journal entries never reached RADOS. Native LibCephFS, the
-// MDS op trackers and counters are the oracles. See
-// integration/fixture/MDS_CEPHFS_RANKS_FIXTURE.md and
-// MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md.
-
 // ranksHop is one MClientRequestForward of a request and the resubmission it
 // caused.
 type ranksHop struct {
@@ -149,6 +138,23 @@ type replayTakeoverEvidence struct {
 	MDSDials                 []recoveryDial
 }
 
+// TestCephMDSCephFSRanksReplayIntegration extends the multi-rank acceptance to
+// three active ranks and a standby-replay follower of rank 0: a mutation
+// forwarded across ranks and resubmitted with its TID on each destination
+// (ResubmitForwarded), Go mutations submitted while their subtree is frozen
+// for export (the exporter's FLUSHMSG acknowledgement held), and the
+// follower's takeover of rank 0 with ReconnectSession and the resubmission of
+// requests whose journal entries never reached RADOS. Native LibCephFS, the
+// MDS op trackers and counters are the oracles: destinations must print no
+// RETRY= while the source prints RETRY=3 (messages/MClientRequest.h print). A
+// CREATE that allocates an inode may get no unsafe reply
+// (Server::early_reply). Not verified: failover mid-forward, takeover of other
+// ranks and native cross-filesystem routing.
+//
+//scenario:row mds-cephfs-ranks-replay.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsranksreplay key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_ranks=1 mds_cephfs_ranks_replay=1
+//scenario:row mds-cephfs-ranks-replay.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsranksreplay key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_ranks=1 mds_cephfs_ranks_replay=1
+//scenario:covers CLIENT to MDS/CephFS
+//scenario:covers Daemon-to-daemon
 //fixture:isolated pins subtrees, pauses an MDS log and fails a rank for standby takeover; ranks not restored
 func TestCephMDSCephFSRanksReplayIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY") != "1" {

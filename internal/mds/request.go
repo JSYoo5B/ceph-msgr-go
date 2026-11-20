@@ -15,9 +15,13 @@ import (
 // head) and include/filepath.h. LGPL-2.1 sources; no code copied.
 
 const (
-	ClientRequestMessage        uint16 = 24
+	// ClientRequestMessage is sent with header 6/1; its decoder exists for
+	// verification only.
+	ClientRequestMessage uint16 = 24
+	// ClientRequestForwardMessage is received with header exactly 1/1.
 	ClientRequestForwardMessage uint16 = 25
-	ClientReplyMessage          uint16 = 26
+	// ClientReplyMessage is received with header exactly 1/1.
+	ClientReplyMessage uint16 = 26
 
 	// RequestHeadVersion is CEPH_MDS_REQUEST_HEAD_VERSION; it requires the
 	// MDS to advertise CEPHFS_FEATURE_32BITS_RETRY_FWD and HAS_OWNER_UIDGID.

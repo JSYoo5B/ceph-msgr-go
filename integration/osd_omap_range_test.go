@@ -14,6 +14,19 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+// TestCephOSDOmapRangeRemovalIntegration mirrors each Go OMAPRMKEYRANGE
+// [begin, end) on a separate native object with rados_write_op_omap_rm_range2
+// and the same mtime, and compares aggregates, final inventories and the
+// header: binary forward ranges, an empty range (which still executes and
+// advances version and mtime), an empty begin, an absent object (-2) and
+// FAILOK before a committed SETVALS. Go refuses a reversed range before
+// transmission.
+//
+// Not verified: the DeleteRange path above rocksdb_delete_range_threshold
+// keys, the EC-pool EOPNOTSUPP refusal, response loss or SIGKILL, and
+// read-only credentials.
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable edits owned UUID objects and native mirrors in the fixture pool; checked cleanup removes them
 func TestCephOSDOmapRangeRemovalIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

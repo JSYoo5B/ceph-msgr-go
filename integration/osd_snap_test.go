@@ -20,6 +20,24 @@ import (
 // objects. Snap ids are allocated natively (a MON pool operation outside the
 // product) and the shared fixture pool enters self-managed snapshot mode.
 //
+// Every Go case has a native twin through
+// rados_ioctx_selfmanaged_snap_set_write_ctx, rados_ioctx_snap_set_read,
+// rados_ioctx_selfmanaged_snap_rollback and ORDERSNAP; listings are compared
+// with rados listsnaps and with ceph-dencoder of the raw Go LIST_SNAPS bytes.
+// Checked server behavior: a read above the snapset seq returns the head; an
+// ORDERSNAP write under an older context is -85 with state unchanged; ROLLBACK
+// with zero mtime keeps the head mtime, ROLLBACK to an absent snap only
+// advances the version, ROLLBACK of an absent object is 0 and leaves it
+// absent, and ROLLBACK to a snap before the object existed deletes it; DELETE
+// under a context leaves a whiteout head whose clones stay readable.
+//
+// Later tests on the shared pool send an empty SnapContext to objects without
+// a snapset, so they create no clones; pool snapshots on this pool would be
+// refused by the MON. Not verified: response loss or SIGKILL during ROLLBACK
+// or a cloning write, ROLLBACK refused with -EBUSY by a watcher, snaps queued
+// for trimming, read-only credentials and EC.
+//
+//scenario:covers CLIENT to OSD
 //fixture:isolated allocates self-managed snaps on the shared fixture pool, leaving its selfmanaged_snaps flag set
 func TestCephOSDSnapshotIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

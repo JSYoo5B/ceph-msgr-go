@@ -13,6 +13,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//scenario:covers Messenger/CephX
 //fixture:shareable sends pg stat reads and closes its own client during the MGR handshake; changes nothing in the cluster
 func TestCephCloseDuringManagerHandshakeIntegration(t *testing.T) {
 	observer, ctx := fixtureClient(t, 30*time.Second)

@@ -13,6 +13,14 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+// TestCephOSDXattrNamespacesIntegration writes the same bare object name in
+// two caller-prepared namespaces (one non-ASCII) with separate native routing;
+// every Go operation matches native snapshots and leaves the peer namespace
+// and the default-namespace object unchanged. Placement comes from
+// rados_mon_command osd map and osd dump, because the native CLI rejects the
+// non-ASCII namespace with EINVAL. The client adds no placement
+// calculation or namespace selection.
+//
 //fixture:shareable creates two namespaced objects in the fixture pool and deletes them, natively verifying absence
 func TestCephOSDXattrNamespacesIntegration(t *testing.T) {
 	c, _, base, original := osdFixture(t)

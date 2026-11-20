@@ -19,6 +19,8 @@ import (
 // is its transaction identity; request-side shard/identity metadata must remain
 // available to the caller rather than being fabricated from the reply.
 // Signed aggregate/per-operation results and completion flags remain raw.
+// Its tail is a boolean followed by a redirect structure only when true; the
+// unconditional v6 redirect structure is not accepted as v8.
 func DecodeReplyV8(m msgr.MessageData, limit uint32) (Reply, error) {
 	var r Reply
 	if limit == 0 {

@@ -15,6 +15,15 @@ import (
 // vector. Without them a replica treats the request as misdirected and never
 // answers. Native observation supplies the expected bytes and attributes.
 //
+// One vector of Read, Stat and GetXattr is read from each acting-set member
+// with each flag; bytes, the attribute and the receipt user version must equal
+// the native values. A read without a flag at a replica gets no reply within
+// the wait, and a write vector carrying a flag is refused before submission.
+// Not verified: EC replica reads, reads racing an in-flight write, other read
+// opcodes, MemStore, and automatic replica selection or EAGAIN redirect to the
+// primary (the caller decides).
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable balanced and localized reads in one owned pool; checked owned-pool cleanup removes it and restores the config
 func TestCephOSDReplicaReadIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" {

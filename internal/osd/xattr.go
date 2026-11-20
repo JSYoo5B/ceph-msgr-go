@@ -27,6 +27,26 @@ const (
 // XattrInput is a request union variant; Data holds the SET/CMP operand.
 // MaxOutputBytes is a positive local GET/GETALL budget, absent from the wire.
 // The OSD cannot be asked to truncate its reply to this local budget.
+//
+// The union is name_len u32, value_len u32, comparison op u8 and mode u8,
+// then zeros; the input is raw name followed by value. The OSD prefixes user
+// names with '_', so an empty name would reach OI_ATTR "_", the internal
+// object_info attribute, and BlueStore looks names up through c_str(), so an
+// embedded NUL would alias another name (src/osd/osd_types.h,
+// src/os/bluestore/BlueStore.cc). Both are refused before transmission. A
+// user name "_foo" is legitimate and is not stripped. SETXATTRS and
+// RESETXATTRS have no PrimaryLogPG handler and stay unsupported. Name and
+// value size limits (osd_max_attr_name_len, osd_max_attr_size, the store
+// maximum) are server configuration and come back as -ENAMETOOLONG or
+// -EFBIG; only the frame bounds the client side.
+//
+// CMPXATTR compares the caller operand on the left with the stored value:
+// true is a positive per-op result 1, false is -ECANCELED. A missing attribute
+// compares as empty (STRING) or zero (U64), unlike a missing object. U64
+// parsing of the stored decimal text is the server's, including its
+// treatment of numeric prefixes and overflow (-EINVAL). Xattr reads after a
+// staged SET, RM or DELETE in the same vector are refused because the read
+// handlers consult committed attributes. A SET can create a missing head.
 type XattrInput struct {
 	Name                         string
 	ComparisonOp, ComparisonMode uint8

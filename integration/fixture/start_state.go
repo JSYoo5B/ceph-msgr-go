@@ -21,8 +21,31 @@ import (
 )
 
 // The start-state check compares the running fixture with the snapshot the
-// fixture recorded once it was ready, just before its control loop started.
-// See FIXTURE_START_STATE.md for each condition and its native source.
+// fixture recorded once it was ready, just before its control loop started,
+// so that one test's leftover state never becomes the next test's
+// precondition. The snapshot is taken after every preparation step of the
+// profile has settled and before any control request; a snapshot failure does
+// not fail the fixture but makes every later check fail with start-snapshot.
+// Its evidence copy, start-state-snapshot.json, is owner-readable only and
+// redacts values whose option name contains key, secret, password or token.
+//
+// A test requests the check with the control `verify start-state [seconds]`
+// (budget 1 to 300 s, default 30 s); a fixture sequence runs it itself after
+// every test. It polls once a second until no condition fails or the budget
+// ends, and writes the last poll to start-state.json. A poll cut short by the
+// budget keeps the failures of a read's latest completed result. A failed
+// check is a result, not a fixture failure, so the caller can restore and
+// check again.
+//
+// Limits: only the daemons of the snapshot are read (an MDS, RGW or mirror
+// daemon the fixture does not record as owned is not); pools are compared by
+// name and flags only, not size, PG count, application or objects; auth
+// entities, blocklist, upmap and primary_temp are not compared. pg-clean reads
+// the MGR's PG map, which lags a change until the OSDs report it, so a check
+// started at once can pass before the map shows it. A restarted daemon loses
+// its runtime overrides; overrides an OSD sets itself while starting (the
+// mClock osd_*_sleep options, OSD::maybe_override_sleep_options_for_qos in
+// ceph/ceph/blob/v20.2.4/src/osd/OSD.cc) come back once it has started.
 const (
 	startStateDefaultBudget = 30 * time.Second
 	startStateMaxBudget     = 300 * time.Second
@@ -36,26 +59,37 @@ const (
 )
 
 // Condition names reported by the start-state check. They are stable: tests
-// and the grouped runner match on them.
+// and the grouped runner match on them. Each is computed from one read, named
+// after the requirement.
 const (
-	startConditionSnapshot         = "start-snapshot"
-	startConditionObservation      = "observation"
-	startConditionDaemonRunning    = "daemon-running"
-	startConditionContainerState   = "container-state"
-	startConditionMonQuorum        = "mon-quorum"
-	startConditionMgrAvailable     = "mgr-available"
-	startConditionOSDSet           = "osd-set"
-	startConditionOSDUp            = "osd-up"
-	startConditionOSDIn            = "osd-in"
-	startConditionPGClean          = "pg-clean"
-	startConditionPGTemp           = "pg-temp"
-	startConditionPool             = "pool"
-	startConditionPoolFlags        = "pool-flags"
-	startConditionErasureProfile   = "erasure-code-profile"
-	startConditionCrushRule        = "crush-rule"
-	startConditionOSDFlags         = "osd-flags"
-	startConditionConfig           = "config"
-	startConditionDaemonConfig     = "daemon-config"
+	startConditionSnapshot    = "start-snapshot"
+	startConditionObservation = "observation" // a read failed or did not decode
+	// Docker list: every MON, MGR, OSD and MDS container exists and runs.
+	startConditionDaemonRunning = "daemon-running"
+	// Docker list: the oracle client and control container keep their state.
+	startConditionContainerState = "container-state"
+	startConditionMonQuorum      = "mon-quorum"    // ceph status quorum_names
+	startConditionMgrAvailable   = "mgr-available" // ceph status mgrmap.available
+	startConditionOSDSet         = "osd-set"       // ceph osd dump osds[].osd
+	startConditionOSDUp          = "osd-up"        // ceph osd dump osds[].up
+	startConditionOSDIn          = "osd-in"        // ceph osd dump osds[].in
+	// ceph status pgmap: every PG exactly active+clean, statistics present.
+	startConditionPGClean        = "pg-clean"
+	startConditionPGTemp         = "pg-temp"              // ceph osd dump pg_temp empty
+	startConditionPool           = "pool"                 // ceph osd dump pool names
+	startConditionPoolFlags      = "pool-flags"           // ceph osd dump flags_names
+	startConditionErasureProfile = "erasure-code-profile" // erasure-code-profile ls
+	startConditionCrushRule      = "crush-rule"           // osd crush rule ls
+	startConditionOSDFlags       = "osd-flags"            // ceph osd dump flags
+	startConditionConfig         = "config"               // ceph config dump entries
+	// daemon-config compares the `override` level of admin socket
+	// `config diff` (ceph/ceph/blob/v20.2.4/src/common/config.cc). Tell,
+	// MCommand and admin socket `config set` and injectargs all set that
+	// level, so a leftover of any of them fails here; the `mon` level follows
+	// the database that `config` compares.
+	startConditionDaemonConfig = "daemon-config"
+	// Docker list: every org.testcontainers=true container is in the start
+	// set. A replaced daemon container fails this and daemon-running.
 	startConditionForeignContainer = "foreign-container"
 )
 
@@ -980,3 +1014,5 @@ func (c *fixtureCluster) controlStartStateRequest(ctx context.Context, out strin
 	}
 	return publishAck(out, "start-state-verify."+fields[0])
 }
+
+var _ = defineControl("start-state", frozenControlRank(21), (*fixtureCluster).controlStartStateRequest)

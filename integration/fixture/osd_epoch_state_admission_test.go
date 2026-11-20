@@ -24,7 +24,6 @@ var osdEpochStateSelectors = []string{
 // selected; the declaration on any other topology is refused, and so is the
 // selector without the declaration on the four-OSD topology.
 func TestOSDEpochStateControlsAdmissionOverTheCatalog(t *testing.T) {
-	bindings := ciWorkflowBindings(t)
 	rows := ciRepositoryCatalog(t)
 	for _, selector := range osdEpochStateSelectors {
 		declaring := 0
@@ -47,11 +46,11 @@ func TestOSDEpochStateControlsAdmissionOverTheCatalog(t *testing.T) {
 			for _, capabilities := range []string{capOSDErasureWidth.name, ""} {
 				params := maps.Clone(row.Params)
 				params["test_run"], params["capabilities"] = selector, capabilities
-				env := rowEnvironment(params, bindings)
+				env := ciRowEnvironment(t, params)
 				p, err := loadProfile(func(k string) string { return env[k] })
 				// The row's own topology admits osd-erasure-width when the row
 				// itself loads on the four-OSD erasure-capacity topology.
-				own := rowEnvironment(row.Params, bindings)
+				own := ciRowEnvironment(t, row.Params)
 				rowProfile, rowErr := loadProfile(func(k string) string { return own[k] })
 				width := rowErr == nil && rowProfile.osdTopology().erasureCapacity
 				declared := capabilities != ""

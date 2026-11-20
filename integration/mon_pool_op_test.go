@@ -22,7 +22,13 @@ import (
 // MPoolOp is the only route to self-managed snapshot ids (no CLI command
 // exists) and also creates and removes pool snapshots by name. The independent
 // native client observes the OSDMap pool state and uses the ids end to end.
+// Go and native allocations draw from one sequence, a Go-allocated id serves
+// as a Go write's SnapContext that native reads honour, removal makes the OSDs
+// trim the clone, and a client pinned to each MON (peons forward to the
+// leader) gets consecutive ids. Refusals (mode mismatch, absent pool, missing
+// capability) are known signed codes that leave the native pool unchanged.
 //
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable pool and self-managed snapshots in owned pools only; checked owned-pool cleanup removes the pools
 func TestCephMonPoolOpIntegration(t *testing.T) {
 	fixture := osdFixture
@@ -297,6 +303,7 @@ func TestCephMonPoolOpIntegration(t *testing.T) {
 // hides it: the native pool shows the id consumed, and the next allocation
 // returns the id after it.
 //
+//scenario:covers Messenger/CephX
 //fixture:shareable client-side lost reply of a snapshot allocation in an owned pool; checked owned-pool cleanup removes it
 func TestCephMonPoolOpLostReplyIntegration(t *testing.T) {
 	fixture := osdFixture
@@ -388,6 +395,7 @@ func TestCephMonPoolOpLostReplyIntegration(t *testing.T) {
 // election and completes once on the new leader: exactly one id is consumed.
 // The stopped MON is restarted and the election settled on every path.
 //
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable stops and restarts the MON leader and waits for a settled full quorum; checked owned-pool cleanup removes its pool
 func TestCephMonPoolOpLeaderStopIntegration(t *testing.T) {
 	fixture := osdFixture
@@ -524,6 +532,7 @@ func TestCephMonPoolOpLeaderStopIntegration(t *testing.T) {
 // osd write. The test-only identity is created and removed through MON auth
 // commands on the disposable fixture.
 //
+//scenario:covers Messenger/CephX
 //fixture:isolated creates an auth entity before registering its removal and does not confirm the auth rm
 func TestCephMonPoolOpScopedCapsIntegration(t *testing.T) {
 	fixture := osdFixture

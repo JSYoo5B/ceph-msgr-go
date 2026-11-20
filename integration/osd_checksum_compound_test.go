@@ -92,6 +92,17 @@ func checksumCompoundNativeOnce(t *testing.T, ctx context.Context, name, which s
 	return n, map[string]any{"receipt": n, "sha256": fmt.Sprintf("%x", sha256.Sum256(raw)), "bytes": len(raw)}
 }
 
+// Ten read-only compounds of CHECKSUM with READ, STAT, ASSERT_VER and CMPEXT
+// on an immutable owned head are compared with one native rados_read_op each.
+// Earlier checksum Values survive a later failing guard; the first negative
+// result ends the vector (PrimaryLogPG.cc do_osd_ops at v20.2.4) and the suffix
+// stays empty. After each negative case the same connection serves a fresh
+// READ. The C API is not a raw reply observer: ASSERT_VER has no prval, an
+// untouched STAT can decode to -EIO natively while Go keeps raw zero, and the
+// returned CHECKSUM extent is a Go-only wire observation. Not verified live:
+// snapshot compounds, EC, extra flags, CALL, mutation and faults.
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable read-only checksum vectors on its owned objects; checked omap-write cleanup removes them
 func TestCephOSDChecksumCompoundIntegration(t *testing.T) {
 	fixture := osdFixture

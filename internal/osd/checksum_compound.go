@@ -8,6 +8,16 @@ import (
 
 // ChecksumCompound identifies only the new multi-operation checksum subset.
 // Standalone checksum requests and every other vector retain their own policy.
+// The subset admits CHECKSUM, READ, STAT, ASSERT_VER and CMPEXT on the head of
+// a replicated primary, without FAILOK, CALL, mutations, snapshots, replica
+// reads, EC placement or resubmission. The summed CHECKSUM, READ and CMPEXT
+// lengths must fit the frame limit, so a small digest output cannot multiply
+// the logical read bound. Tentacle stops at the first ordinary negative
+// operation and keeps earlier output (osd/PrimaryLogPG.cc do_osd_ops and
+// execute_ctx), so the aggregate must equal that result and later operations
+// must be untouched; a missing-object refusal may leave every per-op result
+// zero, which is kept without attributing an executed prefix. Checksum values
+// are decoded only after the whole reply validates.
 func ChecksumCompound(ops []Operation) bool {
 	if len(ops) < 2 {
 		return false

@@ -122,7 +122,7 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
             self.assertEqual(len([row for row in self.rows if row.get("test_run") == selector]), 1)
 
     def test_cache_pool_rows_require_explicit_opt_in_and_only_the_declared_test(self):
-        self.assertIn("CEPH_MSGR_TEST_OSD_CACHE_POOLS: ${{ matrix.osd_cache_pools || '0' }}", self.workflow)
+        self.assert_forwarded("osd_cache_pools", "CEPH_MSGR_TEST_OSD_CACHE_POOLS", "0")
         self.assertIn("matrix.osd_cache_pools == '1' && 'OSD-cache-pools ' || ''", self.workflow)
         rows = [row for row in self.rows if row.get("osd_cache_pools") == "1"]
         common = {

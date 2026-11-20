@@ -8,7 +8,7 @@
 # - provider: ceph-testcontainers-go v0.5.0 capture.Start with CAPTURE_IMAGE
 #   (pinned by digest) in the MON's network namespace. A session is bound to
 #   one container generation, so the MON restart splits it into two segments
-#   with one declared gap (see README.md, "Provider capture").
+#   with one declared gap (coverage.go reads the segment manifest).
 # Both are analyzed, and a parity step compares the analyses. PRIMARY below
 # selects which capture the top-level reports and the expectation gate use.
 # The disposable client key stays in a private work directory and is never
@@ -21,9 +21,8 @@ capture_image=$4
 case "$mode" in crc) octet=10 ;; secure) octet=11 ;; *) echo "mode must be crc or secure" >&2; exit 2 ;; esac
 case "$capture_image" in *@sha256:*) ;; *) echo "the capture helper image must be pinned by digest" >&2; exit 2 ;; esac
 # The provider capture is the primary evidence: its analyses had full parity
-# with the runner-host reference in both modes (CAPTURE_ANALYSIS.md, "Provider
-# capture parity"). Every run must show full parity again (-require-full);
-# the reference stays as the checked comparison.
+# with the runner-host reference in both modes. Every run must show full
+# parity again (-require-full); the reference stays as the checked comparison.
 primary=provider
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)

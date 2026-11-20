@@ -49,8 +49,16 @@ import (
 // Go-side reads. Native librbd, librados, `osd blocklist ls` and `rbd
 // object-map check` are the independent oracles. Every lock, notify and
 // object-map encoding is the test-only consumer code of rbd_lock_test.go. The
-// product is unchanged. See
-// integration/fixture/RBD_LOCK_OWNER_LOSS_VALIDATION.md.
+// product is unchanged. The break sequence follows v20.2.4 librbd
+// managed_lock/BreakRequest.cc (an owner is alive while a watcher has the
+// locker's address and handle; otherwise blocklist, then lock.break_lock), and
+// a blocklisted connection gets -EBLOCKLISTED (108) from PrimaryLogPG::do_op.
+// The fence covers one connection, not the Go client: without EnableCephFS
+// every OSD connection has its own address nonce, and a later connection of
+// the same client is still served. A consumer that needs librbd's fencing
+// must send an owner's writes on the connection that sent lock.lock. Not
+// covered: forced breaks, blocklist removal or expiry, lost break replies,
+// owners with journaling or snapshots, and multi-OSD acting sets.
 
 const (
 	// rbdLockOwnerLossWatchTimeout is the header watch timeout of every Go
@@ -1025,6 +1033,9 @@ func waitRBDLockNotification(ctx context.Context, r *rbdLockResponder, from int,
 	}
 }
 
+//scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-lock-owner-loss
+//scenario:row rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-lock-owner-loss
+//scenario:covers RBD underlying I/O
 //fixture:isolated kills the native lock owner and blocklists its address; removed only at fixture teardown
 func TestCephRBDLockOwnerLossIntegration(t *testing.T) { runRBDLockOwnerLoss(t, false) }
 
@@ -1042,9 +1053,18 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) { runRBDLockOwnerLoss(t, 
 // connection get the same answer. A native observation follows. The OSD's
 // own list of operations in flight, read by the fixture before and after it
 // raised the epoch, shows both requests held since before the handoff and
-// gone afterwards. See
-// integration/fixture/RBD_LOCK_OWNER_LOSS_PENDING_VALIDATION.md.
+// gone afterwards. OSD::ms_fast_dispatch holds a request naming an unknown
+// epoch, and everything after it on that session, for a client without
+// CEPH_FEATURE_RESEND_ON_SPLIT (ceph/ceph/blob/v20.2.4/src/osd/OSD.cc); the
+// blocklist is consulted only when do_op reaches it. A client holds one
+// connection per OSD, so nothing it sends to that OSD overtakes the held
+// requests. Not covered: requests held for other reasons or already executing
+// when fenced, the answer to the canceled request, and a held request on a
+// connection other than the one that took the lock.
 //
+//scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerlosspending key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-lock-owner-loss,rbd-lock-pending-requests
+//scenario:row rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerlosspending key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-lock-owner-loss,rbd-lock-pending-requests
+//scenario:covers RBD underlying I/O
 //fixture:isolated blocklists the lock owner, toggles pool flag nodeep-scrub; blocklist removed only at fixture teardown
 func TestCephRBDLockOwnerLossPendingIntegration(t *testing.T) { runRBDLockOwnerLoss(t, true) }
 

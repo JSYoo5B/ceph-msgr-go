@@ -155,6 +155,19 @@ func setChunkRefsEncoding(count int, name string, hash uint32, pool int64) []byt
 // count before and after; deleting the source releases both references and
 // the target. No product client sends SET_CHUNK.
 //
+// Expected codes are restated here independently of the oracle's gates: absent
+// source -2, zero length -22, out-of-range extent -34, missing WITH_REFERENCE
+// -95, absent target -2, an identical or partially overlapping interval -95.
+// The target's user version is only required to advance, because it follows
+// the PG's last user version, which a failed write in the same single-PG pool
+// may also have advanced. Not verified: a failed reference increment at a
+// non-zero source offset (a source-derived hang hazard, deliberately not
+// exercised), snapshot clones and their reference accounting, chunk overwrite,
+// native resend of an uncertain SET_CHUNK, EC, tier and redirect-manifest
+// sources, and scoped identities.
+//
+//scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdsetchunknative key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6
+//scenario:covers CLIENT to OSD
 //fixture:isolated its native SET_CHUNK checkpoint is selectable once per fixture and its receipt is never overwritten
 func TestCephOSDSetChunkNativeIntegration(t *testing.T) {
 	fixture := osdFixture

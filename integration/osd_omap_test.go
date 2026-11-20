@@ -223,6 +223,23 @@ func decodeOmapRead(t *testing.T, code cephmsgr.OSDOpcode, data []byte) ([]omapN
 	return entries, more
 }
 
+// TestCephOSDOmapReadsIntegration compares Go OMAPGETKEYS, OMAPGETVALS and
+// OMAPGETVALSBYKEYS pages with an independent native C inventory of one owned
+// object (empty, NUL and non-UTF-8 keys, empty and binary values), with
+// complete native state observed before and after every Go read. Count zero
+// reports more=true; exact and final pages report more=false.
+//
+// A missing object is aggregate -2 for both clients, while the raw Go per-op
+// result is 0 with no output and the native C callbacks report -5: Objecter
+// decodes empty output for a nonnegative per-op wire result and turns a buffer
+// error into EIO (ceph/ceph/blob/v20.2.4/src/osdc/Objecter.h), so -5 is not a
+// server result. Both observations are kept as observed.
+//
+// Not verified: NUL cursor and prefix inputs in a live comparison (the native
+// C oracle takes NUL-terminated strings), configured entry and byte caps, OMAP
+// permissions, and EC or snapshot reads.
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable reads OMAP of its owned UUID object; checked osd-omap cleanup removes it
 func TestCephOSDOmapReadsIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

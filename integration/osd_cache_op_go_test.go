@@ -225,6 +225,23 @@ func cacheOpGoLostFlushUnknown(reply cephmsgr.OSDReply, err error, globalID uint
 	return nil
 }
 
+// TestCephOSDCacheOpGoIntegration sends each CACHE_* operation once from Go to
+// the native primary of the owned writeback tier (no overlay, hit set or
+// snapshots). Expected: dirty EVICT -EBUSY; pinned FLUSH/TRY_FLUSH/EVICT
+// -EPERM; FLUSH writes B to the base and clears dirty; clean EVICT removes the
+// tier head; an absent head gives -ENOENT with a zero per-op result for the
+// flush/evict family, because the do_op object lookup refuses before those
+// handlers. A successful reply must carry ONDISK: complete_read_ctx and the
+// commit callback both add ACK+ONDISK, while an early error reply only echoes
+// the requested bits (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc,
+// src/osd/OSD.cc). ONDISK is a terminal minimum, not proof that a flush wrote
+// data; the native observer supplies that. Not verified: other profiles,
+// multiple OSDs, EC tiers, overlays, the tier agent, a live EAGAIN or EBUSY
+// try-flush, raw pin or dirty bits, a lost reply of any other operation, and
+// crash durability.
+//
+//scenario:row osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcacheopgo key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 osd_cache_pools=1 capabilities=exclusive-osd-cache-pools
+//scenario:covers CLIENT to OSD
 //fixture:shareable seeds, pins and flushes its own heads in the cache pools; checked finish deletes them and confirms absence
 func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_CACHE_POOLS") != "1" {

@@ -345,6 +345,9 @@ func (c *Client) openHandshake(ctx context.Context, endpoint string, address msg
 	if freshMDSRank != nil {
 		return session.HandshakeFreshMDS(ctx, conn, address, *freshMDSRank, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout)
 	}
+	// Any other connection gets its own address nonce, so a blocklist entry
+	// for one OSD connection's address (as a librbd lock break adds from a
+	// lock record) fences that connection only.
 	return session.Handshake(ctx, conn, address, role, id, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout)
 }
 
@@ -383,7 +386,9 @@ type monTarget struct {
 // listed, that target moves to the front: routine renewal re-authenticates to
 // the MON that already admitted this GlobalID, instead of first spending the
 // setup timeout on an unreachable earlier seed while the rotating keys behind
-// the reclaim proof age. The other targets keep their order as fallbacks.
+// the reclaim proof age (native Tentacle refuses a reclaim whose rotating AUTH
+// secret expired with -13). The other targets keep their order as fallbacks.
+// Every attempt presents the same GlobalID and current AUTH ticket.
 func monTargets(seeds []string, learned []msgr.Address, admitted monTarget, healthy bool) ([]monTarget, []error) {
 	var failures []error
 	targets := make([]monTarget, 0, len(seeds)+len(learned))
@@ -541,6 +546,10 @@ func (c *Client) publishMonitorAdmission(s *session.Session, attempt monAttempt,
 		// MON's lock. This handshake may have used pre-wipe service
 		// keys; its MonMap reply now proves the refresh, so discard
 		// the tickets and authenticate to the same MON once more.
+		// Source: ceph/ceph/blob/v20.2.4/src/mon/AuthMonitor.cc (the wipe
+		// and epoch bump commit together), MonmapMonitor.cc (the MonMap
+		// push during refresh) and Monitor.cc (handshakes take only
+		// auth_lock; a native MonClient renews in-session under mon.lock).
 		return monPublication{}, errAuthRefreshBarrier
 	}
 	if (attempt.knownEpoch && c.monMap.AuthEpoch > attempt.authEpoch) || admitted.AuthEpoch < c.monMap.AuthEpoch {

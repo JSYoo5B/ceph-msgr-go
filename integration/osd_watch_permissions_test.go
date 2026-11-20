@@ -17,6 +17,7 @@ import (
 // and no registration, while its NOTIFY reaches the admin client's watch and
 // completes with that watcher's ACK.
 //
+//scenario:covers Messenger/CephX
 //fixture:shareable watches and notifies an owned object with existing keys; unwatches, and checked cleanup removes it
 func TestCephOSDWatchPermissionsIntegration(t *testing.T) {
 	modern := isReplicatedPGFixtureProfile()

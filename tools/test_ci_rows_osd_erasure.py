@@ -14,7 +14,7 @@ class OSDErasureRowsTest(ci_row_catalog.RowsTestCase):
     def test_four_osd_topology_selects_only_the_k2m2_erasure_scenarios(self):
         # The topology travels in the already-forwarded osd_replicas input, so
         # the trusted default-branch workflow needs no new parameter.
-        self.assertIn("CEPH_MSGR_TEST_OSD_REPLICAS: ${{ matrix.osd_replicas || '1' }}", self.workflow)
+        self.assert_forwarded("osd_replicas", "CEPH_MSGR_TEST_OSD_REPLICAS", "1")
         for row in self.rows:
             self.assertIn(row.get("osd_replicas", "1"), {"1", "3", "4"})
         rows = [row for row in self.rows if row.get("osd_replicas") == "4"]

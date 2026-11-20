@@ -126,7 +126,7 @@ func TestRBDJournalRequestIsClosedAndOrdered(t *testing.T) {
 }
 
 // The native tests that declare the RBD journal and lock capabilities
-// (catalog.d/rbd.json).
+// (their //scenario:row declarations).
 const (
 	rbdJournalLostAppendSelector    = "^TestCephRBDJournalLostAppendReplyIntegration$"
 	rbdJournalPrimaryChangeSelector = "^TestCephRBDJournalPrimaryChangeIntegration$"
@@ -140,7 +140,7 @@ func rbdSelectionProfile(t *testing.T, selector string) profile {
 	t.Helper()
 	for _, row := range ciRepositoryCatalog(t) {
 		if row.Params["test_run"] == selector && row.Params["rbd"] == "1" {
-			p, err := ciProfile(row, ciWorkflowBindings(t))
+			p, err := ciProfile(row)
 			if err != nil {
 				t.Fatal(row.ID, err)
 			}

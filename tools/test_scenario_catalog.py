@@ -4,257 +4,172 @@ import os
 import subprocess
 import tempfile
 import unittest
-from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import scenario_catalog as catalog
+import scenario_declarations
 import scenario_plan
 
-
-def row(sid, group):
-    return {"id": sid, "group": group, "params": {"key": "aes", "service": "aes", "family": "4"}}
+WORKFLOW = "jobs:\n  unit:\n    if: contains(fromJSON(inputs.matrix).fixed, 'unit')\n    runs-on: x\n"
 
 
-def plan(path, selector):
-    out, err = io.StringIO(), io.StringIO()
-    with redirect_stdout(out), redirect_stderr(err):
-        code = scenario_plan.main(["plan", "--catalog", str(path), "--select", selector])
-    return code, out.getvalue(), err.getvalue()
-
-
-class FragmentTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.dir = Path(self.tmp.name) / "catalog.d"
-        self.dir.mkdir()
-        self.write(catalog.INDEX, {"version": 1, "fixed_jobs": [{"id": "race", "job": "race"}]})
-        self.write("osd.json", {"scenarios": [row("osd.b", "osd"), row("osd.a", "osd")]})
-        self.write("mon-mgr.json", {"scenarios": [row("mon-mgr.a", "mon-mgr")]})
-
-    def write(self, name, data):
-        (self.dir / name).write_text(data if isinstance(data, str) else json.dumps(data))
-
-    def refused(self, text):
-        with self.assertRaises(catalog.CatalogError) as raised:
-            catalog.load(self.dir)
-        self.assertIn(text, str(raised.exception))
-
-    def test_composes_in_file_name_order_keeping_row_order(self):
-        document = catalog.load(self.dir)
-        self.assertEqual([r["id"] for r in document["scenarios"]], ["mon-mgr.a", "osd.b", "osd.a"])
-        self.assertEqual(document["version"], 1)
-        self.assertEqual(document["fixed_jobs"], [{"id": "race", "job": "race"}])
-
-    def test_same_group_subject_fragments_preserve_group_selection(self):
-        self.write("osd.alpha.json", {"scenarios": [row("osd.alpha", "osd")]})
-        self.write("osd.beta.json", {"scenarios": [row("osd.beta", "osd")]})
-        code, out, err = plan(self.dir, "group:osd")
-        self.assertEqual(code, 0, err)
-        self.assertEqual([r["scenario"] for r in json.loads(out)["include"]],
-                         ["osd.alpha", "osd.beta", "osd.b", "osd.a"])
-
-    def test_same_group_subject_duplicate_and_wrong_group_are_refused(self):
-        self.write("osd.subject.json", {"scenarios": [row("osd.a", "osd")]})
-        self.refused("duplicate identifier osd.a")
-        self.write("osd.subject.json", {"scenarios": [row("rbd.new", "rbd")]})
-        self.refused("belongs to group 'rbd', not 'osd'")
-
-    def test_refuses_duplicate_identifier_across_fragments(self):
-        self.write("rbd.json", {"scenarios": [row("osd.a", "rbd")]})
-        self.refused("duplicate identifier osd.a in osd.json and rbd.json")
-
-    def test_refuses_duplicate_identifier_within_a_fragment(self):
-        self.write("rbd.json", {"scenarios": [row("rbd.a", "rbd"), row("rbd.a", "rbd")]})
-        self.refused("duplicate identifier rbd.a")
-
-    def test_refuses_row_in_the_wrong_groups_file(self):
-        self.write("rbd.json", {"scenarios": [row("rbd.a", "osd")]})
-        self.refused("rbd.json: rbd.a belongs to group 'osd', not 'rbd'")
-        self.write("rbd.json", {"scenarios": [{"id": "rbd.a", "params": {}}]})
-        self.refused("belongs to group None")
-
-    def test_refuses_unknown_files_and_entries(self):
-        for name in ("README.md", "osd_x.json", "osd..json", "osd.a.b.json", "osd.json.orig", "_other.json", ".hidden.json"):
-            with self.subTest(name=name):
-                self.write(name, "{}")
-                self.refused("unknown catalog file " + name)
-                (self.dir / name).unlink()
-        (self.dir / "nested").mkdir()
-        self.refused("unknown catalog entry nested")
-        (self.dir / "nested").rmdir()
-        (self.dir / "link.json").symlink_to(self.dir / "osd.json")
-        self.refused("unknown catalog entry link.json")
-
-    def test_refuses_malformed_index_and_fragments(self):
-        self.write("rbd.json", {"scenarios": []})
-        self.refused("rbd.json has no scenarios")
-        self.write("rbd.json", {"scenarios": [row("rbd.a", "rbd")], "group": "rbd"})
-        self.refused("rbd.json has unknown keys: group")
-        self.write("rbd.json", "[")
-        self.refused("rbd.json:")
-        (self.dir / "rbd.json").unlink()
-        self.write(catalog.INDEX, {"version": 2, "fixed_jobs": []})
-        self.refused("unsupported catalog version 2")
-        self.write(catalog.INDEX, {"version": 1, "scenarios": []})
-        self.refused("_catalog.json has unknown keys: scenarios")
-        (self.dir / catalog.INDEX).unlink()
-        self.refused("catalog directory has no _catalog.json")
-
-    def test_single_file_is_still_accepted(self):
-        legacy = Path(self.tmp.name) / "catalog.json"
-        legacy.write_text(json.dumps(catalog.load(self.dir)))
-        self.assertEqual(catalog.load(legacy), catalog.load(self.dir))
-        legacy.write_text(json.dumps({"version": 2, "scenarios": []}))
-        with self.assertRaises(catalog.CatalogError):
-            catalog.load(legacy)
-
-    def test_planner_accepts_the_fragment_directory(self):
-        code, out, _ = plan(self.dir, "group:osd")
-        self.assertEqual(code, 0)
-        self.assertEqual([r["scenario"] for r in json.loads(out)["include"]], ["osd.b", "osd.a"])
-        self.write("rbd.json", {"scenarios": [row("osd.a", "rbd")]})
-        code, _, err = plan(self.dir, "group:osd")
-        self.assertEqual(code, 2)
-        self.assertIn("duplicate identifier osd.a", err)
+def declaring(*rows, test="TestCephXIntegration"):
+    return "package integration_test\n\n%s\n//fixture:shareable x\nfunc %s(t *testing.T) {}\n" % ("\n".join(rows), test)
 
 
 class RepositoryCatalogTests(unittest.TestCase):
-    def test_fragments_have_canonical_json(self):
-        for path in catalog.CATALOG_DIR.iterdir():
-            self.assertEqual(catalog.dump(json.loads(path.read_text())), path.read_text(), path.name)
-
-    def test_single_file_and_fragments_plan_identically(self):
-        """The trusted planner gives the same answer for a revision with the
-        single file as for one with the same rows in fragments. Both plans
-        read the same test sources (a revision's own, in /ci run)."""
+    def test_rows_are_the_declarations_in_planning_order(self):
         document = catalog.load()
-        sources = scenario_plan.sharing_sources.declarations(scenario_plan.sharing_sources.tree_sources(scenario_plan.ROOT))
-        patch = mock.patch.object(scenario_plan, "plan_sources", return_value=sources)
-        patch.start()
-        self.addCleanup(patch.stop)
-        with tempfile.TemporaryDirectory() as directory:
-            legacy = Path(directory) / "catalog.json"
-            legacy.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
-            selectors = ["all"] + ["group:" + g for g in sorted({r["group"] for r in document["scenarios"]})]
-            selectors += [r["id"] for r in document["scenarios"]] + [j["id"] for j in document["fixed_jobs"]]
-            for selector in selectors:
-                with self.subTest(selector=selector):
-                    fragmented = plan(catalog.CATALOG_DIR, selector)
-                    self.assertEqual(fragmented[0], 0, fragmented[2])
-                    self.assertEqual(plan(legacy, selector), fragmented)
+        rows = document["scenarios"]
+        self.assertEqual(rows, scenario_declarations.discover(scenario_declarations.tree_sources(catalog.ROOT))[0])
+        self.assertEqual([row["id"] for row in rows], sorted((row["id"] for row in rows),
+                                                             key=lambda sid: scenario_declarations.planning_key({"id": sid})))
+        for row in rows:
+            self.assertEqual(row["group"], row["id"].split(".", 1)[0])
+        self.assertEqual(scenario_declarations.stray_declarations(catalog.ROOT), [])
+
+    def test_fixed_checks_are_the_selectable_platform_jobs(self):
+        text = (catalog.ROOT / catalog.PLATFORM_WORKFLOW).read_text(encoding="utf-8")
+        jobs = catalog.load()["fixed_jobs"]
+        self.assertTrue(jobs)
+        self.assertEqual(jobs, [{"id": job["id"], "job": job["id"]} for job in jobs])
+        self.assertEqual(text.count("contains(fromJSON(inputs.matrix).fixed, "), len(jobs))
+        self.assertEqual(catalog.fixed_jobs(WORKFLOW), [{"id": "unit", "job": "unit"}])
+        with self.assertRaises(catalog.CatalogError) as raised:
+            catalog.fixed_jobs(WORKFLOW.replace("fixed, 'unit'", "fixed, 'race'"))
+        self.assertIn("platform job unit is selected as fixed check 'race'", str(raised.exception))
+
+    def test_no_catalog_file_is_tracked(self):
+        for path in catalog.RETIRED:
+            self.assertFalse((catalog.ROOT / path).exists(), path)
 
 
-class ExtractTests(unittest.TestCase):
+class TreeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.write(".github/workflows/platform-checks.yml", WORKFLOW)
+        self.write("integration/x_test.go", declaring("//scenario:row osd.b key=aes", "//scenario:suite osd.a key=aes"))
+
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def test_loads_the_declared_rows_and_the_fixed_checks(self):
+        document = catalog.load(self.root)
+        self.assertEqual(document, {"scenarios": [
+            {"id": "osd.a", "group": "osd", "params": {"key": "aes"}},
+            {"id": "osd.b", "group": "osd", "params": {"key": "aes", "test_run": "^TestCephXIntegration$"}},
+        ], "fixed_jobs": [{"id": "unit", "job": "unit"}]})
+
+    def test_refuses_refused_declarations(self):
+        self.write("cephmsgr/y_test.go", declaring("//scenario:row osd.b key=aes", test="TestCephYIntegration"))
+        with self.assertRaises(catalog.CatalogError) as raised:
+            catalog.load(self.root)
+        self.assertIn("duplicate scenario identifier osd.b", str(raised.exception))
+
+    def test_refuses_the_catalog_files_of_the_earlier_layout(self):
+        for name in (".github/scenarios/catalog.d/_catalog.json", ".github/scenarios/catalog.json"):
+            with self.subTest(name=name):
+                self.write(name, "{}")
+                with self.assertRaises(catalog.CatalogError) as raised:
+                    catalog.load(self.root)
+                self.assertIn("rows are declared beside their tests; remove this catalog file", str(raised.exception))
+                (self.root / name).unlink()
+
+
+class RevisionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "repo"
         self.root.mkdir()
         self.git("init", "-q")
-        self.scenarios = self.root / ".github" / "scenarios"
-        self.scenarios.mkdir(parents=True)
-        self.document = {"version": 1, "scenarios": [row("osd.a", "osd"), row("mon-mgr.a", "mon-mgr")],
-                         "fixed_jobs": [{"id": "race", "job": "race"}]}
-        self.count = 0
 
     def git(self, *args):
-        return subprocess.check_output(["git", "-c", "user.name=CI test", "-c", "user.email=ci@example.invalid",
-                                        "-c", "commit.gpgsign=false", *args],
-                                       cwd=self.root, stderr=subprocess.PIPE).decode().strip()
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false",
+                               *args], cwd=self.root, check=True, capture_output=True).stdout.decode().strip()
+
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
 
     def commit(self):
-        self.git("add", "-A")
-        self.git("commit", "-q", "--allow-empty", "-m", "fixture")
+        self.git("add", "-A", ".")
+        self.git("commit", "-qm", "x", "--allow-empty")
         return self.git("rev-parse", "HEAD")
 
-    def fragments(self):
-        directory = self.scenarios / "catalog.d"
-        directory.mkdir(exist_ok=True)
-        for name, text in catalog.split(self.document).items():
-            (directory / name).write_text(text)
-        return directory
-
-    def extract(self, revision):
-        self.count += 1
-        output = Path(self.tmp.name) / ("out%d" % self.count)
-        return catalog.extract(revision, output, git_dir=self.root)
-
-    def refused(self, revision, text):
-        with self.assertRaises(catalog.CatalogError) as raised:
-            self.extract(revision)
-        self.assertIn(text, str(raised.exception))
-
-    def test_single_file_revision_plans(self):
-        (self.scenarios / "catalog.json").write_text(json.dumps(self.document))
-        path = self.extract(self.commit())
-        self.assertEqual(path.name, "catalog.json")
-        code, out, _ = plan(path, "group:osd")
-        self.assertEqual((code, [r["scenario"] for r in json.loads(out)["include"]]), (0, ["osd.a"]))
-
-    def test_fragment_revision_plans_from_objects_not_the_worktree(self):
-        self.fragments()
-        revision = self.commit()
-        (self.scenarios / "catalog.d" / "osd.json").unlink()  # the worktree is not read
-        path = self.extract(revision)
-        self.assertEqual(sorted(p.name for p in path.iterdir()), ["_catalog.json", "mon-mgr.json", "osd.json"])
-        code, out, _ = plan(path, "osd.a")
-        self.assertEqual((code, [r["scenario"] for r in json.loads(out)["include"]]), (0, ["osd.a"]))
-        self.assertEqual(plan(path, "all")[1], json.dumps(scenario_plan.matrix(
-            catalog.load(path)["scenarios"] + scenario_plan.fixed_entries(self.document)), separators=(",", ":")) + "\n")
-
-    def test_subject_fragment_is_extracted_from_git_objects(self):
-        directory = self.fragments()
-        self.document["scenarios"].append(row("osd.extra", "osd"))
-        (directory / "osd.subject.json").write_text(json.dumps({
-            "scenarios": [self.document["scenarios"][-1]]}))
-        revision = self.commit()
-        (directory / "osd.subject.json").unlink()
-        extracted = self.extract(revision)
-        self.assertEqual(set(r["id"] for r in catalog.load(extracted)["scenarios"]),
-                         set(r["id"] for r in self.document["scenarios"]))
-        self.assertEqual(plan(extracted, "osd.extra")[0], 0)
-
-    def test_refuses_missing_ambiguous_and_irregular_layouts(self):
-        self.refused(self.commit(), "the tested revision has no scenario catalog")
-        directory = self.fragments()
-        (self.scenarios / "catalog.json").write_text(json.dumps(self.document))
-        self.refused(self.commit(), "both catalog.d and catalog.json")
-        (self.scenarios / "catalog.json").unlink()
-        (directory / "notes.txt").write_text("x")
-        self.refused(self.commit(), "unknown catalog file notes.txt")
-        (directory / "notes.txt").unlink()
-        (directory / "link.json").symlink_to("osd.json")
-        self.refused(self.commit(), "catalog entry link.json is not a regular file")
-        (directory / "link.json").unlink()
-        (directory / "sub").mkdir()
-        (directory / "sub" / "x.json").write_text("{}")
-        self.refused(self.commit(), "unknown catalog file sub")
-        self.refused("main", "revision must be a full commit SHA")
-        self.refused("0" * 40, "git cat-file failed")
-
-    def test_ci_command_plans_the_extracted_catalog_with_the_trusted_planner(self):
-        text = (catalog.ROOT / ".github/workflows/ci-command.yml").read_text(encoding="utf-8")
-        step = text.split("- name: Resolve the selectors against the tested revision", 1)[1].split("- name:", 1)[0]
-        self.assertIn('catalog=$(python3 tools/scenario_catalog.py extract --revision "$SHA" --output', step)
-        self.assertIn('python3 tools/scenario_plan.py plan --catalog "$catalog"', step)
-        self.assertNotIn("git show", step)
-        self.assertNotIn("checkout", step)
-
-    def test_cli_prints_the_path(self):
-        self.fragments()
-        revision = self.commit()
-        out, err = io.StringIO(), io.StringIO()
-        cwd = os.getcwd()
+    def plan(self, *args):
+        out, err, cwd = io.StringIO(), io.StringIO(), os.getcwd()
         os.chdir(self.root)
         try:
             with redirect_stdout(out), redirect_stderr(err):
-                code = catalog.main(["extract", "--revision", revision, "--output", str(Path(self.tmp.name) / "cli")])
+                code = scenario_plan.main(list(args))
         finally:
             os.chdir(cwd)
-        self.assertEqual(code, 0, err.getvalue())
-        self.assertEqual(out.getvalue().strip(), str(Path(self.tmp.name) / "cli" / "catalog.d"))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_plans_a_revision_from_its_objects_not_the_worktree(self):
+        self.write("integration/x_test.go", declaring("//scenario:row osd.a key=aes service=aes family=4"))
+        self.write("integration/helper.go", "//scenario:row osd.helper key=aes\n")
+        self.write("internal/x_test.go", declaring("//scenario:row osd.internal key=aes service=aes family=4"))
+        revision = self.commit()
+        self.write("integration/x_test.go", declaring("//scenario:row osd.changed key=aes service=aes family=4"))
+        document = catalog.load_revision(revision, self.root)
+        self.assertEqual([row["id"] for row in document["scenarios"]], ["osd.a"])
+        self.assertEqual(document["fixed_jobs"], catalog.load()["fixed_jobs"])
+        code, out, err = self.plan("plan", "--revision", revision, "--select", "osd.a")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)["include"], [{"key": "aes", "service": "aes", "family": "4",
+                                                       "test_run": "^TestCephXIntegration$", "scenario": "osd.a"}])
+        code, out, _ = self.plan("list", "--revision", revision)
+        self.assertEqual(out.split()[0], "osd.a")
+        code, _, err = self.plan("plan", "--revision", revision, "--select", "osd.changed")
+        self.assertEqual(code, 2)
+        self.assertIn("unknown scenario 'osd.changed'", err)
+
+    def test_refuses_a_revision_with_the_earlier_catalog_or_bad_declarations(self):
+        self.write("integration/x_test.go", declaring("//scenario:row osd.a key=aes service=aes family=4"))
+        self.write(".github/scenarios/catalog.d/_catalog.json", "{}")
+        revision = self.commit()
+        code, _, err = self.plan("plan", "--revision", revision, "--select", "all")
+        self.assertEqual(code, 2)
+        self.assertIn("the tested revision has .github/scenarios/catalog.d from before rows were declared beside their tests;"
+                      " merge the default branch", err)
+        # Check suites come from the trusted platform workflow and need no row
+        # of the revision, so such a revision still gets them; any row
+        # selector, a group or all, still asks for the default branch.
+        fixed = [job["id"] for job in catalog.load()["fixed_jobs"]]
+        for selectors, wanted in (([fixed[0]], [fixed[0]]), (fixed[:2], fixed[:2]), (["group:checks"], fixed)):
+            arguments = [word for selector in selectors for word in ("--select", selector)]
+            code, out, err = self.plan("plan", "--revision", revision, *arguments)
+            self.assertEqual(code, 0, err)
+            self.assertEqual(json.loads(out), {"include": [], "fixed": wanted})
+        for selectors in ([fixed[0], "osd.a"], [fixed[0], "group:osd"]):
+            arguments = [word for selector in selectors for word in ("--select", selector)]
+            code, _, err = self.plan("plan", "--revision", revision, *arguments)
+            self.assertEqual(code, 2)
+            self.assertIn("merge the default branch", err)
+        self.git("rm", "-rq", ".github")
+        self.write("integration/x_test.go", declaring("//scenario:row osd.a key", "//scenario:row osd.a key=aes"))
+        code, _, err = self.plan("plan", "--revision", self.commit(), "--select", "all")
+        self.assertEqual(code, 2)
+        self.assertIn("integration/x_test.go:3: osd.a: malformed parameter 'key'", err)
+        for revision, message in (("main", "revision must be a full commit SHA"), ("0" * 40, "git cat-file failed")):
+            with self.assertRaises(catalog.CatalogError) as raised:
+                catalog.load_revision(revision, self.root)
+            self.assertIn(message, str(raised.exception))
+
+    def test_ci_command_plans_the_revision_with_the_trusted_planner(self):
+        text = (catalog.ROOT / ".github/workflows/ci-command.yml").read_text(encoding="utf-8")
+        step = text.split("- name: Resolve the selectors against the tested revision", 1)[1].split("- name:", 1)[0]
+        self.assertIn('python3 tools/scenario_plan.py plan --revision "$SHA"', step)
+        self.assertNotIn("git show", step)
+        self.assertNotIn("checkout", step)
 
 
 if __name__ == "__main__":

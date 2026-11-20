@@ -46,10 +46,31 @@ type PGCursor struct {
 }
 
 type PGListEntry struct{ Namespace, Object, Key string }
+
+// PGListPage is one pg_nls_response_t v1: the next cursor and the entries in
+// server order, embedded NULs kept. The aggregate result is 0 to continue and
+// 1 at the end of this PG, while the per-op result stays 0. A page can be
+// empty before the end, for example after namespace or filter selection, and
+// enumeration is no atomic inventory: maps, writes and splits can change what
+// later pages observe.
 type PGListPage struct {
 	Cursor  PGCursor
 	Entries []PGListEntry
 }
+
+// PGListRequest is one dedicated PGNLS page on an explicit PG. The request
+// sets READ, ONDISK, RETURNVEC and PGOP with an empty object, head snapshot,
+// no SnapContext, zero mtime and attempt zero; for the empty object native
+// MOSDOp encodes an explicit locator hash equal to the PG seed with
+// object_locator_t v6/compat6, even for seed zero. The base v6 negotiation
+// carries it without extra features, and ordinary object requests refuse
+// PGNLS so it is never sent without PGOP. The union is count u64, start epoch
+// u32 and zeros; the input is an hobject_t v4/compat3 cursor. Count bounds
+// server entries; MaxOutputBytes is a local budget of at least MinPGListBytes.
+// Older hobject formats and snapshots are outside this subset. The OSD reads a
+// filter's input and the cursor from one stream, so a filter input that
+// consumes cursor bytes cannot be detected; only the name and frame are
+// bounded. A class filter outside osd_class_load_list is -EPERM.
 type PGListRequest struct {
 	ClientInc, MapEpoch        uint32
 	PG                         PG

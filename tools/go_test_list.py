@@ -40,6 +40,12 @@ import re
 import subprocess
 from types import MappingProxyType
 
+# The Go listings this tool runs: (subcommands that run Go, or None for every
+# invocation; the module directories Go loads). tools/test_workflow_toolchains.py
+# reads this declaration to require a Go that can list those modules.
+# Here: declarations run tools/quality/testdecls.
+GO_LISTING = (None, ("tools/quality",))
+
 PATTERN = "^Test"
 TIMEOUT = 600
 QUALITY = Path(__file__).resolve().parent / "quality"

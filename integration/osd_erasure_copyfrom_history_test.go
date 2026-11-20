@@ -249,8 +249,12 @@ func shardPGHistory(t *testing.T, ctx context.Context, slot int, object string, 
 // the copy's entry with the source write's identity, because this copy
 // creates the head on every shard. This is a positive control: it stops
 // before any trimming or resubmission and claims nothing about absence,
-// eviction or replay.
+// eviction or replay. Not exercised: the duplicate tier (nothing is trimmed),
+// more than one transferred identity, COPY_FROM, an EC source, and degraded,
+// remapped or pg_temp PGs.
 //
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2copyfromhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-shard-history
+//scenario:covers CLIENT to OSD
 //fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
 func TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration(t *testing.T) {
 	width := erasureK2M2

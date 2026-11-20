@@ -15,6 +15,7 @@ import (
 // that Go reads at the pool snapshot id and the native client reads by name,
 // while the head returns the new bytes and the clone list names the snapshot.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable pool snapshot in its own EC pool; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
 func TestCephOSDErasurePoolSnapshotIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

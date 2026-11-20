@@ -19,6 +19,11 @@ import (
 // remaining BlueStore replicas hold identical bytes, version and mtime, and a
 // caller-targeted read on the replacement primary sees them without any replay.
 //
+// No WRITESAME is in flight when the primary dies, and this is OSD process
+// termination with surviving replicas, not host power loss. Only legacy-v6 is
+// supported: the shared restoration helper restores that fixture only.
+//
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills the primary OSD; recovery waits active+clean without a pg_temp proof and rewrites the fixture object
 func TestCephOSDWriteSameFailoverIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

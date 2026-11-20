@@ -58,8 +58,55 @@ type profile struct {
 	// module (rgw_native_route.go) instead of the controller's fixture.
 	rgwNative string
 	// monFreeze opts in to the connected-MON freeze tests, which can leave the
-	// OSD on an old OSDMap (integration/fixture/MON_FREEZE_FIXTURE_ISSUE.md).
+	// OSD on an old OSDMap (an unexplained fixture failure; see
+	// integration/mon_connected_stall_test.go).
 	monFreeze string
+	// inputs holds the inputs declared with defineInput (input.go), the one
+	// field for all of them. The fields above are frozen: a new input is
+	// declared beside the code that reads it and becomes no field.
+	inputs string
+}
+
+// profileInputPrefix begins the name of every fixture input a catalog row
+// sets: the trusted native workflow forwards a row parameter p as
+// CEPH_MSGR_TEST_<P> (tools/native_env.py).
+const profileInputPrefix = "CEPH_MSGR_TEST_"
+
+// loadEnvironmentProfile loads the profile from environ ("NAME=value"
+// entries, the first of a repeated name winning as in os.Getenv) and refuses
+// a CEPH_MSGR_TEST_ name that loadProfile does not read. The names loadProfile
+// reads are the fixture's input vocabulary, and there is no other list of
+// them: a new input is admitted by the code that reads it, and a row
+// parameter or a variable that no input reads is refused instead of ignored.
+// tools/scenario_plan.py validate passes every catalog row through this
+// admission (TestCatalogRowsAreAdmittedByTheFixture).
+func loadEnvironmentProfile(environ []string) (profile, error) {
+	values := map[string]string{}
+	for _, entry := range environ {
+		name, value, _ := strings.Cut(entry, "=")
+		if _, seen := values[name]; !seen {
+			values[name] = value
+		}
+	}
+	read := map[string]bool{}
+	p, err := loadProfile(func(name string) string {
+		read[name] = true
+		return values[name]
+	})
+	if err != nil {
+		return profile{}, err
+	}
+	var unread []string
+	for name := range values {
+		if strings.HasPrefix(name, profileInputPrefix) && !read[name] {
+			unread = append(unread, name)
+		}
+	}
+	if len(unread) != 0 {
+		slices.Sort(unread)
+		return profile{}, fmt.Errorf("no fixture input reads %s", strings.Join(unread, ", "))
+	}
+	return p, nil
 }
 
 // loadProfile reads one row's fixture profile, or a sequence of rows that
@@ -72,6 +119,14 @@ func loadProfile(getenv func(string) string) (profile, error) {
 }
 
 func loadSingleProfile(getenv func(string) string) (profile, error) {
+	p := loadPinnedFields(getenv)
+	p.inputs = readDeclaredInputs(getenv)
+	return admitSingleProfile(p, getenv)
+}
+
+// loadPinnedFields reads the frozen inputs that are fields of profile. A new
+// input is declared with defineInput instead and adds no line here.
+func loadPinnedFields(getenv func(string) string) profile {
 	value := func(name, fallback string) string {
 		if result := getenv(name); result != "" {
 			return result
@@ -125,6 +180,10 @@ func loadSingleProfile(getenv func(string) string) (profile, error) {
 		diagnostics:          getenv("CEPH_MSGR_TEST_DIAGNOSTICS"),
 	}
 	p.serviceCipher = value("CEPH_MSGR_TEST_SERVICE_CIPHER", p.keyType)
+	return p
+}
+
+func admitSingleProfile(p profile, getenv func(string) string) (profile, error) {
 	capabilities, err := parseCapabilities(p.capabilities, p.testRun)
 	if err != nil {
 		return profile{}, err
@@ -353,7 +412,9 @@ func loadSingleProfile(getenv func(string) string) (profile, error) {
 		// The RBD base, clone, journaling, write and exclusive-lock acceptances own
 		// a pool, two identities and six native images on the single-OSD
 		// legacy-v6 fixture; their Go client admits no HASHPSPOOL bit, so
-		// every pool must keep the legacy placement seed.
+		// every pool must keep the legacy placement seed. The replicated-PG
+		// profiles are refused: their explicit-PG requests and HASHPSPOOL
+		// pools are not verified with RBD.
 		selected = "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$"
 		// The lost-append-reply acceptance needs a journal no other test has
 		// advanced. The lock-owner-loss acceptances blocklist two client
@@ -539,6 +600,14 @@ func (p profile) cleanupBudget() time.Duration {
 	return time.Minute
 }
 
+// osdPGV8 selects the explicit-PG fixture: an eight-PG replicated data pool
+// with HASHPSPOOL (also the global pool default before daemon startup, so the
+// .mgr pool has it too), the controlled legacy CRUSH map, automatic CRUSH
+// updates and the balancer off. The caller uses the natively observed PG and
+// target; the product computes no hash-to-PG or CRUSH placement. Tentacle's
+// default optimal CRUSH is outside this fixture: CRUSH_TUNABLES5 shares its
+// bit with NEW_OSDOPREPLY_ENCODING. Preparing this fixture does not show that
+// a Go session negotiated the profile's feature bits.
 func (p profile) osdPGV8() bool {
 	// This is the shared explicit-PG topology gate, not a request-version selector.
 	return p.osdProfile == "replicated-pg-v8" || p.osdProfile == "replicated-pg-reply-v8" || p.osdProfile == "replicated-pg-request-v9-reply-v8"
@@ -547,7 +616,7 @@ func (p profile) osdPGV8() bool {
 func (p profile) monitors() string { return p.monAddresses }
 
 func (p profile) containerEnvironment() map[string]string {
-	return map[string]string{
+	env := map[string]string{
 		"CEPH_MSGR_TEST_MDS_FRESH":               p.mdsFresh,
 		"CEPH_MSGR_TEST_MDS_COMMANDS":            p.mdsCommands,
 		"CEPH_MSGR_TEST_MDS_SESSIONS":            p.mdsSessions,
@@ -583,6 +652,12 @@ func (p profile) containerEnvironment() map[string]string {
 		"CEPH_MSGR_TEST_MON_FREEZE":              p.monFreeze,
 		"CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS":     "1",
 	}
+	// A declared input reaches the native tests and capability requirement
+	// terms as its own variable.
+	for variable, value := range p.declaredInputs() {
+		env[variable] = value
+	}
+	return env
 }
 
 func (p profile) testEnvironment(controlDir, proxy string) map[string]string {

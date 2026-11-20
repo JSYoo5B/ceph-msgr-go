@@ -192,6 +192,8 @@ func (c *fixtureCluster) controlManagerTellRequest(ctx context.Context, out stri
 	return publishAck(out, "mgr-tell-observed."+fields[0])
 }
 
+var _ = defineControl("mgr-tell", frozenControlRank(61), (*fixtureCluster).controlManagerTellRequest)
+
 // mgrTellDiagnostic keeps a bounded printable error with every path-like
 // token masked, so a failed call is attributable without private locations.
 func mgrTellDiagnostic(err error) string {

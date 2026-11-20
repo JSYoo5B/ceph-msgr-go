@@ -89,6 +89,7 @@ func verifyNativeDigest(t *testing.T, ctx context.Context, control, label string
 	t.Logf("%s: MON %s status and full health detail match independent native clients", label, name)
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated a failed unmute leaves a sticky health mute; health mutes are not in the start-state check
 func TestCephDigestIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

@@ -14,6 +14,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable reads MON membership and mon_status through named tells only
 func TestCephMonitorMembersIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

@@ -15,8 +15,18 @@ import (
 // LGPL-2.1 sources; no upstream implementation is copied.
 const ListWatchers uint16 = 0x1209
 
+// ListWatchersInput is a local output budget of at least ten bytes, the size
+// of an empty listing; it has no wire field. LIST_WATCHERS is a standalone
+// head read with a zero union and no other input. The OSD returns the
+// committed object's watcher map as obj_list_watch_response_t v1 holding
+// watch_item_t v2 entries; newer compatible entries are accepted and the
+// address-less v1 entry is refused. A failed listing carries no output.
 type ListWatchersInput struct{ MaxOutputBytes uint32 }
 
+// Watcher is one registration observed when the request ran. The entity is
+// the watcher's, not the observing client's, and TimeoutSeconds is the
+// registered timeout, not remaining life or liveness. Entries keep server
+// order.
 type Watcher struct {
 	NameType       uint8
 	NameNumber     int64

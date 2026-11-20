@@ -20,7 +20,13 @@ const (
 )
 
 // AllocHintInput is the SETALLOCHINT union variant. The hint is advisory: the
-// OSD records it in object_info and passes it to the object store.
+// OSD creates a missing object, records the values in object_info and passes
+// them to the object store without validating the flag bits. Only the pinned
+// CEPH_OSD_ALLOC_HINT_FLAG_* bits are admitted, so an unrecorded meaning is
+// never presented as a supported hint. The native builder always adds per-op
+// FAILOK for older OSDs; this client sends only the caller's flags. The
+// operation is a staged write: it needs ONDISK, advances the object version,
+// and a following CALL is refused. The reply echoes the union with no output.
 type AllocHintInput struct {
 	ExpectedObjectSize, ExpectedWriteSize uint64
 	Flags                                 uint32

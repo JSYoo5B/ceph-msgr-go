@@ -271,6 +271,21 @@ func validateTierOpsReceipt(t *testing.T, n tierOpsReceipt, plan cachePoolPlan) 
 	}
 }
 
+// TestCephOSDCacheTierOpsIntegration is a native-only checkpoint: the fixture
+// runs tools/osd_cache_tier_ops_oracle.py, which issues the five CACHE_*
+// operations through librados C++ entry points, and the test judges its
+// receipt. It makes no Go cache operation claim. Expected: dirty EVICT -EBUSY,
+// PIN/UNPIN by the read-only or base identity -EPERM, pinned FLUSH/TRY_FLUSH/EVICT
+// -EPERM, FLUSH with SKIPRWLOCKS or TRY_FLUSH without it -EINVAL, an absent
+// head -ENOENT before the cache handlers (PrimaryLogPG::do_op), and refusals
+// leave both pools' bytes, size and user version unchanged. Pin evidence is
+// behavioral; raw FLAG_CACHE_PIN and FLAG_DIRTY bits are not decoded. Not
+// verified: other profiles, overlays, hit sets, the tier agent, snapshots,
+// watchers, EC, multiple OSDs, a live EAGAIN or EBUSY try-flush, wire-level
+// flags, and durability beyond librados completion.
+//
+//scenario:row osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcachetierops key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 osd_cache_pools=1 capabilities=exclusive-osd-cache-pools
+//scenario:covers CLIENT to OSD
 //fixture:isolated runs the cache-pool scope finish, which removes the start-state cache pools, CRUSH rules and identities
 func TestCephOSDCacheTierOpsIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_CACHE_POOLS") != "1" {

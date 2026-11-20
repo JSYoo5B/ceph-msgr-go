@@ -17,6 +17,8 @@ import (
 // the primary is killed the new primary holds a different shard, and only a
 // request carrying that new shard is answered.
 //
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
 //fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureFailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M1, false, "")
@@ -24,8 +26,12 @@ func TestCephOSDErasureFailoverIntegration(t *testing.T) {
 
 // With allow_ec_optimizations, raw shard 1 (the second data shard) may never be
 // primary: when the primary is lost the MON picks a parity shard instead, and
-// the caller's placement must carry that shard.
+// the caller's placement must carry that shard. src/osd/OSD.cc (v20.2.4) treats
+// a client without SERVER_TENTACLE as pre-Tentacle and converts its shard back
+// from primary-first numbering, so the read sets OSDPlacement.PrimaryFirst
+// under a pg_temp; the same read without it is never answered.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedFailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M1, true, "")
@@ -36,7 +42,12 @@ func TestCephOSDErasureOptimizedFailoverIntegration(t *testing.T) {
 // the native map. One killed OSD leaves three shards (min_size), so the PG
 // stays active; after the primary's loss a parity shard's OSD must lead and
 // the request carries that shard in primary-first numbering for pool size 4.
+// Only parity shard 2 can lead after one loss; parity shard 3 (wire shard 2)
+// would need two losses below min_size, so that entry is not observed.
 //
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2failover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
 //fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2FailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M2, true, "isa")

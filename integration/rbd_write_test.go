@@ -31,8 +31,13 @@ import (
 // needs), rbd class header mutations (set_size, metadata_set), a lock-class
 // exclusive lock in librbd's managed-lock format, and a header-update notify
 // that librbd acknowledges and acts on. Native librbd and librados observe
-// every step independently. See integration/fixture/RBD_BASE_FIXTURE.md and
-// RBD_WRITE_VALIDATION.md.
+// every step independently. cls_lock stores the locker address in legacy form
+// while the OSD lists the Go watch as MSGR2; librbd compares the legacy
+// strings, so its managed-lock liveness rule holds for a Go owner. librbd
+// keeps a cached size after a foreign set_size until a header-update notify
+// (ImageState::refresh_if_required). Not covered: Go snapshot creation,
+// trim, discard, write-same or compare-and-write, break_lock and shared locks,
+// concurrent Go and librbd writers, and uncertain outcomes or daemon faults.
 //
 // Everything RBD-specific below is test-only consumer logic: the striping
 // map, the SnapContext taken from the header, class and lock encodings and
@@ -601,6 +606,7 @@ func waitRBDWriteState(ctx context.Context, path, phase string, finished <-chan 
 	}
 }
 
+//scenario:covers RBD underlying I/O
 //fixture:isolated creates and writes an image in the fixture's RBD pool, resizes and locks it; image not removed
 func TestCephRBDWriteIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")

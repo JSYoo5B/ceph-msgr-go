@@ -20,7 +20,15 @@ import (
 // MON must propagate transport EOF to the locally pending operation. This is
 // server-answered/lost-reply coverage, not an unprocessed server request or a
 // forced SIGKILL. No elapsed-time guess establishes the request fault phase.
+// The pending call must end as an OutcomeUnknownError wrapping the peer's
+// io.EOF while its context is live (keepalive 30/60 s cannot supply it).
+// Exactly two requests are seen, so the first is not retransmitted; the fresh
+// call uses another MON, the same GID and the next handle, and may reuse the
+// TID because each MON session owns its TID allocator. The relay forwards
+// original CRC frame bytes up to 1 MiB; secure and compressed frames are
+// outside it.
 //
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable stops a peon MON, restarts it and waits for a settled full quorum (cleanup does the same)
 func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
 	runMapVersionConnectedLoss(t, "stop")

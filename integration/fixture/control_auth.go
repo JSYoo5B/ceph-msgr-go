@@ -107,6 +107,10 @@ func (c *countedReader) Read(p []byte) (int, error) {
 // scanMonitorReclaimRefusals returns, sorted and unique, the global IDs one MON
 // log refused to reclaim for mgr.<name> at or after since. A matching line that
 // is not an exact native entry is an explicit error rather than silent absence.
+// The prefix covers the three reclaim refusals of
+// ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxServiceHandler.cc; timestamps
+// follow ceph/ceph/blob/v20.2.4/src/log/LogClock.h, and all daemons share the
+// Docker host's clock.
 func scanMonitorReclaimRefusals(r io.Reader, name string, since time.Time, limit int) ([]uint64, error) {
 	if name == "" || limit <= 0 || since.IsZero() {
 		return nil, errors.New("invalid native MON reclaim attribution scope")
@@ -255,6 +259,8 @@ func (c *fixtureCluster) controlManagerAuthRequest(ctx context.Context, out stri
 	return nil
 }
 
+var _ = defineControl("mgr-auth", frozenControlRank(23), (*fixtureCluster).controlManagerAuthRequest)
+
 func (c *fixtureCluster) controlManagerKeyringRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -276,6 +282,8 @@ func (c *fixtureCluster) controlManagerKeyringRequest(ctx context.Context, out s
 	return nil
 }
 
+var _ = defineControl("mgr-keyring", frozenControlRank(24), (*fixtureCluster).controlManagerKeyringRequest)
+
 func (c *fixtureCluster) controlAuthBundleRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -296,6 +304,8 @@ func (c *fixtureCluster) controlAuthBundleRequest(ctx context.Context, out strin
 	}
 	return nil
 }
+
+var _ = defineControl("auth-bundle", frozenControlRank(25), (*fixtureCluster).controlAuthBundleRequest)
 
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.

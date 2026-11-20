@@ -45,6 +45,16 @@ func integrationOptions(t *testing.T) Options {
 	return Options{Monitors: strings.Split(monitors, ","), Identity: os.Getenv("CEPH_MSGR_IDENTITY"), Key: key, ExpectedFSID: os.Getenv("CEPH_MSGR_FSID"), DialContext: testcluster.Dialer(), ConnectionMode: mode}
 }
 
+//scenario:suite mon-mgr.aes-svc-aes256k.ip4 key=aes service=aes256k family=4 stress=
+//scenario:suite mon-mgr.aes.ip4 key=aes service=aes family=4 stress=
+//scenario:suite mon-mgr.aes.ip4.crc.host key=aes service=aes mode=crc family=4 stress= runtime=host
+//scenario:suite mon-mgr.aes.ip4.release-20.2.3 release=20.2.3 key=aes service=aes family=4 stress=3m image=quay.io/ceph/ceph:v20.2.3@sha256:d195020de02512030118e772cef7859e92904e91eb4cb21acb503f8b94118137
+//scenario:suite mon-mgr.aes256k-svc-aes.ip4 key=aes256k service=aes family=4 stress=
+//scenario:suite mon-mgr.aes256k.ip4 key=aes256k service=aes256k family=4 stress=3m
+//scenario:suite mon-mgr.aes256k.ip4.crc.host key=aes256k service=aes256k mode=crc family=4 stress= runtime=host
+//scenario:suite mon-mgr.aes256k.ip4.host key=aes256k service=aes256k family=4 stress= runtime=host
+//scenario:suite mon-mgr.aes256k.ip6 key=aes256k service=aes256k family=6 stress=
+//scenario:suite mon-mgr.aes256k.ip6.crc key=aes256k service=aes256k mode=crc family=6 stress=
 //fixture:shareable reads MON status and MGR pg stat only, including concurrent reads
 func TestCephIntegration(t *testing.T) {
 	options := integrationOptions(t)
@@ -96,6 +106,7 @@ func TestCephIntegration(t *testing.T) {
 // Faults require the disposable fixture's control directory. Ordinary external
 // cluster credentials alone cannot trigger mutations or stop any daemon.
 //
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated runs mgr fail and stops mon.a through stop-mon-a; mon.a is never restarted
 func TestCephRecoveryIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")

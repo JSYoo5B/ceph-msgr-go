@@ -13,6 +13,12 @@ import re
 import subprocess
 import sys
 
+# The Go listings this tool runs: (subcommands that run Go, or None for every
+# invocation; the module directories Go loads). tools/test_workflow_toolchains.py
+# reads this declaration to require a Go that can list those modules.
+# Here: the pinned Go tool runs under the product toolchain.
+GO_LISTING = (None, (".",))
+
 ACTIONLINT = "github.com/rhysd/actionlint/cmd/actionlint@v1.7.7"
 GROUP = "ci-command-${{ github.event.issue.number || inputs.pull_request || 'main' }}"
 

@@ -1,3 +1,6 @@
 // Package main implements the lintcalibration development analyzer.
-// See tools/quality/README.md for provenance and the repository CI policy.
+// Adapted, with its tests, from ceph-testcontainers-go commit
+// 2d4243d1e04167ff570f582a899b91a58871b61f (internal/tools/lintcalibration) under
+// the MIT license; see tools/quality/LICENSE and THIRD_PARTY_NOTICES.md.
+// .github/scripts/structural_review.py builds and runs it.
 package main

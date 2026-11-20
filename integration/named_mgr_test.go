@@ -58,6 +58,18 @@ func namedMgrNativeObserve(t *testing.T, ctx context.Context, control, phase str
 	return receipt
 }
 
+// MgrTellTo against the exact active manager name, checked against a fresh
+// native `ceph tell mgr.<name>` bracketed by native MgrMap observations of one
+// stable active identity. Covered natively: local refusal of absent, prefixed,
+// wildcard and numeric names and of the standby; raw negative status and text
+// (including an allow-all denial for a read-only identity) as CommandError;
+// concurrent ordinary command, current tell and named tell on one session;
+// ticket renewal with a stable GlobalID and binding; and, after one explicit
+// mgr fail, local refusal of the old name and success with the new one.
+// The race between a queued unstarted call and a binding change, and MON
+// admission loss, are covered by synthetic peers only.
+//
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated runs mgr fail on the named MGR; the active MGR is not restored
 func TestCephNamedManagerTellIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

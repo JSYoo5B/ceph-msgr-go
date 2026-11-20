@@ -26,8 +26,13 @@ import sys
 
 import go_test_list
 
-# ASCII \w, as the fixture's Go native-name rule (ci_catalog_test.go,
-# sharing_test.go): a name Go does not treat as native must be cluster-free.
+# The Go listings this tool runs: (subcommands that run Go, or None for every
+# invocation; the module directories Go loads). tools/test_workflow_toolchains.py
+# reads this declaration to require a Go that can list those modules.
+GO_LISTING = (None, (".",))
+
+# ASCII \w, as the fixture's Go native-name rule (ci_catalog_test.go): a name
+# Go does not treat as native must be cluster-free.
 NATIVE = re.compile(r"TestCeph\w*Integration", re.ASCII)
 
 

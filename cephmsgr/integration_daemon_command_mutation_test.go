@@ -532,7 +532,20 @@ func (f osdCommandFixture) cell(kind string) daemonCommandCell {
 // One applied OSDConnection.Command whose reply is withheld: the daemon-local
 // runtime option of the explicitly targeted OSD process, the same reversible
 // command and bound as the MON and MGR Tell cells.
+// OSD::handle_command queues an MCommand from an allow-all session to the
+// process's admin-socket handler (ceph/ceph/blob/v20.2.4/src/osd/OSD.cc), and
+// the native observer reads the result on that daemon's own admin socket,
+// bracketed by map reads of one incarnation (up_from epoch and address nonce).
 //
+// Not established by the OSD, PG and MDS cells: restoration of a pre-existing
+// override against a daemon, secure-mode frame attribution, other profiles,
+// pools or acting sets, MDS standby or failover, a daemon restart while the
+// reply is withheld, atomic identity of an OSD or PG mutation's target, and a
+// server execution count.
+//
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16 key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 test_run=^TestCephApplied(OSD|PG)CommandIsNotReplayedIntegration$
+//scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16 key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 test_run=^TestCephApplied(OSD|PG)CommandIsNotReplayedIntegration$
+//scenario:covers CLIENT to OSD
 //fixture:shareable sets an OSD runtime override; cleanup restores it natively and a fresh read shows baseline value and provenance
 func TestCephAppliedOSDCommandIsNotReplayedIntegration(t *testing.T) {
 	fixture, ctx := osdCommandOutcomeFixture(t)
@@ -572,7 +585,15 @@ func parsePGScrubSessions(pgid string, data []byte) (int64, bool) {
 // commands of the pinned OSD have exactly one reversible, synchronously
 // applied state: the scrubber's "sessions" debug flag. A sets it, the native
 // overwrite B unsets it again, so a replay of A would list the counter again.
+// The flag is an upstream test hook (PgScrubber::asok_debug in
+// ceph/ceph/blob/v20.2.4/src/osd/scrubber/pg_scrubber.cc), so this shows the
+// PG channel's outcome and no-replay boundary, not a production PG operation;
+// because B equals the baseline, the final restoration is not separately
+// observable. scrubdebug is also routed to non-primary copies, so the primary
+// is chosen by the fixture and the primary-only query, and a non-primary OSD
+// is not covered.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable sets the PG scrubdebug sessions flag; overwrite and restore unset it and a fresh read shows the baseline
 func TestCephAppliedPGCommandIsNotReplayedIntegration(t *testing.T) {
 	fixture, ctx := osdCommandOutcomeFixture(t)
@@ -592,7 +613,14 @@ func TestCephAppliedPGCommandIsNotReplayedIntegration(t *testing.T) {
 
 // One applied MDSConnection.Command whose reply is withheld: the daemon-local
 // runtime option of the explicitly targeted active MDS process.
+// The native mutations are sent as `tell mds.<GID>` with the baseline GID,
+// which FSMap::parse_role resolves only while that GID is in the map
+// (ceph/ceph/blob/v20.2.4/src/mds/FSMap.cc), so they cannot reach a
+// replacement; that interval is exercised only with a fake fixture backend.
 //
+//scenario:row mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_commands=1 capabilities=mds-applied-command
+//scenario:row mds-commands.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_commands=1 capabilities=mds-applied-command
+//scenario:covers CLIENT to MDS/CephFS
 //fixture:shareable sets an MDS runtime override; cleanup restores it natively and a fresh read shows the baseline
 func TestCephAppliedMDSCommandIsNotReplayedIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")

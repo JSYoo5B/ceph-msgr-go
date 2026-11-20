@@ -18,32 +18,26 @@ ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
 WORKFLOWS = ROOT / ".github" / "workflows"
 
-# Tools that run Go on repository modules: {module name: (subcommands that
-# run Go, or None for every invocation; module directories Go loads)}. The
-# guard test below keeps this table equal to the tools that call Go.
-LISTERS = {
-    "go_test_list": (None, ("tools/quality",)),  # declarations run tools/quality/testdecls
-    "cluster_free_tests": (None, (".",)),
-    "native_test_results": (("snapshot",), (".",)),
-    # validate and sharing list the suites and run fixture tests
-    # (TestCatalogRowsAreAdmittedByTheFixture, TestCatalogRowsDeclareFixtureSharing).
-    "scenario_plan": (("validate", "sharing"), (".", "integration/fixture")),
-    "protocol_evidence": (None, (".", "integration/fixture")),  # a link's own module
-    "native_path_coverage": (None, None),  # its MODULES, read below
-    "fuzz_targets": (None, (".",)),
-    "product_dependencies": (None, (".",)),
-    "workflow_lint": (None, (".",)),  # pinned Go tool under the product toolchain
-    "windows_interop": (None, (".", "integration/fixture")),
-}
+def declared_listings():
+    """{tool: (subcommands that run Go, or None; module directories)}: the
+    GO_LISTING literal each tools module declares beside its own code, so a
+    new tool that runs Go adds its declaration and edits no table here."""
+    found = {}
+    for path in sorted(TOOLS.glob("*.py")):
+        if path.name.startswith("test_"):
+            continue
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, ast.Assign) and [getattr(t, "id", None) for t in node.targets] == ["GO_LISTING"]:
+                found[path.stem] = ast.literal_eval(node.value)
+    return found
+
+
+LISTERS = declared_listings()
 SUITE = re.compile(r"-m unittest discover -s tools(?: -p '([^']+)')?")
 
 
 def modules_of(name):
-    subcommands, modules = LISTERS[name]
-    if modules is None:
-        import native_path_coverage
-        modules = native_path_coverage.MODULES
-    return modules
+    return LISTERS[name][1]
 
 
 def go_directive(module):
@@ -206,7 +200,7 @@ class WorkflowToolchainTests(unittest.TestCase):
         self.assertIn("integration/fixture", suite_modules("test_*.py"))
         self.assertEqual(max(go_directive(module) for module in suite_modules("test_*.py")),
                          go_directive("integration/fixture"))
-        self.assertEqual(suite_modules("test_rgw_native_gate.py"), set())
+        self.assertEqual(suite_modules("test_rgw_native_gate*.py"), set())
 
     def test_old_platform_unit_layout_is_refused(self):
         # The layout of platform-checks.yml before this check: the whole suite
@@ -234,7 +228,7 @@ class WorkflowToolchainTests(unittest.TestCase):
         self.assertEqual(active_go(basic, "basic", "go build -mod=readonly ./..."), ["1.25.0"])
         self.assertEqual(go_directive("."), (1, 25, 0))
 
-    def test_listers_table_names_every_tool_that_calls_go(self):
+    def test_every_tool_that_calls_go_declares_its_listing(self):
         calling = set()
         for path in TOOLS.glob("*.py"):
             if path.name.startswith("test_"):

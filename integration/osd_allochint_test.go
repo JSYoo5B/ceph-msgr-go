@@ -12,6 +12,16 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+// Each Go SETALLOCHINT vector is mirrored on a separate native object with
+// rados_write_op_set_alloc_hint2 (which adds FAILOK) and the same mtime; the
+// committed object_info of both (OI_ATTR "_", decoded by the pinned
+// ceph-dencoder) must record the same expected sizes and hint flags. A hint on
+// an absent object creates it with size 0. The native server records an
+// unknown hint bit unvalidated, while Go refuses it before transmission.
+// Not verified: the object store's use of the hint (BlueStore allocation or
+// compression), EC pools, and response loss.
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable writes only its owned UUID objects in the fixture pool; checked omap-write cleanup removes them
 func TestCephOSDAllocationHintIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

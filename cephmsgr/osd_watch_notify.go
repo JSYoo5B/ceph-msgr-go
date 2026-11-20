@@ -160,6 +160,12 @@ func (o *OSDConnection) prepareWatchStream(request OSDRequest, options OSDWatchO
 // explicit routing metadata and no Operations. ctx controls registration only.
 // The returned handle is also retained on an uncertain submission error so the
 // caller can inspect its cookie and explicitly submit Unwatch. No replay occurs.
+// WATCH is a write-mode operation that needs ONDISK but changes no user
+// version; the OSD excludes it from user_modify. NOTIFY and NOTIFY_ACK are
+// reads whose success says nothing about durability or notify completion. An
+// identity with only read capability is refused WATCH with EPERM yet may
+// NOTIFY. A DISCONNECT event ends the stream with ErrOSDWatchDisconnected; it
+// proves neither remote unwatch nor notify success.
 func (o *OSDConnection) WatchObject(ctx context.Context, request OSDRequest, options OSDWatchOptions) (*OSDWatch, OSDReply, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, OSDReply{}, err
@@ -183,6 +189,12 @@ func (o *OSDConnection) WatchObject(ctx context.Context, request OSDRequest, opt
 // An early completion retained after a lost ordinary reply cannot be checked
 // against that reply's notify ID; the operation's unknown outcome remains.
 // ctx cancellation never proves remote cancellation or permits automatic retry.
+// The completion carries the message-data map (watcher GlobalID, cookie) to
+// reply followed by the missed watchers; on -ETIMEDOUT it keeps the partial
+// replies and is still delivered, and the stream then ends with
+// ErrOSDNotifyComplete. A completion whose header TID equals a pending call's
+// cannot complete that call. An ACK after the timeout does not change the
+// completion already delivered.
 func (o *OSDConnection) NotifyObject(ctx context.Context, request OSDRequest, payload []byte, options OSDWatchOptions) (*OSDNotify, OSDReply, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, OSDReply{}, err

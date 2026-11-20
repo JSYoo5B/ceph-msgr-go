@@ -29,6 +29,16 @@ const (
 // No product API or S3 SDK is introduced. A catalog row with rgw_native=1
 // routes the trusted native workflow to this test (rgw_native_route.go).
 //
+// The radosgw-admin manifest must cover the input exactly with a head (or a
+// metadata-only head sentinel) and tails of this bucket marker; a gap,
+// overlap, foreign pool or locator is refused rather than inferred. Bytes are
+// accepted only from raw object reads concatenated in manifest order. Tail
+// removal is established by independent absence after one gc process run,
+// not by gateway attribution, because radosgw-admin removes tails as its own
+// client. Multipart and faults during the upload are not covered.
+//
+//scenario:row rgw.aes256k.ip4.container.t-rgwmultistripe key=aes256k service=aes256k family=4 stress= rgw_native=1
+//scenario:covers Service-induced paths
 //fixture:isolated starts its own owned RGW cluster and runs one explicit GC process on it
 func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_RGW_NATIVE") == "" {

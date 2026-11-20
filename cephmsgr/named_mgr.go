@@ -38,6 +38,26 @@ var ErrManagerTargetChanged = fmt.Errorf("ceph: named manager target changed: %w
 // active daemon. ctx governs setup and the local reply wait; after transmission
 // starts cancellation or loss leaves an OutcomeUnknownError. No uncertain
 // command is replayed. The server requires allow-all MGR capabilities for tell.
+//
+// The binding is fixed after command-slot admission, before MGR setup, and is
+// checked at the shared session writer before each write: a changed name,
+// GID, v2 address vector or client identity refuses an unstarted call with
+// ErrManagerTargetChanged, and a name change alone retires the old session.
+// Epoch-only updates, standby changes and ticket renewal with the same
+// GlobalID keep it. Discarded v1 addresses are outside the binding. Loss of
+// the MGR connection while the same daemon stays active is not a target
+// change: a started call returns an OutcomeUnknownError caused by the
+// connection error and is not sent again on the next session.
+//
+// The wire form is TellCommand (MCommand with the nonzero cluster FSID, which
+// selects the manager's admin-socket path), never MMgrCommand or a zero-FSID
+// MCommand, which route to modules. Native MgrClient retransmits pending
+// commands on reconnect; this client deliberately does not. Source:
+// ceph/ceph/blob/v20.2.4/src/mgr/MgrClient.cc,
+// ceph/ceph/blob/v20.2.4/src/mgr/DaemonServer.cc and
+// ceph/ceph/blob/v20.2.4/src/mon/MgrMap.h. Not supported: standby command
+// service, arbitrary named-daemon address discovery and typed manager
+// operations; manager replacement during an applied tell is not verified.
 func (c *Client) MgrTellTo(ctx context.Context, name string, command Command) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err

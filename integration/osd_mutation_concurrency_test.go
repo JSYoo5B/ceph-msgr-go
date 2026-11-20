@@ -12,6 +12,13 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+// Sixteen concurrent two-operation requests on one OSD connection and one
+// object: WRITE extents rebuild tagged records, and the two APPENDs of each
+// request must stay one complete record. Append order is unspecified, so
+// native readback checks the record multiset for missing, duplicated or torn
+// records; TIDs and user versions must be unique and are compared as sets.
+//
+//scenario:covers CLIENT to OSD
 //fixture:isolated rewrites the shared fixture object; recovery rewrites bytes and mtime only, version not restored
 func TestCephOSDMutationConcurrencyIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

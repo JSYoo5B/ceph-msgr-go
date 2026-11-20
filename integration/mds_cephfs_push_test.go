@@ -20,14 +20,6 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
-// TestCephMDSCephFSPushIntegration accepts MDS pushes that had only
-// synthetic coverage against a live Tentacle MDS with native oracles: a
-// dentry lease REVOKE answered with RELEASE while a native rename waits for
-// it, snapshot-realm and quota pushes provoked by native mksnap and quota
-// setxattr, RECALL_STATE answered by releasing capabilities, and FLUSHMSG
-// acknowledged after a `cache drop` recall. See integration/fixture/
-// MDS_CEPHFS_FIXTURE.md and MDS_CEPHFS_PUSH_VALIDATION.md.
-
 type nativeMDSCephFSPushPlan struct {
 	Directory     string   `json:"directory"`
 	LeaseDir      string   `json:"lease_dir"`
@@ -191,6 +183,19 @@ func pushArrivals(s cephfsAgentSnapshot, from int) []pushArrival {
 	return out
 }
 
+// TestCephMDSCephFSPushIntegration accepts MDS pushes against a live Tentacle
+// MDS with native oracles: a dentry lease REVOKE answered with RELEASE while a
+// native rename waits for it, snapshot-realm and quota pushes provoked by
+// native mksnap and quota setxattr, RECALL_STATE (Server::recall_client_state
+// asks for mds_min_caps_per_client) answered by releasing capabilities, and
+// FLUSHMSG acknowledged after a `cache drop` recall whose gather only the
+// FLUSHMSG_ACK can end. Every agent's push count must equal the session
+// PushSequence. It runs first on the shared mds-cephfs fixture and must leave
+// no snapshot, quota, recall setting or session behind. Not exercised:
+// FORCE_RO, lease RENEW, cap snaps, nested snapshot realms, recall throttling
+// and multiple ranks.
+//
+//scenario:covers CLIENT to MDS/CephFS
 //fixture:isolated leaves a CephFS snapshot, quota and files when an earlier step fails; CephFS state is not checked
 func TestCephMDSCephFSPushIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS") != "1" {

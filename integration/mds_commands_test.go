@@ -214,6 +214,19 @@ type mdsCommandCase struct {
 	WriteChunksBefore, WriteChunksAfter uint64                    `json:",omitempty"`
 }
 
+// TestCephMDSCommandsIntegration accepts raw MDS MCommand through an explicit
+// MDSTarget against a live Tentacle MDS, compared with native libcephfs
+// mds_command on the same daemon GID: raw output, status bytes and the signed
+// code must match. The command identity holds `mds allow *` because
+// MDSDaemon::handle_command requires MDSAuthCaps::allow_all; no filesystem
+// isolation is claimed, and ServerIdent proves the rank, not the daemon GID. A
+// command cancelled or closed after transmission reports OutcomeUnknownError
+// without redial or replay; output equality does not prove the input reached
+// the daemon.
+//
+//scenario:row mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscommands key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_commands=1
+//scenario:row mds-commands.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscommands key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_commands=1
+//scenario:covers CLIENT to MDS/CephFS
 //fixture:isolated stops the owned MDS daemon through fixture control and never restarts it
 func TestCephMDSCommandsIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_COMMANDS") != "1" {

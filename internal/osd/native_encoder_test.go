@@ -43,6 +43,16 @@ func nativeEncoderMessage(t *testing.T, name string) msgr.MessageData {
 	return m
 }
 
+// TestMutationRequestMatchesFreshNativeEncoder compares the request of the five
+// mutation-native-* vectors (regenerate with `encode-osd-mutations`, see
+// runNativeEncoder in integration/fixture; provenance in
+// testdata/mutation-native-provenance.json). The wrapper constructs fresh
+// MOSDOp/MOSDOpReply objects with empty segments and calls native
+// encode_payload(features), asserting version 6, then Message::encode with
+// MSG_CRC_ALL and a 41-byte MessageFrame::Encode header projection (sequence 1,
+// ACK 3, priority 127, COMPLETE). The replies (all-success, exclusive EEXIST,
+// CMPEXT mismatch without FAILOK and a constructed TRUNCATE) are not live ZERO
+// normalization. Server execution, durability and placement are out of scope.
 func TestMutationRequestMatchesFreshNativeEncoder(t *testing.T) {
 	r := Request{ClientInc: 1, MapEpoch: 11,
 		Locator: Locator{Pool: 7, Key: "route-key", Namespace: "tenant", Hash: -1},

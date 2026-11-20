@@ -18,6 +18,18 @@ import (
 // and incarnation with FLAG_RETRY, so the OSD answers from its PG log instead of
 // appending again. A new request with a new ID executes again (the control).
 //
+// A completed request resubmitted with RetryAttempt 1 is answered under the
+// same transaction ID with ONDISK and the original user version; an executed
+// request whose reply was dropped resolves on a replaced connection with the
+// same client identity. Vectors whose re-execution would differ (exclusive
+// CREATE, DELETE, APPEND plus SETXATTR, OMAP SETVALS plus RMKEYS, an
+// object-class write CALL, COPY_FROM2) return the original code, per-op
+// results and user version with native state unchanged. Not verified: read
+// vectors, rollback vectors and opcodes outside these (the server may not log
+// every opcode); resubmission through a different client identity is refused
+// locally.
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable mutates owned UUID objects in the fixture pool; checked cleanup removes them
 func TestCephOSDResubmitIntegration(t *testing.T) {
 	fixture, request := osdFixture, osdObjectRequest

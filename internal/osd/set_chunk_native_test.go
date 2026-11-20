@@ -73,6 +73,16 @@ func setChunkNativeRequest(shape int) Request {
 	return r
 }
 
+// TestSetChunkRetainsFreshNativeRequests compares the 12 requests of
+// testdata/set-chunk-native-provenance.json (generator
+// tools/osd_set_chunk_native_encoder.py, regenerated as described at
+// TestIgnoreCacheMatches24FreshNativeRequests): four shapes across v6, v8 and v9,
+// built by the native ObjectOperation::set_chunk helper. The admitted shapes
+// match the Go request byte for byte; nonzero-source and without-reference are
+// kept as codec facts for requests the Go encoder refuses with ErrOperation.
+// Flags follow `rados set-chunk` (ceph/ceph/blob/v20.2.4/src/tools/rados/rados.cc):
+// a read operation with the WITH_REFERENCE op flag and no cache-pool bit 35.
+// They prove request bytes only, not manifest, reference or server results.
 func TestSetChunkRetainsFreshNativeRequests(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "set-chunk-native-provenance.json"))
 	if err != nil {

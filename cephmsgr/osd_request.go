@@ -209,7 +209,13 @@ type OSDOperation struct {
 // SourceFadvise carries FADVISE hints for the source read; cache-tier copy
 // flags are unsupported.
 // A reply with success reports server completion of the copy as ONDISK;
-// a cancelled or failed local wait leaves the outcome unknown.
+// a cancelled or failed local wait leaves the outcome unknown. A copy that
+// fails after the OSD started it reports its aggregate code with per-op
+// -EINPROGRESS, and the OSD drops a copy it had not yet read without a reply
+// because a native client would resend it; this client leaves that to the
+// caller. A copy may lead only SetXattr/RemoveXattr operations, which the OSD
+// applies in the same transaction. The destination receives the source's
+// user version, and the OSD does not copy a source's empty OMAP key.
 type OSDCopyFromInput struct {
 	SourcePool                 int64
 	SourceName                 string
@@ -296,7 +302,11 @@ type OSDRequest struct {
 	// MapExt, Checksum or SparseRead. The connection may then target any
 	// replica; the caller owns that choice and the PG's Primary field still
 	// names the primary. Replicas may answer -EAGAIN (unreadable object or
-	// unstable write), which is a known refusal the caller handles.
+	// unstable write), which is a known refusal the caller handles; the
+	// client never redirects or repeats it. A replica advances its committed
+	// point only with the next write in the same PG, so an object written
+	// last in its PG can be bounced until another write lands there. A vector
+	// the OSD will not serve on a non-primary is dropped unanswered.
 	BalanceReads, LocalizeReads bool
 	// IgnoreRedirect (CEPH_OSD_FLAG_IGNORE_REDIRECT) makes the OSD serve a
 	// manifest redirect object itself rather than its target.
@@ -328,9 +338,19 @@ type OSDRequest struct {
 	// earlier Request returned, including after an unknown outcome, with the
 	// same ClientIncarnation, and a RetryAttempt of 1 or more that you raise
 	// per resubmission. The caller must resend the same operations; the
-	// client cannot check that. The server's duplicate detection covers only
-	// requests still in the PG log and is never a replay guarantee; nothing
-	// resubmits automatically.
+	// client cannot check that. The submission must carry this client's
+	// GlobalID, its transaction must not still be pending on the connection,
+	// and watch/notify requests cannot be resubmitted; these are refused
+	// before submission. The OSD answers a write whose reqid is still in its
+	// PG log with the original result and versions (osd/PrimaryLogPG.cc
+	// do_op). The entry replicates with the write and follows a PG split or
+	// merge, so a replacement primary or child PG reached by your new
+	// placement answers from its own copy. A trimmed entry no longer
+	// deduplicates and the write runs again, so this is never an exactly-once
+	// guarantee; reads need no deduplication. A late reply to an earlier
+	// attempt differs only by its echoed attempt and fails the session as an
+	// unknown outcome, so resubmit on a fresh connection after the original's
+	// ended. Nothing resubmits automatically.
 	Resubmit     *OSDSubmission
 	RetryAttempt int32
 }

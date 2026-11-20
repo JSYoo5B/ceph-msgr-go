@@ -39,9 +39,15 @@ var fcntlHeldLocks = heldFlockRecipe{Name: "fcntl-ranges-and-flock", Results: "m
 // TestCephMDSCephFSRecoveryIntegration with two FCNTL byte-range locks and one
 // FLOCK lock (fcntlHeldLocks) in place of the one exclusive FLOCK lock. It
 // needs a fresh mds-cephfs fixture of its own: the recipe performs the
-// fixture's only owned MDS restart. See
-// integration/fixture/MDS_FILELOCK_FCNTL_RESTART_VALIDATION.md.
+// fixture's only owned MDS restart. The blob carries records in both sections,
+// which Server::recover_filelocks restores into separate per-inode lock
+// states; a native second mount probes fixed ranges with ceph_getlk and
+// ceph_setlk. Not covered: merged or split ranges of one owner, waiting or
+// interrupted FCNTL locks, several clients and ranges in a split reconnect.
 //
+//scenario:row mds-cephfs-fcntl-recovery.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsfcntlrangerecovery key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs=1 capabilities=mds-held-fcntl
+//scenario:row mds-cephfs-fcntl-recovery.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsfcntlrangerecovery key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs=1 capabilities=mds-held-fcntl
+//scenario:covers CLIENT to MDS/CephFS
 //fixture:isolated pauses the MDS journal, fails the owned rank-0 MDS and evicts a session (blocklist entry); no restore proof
 func TestCephMDSCephFSFcntlRangeRecoveryIntegration(t *testing.T) {
 	runCephFSRecovery(t, fcntlHeldLocks)

@@ -141,6 +141,7 @@ func (o *crcOfferObserver) check(mon, mgr string) (int, error) {
 	return completed, nil
 }
 
+//scenario:covers Messenger/CephX
 //fixture:isolated sets a config-key; cleanup is registered after the set and ignores the result code; config-key is not checked
 func TestCephCRCConnectionModeIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_CONNECTION_MODE") != "crc" {

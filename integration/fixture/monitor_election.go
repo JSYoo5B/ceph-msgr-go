@@ -151,6 +151,13 @@ func decodeElection(data []byte, expected electionExpectation) (electionObservat
 	return got, ready, nil
 }
 
+// waitSettledElection is the barrier after a MON membership change or restart:
+// two complete native quorum_status reads at least two seconds apart must
+// match the expected FSID, map epoch, members and quorum with one unchanged
+// election epoch. A changed election epoch, incomplete quorum or timed-out
+// read clears the window; schema or identity errors fail. It shows stability
+// between samples, not the absence of later elections, and never repeats a
+// MON mutation.
 func waitSettledElection(parent context.Context, expected electionExpectation, backend electionBackend) (electionSettled, error) {
 	var receipt electionSettled
 	if err := electionExpected(expected); err != nil {

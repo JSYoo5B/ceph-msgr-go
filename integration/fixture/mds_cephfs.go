@@ -31,6 +31,19 @@ import (
 // behavior relied upon:
 // client/Client.cc, pybind/cephfs/cephfs.pyx, mds/Server.cc and
 // mds/SessionMap.cc at mdsFreshSource (LGPL-2.1 references; no code copied).
+//
+// The profile is exclusive, with one legacy-v6 OSD and no-HASHPSPOOL pools, so
+// the Go clients enable MDS only (the recovery fencing clients add OSD). The
+// push, recovery and metadata tests share one fixture in source-file order:
+// push restores what it changed and recovery performs the only owned restart,
+// so later tests read mds-cephfs-target.json, not the startup oracle. Restart
+// steps are refused between restart-fire and restart-adopt, where no identity
+// proof is possible. The push baseline requires allow_snaps already set and no
+// central mds_{min,max}_caps_per_client entry. Cleanup never evicts: it lifts
+// a leftover journal pause only on a still-mapped armed rank-0 GID, removes
+// only blocklist entries it can attribute, and fails on any other new entry or
+// on an identity whose creation outcome is unknown. The relay admits any port
+// of an owned MDS container IP, because a respawned MDS may bind another port.
 
 const mdsCephFSJSONLimit = 64 << 10
 const mdsCephFSXattrName = "user.ceph-msgr"
@@ -982,6 +995,8 @@ func (c *fixtureCluster) mdsCephFSControl(ctx context.Context, out string, field
 	result.Complete = true
 	return nil
 }
+
+var _ = defineRequestControl("mds-cephfs", frozenControlRank(7), (*fixtureCluster).mdsCephFSControl)
 
 func (c *fixtureCluster) mdsCephFSAct(ctx context.Context, id int64, action mdsCephFSAction, result *mdsCephFSResult) error {
 	s, x := c.mdsFresh, c.mdsCephFS

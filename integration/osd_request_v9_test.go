@@ -75,6 +75,15 @@ func checkActualV9Prefix(t *testing.T, m msgr.MessageData, want v9RuntimeExpecte
 	}
 }
 
+// TestCephOSDRequestV9Integration runs STAT+READ, one APPEND, a fresh READ and
+// a bounded PGNLS under the request-v9/reply-v8 profile (single OSD only) with
+// the caller-supplied actual PG, raw hash and NO_SHARD. On CRC connections it
+// checks the captured plaintext messages (request type 42 v9/compat3 with an
+// empty OTEL envelope, reply type 43 v8/compat2); secure traffic stays
+// encrypted and no header is captured. Native bytes and own version must match
+// the Go ONDISK reply. Not verified: a nonempty OTEL trace, three-OSD v9,
+// mutation failover and MemStore restart durability.
+//
 //fixture:shareable writes one owned UUID object; checked cleanup removes it and verifies the fixture head unchanged
 func TestCephOSDRequestV9Integration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-request-v9-reply-v8" {

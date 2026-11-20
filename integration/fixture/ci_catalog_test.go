@@ -11,6 +11,7 @@ import (
 	"go/build"
 	"go/parser"
 	"go/token"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -36,53 +38,92 @@ type ciScenario struct {
 	Params map[string]string `json:"params"`
 }
 
-type ciBinding struct{ Parameter, Fallback string }
-
-// Admit only the workflow's simple matrix references. A new expression shape
-// must be taught to this validator rather than silently interpreted as empty.
-// A Windows checkout may deliver the workflow with CRLF line endings, so one
-// trailing carriage return per line is a line terminator, not expression text.
-func ciBindings(text string) (map[string]ciBinding, error) {
-	linePattern := regexp.MustCompile(`^\s+(CEPH_[A-Z0-9_]+): (.+)$`)
-	valuePattern := regexp.MustCompile(`^\$\{\{ matrix\.([a-z_]+)(?: \|\| '([^']*)')? \}\}$`)
-	result := map[string]ciBinding{}
-	for _, line := range strings.Split(text, "\n") {
-		fields := linePattern.FindStringSubmatch(strings.TrimSuffix(line, "\r"))
-		if fields == nil || !strings.Contains(fields[2], "matrix.") {
-			continue
-		}
-		value := valuePattern.FindStringSubmatch(fields[2])
-		if value == nil {
-			return nil, fmt.Errorf("unsupported workflow expression for %s", fields[1])
-		}
-		if _, ok := result[fields[1]]; ok {
-			return nil, fmt.Errorf("duplicate workflow binding %s", fields[1])
-		}
-		result[fields[1]] = ciBinding{value[1], value[2]}
-	}
-	if len(result) == 0 {
-		return nil, fmt.Errorf("no matrix environment bindings")
-	}
-	return result, nil
+// ciForwarder is the trusted native workflow's forwarding of a job's matrix
+// to the runner's environment (tools/native_env.py), started once per test
+// binary: the one reading of a matrix into fixture inputs. Each request is
+// one JSON matrix on a line and each answer one JSON line. The helper ends
+// when this binary closes its input.
+type ciForwarder struct {
+	mu      sync.Mutex
+	in      io.Writer
+	answers *bufio.Scanner
 }
 
-func ciProfile(row ciScenario, bindings map[string]ciBinding) (profile, error) {
-	known := map[string]bool{"release": true}
-	for _, binding := range bindings {
-		known[binding.Parameter] = true
+var ciForwarding = sync.OnceValues(func() (*ciForwarder, error) {
+	command := exec.Command("python3", filepath.Join("tools", "native_env.py"), "serve")
+	command.Dir = filepath.Join("..", "..")
+	command.Stderr = os.Stderr
+	in, err := command.StdinPipe()
+	if err != nil {
+		return nil, err
 	}
-	for key := range row.Params {
-		if !known[key] {
-			return profile{}, fmt.Errorf("unforwarded parameter %s", key)
-		}
+	out, err := command.StdoutPipe()
+	if err != nil {
+		return nil, err
 	}
-	return loadProfile(func(name string) string {
-		binding := bindings[name]
-		if value := row.Params[binding.Parameter]; value != "" {
-			return value
-		}
-		return binding.Fallback
-	})
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	answers := bufio.NewScanner(out)
+	answers.Buffer(make([]byte, 0, 64<<10), 16<<20)
+	return &ciForwarder{in: in, answers: answers}, nil
+})
+
+// ciEnvironment is the environment the native workflow's runner receives for
+// a matrix (a row's parameters, or a planned job), or the helper's refusal.
+func ciEnvironment(matrix map[string]string) (map[string]string, error) {
+	f, err := ciForwarding()
+	if err != nil {
+		return nil, fmt.Errorf("forwarding helper: %w", err)
+	}
+	request, err := json.Marshal(matrix)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, err := f.in.Write(append(request, '\n')); err != nil {
+		return nil, fmt.Errorf("forwarding helper: %w", err)
+	}
+	if !f.answers.Scan() {
+		return nil, fmt.Errorf("forwarding helper ended: %v", f.answers.Err())
+	}
+	var answer struct {
+		Environment map[string]string `json:"environment"`
+		Error       string            `json:"error"`
+	}
+	if err := json.Unmarshal(f.answers.Bytes(), &answer); err != nil {
+		return nil, fmt.Errorf("forwarding helper: %w", err)
+	}
+	if answer.Error != "" {
+		return nil, errors.New(answer.Error)
+	}
+	return answer.Environment, nil
+}
+
+// ciRowEnvironment is ciEnvironment of a matrix the helper must forward.
+func ciRowEnvironment(t testing.TB, matrix map[string]string) map[string]string {
+	t.Helper()
+	env, err := ciEnvironment(matrix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
+
+// ciProfile is the fixture's admission of a matrix as the native workflow
+// forwards it: the helper's environment through loadEnvironmentProfile, which
+// refuses a forwarded parameter that no fixture input reads.
+func ciProfile(row ciScenario) (profile, error) {
+	env, err := ciEnvironment(row.Params)
+	if err != nil {
+		return profile{}, err
+	}
+	environ := make([]string, 0, len(env))
+	for name, value := range env {
+		environ = append(environ, name+"="+value)
+	}
+	return loadEnvironmentProfile(environ)
 }
 
 // ciSuiteTestFiles returns the paths of the _test.go files of the suite
@@ -123,7 +164,7 @@ type ciNativeSuite struct {
 
 var (
 	ciProductNativeTest = regexp.MustCompile(`^TestCeph\w*Integration$`)
-	ciRGWNativeTest     = regexp.MustCompile(`^TestRGWNative\w*Integration$`)
+	ciRGWNativeTest     = rgwNativeCheckpoint
 	ciNativeSuites      = []ciNativeSuite{
 		{"integration", "integration", ciProductNativeTest, false},
 		{"cephmsgr", "cephmsgr", ciProductNativeTest, false},
@@ -196,7 +237,7 @@ func ciInventoryProblems(declared map[string]string, listed []string) []string {
 // rows whose effective fixture selector includes it. The source declarations
 // are the inventory, so there is no list to keep in step. A row that selects
 // no native test and a native test that no row selects are problems.
-func ciSelection(sources map[string]string, scenarios []ciScenario, bindings map[string]ciBinding) ([]ciTestSelection, []string) {
+func ciSelection(sources map[string]string, scenarios []ciScenario) ([]ciTestSelection, []string) {
 	names := slices.Sorted(maps.Keys(sources))
 	rows := make([]ciTestSelection, 0, len(names))
 	for _, name := range names {
@@ -204,7 +245,7 @@ func ciSelection(sources map[string]string, scenarios []ciScenario, bindings map
 	}
 	var problems []string
 	for _, scenario := range scenarios {
-		p, err := ciProfile(scenario, bindings)
+		p, err := ciProfile(scenario)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", scenario.ID, err))
 			continue
@@ -242,24 +283,12 @@ func ciSelection(sources map[string]string, scenarios []ciScenario, bindings map
 
 func TestCICatalogInventory(t *testing.T) {
 	root := filepath.Join("..", "..")
-	read := func(name string) []byte {
-		t.Helper()
-		data, err := os.ReadFile(filepath.Join(root, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return data
-	}
 	scenarios := ciRepositoryCatalog(t)
-	bindings, err := ciBindings(string(read(".github/workflows/native-scenarios.yml")))
-	if err != nil {
-		t.Fatal(err)
-	}
 	sources, err := ciNativeSources(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, problems := ciSelection(sources, scenarios, bindings)
+	rows, problems := ciSelection(sources, scenarios)
 	for _, problem := range problems {
 		t.Error(problem)
 	}
@@ -346,10 +375,25 @@ func ciCompiledRoutedTests(t *testing.T) []string {
 	return compiled
 }
 
-// TestCIRoutedTestsAreTheDeclaredRGWCheckpoints keeps the closed routing set
-// (rgwNativeTargets) equal to the RGW checkpoints this module declares: a
-// new checkpoint without a route, or a route to no test, fails.
+// TestCIRoutedTestsAreTheDeclaredRGWCheckpoints: the route admits every RGW
+// checkpoint this module declares by its exact selector, by the same name
+// rule that finds them, so a new checkpoint needs no route entry.
 func TestCIRoutedTestsAreTheDeclaredRGWCheckpoints(t *testing.T) {
+	declared := ciDeclaredRoutedTests(t)
+	if len(declared) == 0 {
+		t.Fatal("the module declares no RGW checkpoint")
+	}
+	for _, name := range declared {
+		if routed, ok := rgwNativeTarget("^" + name + "$"); !ok || routed != name {
+			t.Errorf("declared RGW checkpoint %s is not routed: %q %t", name, routed, ok)
+		}
+	}
+}
+
+// ciDeclaredRoutedTests is the sorted names of the RGW checkpoints this
+// module declares.
+func ciDeclaredRoutedTests(t *testing.T) []string {
+	t.Helper()
 	sources, err := ciNativeSources(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -361,9 +405,7 @@ func TestCIRoutedTestsAreTheDeclaredRGWCheckpoints(t *testing.T) {
 		}
 	}
 	slices.Sort(declared)
-	if want := slices.Sorted(slices.Values(rgwNativeTargets)); !slices.Equal(declared, want) {
-		t.Fatalf("declared RGW checkpoints %v, routed targets %v", declared, want)
-	}
+	return declared
 }
 
 func TestCIInventoryRefusesMissingStaleAndDuplicateEntries(t *testing.T) {
@@ -376,10 +418,6 @@ func TestCIInventoryRefusesMissingStaleAndDuplicateEntries(t *testing.T) {
 }
 
 func TestCISelectionRefusesUnselectedTestsAndEmptyRows(t *testing.T) {
-	bindings, err := ciBindings("  CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}")
-	if err != nil {
-		t.Fatal(err)
-	}
 	sources := map[string]string{
 		"integration/TestCephAIntegration": "integration/a_test.go",
 		"cephmsgr/TestCephBIntegration":    "cephmsgr/b_test.go",
@@ -387,7 +425,7 @@ func TestCISelectionRefusesUnselectedTestsAndEmptyRows(t *testing.T) {
 	row := func(id, selector string) ciScenario {
 		return ciScenario{ID: id, Params: map[string]string{"test_run": selector}}
 	}
-	rows, problems := ciSelection(sources, []ciScenario{row("a", "^TestCephAIntegration$"), row("b", "^TestCephBIntegration$")}, bindings)
+	rows, problems := ciSelection(sources, []ciScenario{row("a", "^TestCephAIntegration$"), row("b", "^TestCephBIntegration$")})
 	if len(problems) != 0 || len(rows) != 2 || rows[0].Test != "cephmsgr/TestCephBIntegration" || !slices.Equal(rows[1].Required, []string{"a"}) {
 		t.Fatalf("complete selection: rows %+v problems %v", rows, problems)
 	}
@@ -399,7 +437,7 @@ func TestCISelectionRefusesUnselectedTestsAndEmptyRows(t *testing.T) {
 		"row that selects nothing":  {[]ciScenario{row("a", "^TestCeph[AB]Integration$"), row("gone", "^TestCephGoneIntegration$")}, "gone: effective fixture selector matches no native tests"},
 		"invalid selector":          {[]ciScenario{row("a", "^TestCeph[AB]Integration$"), row("bad", "(")}, "bad: "},
 	} {
-		_, problems := ciSelection(sources, test.scenarios, bindings)
+		_, problems := ciSelection(sources, test.scenarios)
 		if !slices.ContainsFunc(problems, func(problem string) bool { return strings.HasPrefix(problem, test.want) }) {
 			t.Errorf("%s: problems %v lack %q", name, problems, test.want)
 		}
@@ -443,73 +481,43 @@ func TestCINativeSourcesRefuseDuplicateNames(t *testing.T) {
 	}
 }
 
-func TestCIBindingsParseCRLFLikeLF(t *testing.T) {
-	root := filepath.Join("..", "..")
-	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "native-scenarios.yml"))
-	if err != nil {
-		t.Fatal(err)
+// The fixture refuses a forwarded parameter that no input reads, and an
+// invalid topology; the helper refuses a parameter that names a variable the
+// workflow sets itself or another parameter's variable. A parameter that an
+// input reads is admitted without any list naming it.
+func TestCIProfileRefusesUnreadParametersAndInvalidTopology(t *testing.T) {
+	base := map[string]string{"key": "aes256k", "service": "aes256k", "family": "4"}
+	with := func(name, value string) ciScenario {
+		params := maps.Clone(base)
+		params[name] = value
+		return ciScenario{ID: "a.1", Params: params}
 	}
-	synthetic := "env:\n  CEPH_MSGR_TEST_IMAGE: ${{ matrix.image }}\n  CEPH_MSGR_TEST_MDS_COMMANDS: ${{ matrix.mds_commands || '0' }}\n  CEPH_MSGR_TEST_EMPTY: ${{ matrix.empty || '' }}\n  CEPH_MSGR_TEST_FIXED: literal\n"
-	want := map[string]ciBinding{
-		"CEPH_MSGR_TEST_IMAGE":        {"image", ""},
-		"CEPH_MSGR_TEST_MDS_COMMANDS": {"mds_commands", "0"},
-		"CEPH_MSGR_TEST_EMPTY":        {"empty", ""},
+	if _, err := ciProfile(ciScenario{ID: "a.1", Params: base}); err != nil {
+		t.Fatal("the minimal row is refused:", err)
 	}
-	// The checked-out workflow may already be CRLF; normalize it first so both
-	// encodings are exercised on every platform.
-	for name, text := range map[string]string{"synthetic": synthetic, "workflow": strings.ReplaceAll(string(workflow), "\r\n", "\n")} {
-		lf, err := ciBindings(text)
-		if err != nil {
-			t.Fatalf("%s LF: %v", name, err)
-		}
-		crlf, err := ciBindings(strings.ReplaceAll(text, "\n", "\r\n"))
-		if err != nil {
-			t.Fatalf("%s CRLF: %v", name, err)
-		}
-		if !maps.Equal(lf, crlf) {
-			t.Fatalf("%s bindings differ: LF %v CRLF %v", name, lf, crlf)
-		}
-		if name == "synthetic" && !maps.Equal(lf, want) {
-			t.Fatalf("synthetic bindings = %v, want %v", lf, want)
-		}
-		fallbacks := 0
-		for _, binding := range lf {
-			if binding.Fallback != "" {
-				fallbacks++
-			}
-		}
-		if fallbacks == 0 {
-			t.Fatalf("%s has no fallback binding to compare", name)
-		}
-	}
-	// Line-ending tolerance must not admit other expression shapes, duplicates
-	// or carriage returns that are not a line terminator.
-	for _, text := range []string{
-		"  CEPH_MSGR_TEST_OSD: ${{ matrix.osd && '1' }}\r\n",
-		"  CEPH_MSGR_TEST_OSD: ${{ matrix.osd }}\r\n  CEPH_MSGR_TEST_OSD: ${{ matrix.osd }}\r\n",
-		"  CEPH_MSGR_TEST_OSD: ${{ matrix.osd }}\r\r\n",
-		"  CEPH_MSGR_TEST_OSD: ${{ matrix.osd }}\r trailing\n",
-		"  CEPH_MSGR_TEST_FIXED: literal\r\n",
+	for _, test := range []struct{ name, value, want string }{
+		{"unknown", "1", "no fixture input reads CEPH_MSGR_TEST_UNKNOWN"},
+		{"mds_commands", "1", ""},
+		{"diagnostics", "/tmp/x", "CEPH_MSGR_TEST_DIAGNOSTICS is set by the native workflow itself"},
+		{"key_type", "aes", "CEPH_MSGR_TEST_KEY_TYPE is the variable of parameter key"},
 	} {
-		if bindings, err := ciBindings(text); err == nil {
-			t.Fatalf("accepted %q as %v", text, bindings)
+		_, err := ciProfile(with(test.name, test.value))
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s=%s: error %v, want %q", test.name, test.value, err, test.want)
 		}
 	}
-}
-
-func TestCIProfileRejectsUnsupportedBindingsAndInvalidTopology(t *testing.T) {
-	for _, text := range []string{"", "  CEPH_MSGR_TEST_OSD: ${{ matrix.osd && '1' }}", "  CEPH_MSGR_TEST_OSD: ${{ matrix.osd }}\n  CEPH_MSGR_TEST_OSD: ${{ matrix.osd }}"} {
-		if _, err := ciBindings(text); err == nil {
-			t.Fatalf("accepted %q", text)
-		}
+	// An input that loadProfile reads but no legacy binding named is admitted
+	// by that reading alone.
+	if p, err := ciProfile(with("timeout", "20m")); err != nil || p.testTimeout != "20m" {
+		t.Fatal("an input the fixture reads is refused:", p.testTimeout, err)
 	}
-	bindings, err := ciBindings("  CEPH_MSGR_TEST_MDS_COMMANDS: ${{ matrix.mds_commands || '0' }}")
-	if err != nil {
-		t.Fatal(err)
+	// The refusal is loadEnvironmentProfile's, so a hand-set variable is
+	// refused at run time as well.
+	if _, err := loadEnvironmentProfile([]string{"CEPH_MSGR_TEST_UNKNOWN=1", "CEPH_MSGR_TEST_KEY_TYPE=aes"}); err == nil ||
+		!strings.Contains(err.Error(), "no fixture input reads CEPH_MSGR_TEST_UNKNOWN") {
+		t.Fatal("an unread variable was admitted:", err)
 	}
-	for _, params := range []map[string]string{{"unknown": "1"}, {"mds_commands": "1"}} {
-		if _, err := ciProfile(ciScenario{Params: params}, bindings); err == nil {
-			t.Fatalf("accepted %v", params)
-		}
+	if p, err := loadEnvironmentProfile([]string{"CEPH_MSGR_TEST_KEY_TYPE=aes", "CEPH_MSGR_TEST_KEY_TYPE=aes256k", "OTHER=1"}); err != nil || p.keyType != "aes" {
+		t.Fatal("the first of a repeated variable did not win:", p.keyType, err)
 	}
 }

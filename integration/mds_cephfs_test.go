@@ -22,10 +22,6 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
-// TestCephMDSCephFSIntegration accepts the opt-in CephFS metadata API against
-// a live Tentacle MDS with a native LibCephFS oracle. See
-// integration/fixture/MDS_CEPHFS_FIXTURE.md and MDS_CEPHFS_VALIDATION.md.
-
 type nativeMDSCephFSPlan struct {
 	Directory     string   `json:"directory"`
 	GoFile        string   `json:"go_file"`
@@ -317,6 +313,27 @@ type mdsCephFSResumeEvidence struct {
 	HeldIncomingAtClose bool `json:",omitempty"`
 }
 
+// TestCephMDSCephFSIntegration accepts the opt-in CephFS metadata API against
+// a live Tentacle MDS with a native LibCephFS oracle. One EnableMDS and
+// EnableCephFS client uses the explicit target of mds-cephfs-target.json and
+// never dials an OSD; every native receipt must name that target. The
+// test-only cap agent (mds_cephfs_agent_test.go) restates client/Client.cc for
+// a client without data. A lossless resume, idle or with a request in flight,
+// must keep the session Open at the same GlobalID and ip:port/nonce.
+//
+// The filelock leaves compare raw whole-file FLOCK SETFILELOCK and GETFILELOCK
+// (Server::handle_client_file_setlock and readlock) with native nonblocking
+// probes, a local Wait expiry followed by a grant on the same call, and an
+// explicit interrupt whose original call returns -EINTR. The wire inode
+// Version is not asserted, because Locker cap and max_size updates advance it;
+// ChangeAttr is compared with the native statx version instead. Not verified:
+// request-embedded releases, async requests, a resume inside a mutation's
+// unsafe window, FCNTL locks, a native observation of waiting locks, interrupt
+// after a grant and durable lock state.
+//
+//scenario:row mds-cephfs.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-1c00e7 key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs=1 test_run=^TestCephMDSCephFS(Push|Recovery)?Integration$
+//scenario:row mds-cephfs.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-suite-1c00e7 key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs=1 test_run=^TestCephMDSCephFS(Push|Recovery)?Integration$
+//scenario:covers CLIENT to MDS/CephFS
 //fixture:isolated removes its CephFS dir and files only in a final subtest; CephFS state is not in the start-state check
 func TestCephMDSCephFSIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS") != "1" {

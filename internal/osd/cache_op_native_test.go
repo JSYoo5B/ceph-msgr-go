@@ -66,6 +66,19 @@ type cacheOpNativeProof struct {
 	Fixtures map[string]cacheOpNativeFixture `json:"fixtures"`
 }
 
+// TestCacheOperationsRetain21FreshNativeRequests compares the 21 requests of
+// testdata/cache-op-native-provenance.json (generator
+// tools/osd_cache_op_native_encoder.py, regenerated as described at
+// TestIgnoreCacheMatches24FreshNativeRequests): CACHE_FLUSH, CACHE_TRY_FLUSH,
+// CACHE_EVICT and CACHE_PIN/UNPIN with and without IGNORE_CACHE, across v6, v8
+// and v9. The request flags follow the pinned native callers:
+// ceph/ceph/blob/v20.2.4/src/tools/rados/rados.cc submits flush, try-flush and
+// evict as read operations with IGNORE_CACHE|IGNORE_OVERLAY (SKIPRWLOCKS for
+// try-flush and evict), translated by src/librados/librados_util.cc
+// translate_flags; pin and unpin are write operations. The vectors carry the
+// OSD_CACHEPOOL feature bit 35 that a cache-pool session negotiates, because
+// MOSDOp encodes its features in the front. They prove request bytes only, not
+// tier state, lock mode or flush/evict results.
 func TestCacheOperationsRetain21FreshNativeRequests(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "cache-op-native-provenance.json"))
 	if err != nil {

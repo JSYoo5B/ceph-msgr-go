@@ -20,8 +20,15 @@ import (
 // OSD and observes both objects through the independent native C API/CLI. The
 // native client never executes copy-from here: librados' copy_from2 cannot set
 // TRUNCATE_SEQ, so the independent evidence is the native-observed source and
-// destination state, not a native twin execution.
+// destination state, not a native twin execution. A lower or higher source
+// version gets aggregate -ERANGE or -EOVERFLOW and a missing source -ENOENT,
+// each with per-op -EINPROGRESS because the copy started asynchronously; Go
+// keeps both raw as a known refusal. A copy onto itself gets -EINVAL. The
+// TRUNCATE_SEQ flag installs the supplied sequence: a later lower-sequence
+// write is trimmed on the sequenced copy and applied in full on a plain one.
+// Not verified: MAP_SNAP_CLONE, the cache-tier flags and EC pools.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated allocates a self-managed snap in the fixture pool, permanently adding its selfmanaged_snaps pool flag
 func TestCephOSDCopyFromIntegration(t *testing.T) {
 	fixture := osdFixture

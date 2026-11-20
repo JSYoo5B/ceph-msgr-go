@@ -280,6 +280,13 @@ func (c *fixtureCluster) readMDSFreshOracle(ctx context.Context) (mdsFreshOracle
 	return zero, errors.New("MDS fresh native snapshot unavailable")
 }
 
+// prepareMDSFresh creates a new filesystem with one active rank and no standby
+// and never adopts an existing one. The MDS service modes stay at native
+// defaults; the Go test offers one mode and does not claim the server rejects
+// others. The endpoint is the single advertised numeric v2 address of the
+// selected family; no port is guessed. An accepted connection holds a closed
+// Session that is not in SessionMap until OPEN (mds/MDSDaemon.cc), so absence
+// from session ls shows only that no session is open.
 func (c *fixtureCluster) prepareMDSFresh(ctx context.Context, out string) error {
 	if c.profile.mdsFresh != "1" || c.profile.osd != "1" || !c.profile.mdsFreshOSDAllowed() || c.profile.osdReplicas != "1" || c.mdsFresh != nil {
 		return errors.New("invalid MDS fresh fixture preparation scope")

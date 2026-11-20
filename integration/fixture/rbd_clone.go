@@ -883,6 +883,8 @@ func (c *fixtureCluster) rbdCloneControl(ctx context.Context, out string, fields
 	return c.rbdBaseFinish(m, nil)
 }
 
+var _ = defineRequestControl("rbd-clone", frozenControlRank(14), (*fixtureCluster).rbdCloneControl)
+
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.
 var _ = collectDiagnosticFiles(

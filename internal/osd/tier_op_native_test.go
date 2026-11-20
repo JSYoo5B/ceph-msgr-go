@@ -36,6 +36,15 @@ type tierOpNativeProof struct {
 	Fixtures map[string]cacheOpNativeFixture `json:"fixtures"`
 }
 
+// TestTierOperationsRetainFreshNativeRequests compares the nine requests of
+// testdata/tier-op-native-provenance.json (generator
+// tools/osd_tier_op_native_encoder.py, regenerated as described at
+// TestIgnoreCacheMatches24FreshNativeRequests): TIER_PROMOTE, TIER_FLUSH and
+// TIER_EVICT across v6, v8 and v9. Flags follow the pinned rados CLI
+// (ceph/ceph/blob/v20.2.4/src/tools/rados/rados.cc): promote is a write
+// operation with an mtime, flush and evict are read operations with
+// IGNORE_CACHE|IGNORE_OVERLAY. They carry no cache-pool bit 35 and prove request
+// bytes only, not manifest, chunk, dedup or dirty state.
 func TestTierOperationsRetainFreshNativeRequests(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "tier-op-native-provenance.json"))
 	if err != nil {

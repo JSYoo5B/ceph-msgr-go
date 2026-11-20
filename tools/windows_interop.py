@@ -16,6 +16,11 @@ import traceback
 import go_test_annotations
 import product_dependencies
 
+# The Go listings this tool runs: (subcommands that run Go, or None for every
+# invocation; the module directories Go loads). tools/test_workflow_toolchains.py
+# reads this declaration to require a Go that can list those modules.
+GO_LISTING = (None, (".", "integration/fixture"))
+
 
 MODULE = "github.com/JSYoo5B/ceph-msgr-go"
 DAEMON_VERSION = "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)"

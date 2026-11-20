@@ -26,13 +26,24 @@ import (
 // xattrs. Vectors with a CALL after a write-mode CALL are refused before
 // transmission and are never sent, by Go or natively: a write method followed
 // by a full-reading method made live Tentacle repair the primary copy in a
-// loop without replying (the historical run in the validation record). Only
-// the stock `hello` class and `lock.assert_locked` are used; the expected
-// values restate the pinned src/cls/hello/cls_hello.cc,
-// src/cls/lock/cls_lock.cc, src/osd/objclass.cc and src/osd/PrimaryLogPG.cc
-// (do_osd_ops CREATE/CALL/STAT/SYNC_READ/OMAPSETVALS, execute_ctx reply
-// bound) at 7f793731f1b39eb4f465e960113d2363c311b964 (LGPL-2.1 references; no
-// code copied). See integration/fixture/OSD_CALL_COMPOUND_VALIDATION.md.
+// loop without replying: after `turn_it_to_11`, `replay`'s SYNC_READ checks
+// committed bytes against the staged full-object digest (do_read), the crc
+// mismatch becomes -EIO, rep_repair_primary_object marks the primary copy
+// missing and parks the request until the client disconnects. Only the stock
+// `hello` class and `lock.assert_locked` are used; the expected values
+// restate the pinned src/cls/hello/cls_hello.cc, src/cls/lock/cls_lock.cc,
+// src/osd/objclass.cc and src/osd/PrimaryLogPG.cc (do_osd_ops
+// CREATE/CALL/STAT/SYNC_READ/OMAPSETVALS, execute_ctx reply bound) at
+// 7f793731f1b39eb4f465e960113d2363c311b964 (LGPL-2.1 references; no code
+// copied). A method sees a staged CREATE through cls_cxx_stat; the first
+// failing operation aborts the vector, later ones report 0 without output, and
+// the aggregate is the last executed operation's return. Each operation's
+// output is bounded by osd_max_write_op_reply_len (64): one above it gets
+// -EOVERFLOW with its output cleared. CREATE and OMAP results are Go-only;
+// librados exposes none. Not verified: xattr or OMAP reads inside a later
+// method, live guards before a CALL, the staged-read loop on one replica,
+// MemStore or EC, FAILOK CALL, -EAGAIN/-EINPROGRESS methods, and response loss
+// during a compound.
 
 type compoundCallLeaf struct {
 	name    string
@@ -359,6 +370,7 @@ func compoundOmapPage(state omapWriteState) []omapNativeEntry {
 	return state.Omap.Operations[0].Entries
 }
 
+//scenario:covers CLIENT to OSD
 //fixture:shareable class calls on owned UUID objects and removed native mirrors only; checked cleanup removes owned objects
 func TestCephOSDClassCallCompoundIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

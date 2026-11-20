@@ -38,6 +38,14 @@ type pgListV8Evidence struct {
 	ObjectBefore, ObjectAfter mutationSnapshot
 }
 
+// TestCephOSDPGListV8Integration compares count-one v8 PGNLS pages with the
+// native complete inventory of a selected actual PG in the default and an
+// isolated namespace; empty intermediate pages and native page boundaries are
+// kept as observed. A wrong primary is refused locally, the fixture object's
+// bytes, mtime and version stay unchanged, and the explicit PG survives an
+// uncertain ListPG result in the submission metadata.
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable creates owned objects and a namespace head; deletes them, confirms absence, checks the fixture object
 func TestCephOSDPGListV8Integration(t *testing.T) {
 	if !isReplicatedPGFixtureProfile() {

@@ -102,6 +102,16 @@ func checkOSDMetadata(t *testing.T, reply cephmsgr.OSDReply, oracle osdFixtureOr
 	}
 }
 
+//scenario:suite osd.aes.ip4 key=aes service=aes family=4 stress= osd=1
+//scenario:suite osd.aes.ip4.crc key=aes service=aes mode=crc family=4 stress= osd=1
+//scenario:suite osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3 key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3
+//scenario:suite osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.race-1 key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 race=1
+//scenario:suite osd.aes256k.ip4.crc.host key=aes256k service=aes256k mode=crc family=4 stress= runtime=host osd=1
+//scenario:suite osd.aes256k.ip4.host key=aes256k service=aes256k family=4 stress= runtime=host osd=1
+//scenario:suite osd.aes256k.ip4.osd-store-bluestore key=aes256k service=aes256k family=4 stress= osd=1 osd_store=bluestore
+//scenario:suite osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3 key=aes256k service=aes256k family=4 stress= osd=1 osd_store=bluestore osd_replicas=3
+//scenario:suite osd.aes256k.ip6.osd-store-bluestore.osd-replicas-3 key=aes256k service=aes256k family=6 stress= osd=1 osd_store=bluestore osd_replicas=3
+//scenario:covers CLIENT to OSD
 //fixture:shareable reads the fixture object and opens and closes client and OSD sessions only
 func TestCephOSDIOIntegration(t *testing.T) {
 	c, ctx, oracle, data := osdFixture(t)
@@ -178,6 +188,7 @@ func TestCephOSDIOIntegration(t *testing.T) {
 	t.Logf("native stat2 and %d binary bytes matched; partial/EOF/ENOENT and eight concurrent requests passed", len(data))
 }
 
+//scenario:covers Messenger/CephX
 //fixture:shareable reads the fixture object and renews and closes client sessions only
 func TestCephOSDRenewalIntegration(t *testing.T) {
 	c, ctx, oracle, data := osdFixture(t)
@@ -213,6 +224,7 @@ func TestCephOSDRenewalIntegration(t *testing.T) {
 	t.Log("OSD service ticket renewed; new session kept request identity and native read bytes; parent shutdown rejected later I/O")
 }
 
+//scenario:covers Messenger/CephX
 //fixture:isolated sets crush tunables optimal and back to legacy without waiting for clean PGs or proving the baseline
 func TestCephOSDUnsupportedFeaturesIntegration(t *testing.T) {
 	c, ctx, oracle, _ := osdFixture(t)

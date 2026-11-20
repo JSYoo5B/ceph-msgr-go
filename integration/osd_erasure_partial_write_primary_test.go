@@ -399,7 +399,14 @@ func (r *partialWriteRun) primaryBack(o *primaryOutage) pgIntervalReceipt {
 // during the outage, not the overwrite between them, with its head at its
 // last entry. This states what each shard's own log holds at capture time;
 // it claims nothing about eviction, loss or replay.
+// Marking the running primary out does not give the PG another active primary
+// (the next leader refills shard 0 from the out OSD under a pg_temp,
+// PeeringState.cc:1760-1817, OSDMap.cc:3060-3093), hence the forced kill. Not
+// run: an orderly stop, noup, a partition, a primary outage without a write,
+// and a capture while the primary is away.
 //
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteprimaryreplacementshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills the primary OSD (its PG proven clean without pg_temp) and pauses each acting OSD for a store copy, no clean wait
 func TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration(t *testing.T) {
 	run := startPartialWriteRun(t, 900*time.Second)

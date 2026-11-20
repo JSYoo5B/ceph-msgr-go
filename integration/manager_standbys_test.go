@@ -109,6 +109,7 @@ func nativeManagerSnapshot(t *testing.T, ctx context.Context, c *cephmsgr.Client
 	}
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated runs mgr fail to promote the standby; not restored
 func TestCephManagerStandbysIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

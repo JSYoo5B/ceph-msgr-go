@@ -18,7 +18,13 @@ import (
 // The pinned injector runs after copy cursor completion/digest checks and before
 // fill_in_final_tx. This verifies a late server error, not daemon loss, temporary
 // copy staging, rollback of arbitrary vectors, or automatic mutation replay.
+// The COPY_FROM2 plus SETXATTR vector must end as OSDError -EIO (not an unknown
+// outcome) with per-op [-EINPROGRESS, 0]; the suffix's zero does not prove it
+// ran, and native source and destination state stay unchanged. Sources at
+// v20.2.4: osd_debug_inject_copyfrom_error in src/common/options/global.yaml.in,
+// process_copy_chunk and CopyFromCallback in src/osd/PrimaryLogPG.cc.
 //
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromlateerror key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 capabilities=osd-copy-from-late-error
 //fixture:isolated sets the OSD copy-from injector by admin socket; the restore re-sets the value, leaving a runtime override
 func TestCephOSDCopyFromLateErrorIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_COPYFROM_LATE_ERROR") != "1" {

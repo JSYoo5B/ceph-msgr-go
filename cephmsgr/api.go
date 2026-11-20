@@ -101,6 +101,13 @@ var ErrKeepaliveTimeout = session.ErrKeepaliveTimeout
 // the resulting cluster state independently, or rely on an operation whose
 // repetition is harmless by its own definition. Failures that occur before
 // transmission starts return their cause without this wrapper.
+//
+// Transmission starts when the session's writer takes the command, before
+// its first byte leaves, so a failure such as setting the write deadline is
+// already uncertain; this errs toward uncertainty, never toward a false "not
+// sent". A call issued after the session recorded the loss of its connection,
+// or admitted but not yet taken by the writer, gets the session's cause
+// without this wrapper.
 type OutcomeUnknownError = session.OutcomeUnknownError
 
 // AuthenticationError is an explicit server rejection of authentication or
@@ -176,13 +183,24 @@ type Options struct {
 	// EnableCephFS selects the CephFS client profile for every MDS connection
 	// (requires EnableMDS): the CephFS Messenger features and client feature
 	// set required by metadata requests, capability/lease/snapshot/quota
-	// pushes and their answers. See cephmsgr/MDS_CEPHFS_CONTRACT.md. Without
-	// it, MDS connections stay command/session-only.
+	// pushes and their answers. An MDS lacking a required Messenger feature is
+	// refused during the handshake, without falling back to older encodings.
+	// MDS connections become lossless: a transport fault resumes the same
+	// Messenger session at the same address and retransmits unacknowledged
+	// frames; RESET, an identity change or an exhausted 30 s episode makes the
+	// session Lost. All MDS and OSD connections share one address nonce
+	// (State.CephFSNonce), so an MDS eviction blocklist also fences OSD I/O
+	// from that IP. Selecting a new MDS incarnation, request replay and cap
+	// flush resubmission happen only through explicit calls. Path walking,
+	// inode/dentry/capability caches, lease expiry, snapshot realm trees,
+	// writeback ordering, file locks, delegated inode allocation, async
+	// operations and file data layout remain the consumer's. Without it, MDS
+	// connections stay command/session-only.
 	EnableCephFS bool
 	// EnableMgrService permits OpenMgrService: an explicit service-daemon
 	// registration on a dedicated MGR connection (MMgrOpen/Update/Report/Close).
 	// It adds no Messenger feature bit and changes no MON/MGR command behavior;
-	// see cephmsgr/MGR_SERVICE_CONTRACT.md.
+	// see MgrService for the lifecycle and its limits.
 	EnableMgrService bool
 	// MaxMDSConnections bounds cached MDS handles and concurrent setups.
 	// Defaults to 16; valid values are 1 through 1024. Close releases a slot.
@@ -236,7 +254,14 @@ type Options struct {
 }
 
 // Command is one raw Ceph command. The caller owns its construction and the
-// interpretation of the result.
+// interpretation of the result. Each channel (MonCommand, MgrCommand, MonTell,
+// MgrTell, MonTellTo, MgrTellTo, OSDConnection.Command and PGCommand,
+// MDSConnection.Command) stands alone: one that works proves nothing about
+// another. A command is an unknown outcome exactly when its transmission had
+// started; an unavailable or wrong target found before that returns its
+// cause, and a daemon's refusal is a completed reply carrying the signed code
+// in a CommandError, never retried. No channel has a typed administrative
+// API, wildcard target expansion, local admin socket or HTTP module endpoint.
 type Command struct {
 	// JSON is one Ceph command object with a non-empty string prefix.
 	JSON  json.RawMessage
@@ -294,7 +319,8 @@ const (
 // admitted when its MON session is retired is sent on the recovered session.
 // Once transmission starts, cancellation, session loss or Close returns an
 // OutcomeUnknownError and the command is never sent again. A negative server
-// code returns *CommandError with the preserved Result.
+// code returns *CommandError with the preserved Result. The wire message is
+// MMonCommand (type 50), answered by type 51.
 func (c *Client) MonCommand(ctx context.Context, command Command) (Result, error) {
 	return c.command(ctx, command, monitorCommand, "")
 }
@@ -303,7 +329,8 @@ func (c *Client) MonCommand(ctx context.Context, command Command) (Result, error
 // ctx for an available MGR in the MgrMap and opening its session on demand.
 // Uncertainty, replay and server-code handling follow MonCommand; an active
 // MGR change after transmission starts reports ErrManagerChanged as the Cause
-// of an OutcomeUnknownError.
+// of an OutcomeUnknownError. The wire message is MMgrCommand (type 0x709),
+// answered by type 0x70a.
 func (c *Client) MgrCommand(ctx context.Context, command Command) (Result, error) {
 	return c.command(ctx, command, managerCommand, "")
 }
@@ -312,6 +339,7 @@ func (c *Client) MgrCommand(ctx context.Context, command Command) (Result, error
 // target can change after recovery or ticket renewal. It does not select a
 // monitor by name, send to a quorum, or replay an uncertain command.
 // The server requires MON read, write and execute capabilities for tell.
+// The wire message is MCommand (type 97), answered by type 98.
 func (c *Client) MonTell(ctx context.Context, command Command) (Result, error) {
 	return c.command(ctx, command, monitorTell, "")
 }
@@ -319,7 +347,8 @@ func (c *Client) MonTell(ctx context.Context, command Command) (Result, error) {
 // MgrTell sends a daemon-local command to the current active MGR. These commands
 // use the daemon's admin command schema, distinct from MGR module commands, and
 // require the server's allow-all MGR capability. Context cancellation ends the
-// local wait; an uncertain command is never replayed after recovery.
+// local wait; an uncertain command is never replayed after recovery. The wire
+// message is MCommand (type 97), answered by type 98.
 func (c *Client) MgrTell(ctx context.Context, command Command) (Result, error) {
 	return c.command(ctx, command, managerTell, "")
 }

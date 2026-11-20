@@ -35,8 +35,19 @@ import (
 // writes a data object as librbd's writer would, and releases the lock
 // (object-map unlock, header unlock, ReleasedLock) when native librbd's next
 // write asks for it. Native librbd, librados and `rbd object-map check`
-// observe every step independently. See
-// integration/fixture/RBD_BASE_FIXTURE.md and RBD_LOCK_VALIDATION.md.
+// observe every step independently. Native librbd runs its default
+// exclusive_lock::AutomaticPolicy, which releases the lock on RequestLock
+// (StandardPolicy, after a manual lock, would answer -EROFS). Pinned
+// NotifyLockOwner::handle_notify tolerates an aggregate notify timeout when
+// exactly one non-empty acknowledgement is present and treats a missing or
+// empty owner acknowledgement as -ETIMEDOUT; the request_lock_release and
+// native_requests_lock_back cells omit, empty and answer acknowledgements
+// accordingly, and the native notifier's own logical result is not observed.
+// librbd's object-map update is one vector [lock.assert_locked,
+// rbd.object_map_update] (librbd/object_map/UpdateRequest.cc), sent as such.
+// Not covered: forced RequestLock or lock_break of a live owner,
+// duplicate-owner or error responses, more than two contenders, shared locks,
+// object maps with snapshots, and watch pings.
 //
 // Everything RBD-specific below is test-only consumer logic: the watch-notify
 // payloads, the lock-owner rules, the lock and object-map class encodings,
@@ -998,6 +1009,7 @@ func waitRBDLockState(ctx context.Context, path, phase string, finished <-chan s
 	}
 }
 
+//scenario:covers RBD underlying I/O
 //fixture:isolated creates an image and a Go set_id object in the fixture's RBD pool; leaves both, only lock/watch released
 func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")

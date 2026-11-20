@@ -10,8 +10,8 @@ import (
 
 // The native wrapper built these operations with the fields the CephFS data
 // path sets: Objecter::read_trunc, ObjectOperation::write(off, bl,
-// truncate_size, truncate_seq) and Objecter::trunc. See
-// testdata/truncate-native-README.md.
+// truncate_size, truncate_seq) and Objecter::trunc (see
+// TestTruncateFieldRequestsMatchFreshNativeEncoder).
 func truncateNativeRequest(ops ...Operation) Request {
 	return Request{ClientInc: 1, MapEpoch: 11, Hash: 0x11223344, Object: "trunc-codec",
 		Locator: Locator{Pool: 7, Key: "route-key", Namespace: "tenant", Hash: -1}, Operations: ops}
@@ -35,8 +35,17 @@ func truncateNativeRequests() map[string]Request {
 	}
 }
 
-// These payloads came from fresh native encoders and separate native
-// decoders; the headers use explicit offline sequence/ACK inputs.
+// TestTruncateFieldRequestsMatchFreshNativeEncoder compares the three requests
+// of the six truncate-native-* vectors (regenerate with `encode-osd-truncate`,
+// see runNativeEncoder in integration/fixture; provenance in
+// testdata/truncate-native-provenance.json): READ 4~12, WRITE at 8 and TRUNCATE
+// 10, each carrying truncate_size/truncate_seq as the CephFS data path sends them
+// (ceph/ceph/blob/v20.2.4/src/client/Client.cc Filer::read_trunc/write_trunc,
+// src/osdc/Objecter.h read_trunc, write_trunc and trunc). Fresh native encoders
+// built them and separate native decoders checked them; headers use offline
+// sequence/ACK inputs. The same requests without truncate fields must differ.
+// No v8 vector exists, so EncodeRequestV8's copy of the field order is not
+// covered.
 func TestTruncateFieldRequestsMatchFreshNativeEncoder(t *testing.T) {
 	requests := truncateNativeRequests()
 	for _, tc := range []struct {
@@ -86,6 +95,13 @@ func TestTruncateFieldRequestsMatchFreshNativeEncoder(t *testing.T) {
 	}
 }
 
+// TestDecodeFreshNativeTruncateFieldReplies decodes the three constructed
+// truncate replies (not daemon replies). Their shapes follow
+// ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc: do_read clips a READ to
+// truncate_size when the object truncate_seq is older (extent 6), the WRITE
+// handler trims an old-sequence write (extent 2), and a sequenced TRUNCATE no
+// newer than the object is a committed no-op. They claim no OSD execution,
+// trimming, durability or cap behaviour.
 func TestDecodeFreshNativeTruncateFieldReplies(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

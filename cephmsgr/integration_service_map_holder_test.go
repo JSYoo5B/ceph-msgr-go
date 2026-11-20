@@ -16,6 +16,7 @@ import (
 // verifies that fixture prerequisite natively. It starts no Go ServiceMap
 // watch and does not stop any MON.
 //
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated cleanup kills a live holder without proving its service map entry is gone; the service map is not checked
 func TestCephServiceMapNativeHolderIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")

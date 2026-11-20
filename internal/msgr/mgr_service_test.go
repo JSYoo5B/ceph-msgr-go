@@ -13,7 +13,7 @@ import (
 // The expected bytes below are written out from the pinned MMgrOpen.h,
 // MMgrUpdate.h, MMgrReport.h, MMgrClose.h and MMgrConfigure.h encode_payload
 // order, independently of the encoder under test. They are source-derived, not
-// native daemon output; see cephmsgr/MGR_SERVICE_CONTRACT.md for the evidence.
+// native daemon output; mgr_service_native_test.go compares native vectors.
 
 func le32(v uint32) []byte { return binary.LittleEndian.AppendUint32(nil, v) }
 

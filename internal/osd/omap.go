@@ -17,7 +17,15 @@ type OmapEntry struct {
 }
 
 // OmapAssertion is one OMAP_CMP assertion. The stored value is the left
-// operand; Comparison is the native EQ=1, GT=3 or LT=5 identifier.
+// operand; Comparison is the native EQ=1, GT=3 or LT=5 identifier. The OSD
+// answers the other identifiers with -EINVAL, so they are refused locally.
+// Success is 0 and a failed assertion -ECANCELED, the first failure in key
+// order stopping evaluation; a missing key compares as an empty value, while
+// a missing object is -ENOENT. Ordered comparison iterates char bytes and the
+// pinned build uses -fsigned-char (ceph/ceph/blob/v20.2.4/src/include/buffer.h,
+// src/CMakeLists.txt), so 0x80 sorts below 0x7f; the client never compares values
+// itself. Duplicate keys are refused, as the pinned decoder would keep only the
+// first, and an empty assertion set checks only that the object exists.
 type OmapAssertion struct {
 	Key        string
 	Value      []byte
@@ -34,6 +42,32 @@ const (
 // read, one comparison set or one OMAP mutation. Strings are length-aware wire bytes, including
 // empty, NUL and non-UTF-8 strings. Each opcode admits only its own fields.
 // The local output budget does not become a remote byte-limit argument.
+//
+// For the operations with input the union's extent.length is the encoded
+// input length, derived here, not an object range. GETKEYS seeks strictly
+// after StartAfter; GETVALS starts at the greater of StartAfter and Prefix and
+// returns only keys with that byte prefix. An empty StartAfter is an
+// empty-string boundary, so an unfiltered first page skips an empty key. The
+// OSD clamps MaxEntries to osd_max_omap_entries_per_request and checks
+// osd_max_omap_bytes_per_request before adding each entry, so one entry can
+// exceed it; the more byte reports a stop inside the prefix, and
+// GETVALSBYKEYS has no more byte and omits missing keys. One page is
+// returned; pagination and consistency across pages are the caller's.
+//
+// Keys and SETVALS entries are sent as sorted copies and duplicates are
+// refused. SETVALS and SETHEADER can create a missing head; CLEAR, RMKEYS and
+// RMKEYRANGE answer -ENOENT for a missing or whiteout object. CLEAR removes the
+// header too, while an empty SETHEADER stores an empty header. RMKEYRANGE
+// removes [RangeBegin, RangeEnd); begin after end is refused because a
+// reversed range past rocksdb_delete_range_threshold reaches DeleteRange
+// unchanged and MemStore's erase is undefined for it (src/os/memstore/
+// MemStore.cc). OMAP writes need pool supports_omap (an EC pool answers
+// -EOPNOTSUPP). Any OMAP read after an OMAP write or DELETE in the same vector
+// is refused: writes are staged while reads consult the backend, and DELETE
+// keeps the object's OMAP flag. A read output in a writing vector above
+// osd_max_write_op_reply_len makes the vector -EOVERFLOW without commit, yet
+// the primary may already report a newer user version and mtime, so keep
+// large reads in read-only requests.
 type OmapInput struct {
 	StartAfter, Prefix string
 	MaxEntries         uint64

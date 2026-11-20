@@ -143,6 +143,8 @@ def collect(root, output, pool, object_name):
             "creating" in descriptor.get("flags_names", "").split(",") or
             any((bool(p.get("flags", 0) & 1) != modern or
                  ("hashpspool" in p.get("flags_names", "").split(",")) != modern) for p in topology["pools"]) or
+            # pg_upmap/pg_upmap_items only under an explicit-PG profile;
+            # pg_upmap_primaries needs a separate SERVER_REEF feature contract.
             (not modern and (topology.get("pg_upmap") or topology.get("pg_upmap_items"))) or
             topology.get("pg_upmap_primaries") or
             any(b["alg"] != "straw" for b in crush["buckets"]) or

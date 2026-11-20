@@ -159,6 +159,14 @@ func mdsMapsCompare(t *testing.T, native nativeMDSMaps, fs cephmsgr.FSMapUserUpd
 	}
 }
 
+// TestCephMDSMapsIntegration accepts raw FSMapUser and MDSMap watches against
+// a live MON with one empty filesystem and no MDS daemon, compared with native
+// `fs dump` and `fs get` JSON. The pinned MON has no getmap command, so raw
+// blobs are checked for envelope and retention only; populated ranks are
+// covered by the native codec vectors only. The renewed-source branch, MDS
+// authentication and sessions are not verified here.
+//
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated creates a filesystem and two pools; removes the filesystem but keeps the pools
 func TestCephMDSMapsIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")

@@ -15,11 +15,17 @@ import (
 // LGPL-2.1 sources; no code copied.
 
 const (
-	ClientCapsMessage       uint16 = 0x310
-	ClientLeaseMessage      uint16 = 0x311
-	ClientSnapMessage       uint16 = 0x312
+	// ClientCapsMessage is sent and received with header 12/1.
+	ClientCapsMessage uint16 = 0x310
+	// ClientLeaseMessage is sent and received with header 1/1.
+	ClientLeaseMessage uint16 = 0x311
+	// ClientSnapMessage is received with header exactly 1/1.
+	ClientSnapMessage uint16 = 0x312
+	// ClientCapReleaseMessage is sent with header 2/1; its decoder exists for
+	// verification only.
 	ClientCapReleaseMessage uint16 = 0x313
-	ClientQuotaMessage      uint16 = 0x314
+	// ClientQuotaMessage is received with header exactly 1/1.
+	ClientQuotaMessage uint16 = 0x314
 
 	// capsVersion is MClientCaps HEAD_VERSION, emitted when the connection
 	// negotiated FLOCK and EXPORT_PEER (older versions are not decoded).

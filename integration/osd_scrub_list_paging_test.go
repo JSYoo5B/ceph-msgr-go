@@ -19,6 +19,7 @@ import (
 // after the object the previous page returned, together list each object
 // exactly once, matching the native list-inconsistent-obj names.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated injects OSD data errors and deep-scrubs; checked config rm restores bluestore_debug_inject_read_err
 func TestCephOSDScrubListPagingIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

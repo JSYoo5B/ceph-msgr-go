@@ -51,8 +51,13 @@ import (
 // from concurrent goroutines; their wire overlap is not observed) while
 // native aio writes wait for the lock, applies them to the data objects and commits the image
 // client's position, and native librbd then appends its queued writes under
-// a new tag. See integration/fixture/RBD_BASE_FIXTURE.md,
-// RBD_JOURNAL_VALIDATION.md and RBD_JOURNAL_CONCURRENT_VALIDATION.md.
+// a new tag. Two lock owners appending at once is not valid librbd behaviour
+// and is not attempted. The client cannot express FADVISE_DONTNEED, so the
+// compat append form sends APPEND without it (an OSD cache hint only).
+// Not covered: a Go consumer replaying or mirroring entries, object sets
+// beyond set 0, trimming, events other than AioWrite and AioDiscard, a
+// separate journal pool, more than one handoff cycle, native replay of Go
+// entries during a live reacquisition, and multi-OSD or EC pools.
 //
 // Everything journal-specific below is test-only consumer logic: the
 // cls_journal encodings, the Entry framing, the librbd EventEntry,
@@ -794,6 +799,7 @@ type rbdJournalTestEvidence struct {
 
 var rbdJournalInspectShutdownLine = regexp.MustCompile(`^\S+ [0-9a-f]+ -1 JournalMetadata: 0x[0-9a-f]+ failed to locate client: INSPECT$`)
 
+//scenario:covers RBD underlying I/O
 //fixture:isolated creates a journaling image in the fixture's RBD pool and writes journal entries; image not removed
 func TestCephRBDJournalIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")

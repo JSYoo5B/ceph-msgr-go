@@ -16,8 +16,11 @@ package osd
 // read by the native Objecter when it chooses a target; the caller here
 // already supplies the target, and the flag is sent only to match the native
 // request. Dirty flush clears dirty after a base-pool write; clean flush can
-// be a no-op. Clean eviction deletes the cached head, while absent lookups
-// can fail before the handler. Pin changes a flag. Successful cache requests
+// be a no-op. Clean eviction deletes the cached head, refuses a dirty or
+// watched head with EBUSY and a pinned one with EPERM, while absent lookups
+// can fail with ENOENT before the handler. Pin changes a flag. An internal
+// EAGAIN on the flush path is consumed by execute_ctx and the OSD requeues the
+// request itself; that is not a caller resubmission. Successful cache requests
 // require ONDISK without changing their READ/WRITE wire mode; that bit alone
 // does not identify a state transition. A lost reply leaves an unknown outcome
 // that is never replayed.

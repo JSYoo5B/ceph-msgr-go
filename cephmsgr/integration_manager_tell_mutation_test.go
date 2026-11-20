@@ -62,6 +62,23 @@ func waitGoManager(t *testing.T, ctx context.Context, c *Client, want nativeMgrT
 // native overwrite B then makes any replay of A visible, and the caller keeps
 // its unknown outcome. The command schema stays in test files.
 //
+// The mutation is the daemon-local `config set log_max_recent`, which a
+// nonzero-FSID MCommand reaches through the manager's admin-socket handler
+// (ceph/ceph/blob/v20.2.4/src/mgr/DaemonServer.cc), not a module command and
+// not the centralized configuration database. It only raises the value within
+// a bound and the native control restores it.
+//
+// Not established: restoration of a pre-existing override against a daemon,
+// secure-mode frame attribution, MgrTell when the active manager changes
+// while the reply is withheld, manager replacement or restart during the cell,
+// atomic identity of a native mutation's target (the incarnation is inferred
+// from the unchanged GID around each admin-socket call) and a server execution
+// count: one local write and a surviving native overwrite show only that the
+// client did not send A again and that A was not applied after B.
+//
+//scenario:row mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell key=aes service=aes mode=crc family=4 stress= runtime=host
+//scenario:row mon-mgr.aes256k.ip4.host.t-suite-e9be0b key=aes256k service=aes256k family=4 stress= runtime=host test_run=^TestCephApplied(Named|Current)ManagerTellIsNotReplayedIntegration$
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable sets an active MGR runtime override; cleanup restores it and a fresh read shows the baseline
 func TestCephAppliedNamedManagerTellIsNotReplayedIntegration(t *testing.T) {
 	appliedManagerTellIsNotReplayed(t, false)
@@ -71,6 +88,8 @@ func TestCephAppliedNamedManagerTellIsNotReplayedIntegration(t *testing.T) {
 // client's MgrMap rather than a name the caller supplies. The native observer
 // is bound to the manager whose connection actually carried the command.
 //
+//scenario:row mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell key=aes service=aes mode=crc family=4 stress= runtime=host
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable sets an active MGR runtime override; cleanup restores it and a fresh read shows the baseline
 func TestCephAppliedCurrentManagerTellIsNotReplayedIntegration(t *testing.T) {
 	appliedManagerTellIsNotReplayed(t, true)

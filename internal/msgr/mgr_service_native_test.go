@@ -12,8 +12,28 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
-// These retained bytes come from fresh pinned native message objects, never
-// from the Go encoder or a decoded object subsequently used as a producer.
+// TestMgrServiceNativeVectors compares the eight vectors of
+// testdata/mgr-service-native-provenance.json (MMgrOpen 3, MMgrUpdate 2,
+// MMgrReport 9, MMgrConfigure 4, MMgrClose 1) with the Go frames. They come
+// from fresh native message objects of Ceph v20.2.4 (commit
+// 7f793731f1b39eb4f465e960113d2363c311b964) through Message::encode, never from
+// the Go encoder or a decoded object used as a producer; a separate native
+// object decoded each payload. Reports use Ceph's versioned envelope for an
+// empty counter set, as MgrClient::_send_report does with no counters.
+//
+// Regenerate on a Linux amd64 Docker host with copies of
+// tools/mgr_service_native_encoder.{py,cc} and tools/mon_ping_native_encoder.{py,cc}
+// (the MPing bootstrap builds the pinned SDK and library) in a writable
+// directory mounted at /tools, and an empty /work:
+//
+//	docker run --rm -v <tools>:/tools -v <work>:/work --entrypoint python3 \
+//	  quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9 \
+//	  /tools/mgr_service_native_encoder.py --work /work --wrapper /tools/mgr_service_native_encoder.cc
+//
+// The last JSON line of its output is this provenance file. The 41-byte
+// headers are an offline MessageFrame projection (sequence 1, ACK 3), not a
+// ProtocolV2 capture. Configure versions 1 to 3 and daemon extensions have
+// only synthetic coverage, and no daemon behaviour follows from these bytes.
 func TestMgrServiceNativeVectors(t *testing.T) {
 	type vector struct {
 		Type       uint16         `json:"type"`

@@ -14,7 +14,12 @@ import "github.com/JSYoo5B/ceph-msgr-go/internal/osd"
 // to the replicated primary, without FAILOK, extent truncate fields,
 // snapshot, replica reads or resubmission. Decoded compound results appear
 // only after the whole reply validates; on a negative aggregate they cover
-// the completed prefix. See internal/osd/SPARSE_READ_CONTRACT.md.
+// the completed prefix. The returned Length is the byte count, which may be
+// shorter than the range; past EOF the map and bytes are empty. A failed
+// operation carries no output. The local budget neither caps server work nor
+// truncates output: output over budget fails the session. Snapshot and
+// replica-read compounds, guards in compounds, MAPEXT compounds and EC are
+// not supported.
 const OSDSparseRead OSDOpcode = OSDOpcode(osd.SparseRead)
 
 // OSDSparseReadInput bounds accepted encoded output, including eight bytes of

@@ -20,8 +20,15 @@ import (
 
 // TestCephMDSCephFSMultiReconnectIntegration restores only real retained
 // capabilities, with no request replay or pending metadata flush. The small
-// frame bound makes this a split-wire acceptance rather than a scale test.
+// frame bound makes this a split-wire acceptance rather than a scale test. The
+// proof of splitting is the replacement's Server::handle_client_reconnect log:
+// every nonfinal message ends "(more)" and only the final one opens the
+// session; OPEN alone is not evidence. Not verified: connection loss between
+// fragments, large state and a split across several ranks.
 //
+//scenario:row mds-cephfs-multi-reconnect.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsmultireconnect key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=exclusive-mds-cephfs-completion
+//scenario:row mds-cephfs-multi-reconnect.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsmultireconnect key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=exclusive-mds-cephfs-completion
+//scenario:covers CLIENT to MDS/CephFS
 //fixture:isolated restarts the owned MDS via mds fail and sets debug overrides; leaves 32 split files in the fixture filesystem
 func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION") != "1" {

@@ -7,6 +7,29 @@
 //	msgrcap parity -reference ref.json -candidate cand.json [-reference-cross a.json
 //	        -candidate-cross b.json] [-json parity.json] [-require-full]
 //	msgrcap probe -mon v2:IP:3300 -entity client.x -key-file key -mode crc|secure -trace probe.json
+//
+// Build it with `go -C tools/msgrcap build -o <path outside the checkout> .`.
+// It reads classic pcap only (pcapng is refused). Reports hold identities,
+// lengths, tags, message header fields, TCP events and digests, never
+// segment payloads, keys, tickets or connection secrets. A key file is read
+// only with -key-file; supply only a disposable fixture key and never commit
+// or upload it. The disposable live recipe is live-poc.sh, run by
+// .github/workflows/msgr-capture-poc.yml.
+//
+// Live evidence is the native MON's own ProtocolV2 log compared with the
+// capture (crosscheck.go), and tshark's TCP reassembly compared with msgrcap's
+// (tshark_compare.py); the unit tests build frames with the product writer and
+// are not interoperability evidence. Use tshark only for TCP-level work, with
+// `--disable-heuristic ceph_tcp`: Wireshark's Ceph dissector is msgr1-only and
+// labels every msgr2.1 packet wrongly. Without a key, secure mode exposes only
+// the banner, the plaintext pre-auth frames and TCP timing. With the opt-in key
+// msgrcap derives the connection secret passively from the MON's AUTH_DONE
+// (cephx.Client.Finish), so the Go client needs no key export seam and must not
+// get one. Service authorizers (OSD, MDS, MGR), in-session ticket renewal and
+// secure compression are not followed. The provider capture is two segments
+// around a MON restart with one declared gap; -segments fails closed on any
+// undeclared gap, overlap or count mismatch (coverage.go). Only one MON, one
+// client, IPv4 and aes256k with short sessions on amd64 have been exercised.
 package main
 
 import (

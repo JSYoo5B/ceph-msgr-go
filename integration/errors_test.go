@@ -15,6 +15,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//scenario:covers Messenger/CephX
 //fixture:shareable authentication with a corrupted key is refused; changes nothing
 func TestCephRejectedKeyIntegration(t *testing.T) {
 	options := integrationOptions(t)
@@ -45,6 +46,7 @@ func TestCephRejectedKeyIntegration(t *testing.T) {
 	}
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable unknown-command refusals and pg getmap reads only
 func TestCephCommandErrorsAndBinaryOutputIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -68,6 +70,7 @@ func TestCephCommandErrorsAndBinaryOutputIntegration(t *testing.T) {
 	}
 }
 
+//scenario:covers Messenger/CephX
 //fixture:shareable reads, plus config set and pg scrub refused with -13; changes nothing
 func TestCephReadOnlyPermissionsIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
@@ -111,6 +114,7 @@ func TestCephReadOnlyPermissionsIntegration(t *testing.T) {
 	}
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated writes config-key ceph-msgr-go-integration and never removes it
 func TestCephBinaryBulkInputIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {

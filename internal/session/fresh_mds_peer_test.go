@@ -19,7 +19,7 @@ import (
 // Source-derived synthetic service peer, not a native MDS oracle. In addition
 // to the Messenger transcript it opens actual ServiceAuth proof ciphertext and
 // checks service 0x02, identity, ticket and the authorizer-v2 challenge response.
-// Provenance and excluded application protocols: MDS_FRESH_CONTRACT.md.
+// It sends no application message.
 type freshMDSPeerConfig struct {
 	role                          uint8
 	rank, flags, cookie           uint64

@@ -10,6 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import native_env
 import scenario_plan as plan
 from test_go_test_list import SHAPES, module, tests_file
 
@@ -21,9 +22,21 @@ def entry(sid, group="mon-mgr", **params):
 
 
 def all_shareable():
-    """A fixture sharing value for every repository row, as a passing fixture
-    check reports them."""
+    """A fixture sharing value for every repository row."""
     return {row["id"]: "shareable" for row in plan.load_catalog()}
+
+
+def sharing_tests(values, label="integration"):
+    """fixture_sharing.test_declarations of tests {name: value or None}."""
+    return {"%s/%s" % (label, name): {"value": value, "reason": "r", "source": "%s/x_test.go" % label}
+            for name, value in values.items()}
+
+
+def passing_checks(values=None):
+    """Patches for validate and sharing whose fixture check and derivation
+    pass with the given row values (every repository row shareable)."""
+    return (mock.patch.object(plan, "fixture_admission", return_value=([], {})),
+            mock.patch.object(plan, "fixture_values", return_value=([], all_shareable() if values is None else values)))
 
 
 class CatalogTests(unittest.TestCase):
@@ -70,18 +83,11 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("lacks required parameter service", text)
         self.assertIn("invalid test selector", text)
 
-    def test_workflow_bindings_cover_every_matrix_variable(self):
-        text = plan.NATIVE_WORKFLOW.read_text(encoding="utf-8")
-        bound = re.findall(r"(?m)^ +(CEPH_[A-Z0-9_]+): .*matrix\.", text)
-        bindings = plan.workflow_bindings(text)
-        self.assertEqual(sorted(bound), sorted(bindings), "a matrix binding the planner cannot read")
-        self.assertEqual(bindings["CEPH_MSGR_TEST_CAPABILITIES"], ("capabilities", ""))
-
     # The planner's own refusal: a capability on a selector of more than one
     # test. Every other refusal (an undefined capability, a missing capability
     # that a declared one extends, a declared capability on a topology the
     # fixture does not admit) is the fixture's, through
-    # fixture_admission_problems; integration/fixture/capability_test.go
+    # fixture_admission; integration/fixture/capability_test.go
     # covers those.
     def test_capability_requires_one_anchored_test(self):
         for selector in ("^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$", "^TestCephOSD.*Integration$",
@@ -114,8 +120,14 @@ class CatalogTests(unittest.TestCase):
                 record["Output"] = output
             return json.dumps(record)
 
-        passed = "\n".join([event("run"), event("pass")])
-        self.assertEqual(plan.fixture_admission_problems(fake(passed)), [])
+        passed = "\n".join([
+            event("run"),
+            event("output", "    capability_test.go:9: catalog selector row: osd.a 0 ^TestCephAIntegration$\n"),
+            event("output", "    capability_test.go:9: catalog selector row: rgw.b 1 ^TestRGWNativeBIntegration$\n"),
+            event("output", "    capability_test.go:9: catalog selector row: z 0 ^TestZ$\n", test="TestOther"),
+            event("pass")])
+        self.assertEqual(plan.fixture_admission(fake(passed)),
+                         ([], {"osd.a": (False, "^TestCephAIntegration$"), "rgw.b": (True, "^TestRGWNativeBIntegration$")}))
         command, kwargs = calls[0]
         self.assertEqual(command[:2], ["go", "test"])
         self.assertIn("^%s$" % plan.ADMISSION_TEST, command)
@@ -127,7 +139,7 @@ class CatalogTests(unittest.TestCase):
             event("output", "    capability_test.go:9: catalog admission: rbd.y: the fixture does not admit capability rbd-mirror\n"),
             event("output", "    capability_test.go:9: catalog admission: z: unrelated\n", test="TestOther"),
             event("fail")])
-        self.assertEqual(plan.fixture_admission_problems(fake(refused, 1)),
+        self.assertEqual(plan.fixture_admission(fake(refused, 1))[0],
                          ["osd.x: the fixture refuses the row: four-OSD topology",
                           "rbd.y: the fixture does not admit capability rbd-mirror"])
         # A check that does not run, is skipped, fails without naming a row or
@@ -139,84 +151,72 @@ class CatalogTests(unittest.TestCase):
                           ("passed with a non-zero exit", fake(passed, 2)),
                           ("no go command", fake(raises=FileNotFoundError("go")))):
             with self.subTest(name):
-                problems = plan.fixture_admission_problems(run)
+                problems = plan.fixture_admission(run)[0]
                 self.assertEqual(len(problems), 1)
                 self.assertIn(plan.ADMISSION_TEST, problems[0])
-        self.assertIn("go >= 1.26.0", plan.fixture_admission_problems(fake("", 1, "go: go.mod requires go >= 1.26.0"))[0])
+        self.assertIn("go >= 1.26.0", plan.fixture_admission(fake("", 1, "go: go.mod requires go >= 1.26.0"))[0][0])
+        for name, line in (("missing selector", "catalog selector row: osd.a 0\n"),
+                           ("bad routed flag", "catalog selector row: osd.a x ^TestA$\n")):
+            with self.subTest(name):
+                problems, _ = plan.fixture_admission(fake("\n".join([event("run"), event("output", line), event("pass")])))
+                self.assertEqual(len(problems), 1)
+                self.assertIn("unreadable selector line", problems[0])
+        repeated = "\n".join([event("run"), event("output", "catalog selector row: osd.a 0 ^TestA$\n"),
+                               event("output", "catalog selector row: osd.a 0 ^TestB$\n"), event("pass")])
+        self.assertIn("unreadable selector line", plan.fixture_admission(fake(repeated))[0][0])
 
     def test_fixture_admission_test_is_the_one_the_planner_runs(self):
         source = (plan.FIXTURE / "capability_test.go").read_text(encoding="utf-8")
         self.assertIn("func %s(t *testing.T) {" % plan.ADMISSION_TEST, source)
         self.assertIn('t.Error("%s" + problem)' % plan.ADMISSION_MARK, source)
+        self.assertIn('selectorRowMark = "%s"' % plan.SELECTOR_ROW_MARK, source)
+        self.assertIn("t.Log(selectorRowMark + ciSelectorLine(row.ID, p))", source)
 
     def test_validate_fails_on_a_row_the_fixture_refuses(self):
         refusal = "osd.x: the fixture refuses the row: four-OSD erasure-capacity topology requires ..."
         err = io.StringIO()
-        with mock.patch.object(plan, "fixture_admission_problems", return_value=[refusal]), \
-                mock.patch.object(plan, "fixture_sharing", return_value=([], all_shareable())), \
+        with mock.patch.object(plan, "fixture_admission", return_value=([refusal], {})), \
+                mock.patch.object(plan, "fixture_values", return_value=([], all_shareable())), \
                 redirect_stdout(io.StringIO()), redirect_stderr(err):
             self.assertEqual(plan.main(["validate"]), 1)
         self.assertIn(refusal, err.getvalue())
 
-    def test_fixture_sharing_reads_the_fixtures_own_values_and_problems(self):
-        calls = []
+    def test_fixture_values_derive_every_row_from_the_fixtures_selectors(self):
+        rows = [entry("a", test_run="^TestCephAIntegration$"), entry("broad"), entry("k", test_run="^TestCephKillIntegration$"),
+                entry("r", test_run="^TestRGWNativeRIntegration$", rgw_native="1")]
+        tests = {**sharing_tests({"TestCephAIntegration": "shareable", "TestCephKillIntegration": "isolated"}),
+                 **sharing_tests({"TestRGWNativeRIntegration": "isolated"}, label="fixture")}
+        listing = {"./integration": {"TestCephAIntegration": 1, "TestCephKillIntegration": 1, "TestHelper": 1}}
+        routed = {".": {"TestRGWNativeRIntegration": 1, "TestCIFixture": 1}}
+        selectors = {"a": (False, "^TestCephAIntegration$"), "broad": (False, "^TestCeph(A|Kill)Integration$"),
+                     "k": (False, "^TestCephKillIntegration$"), "r": (True, "^TestRGWNativeRIntegration$")}
+        self.assertEqual(plan.fixture_values(rows, selectors, tests, listing, routed),
+                         ([], {"a": "shareable", "broad": "isolated", "k": "isolated", "r": "isolated"}))
+        # The fixture's effective selector of a row with a test_run must be it,
+        # since plan groups the row by its test_run.
+        problems, _ = plan.fixture_values(rows, dict(selectors, a=(False, "^TestCeph(A|Kill)Integration$")), tests, listing, routed)
+        self.assertEqual(problems, ["a: the fixture's effective selector '^TestCeph(A|Kill)Integration$' is not the row's"
+                                    " test_run '^TestCephAIntegration$', by which plan groups it"])
+        # The reader must see exactly the native tests Go lists.
+        problems, _ = plan.fixture_values(rows, selectors, tests, {"./integration": {"TestCephAIntegration": 1}}, routed)
+        self.assertIn("native test TestCephKillIntegration is declared in a file Go does not list (build-excluded?)", problems)
+        problems, _ = plan.fixture_values(rows, selectors, tests,
+                                          {"./integration": dict(listing["./integration"], TestCephNewIntegration=1)}, routed)
+        self.assertIn("native test TestCephNewIntegration is listed by Go but not found by the fixture sharing reader", problems)
+        problems, _ = plan.fixture_values(rows, selectors, tests, listing, {".": {}})
+        self.assertIn("RGW checkpoint TestRGWNativeRIntegration: Go and the fixture sharing reader disagree on whether it exists",
+                      problems)
+        # A row the fixture reports no selector for has no value.
+        problems, values = plan.fixture_values(rows, {k: v for k, v in selectors.items() if k != "k"}, tests, listing, routed)
+        self.assertNotIn("k", values)
+        self.assertIn("k: no fixture sharing value: the fixture reports no effective selector for it", problems)
 
-        def fake(stdout="", returncode=0, stderr="", raises=None):
-            def run(command, **kwargs):
-                calls.append((command, kwargs))
-                if raises:
-                    raise raises
-                return subprocess.CompletedProcess(command, returncode, stdout, stderr)
-            return run
-
-        def event(action, output=None, test=plan.SHARING_TEST):
-            record = {"Action": action, "Package": "fixture", "Test": test}
-            if output is not None:
-                record["Output"] = output
-            return json.dumps(record)
-
-        passed = "\n".join([
-            event("run"),
-            event("output", "    sharing_test.go:9: fixture sharing row: a shareable\n"),
-            event("output", "    sharing_test.go:9: fixture sharing row: b isolated by 1 of 2 selected tests, first integration/TestCephKillIntegration\n"),
-            event("output", "    sharing_test.go:9: fixture sharing row: c shareable\n", test="TestOther"),
-            event("pass")])
-        self.assertEqual(plan.fixture_sharing(fake(passed)), ([], {"a": "shareable", "b": "isolated"}))
-        command, kwargs = calls[0]
-        self.assertEqual(command[:2], ["go", "test"])
-        self.assertIn("^%s$" % plan.SHARING_TEST, command)
-        self.assertEqual(kwargs["cwd"], str(plan.FIXTURE))
-        self.assertEqual(kwargs["env"]["GOWORK"], "off")
-        refused = "\n".join([
-            event("run"),
-            event("output", "    sharing_test.go:9: fixture sharing: integration/TestCephNewIntegration (integration/new_test.go) declares no fixture sharing\n"),
-            event("output", "    sharing_test.go:9: fixture sharing: n: no fixture sharing value: it selects integration/TestCephNewIntegration\n"),
-            event("fail")])
-        problems, values = plan.fixture_sharing(fake(refused, 1))
-        self.assertEqual(values, {})
-        self.assertEqual(problems, ["integration/TestCephNewIntegration (integration/new_test.go) declares no fixture sharing",
-                                    "n: no fixture sharing value: it selects integration/TestCephNewIntegration"])
-        for name, run in (("no test", fake('{"Action":"output","Output":"testing: warning: no tests to run\\n"}')),
-                          ("skipped", fake("\n".join([event("run"), event("skip")]))),
-                          ("build failure", fake("", 1, "go: go.mod requires go >= 1.26.0")),
-                          ("failure without a problem", fake("\n".join([event("run"), event("fail")]), 1)),
-                          ("passed with a non-zero exit", fake(passed, 2)),
-                          ("unknown value", fake("\n".join([event("run"), event("output", "fixture sharing row: a sharable\n"), event("pass")]))),
-                          ("repeated row", fake("\n".join([event("run"), event("output", "fixture sharing row: a shareable\n"),
-                                                           event("output", "fixture sharing row: a isolated by x\n"), event("pass")]))),
-                          ("no go command", fake(raises=FileNotFoundError("go")))):
-            with self.subTest(name):
-                problems, _ = plan.fixture_sharing(run)
-                self.assertEqual(len(problems), 1)
-                self.assertIn("fixture sharing", problems[0])
-
-    def test_fixture_sharing_test_is_the_one_the_planner_runs(self):
-        source = (plan.FIXTURE / "sharing_test.go").read_text(encoding="utf-8")
-        self.assertIn("func %s(t *testing.T) {" % plan.SHARING_TEST, source)
-        self.assertIn('sharingMark    = "%s"' % plan.SHARING_MARK, source)
-        self.assertIn('sharingRowMark = "%s"' % plan.SHARING_ROW_MARK, source)
-        self.assertIn("t.Error(sharingMark + problem)", source)
-        self.assertIn("t.Log(sharingRowMark + row.line())", source)
+    def test_the_fixture_never_reads_the_sharing_declarations(self):
+        for path in plan.FIXTURE.glob("*.go"):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.name):
+                self.assertNotIn('"//fixture:', text)
+                self.assertNotIn("fixture:shareable|isolated", text)
 
     def test_planner_refuses_a_row_without_a_fixture_sharing_value(self):
         rows = [entry("a"), entry("b"), entry("c")]
@@ -229,17 +229,14 @@ class CatalogTests(unittest.TestCase):
         del values[missing]
         err = io.StringIO()
         for command in ("validate", "sharing"):
-            with self.subTest(command), mock.patch.object(plan, "fixture_admission_problems", return_value=[]), \
-                mock.patch.object(plan, "sequence_problems", return_value=[]), \
-                    mock.patch.object(plan, "fixture_sharing", return_value=([], values)), \
-                    redirect_stdout(io.StringIO()), redirect_stderr(err):
+            admission, derived = passing_checks(values)
+            with self.subTest(command), admission, derived, redirect_stdout(io.StringIO()), redirect_stderr(err):
                 self.assertEqual(plan.main([command]), 1)
             self.assertIn("%s has no fixture sharing value" % missing, err.getvalue())
         declaration = "integration/TestCephNewIntegration (integration/new_test.go) declares no fixture sharing"
         err = io.StringIO()
-        with mock.patch.object(plan, "fixture_admission_problems", return_value=[]), \
-                mock.patch.object(plan, "sequence_problems", return_value=[]), \
-                mock.patch.object(plan, "fixture_sharing", return_value=([declaration], all_shareable())), \
+        with mock.patch.object(plan, "fixture_admission", return_value=([], {})), \
+                mock.patch.object(plan, "fixture_values", return_value=([declaration], all_shareable())), \
                 redirect_stdout(io.StringIO()), redirect_stderr(err):
             self.assertEqual(plan.main(["validate"]), 1)
         self.assertIn(declaration, err.getvalue())
@@ -255,12 +252,13 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual([(shareable, isolated) for _, shareable, isolated in groups],
                          [(["a.1", "a.2"], ["a.3", "a.broad"]), (["b.1"], []), ([], ["c.1"])])
         self.assertEqual(groups[0][0], {"key": "aes", "service": "aes", "family": "4"})
-        declared = {"TestCephAIntegration": {"shareable"}, "TestCephBIntegration": {"shareable"},
-                    "TestCephKillIntegration": {"isolated"}}
+        declared = sharing_tests({"TestCephAIntegration": "shareable", "TestCephBIntegration": "shareable",
+                                  "TestCephKillIntegration": "isolated"})
         out = io.StringIO()
         with mock.patch.object(plan, "load_catalog", return_value=rows), \
-                mock.patch.object(plan, "fixture_sharing", return_value=([], values)), \
-                mock.patch.object(plan, "plan_sources", return_value=declared), redirect_stdout(out):
+                mock.patch.object(plan.sharing_sources, "test_declarations", return_value=(declared, [])), \
+                mock.patch.object(plan, "fixture_admission", return_value=([], {})), \
+                mock.patch.object(plan, "fixture_values", return_value=([], values)), redirect_stdout(out):
             self.assertEqual(plan.main(["sharing"]), 0)
         self.assertIn("6 rows: 3 shareable, 3 isolated; 3 configurations, 1 with more than one shareable row", out.getvalue())
         self.assertIn("default coverage: 6 rows in 5 jobs, 1 of them fixture sequences of 2 rows", out.getvalue())
@@ -271,8 +269,9 @@ class CatalogTests(unittest.TestCase):
                 entry("a.2", test_run="^TestCephB(One|Two)Integration$"), entry("a.cap", test_run="^TestCephAIntegration$", capabilities="c"),
                 entry("a.3", test_run="^TestCephCIntegration$")]
 
-    declared = {"TestCephAIntegration": {"shareable"}, "TestCephBOneIntegration": {"shareable"}, "TestCephBTwoIntegration": {"shareable"},
-                "TestCephCIntegration": {"shareable"}, "TestCephKillIntegration": {"isolated"}}
+    declared = sharing_tests({"TestCephAIntegration": "shareable", "TestCephBOneIntegration": "shareable",
+                              "TestCephBTwoIntegration": "shareable", "TestCephCIntegration": "shareable",
+                              "TestCephKillIntegration": "isolated"})
 
     def test_planner_groups_shareable_rows_of_one_configuration_in_catalog_order(self):
         jobs = plan.matrix(self.sequence_rows(), self.declared)["include"]
@@ -299,9 +298,10 @@ class CatalogTests(unittest.TestCase):
 
     def test_a_row_with_any_selected_test_not_declared_shareable_is_not_grouped(self):
         rows = [entry("a.1", test_run="^TestCephAIntegration$"), entry("a.2", test_run="^TestCephB(One|Two)Integration$")]
-        for declared in ({**self.declared, "TestCephBTwoIntegration": {"isolated"}},
-                         {**self.declared, "TestCephBTwoIntegration": {"shareable", None}},
-                         {key: value for key, value in self.declared.items() if key != "TestCephBTwoIntegration" and key != "TestCephBOneIntegration"}):
+        for declared in ({**self.declared, **sharing_tests({"TestCephBTwoIntegration": "isolated"})},
+                         {**self.declared, **sharing_tests({"TestCephBTwoIntegration": None}, label="cephmsgr")},
+                         {key: value for key, value in self.declared.items()
+                          if key not in ("integration/TestCephBTwoIntegration", "integration/TestCephBOneIntegration")}):
             with self.subTest(declared=declared):
                 self.assertEqual(len(plan.matrix(rows, declared)["include"]), 2)
         self.assertEqual(len(plan.matrix(rows, self.declared)["include"]), 1)
@@ -309,19 +309,14 @@ class CatalogTests(unittest.TestCase):
     def test_a_large_group_is_split_in_order(self):
         names = ["TestCephG%dIntegration" % i for i in range(plan.MAX_SEQUENCE_ROWS + 2)]
         rows = [entry("g.%d" % i, test_run="^%s$" % name) for i, name in enumerate(names)]
-        jobs = plan.matrix(rows, {name: {"shareable"} for name in names})["include"]
+        jobs = plan.matrix(rows, sharing_tests({name: "shareable" for name in names}))["include"]
         self.assertEqual([job.get("sequence_rows") for job in jobs], [str(plan.MAX_SEQUENCE_ROWS), "2"])
         self.assertEqual(jobs[1]["scenarios"], "g.%d g.%d" % (plan.MAX_SEQUENCE_ROWS, plan.MAX_SEQUENCE_ROWS + 1))
 
-    def test_planner_reading_must_agree_with_the_fixture(self):
-        rows = self.sequence_rows()
-        values = {"a.1": "shareable", "x.1": "shareable", "a.kill": "isolated", "a.broad": "isolated",
-                  "a.2": "shareable", "a.cap": "shareable", "a.3": "shareable"}
-        self.assertEqual(plan.sequence_problems(rows, values, self.declared), [])
-        self.assertEqual(plan.sequence_problems(rows, dict(values, **{"a.3": "isolated"}), self.declared),
-                         ["a.3: the planner reads it as shareable, the fixture as isolated"])
-        self.assertEqual(plan.sequence_problems(rows, values, {**self.declared, "TestCephCIntegration": {None}}),
-                         ["a.3: the planner reads it as isolated, the fixture as shareable"])
+    def test_a_routed_row_is_never_grouped(self):
+        rows = [entry("r.1", test_run="^TestCephAIntegration$", rgw_native="1"),
+                entry("r.2", test_run="^TestCephCIntegration$", rgw_native="1")]
+        self.assertEqual(len(plan.matrix(rows, self.declared)["include"]), 2)
 
     def test_rows_cannot_set_the_planners_sequence_parameters(self):
         for name in plan.SEQUENCE_PARAMS:
@@ -356,7 +351,7 @@ class CatalogTests(unittest.TestCase):
             name, _, value = line.partition("=")
             self.assertTrue(name.startswith("export CEPH_"), line)
             exported[name[len("export "):]] = shlex.split(value)[0] if value else ""
-        self.assertEqual(set(exported), set(plan.workflow_bindings()))
+        self.assertEqual(exported, native_env.environment(dict(row["params"], scenario=row["id"])))
         self.assertEqual(exported["CEPH_MSGR_TEST_CAPABILITIES"], row["params"]["capabilities"])
         self.assertEqual(exported["CEPH_MSGR_TEST_RUN"], row["params"]["test_run"])
         self.assertEqual(exported["CEPH_MSGR_TEST_OSD_REPLICAS"], row["params"]["osd_replicas"])
@@ -514,18 +509,12 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(plan.selector_problems([entry("client", test_run="^TestActual$")],
                                                 {"integration": {"TestActual": 1}, "cephmsgr": {"TestActual": 1}}), [])
 
-    def test_pr_catalog_cannot_silently_add_a_trusted_runner_parameter(self):
-        from unittest.mock import patch
-        future = entry("future", mgr_service="1")
-        # Simulate main's old runner reading a PR's newer catalog.
-        with patch("scenario_plan.NATIVE_WORKFLOW") as workflow:
-            workflow.read_text.return_value = "\n".join(
-                "  CEPH_TEST_%s: ${{ matrix.%s }}" % (name.upper(), name)
-                for name in ("key", "service", "family")) + "\nname: matrix.mgr_service"
-            self.assertIn("does not support parameter mgr_service", "\n".join(plan.validate_catalog([future])))
-        self.assertEqual(plan.validate_catalog([future]), [])
-        self.assertIn("CEPH_MSGR_TEST_MGR_SERVICE: ${{ matrix.mgr_service || '0' }}",
-                      plan.NATIVE_WORKFLOW.read_text(encoding="utf-8"))
+    def test_pr_catalog_may_add_an_input_but_never_a_workflow_variable(self):
+        # A newer catalog's new parameter is forwarded by the trusted rule;
+        # whether the fixture reads it is that revision's admission.
+        self.assertEqual(plan.validate_catalog([entry("future", osd_future_mode="1")]), [])
+        text = "\n".join(plan.validate_catalog([entry("own", diagnostics="/tmp/x")]))
+        self.assertIn("does not support parameter diagnostics: CEPH_MSGR_TEST_DIAGNOSTICS is set by the native workflow", text)
 
 
 class PlannerTests(unittest.TestCase):
@@ -561,29 +550,11 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(rows, [{"key": "aes", "service": "aes", "family": "4", "osd": "1", "scenario": "o1"}])
         self.assertEqual(self.scenarios[2]["params"].get("scenario"), None, "planning must not mutate the catalog")
 
-    def test_plan_against_another_revisions_catalog(self):
-        import io
-        import os
-        import tempfile
-        from contextlib import redirect_stderr, redirect_stdout
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "catalog.json")
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump({"version": 1, "scenarios": self.scenarios}, handle)
-            out, err = io.StringIO(), io.StringIO()
-            with redirect_stdout(out), redirect_stderr(err):
-                self.assertEqual(plan.main(["plan", "--catalog", path, "--select", "o1"]), 0)
-            self.assertEqual([r["scenario"] for r in json.loads(out.getvalue())["include"]], ["o1"])
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                self.assertEqual(plan.main(["plan", "--catalog", path, "--select", "m9"]), 2)
-
     def test_cli_exit_codes(self):
         # The fixture's own admission runs in the validate command itself
         # (Basic CI); these unit tests also run with the product's Go 1.25.
-        with mock.patch.object(plan, "fixture_admission_problems", return_value=[]), \
-                mock.patch.object(plan, "sequence_problems", return_value=[]), \
-                mock.patch.object(plan, "fixture_sharing", return_value=([], all_shareable())), \
-                redirect_stdout(io.StringIO()):
+        admission, derived = passing_checks()
+        with admission, derived, redirect_stdout(io.StringIO()):
             self.assertEqual(plan.main(["validate"]), 0)
         self.assertEqual(plan.main(["plan", "--select", "no-such-scenario"]), 2)
 

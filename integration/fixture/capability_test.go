@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -29,21 +28,20 @@ func catalogCapabilities(t *testing.T, selector string) string {
 	return value
 }
 
-// ciWorkflowBindings are the trusted native workflow's matrix bindings.
-func ciWorkflowBindings(t *testing.T) map[string]ciBinding {
+// ciForwards reports whether a row parameter reaches the fixture as name:
+// a frozen legacy variable, which every job sets, or the one the forwarding
+// rule makes of the parameter that name spells.
+func ciForwards(t *testing.T, name string) bool {
 	t.Helper()
-	workflow, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "native-scenarios.yml"))
-	if err != nil {
-		t.Fatal(err)
+	if _, ok := ciRowEnvironment(t, map[string]string{})[name]; ok {
+		return true
 	}
-	bindings, err := ciBindings(string(workflow))
-	if err != nil {
-		t.Fatal(err)
+	param, ok := strings.CutPrefix(name, profileInputPrefix)
+	if !ok {
+		return false
 	}
-	if bindings["CEPH_MSGR_TEST_CAPABILITIES"] != (ciBinding{Parameter: "capabilities"}) {
-		t.Fatal("the native workflow does not forward the capabilities parameter")
-	}
-	return bindings
+	env, err := ciEnvironment(map[string]string{strings.ToLower(param): "1"})
+	return err == nil && env[name] == "1"
 }
 
 // Every requirement names a variable the native workflow forwards and the
@@ -53,7 +51,9 @@ func TestFixtureCapabilityDefinitions(t *testing.T) {
 	if len(fixtureCapabilities) == 0 {
 		t.Fatal("the fixture defines no capability")
 	}
-	bindings := ciWorkflowBindings(t)
+	if env := ciRowEnvironment(t, map[string]string{"capabilities": "x"}); env["CEPH_MSGR_TEST_CAPABILITIES"] != "x" {
+		t.Fatal("the native workflow does not forward the capabilities parameter")
+	}
 	reported := profile{}.containerEnvironment()
 	for name, c := range fixtureCapabilities {
 		if !capabilityNamePattern.MatchString(name) || c.summary == "" {
@@ -67,7 +67,7 @@ func TestFixtureCapabilityDefinitions(t *testing.T) {
 				}
 			default:
 				variable, _, _ := strings.Cut(term, "=")
-				_, forwarded := bindings["CEPH_MSGR_TEST_"+variable]
+				forwarded := ciForwards(t, "CEPH_MSGR_TEST_"+variable)
 				if _, ok := reported["CEPH_MSGR_TEST_"+variable]; !ok || !forwarded {
 					t.Fatalf("%s requires %s, which the workflow does not forward or the profile does not report", name, term)
 				}
@@ -172,10 +172,19 @@ func TestFixtureRefusesCapabilityOutsideItsDeclaration(t *testing.T) {
 // capability admitted on the row's topology. A capability's requirement terms
 // are only part of what loadProfile checks, so no reading of those terms can
 // stand in for this.
-func catalogAdmissionProblems(rows []ciScenario, bindings map[string]ciBinding) []string {
+// ciSelectorLine is the selectorRowMark line of one admitted row.
+func ciSelectorLine(id string, p profile) string {
+	routed := "0"
+	if p.rgwNative == "1" {
+		routed = "1"
+	}
+	return fmt.Sprintf("%s %s %s", id, routed, p.testRun)
+}
+
+func catalogAdmissionProblems(rows []ciScenario) []string {
 	var problems []string
 	for _, row := range rows {
-		p, err := ciProfile(row, bindings)
+		p, err := ciProfile(row)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: the fixture refuses the row: %v", row.ID, err))
 			continue
@@ -197,12 +206,26 @@ func catalogAdmissionProblems(rows []ciScenario, bindings map[string]ciBinding) 
 	return problems
 }
 
+// selectorRowMark marks the line that reports one admitted row's effective
+// selector: "<id> <routed 0|1> <selector>". The fixture is the only authority
+// on a row's effective selector (its own default when the row has no
+// test_run); tools/fixture_sharing.py derives each row's fixture sharing
+// value from it and from the //fixture: declarations, which this module
+// never reads.
+const selectorRowMark = "catalog selector row: "
+
 // tools/scenario_plan.py validate runs this test and reports each line marked
 // "catalog admission: " as a catalog problem, so a row the fixture refuses
-// fails validation with the fixture's own error.
+// fails validation with the fixture's own error. It reads every admitted
+// row's effective selector from the lines marked selectorRowMark.
 func TestCatalogRowsAreAdmittedByTheFixture(t *testing.T) {
 	rows := ciRepositoryCatalog(t)
-	for _, problem := range catalogAdmissionProblems(rows, ciWorkflowBindings(t)) {
+	for _, row := range rows {
+		if p, err := ciProfile(row); err == nil {
+			t.Log(selectorRowMark + ciSelectorLine(row.ID, p))
+		}
+	}
+	for _, problem := range catalogAdmissionProblems(rows) {
 		t.Error("catalog admission: " + problem)
 	}
 	if !slices.ContainsFunc(rows, func(row ciScenario) bool { return row.Params["capabilities"] != "" }) {
@@ -220,22 +243,18 @@ func TestCatalogRowsAreAdmittedByTheFixture(t *testing.T) {
 		if err != nil {
 			t.Fatal("catalog admission: planned jobs:", err)
 		}
-		for _, problem := range plannedJobAdmissionProblems(jobs, ciWorkflowBindings(t)) {
+		for _, problem := range plannedJobAdmissionProblems(jobs) {
 			t.Error("catalog admission: " + problem)
 		}
 	}
 }
 
 // plannedJobAdmissionProblems passes each planned fixture sequence job, as the
-// native workflow forwards it, through loadProfile.
-func plannedJobAdmissionProblems(jobs []map[string]string, bindings map[string]ciBinding) []string {
+// native workflow forwards its whole matrix, through loadProfile.
+func plannedJobAdmissionProblems(jobs []map[string]string) []string {
 	var problems []string
 	for _, job := range jobs {
-		params := maps.Clone(job)
-		for _, planner := range []string{"scenario", "scenarios", "sequence_rows"} {
-			delete(params, planner)
-		}
-		p, err := ciProfile(ciScenario{ID: job["scenario"], Params: params}, bindings)
+		p, err := ciProfile(ciScenario{ID: job["scenario"], Params: job})
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("planned sequence %s: the fixture refuses it: %v", job["scenarios"], err))
 		} else if job["test_sequence"] != "" && p.sequence != job["test_sequence"] {
@@ -252,7 +271,6 @@ func plannedJobAdmissionProblems(jobs []map[string]string, bindings map[string]c
 // repeat. The admission is the fixture's, so each such row is refused, while
 // the row as the catalog declares it is admitted.
 func TestCatalogAdmissionRefusesCapabilityOnRefusedTopology(t *testing.T) {
-	bindings := ciWorkflowBindings(t)
 	const failover = "^TestCephOSDErasureOptimizedK2M2FailoverIntegration$"
 	var row ciScenario
 	for _, candidate := range ciRepositoryCatalog(t) {
@@ -263,7 +281,7 @@ func TestCatalogAdmissionRefusesCapabilityOnRefusedTopology(t *testing.T) {
 	if row.ID == "" || row.Params["capabilities"] != capOSDErasureWidth.name {
 		t.Fatalf("no catalog row declares %s for %s", capOSDErasureWidth.name, failover)
 	}
-	if problems := catalogAdmissionProblems([]ciScenario{row}, bindings); len(problems) != 0 {
+	if problems := catalogAdmissionProblems([]ciScenario{row}); len(problems) != 0 {
 		t.Fatal("the catalog's own row is refused:", problems)
 	}
 	for name, change := range map[string]map[string]string{
@@ -280,7 +298,7 @@ func TestCatalogAdmissionRefusesCapabilityOnRefusedTopology(t *testing.T) {
 	} {
 		mutated := ciScenario{ID: row.ID, Params: maps.Clone(row.Params)}
 		maps.Copy(mutated.Params, change)
-		problems := catalogAdmissionProblems([]ciScenario{mutated}, bindings)
+		problems := catalogAdmissionProblems([]ciScenario{mutated})
 		if len(problems) == 0 || !strings.HasPrefix(problems[0], row.ID+": ") {
 			t.Fatalf("%s: row admitted: %v", name, problems)
 		}
@@ -294,7 +312,6 @@ func TestCatalogAdmissionRefusesCapabilityOnRefusedTopology(t *testing.T) {
 // mode is admitted without an edit to loadProfile or to any other
 // capability's requirements.
 func TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture(t *testing.T) {
-	bindings := ciWorkflowBindings(t)
 	byFixture := map[ownFixture][]string{}
 	for name, c := range fixtureCapabilities {
 		if c.exclusive != "" {
@@ -336,7 +353,7 @@ func TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture(t *testing.T) {
 				if name == own.name {
 					continue
 				}
-				problems := catalogAdmissionProblems([]ciScenario{replace(row, own.name, name)}, bindings)
+				problems := catalogAdmissionProblems([]ciScenario{replace(row, own.name, name)})
 				if f != own.exclusive && len(problems) == 0 {
 					t.Fatalf("%s: capability %s of the %s fixture admitted on the %s fixture", row.ID, name, f, own.exclusive)
 				}
@@ -344,7 +361,7 @@ func TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture(t *testing.T) {
 					// Both declared: refused whatever their own terms say.
 					both := maps.Clone(row.Params)
 					both["capabilities"] = strings.Join(slices.Sorted(slices.Values(append(strings.Split(row.Params["capabilities"], ","), name))), ",")
-					problems = catalogAdmissionProblems([]ciScenario{{ID: row.ID, Params: both}}, bindings)
+					problems = catalogAdmissionProblems([]ciScenario{{ID: row.ID, Params: both}})
 					if len(problems) == 0 {
 						t.Fatalf("%s: two exclusive capabilities %s and %s of the %s fixture admitted", row.ID, own.name, name, f)
 					}
@@ -362,7 +379,7 @@ func TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture(t *testing.T) {
 			}
 			const name = "merge-proof-other-exclusive"
 			defineExclusiveCapability(f, name, "a capability of another fixture defined by this test", "OSD=1", nil)
-			problems := catalogAdmissionProblems([]ciScenario{replace(row, own.name, name)}, bindings)
+			problems := catalogAdmissionProblems([]ciScenario{replace(row, own.name, name)})
 			delete(fixtureCapabilities, name)
 			if len(problems) == 0 {
 				t.Fatalf("%s: an exclusive capability of the %s fixture admitted on the %s fixture", row.ID, f, own.exclusive)
@@ -374,7 +391,7 @@ func TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture(t *testing.T) {
 		if row.Params["capabilities"] == own.name {
 			const name = "merge-proof-exclusive"
 			defineExclusiveCapability(own.exclusive, name, "a capability defined by this test", "OSD=1", nil)
-			if len(catalogAdmissionProblems([]ciScenario{replace(row, own.name, name)}, bindings)) == 0 {
+			if len(catalogAdmissionProblems([]ciScenario{replace(row, own.name, name)})) == 0 {
 				admittedNew[own.exclusive] = true
 			}
 			delete(fixtureCapabilities, name)

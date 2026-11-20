@@ -21,15 +21,6 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
-// TestCephMDSCephFSCompletionIntegration accepts the request-completion and
-// reconnect edge cases of a restarted rank-0 MDS against live Tentacle
-// daemons: a lost reply of a delivered request and a REPLAY answered from the
-// completed-request record (one restart, ms_blackhole_client on the old
-// incarnation only), a denied reconnect, a missed reconnect window with OSD
-// fencing, a forced read-only filesystem, a dentry lease RENEW and a cap snap
-// flush. See integration/fixture/MDS_CEPHFS_COMPLETION_FIXTURE.md and
-// MDS_CEPHFS_COMPLETION_VALIDATION.md.
-
 type nativeMDSCephFSCompletionPlan struct {
 	Directory        string   `json:"directory"`
 	Children         []string `json:"children"`
@@ -486,6 +477,27 @@ type completionSnapEvidence struct {
 	SnapshotRemoved     *nativeMDSCephFSOutput
 }
 
+// TestCephMDSCephFSCompletionIntegration accepts the request-completion and
+// reconnect edge cases of a restarted rank-0 MDS against live Tentacle
+// daemons: a lost reply of a delivered request and a REPLAY answered from the
+// completed-request record (one restart, ms_blackhole_client on the old
+// incarnation only), a denied reconnect, a missed reconnect window with OSD
+// fencing, a forced read-only filesystem, a dentry lease RENEW and a cap snap
+// flush. The lost reply needs mds_log_pause and mds_early_reply false before
+// the blackhole, since the blackhole alone lets the Messenger ack and drop the
+// request. A retried MKDIR found in the completed-request record is answered
+// as LOOKUP (Server::handle_client_request).
+//
+// The DELEG_INO leaves compare openc_response_t ranges with native
+// delegated_inos (Server::set_reply_extra_bl). mds_client_delegate_inos_pct is
+// read only at Server construction, so it is set centrally before a restart.
+// Not verified: completed-record answers for other operations, the GETATTR,
+// MKNOD and SYMLINK conversions, a lost OPEN|O_CREAT reply, async directory
+// operations and multi-snapshot cap snaps.
+//
+//scenario:row mds-cephfs-completion.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscompletion key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1
+//scenario:row mds-cephfs-completion.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscompletion key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1
+//scenario:covers CLIENT to MDS/CephFS
 //fixture:isolated mds fail restarts the owned MDS, evicts a session, force-readonly and runtime overrides; start state not proven
 func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION") != "1" {

@@ -18,7 +18,16 @@ import (
 
 // Both admitted copy opcodes may lead xattr edits. Native C API/CLI reads
 // independently observe object state; they do not execute a twin copy vector.
+// The pinned server omits an empty OMAP key from a copy: do_copy_get starts
+// OMAP enumeration at "" with UPPER_BOUND (src/osd/PrimaryLogPG.cc at v20.2.4),
+// and a single native `rados cp` baseline reproduces that, so Go's result is
+// compared with the baseline rather than the raw source inventory. The copy
+// takes the source mtime, not the request stamp (finish_copyfrom). SETXATTR
+// before a copy, or READ, WRITEFULL, STAT or another copy after it, is refused
+// known-unsent; the next STAT on the connection has the copy TID plus one.
+// Not verified: snapshot or TRUNCATE_SEQ compounds, EC and request-v9 replies.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable copies and edits only its owned UUID objects; checked omap-write cleanup removes them
 func TestCephOSDCopyFromCompoundIntegration(t *testing.T) {
 	fixture, request := osdFixture, osdObjectRequest

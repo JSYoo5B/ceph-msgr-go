@@ -18,8 +18,10 @@ package osd
 // Each is accepted only as a standalone, flagless head operation in this initial
 // scope; compound ordering, snapshot interaction and the cache-tier agent paths
 // that also emit them are deliberately left to a later contract. The cache-tier
-// opcodes (cache_op.go) need a cache tier; the dedup-manifest SET_CHUNK opcode
-// is not implemented.
+// opcodes (cache_op.go) return -EINVAL on a pool that is not a cache tier.
+// SET_CHUNK (set_chunk.go) and the TIER_* operations (tier_op.go) are separate
+// manifest contracts, although TIER_FLUSH and TIER_EVICT clear the dirty flag
+// of the object they act on.
 const (
 	Isdirty uint16 = 0x121d
 	Undirty uint16 = 0x221c

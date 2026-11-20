@@ -76,6 +76,18 @@ func (e *PoolOpError) Error() string { return fmt.Sprintf("ceph: pool op result 
 // allocates two ids. The MON requires its pool-op capabilities for the
 // identity (MON "osd" write, or the unmanaged-snapshot rule for self-managed
 // operations) and answers EPERM otherwise.
+//
+// Server answers per ceph/ceph/blob/v20.2.4/src/mon/OSDMonitor.cc
+// (enforce_pool_op_caps, preprocess_pool_op, prepare_pool_op): the capability
+// check precedes pool existence and snapshot mode; an absent pool is ENOENT;
+// a pool is in either self-managed or pool-snapshot mode and the other family
+// is EINVAL; re-creating an existing pool snapshot and removing an absent one
+// answer 0; removing a self-managed id above the pool's sequence is ENOENT;
+// pools attached to a filesystem refuse both families with EOPNOTSUPP. A
+// negative code returns *PoolOpError together with the result. An allocated id
+// is only usable as a write SnapContext once the OSDs hold the updated map;
+// PoolOp does not wait for that. A MON that dies (rather than freezes) after
+// forwarding a pool op is not verified natively.
 func (c *Client) PoolOp(ctx context.Context, request PoolOpRequest) (PoolOpResult, error) {
 	var result PoolOpResult
 	switch request.Op {

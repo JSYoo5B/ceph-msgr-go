@@ -215,6 +215,16 @@ func mdsFreshKeepalive(ctx context.Context, tr *session.Transport, evidence *mds
 	return errors.New("MDS did not acknowledge within the bounded control-frame count")
 }
 
+// TestCephMDSFreshIntegration accepts the internal fresh MDS handshake
+// (session.HandshakeFreshMDS) and one authenticated keepalive whose ACK must
+// echo its timestamp. The native session list must not show the GlobalID: an
+// accepted connection holds only a closed Session until OPEN
+// (mds/MDSDaemon.cc). Not established: CephFS OPEN, sessions, metadata I/O,
+// failover and replay.
+//
+//scenario:row mds-fresh.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-mdsfresh key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8 mds_fresh=1
+//scenario:row mds-fresh.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-mdsfresh key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=replicated-pg-reply-v8 mds_fresh=1
+//scenario:covers CLIENT to MDS/CephFS
 //fixture:shareable authenticates and sends MDS keepalives only; native session-map reads, no CephFS session opened
 func TestCephMDSFreshIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_FRESH") != "1" {

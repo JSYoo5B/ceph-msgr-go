@@ -13,6 +13,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated stops the active MGR process and runs mgr fail; the deferred resume is not followed by a readiness check
 func TestCephPausedManagerIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
@@ -79,6 +80,8 @@ func TestCephPausedManagerIntegration(t *testing.T) {
 	t.Logf("paused MGR=%s: open socket silence detected and standby command passed", name)
 }
 
+//scenario:covers CLIENT to MON/MGR
+//scenario:covers Daemon-to-daemon
 //fixture:isolated stops one MON process; the deferred resume does not wait for that MON to rejoin quorum
 func TestCephPausedMonitorIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")

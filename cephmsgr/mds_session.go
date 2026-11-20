@@ -71,7 +71,9 @@ const (
 func MDSSessionClientFeatures() []byte { return slices.Clone(mds.ClientFeatures) }
 
 // MDSCephFSClientFeatures is the bitset an EnableCephFS session declares:
-// bits 0-10, 12, 15 and 18-20 (see MDS_CEPHFS_CONTRACT.md).
+// bits 0-10, 12, 13, 15 and 18-20 (0x1cb7ff in native `session ls`). DELEG_INO
+// (13) is decode only: it selects the openc_response_t create-reply extra and
+// enables no asynchronous directory operation.
 func MDSCephFSClientFeatures() []byte { return slices.Clone(mds.CephFSClientFeatures) }
 
 // MDSClientFeatures is the exact bitset this client declares in REQUEST_OPEN.
@@ -173,7 +175,11 @@ type MDSSessionStatus struct {
 // MDSSession is one CephFS client session on an MDSConnection: open, renew,
 // close and session events, plus (with EnableCephFS) metadata requests, MDS
 // pushes, explicit capability/lease answers and reconnect. The library keeps
-// no inode, capability or cache state of its own.
+// no inode, capability or cache state of its own. Client.Close performs no
+// graceful CephFS close: an unresolved remote session is evicted by the MDS
+// after session_autoclose and, with the default
+// mds_session_blocklist_on_timeout, its address is blocklisted
+// (mds/Server.cc find_idle_sessions).
 type MDSSession struct {
 	conn          *MDSConnection
 	generation    uint64

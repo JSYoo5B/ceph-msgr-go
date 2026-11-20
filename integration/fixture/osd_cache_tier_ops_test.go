@@ -6,7 +6,7 @@ import (
 )
 
 // cacheTierOpsSelector is a native test that declares
-// exclusive-osd-cache-pools (catalog.d/osd-cache-pools.json).
+// exclusive-osd-cache-pools (its //scenario:row declarations).
 const cacheTierOpsSelector = "^TestCephOSDCacheTierOpsIntegration$"
 
 func TestCacheTierOpsSelectorReusesExclusiveCachePoolProfile(t *testing.T) {

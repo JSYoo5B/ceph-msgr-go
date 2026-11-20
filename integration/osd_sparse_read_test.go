@@ -70,6 +70,17 @@ func sparseReadOracleAt(t *testing.T, ctx context.Context, name string, offset, 
 	return result
 }
 
+// TestCephOSDSparseReadIntegration compares Go SPARSE_READ for the exact
+// submitted offset and length with public native C++ IoCtx::sparse_read:
+// dense, full and partial reads, clipped and exact EOF, past EOF, sparse
+// ranges and holes, ENOENT, and an isolated output-budget failure. The native
+// success result is an extent count, whereas the Go per-operation result is
+// zero. Object bytes, nanosecond mtime, xattrs and version are observed before
+// and after. BlueStore and MemStore allocation layouts are compared as
+// observed, not normalized into one layout. The comparison needs the optional
+// native helper and skips without it.
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable writes owned UUID objects in the fixture pool; checked cleanup removes them
 func TestCephOSDSparseReadIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE") != "1" {

@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import unittest
 
+import native_env
 import scenario_plan
 
 
@@ -42,6 +43,12 @@ class RowsTestCase(unittest.TestCase):
         cls.entries = scenario_plan.load_catalog()
         cls.rows = [dict(entry["params"]) for entry in cls.entries]
         cls.declared = declared_tests("integration")
+
+    def assert_forwarded(self, param, name, fallback):
+        # The native workflow's runner receives the parameter as name
+        # (native_env.py), with fallback when the row does not set it.
+        self.assertEqual(native_env.environment({})[name], fallback)
+        self.assertEqual(native_env.environment({param: "x"})[name], "x")
 
     def client_tests(self):
         return declared_tests("cephmsgr")

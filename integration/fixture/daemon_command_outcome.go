@@ -563,6 +563,8 @@ func (c *fixtureCluster) controlDaemonCommandRequest(ctx context.Context, out st
 	return publishAck(out, "daemon-command-observed."+fields[0])
 }
 
+var _ = defineControl("daemon-command", frozenControlRank(62), (*fixtureCluster).controlDaemonCommandRequest)
+
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.
 var _ = collectDiagnosticFiles(

@@ -1,5 +1,26 @@
-// Package mds implements bounded current Tentacle map wire decoding. It does
-// not select a filesystem/rank, authenticate an MDS, or implement CephFS I/O.
+// Package mds implements the bounded current Tentacle MDS wire codecs: FSMapUser
+// and MDSMap, MClientSession and reclaim, MClientRequest/Reply/Forward,
+// MClientReconnect and the capability, lease, snapshot and quota messages. It
+// does not select a filesystem or rank, authenticate an MDS, or implement
+// CephFS I/O.
+//
+// Each codec accepts exactly its current pinned form (for example MMDSMap
+// header 2/compat 1, inner MDSMap struct 5/compat 4, mds_info_t struct
+// 10/compat 4); newer compatible structs and trailing bytes are refused rather
+// than skipped as native DECODE_START would. FSMapUser carries no cluster FSID
+// and MMDSMap no FSCID; its map_fs_name does not bind a filesystem, so callers
+// supply the FSCID. CompatSet masks and names are kept as encoded, without the
+// native in-memory repairs, and the required-client feature_bitset_t is kept as
+// raw bytes: preserving a requirement does not mean the client implements it.
+// Collections are capped (MaxMapEntries, MaxFeatureNames, MaxClientFeatureBytes)
+// and counts are checked against minimum wire size before allocation. The
+// current MMDSMap encoding is selected by a peer with PGID64, MDSENC, MSG_ADDR2
+// and SERVER_NAUTILUS (messages/MMDSMap.h encode_payload).
+//
+// The codecs are independently written from LGPL-2.1 Ceph v20.2.4 sources;
+// no code is copied. The native vectors under testdata were produced by fresh
+// native objects through canonical Message::encode, whose zero-compat
+// normalization is why FSMapUser compat 0 is refused here.
 package mds
 
 import (
@@ -8,7 +29,9 @@ import (
 )
 
 const (
-	FSMapUserMessage      uint16 = 103
+	// FSMapUserMessage is received in the exact current header form 1/1.
+	FSMapUserMessage uint16 = 103
+	// MDSMapMessageType is received in the exact current header form 2/1.
 	MDSMapMessageType     uint16 = 21
 	MaxMapEntries         uint32 = 4096
 	MaxFeatureNames       uint32 = 1024

@@ -12,6 +12,17 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/osd"
 )
 
+// nativeCallFixture reads one of the five call-native-* vectors (regenerate with
+// `encode-osd-call`, see runNativeEncoder in integration/fixture; provenance in
+// internal/osd/testdata/call-native-provenance.json). CALL is RD|EXEC in
+// rados.h, so the wrapper sets the READ/WRITE request bit from the caller mode as
+// ClassInput.Mode does. Reply shapes follow ceph/ceph/blob/v20.2.4: the handler
+// records the method output length in extent.length (src/osd/PrimaryLogPG.cc);
+// hello.write_return_data returns 42 with 18 bytes and
+// hello.write_too_much_return_data overflows the RETURNVEC bound to -EOVERFLOW
+// with the output cleared (src/cls/hello/cls_hello.cc); an unregistered method
+// maps to -EOPNOTSUPP before execution (src/osd/osd_op_util.cc) and
+// OSDService::reply_op_error keeps only the request's ONDISK bit (src/osd/OSD.cc).
 func nativeCallFixture(t *testing.T, name, segment string) []byte {
 	t.Helper()
 	p, err := os.ReadFile("../internal/osd/testdata/" + name + "." + segment + ".hex")

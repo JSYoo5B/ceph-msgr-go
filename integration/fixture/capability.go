@@ -13,9 +13,9 @@ import (
 // mode only when its capability is declared, the selector is exactly one
 // anchored test (^TestName$) and the profile meets the capability's
 // requirements. It never names the test that owns a mode and does not know
-// where the declaration comes from: today a catalog row declares it
-// (.github/scenarios/catalog.d), and a declaration beside the test can supply
-// the same two values without a fixture change.
+// where the declaration comes from: the row declared beside the test that
+// owns the mode supplies both values (//scenario:row ... capabilities=<name>,
+// .github/scenarios/README.md).
 //
 // Each capability is defined once, beside the mode it admits, by one
 // defineCapability call. Those calls are the whole vocabulary. The planner

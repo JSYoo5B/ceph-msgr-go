@@ -6,6 +6,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
+// LogMessage is received; header compat above 1 is refused.
 const LogMessage uint16 = 52
 
 // LogBatch is a MON log-service update. Version is the service cursor, distinct

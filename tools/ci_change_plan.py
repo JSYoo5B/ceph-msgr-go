@@ -99,7 +99,7 @@ def recommend(entries, groups, skip, fallback):
 
 
 def plan(root, event, fork, base, head):
-    document = scenario_catalog.load(root / scenario_catalog.CATALOG)
+    document = scenario_catalog.load(root)
     groups = sorted({row["group"] for row in document["scenarios"]})
     if not groups:
         raise ValueError("catalog has no native groups")

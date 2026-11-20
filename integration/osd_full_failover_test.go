@@ -20,8 +20,11 @@ import (
 // SIGKILLed: it ends as an unknown outcome and never executes. At the new
 // primary FULL_TRY is still refused with -ENOSPC and FULL_FORCE writes. The
 // ratios are restored before the killed OSD restarts (backfill would otherwise
-// be held as too full).
+// be held as too full). The killed OSD stays listed as full until it restarts
+// and reports, so the test waits for the full set to empty and for clean PGs.
 //
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
 //fixture:isolated lowers full ratios, kills and restarts an OSD without a pg_temp proof; rewrites the fixture object unverified
 func TestCephOSDFullFailoverIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" || isReplicatedPGFixtureProfile() {

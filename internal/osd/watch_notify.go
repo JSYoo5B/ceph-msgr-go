@@ -11,9 +11,11 @@ import (
 // include/rados.h, osdc/Objecter.h, messages/MWatchNotify.h and osd/Watch.cc.
 // Upstream sources are LGPL-2.1; no implementation is copied.
 const (
-	Watch                uint16 = 0x220f
-	Notify               uint16 = 0x1206
-	NotifyAck            uint16 = 0x1207
+	Watch     uint16 = 0x220f
+	Notify    uint16 = 0x1206
+	NotifyAck uint16 = 0x1207
+	// WatchNotifyMessage is received with header exactly 3/1 and inner event
+	// version 1.
 	WatchNotifyMessage   uint16 = 44
 	WatchUnwatch         uint8  = 0
 	WatchRegister        uint8  = 3
@@ -25,6 +27,17 @@ const (
 )
 
 // Data carries the notification or ACK blob; this structure holds wire metadata.
+// The WATCH union is cookie u64, unused version u64 (zero), action u8,
+// registration generation u32, timeout u32 and zeros; NOTIFY carries the
+// cookie and an input of protocol u32 (1), timeout u32 and a length-prefixed
+// blob, and its success output is the notify ID; NOTIFY_ACK has a zero union
+// and an input of notify ID, cookie and a length-prefixed reply. The legacy
+// WATCH action 1 is refused. Each is a single head operation without flags or
+// snapshot input. MWatchNotify is accepted only as the current header and
+// payload version, with the front blob kept apart from the message data;
+// unknown opcodes or malformed fields fail the session. The event carries no
+// registration generation or object, so the receiver binds it to the
+// authenticated source session.
 type WatchInput struct {
 	Cookie, Version, NotifyID                   uint64
 	Generation, TimeoutSeconds, ProtocolVersion uint32

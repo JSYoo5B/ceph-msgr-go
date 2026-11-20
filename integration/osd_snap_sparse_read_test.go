@@ -29,6 +29,13 @@ import (
 // store's (BlueStore logical extents, MemStore whole ranges); the native
 // client decides the expected map on the active store.
 //
+// The clone's own size bounds the read, even where the head holds data. A snap
+// id at or below the snapset seq with no covering clone is -ENOENT, not the
+// head: PrimaryLogPG::find_object_context returns the head only when the snap
+// id exceeds the snapset seq, and otherwise the first clone at or above it
+// (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc). Not verified: a snap id in
+// the removed-snaps queue, EC pools and compound vectors.
+//
 //fixture:isolated allocates self-managed snaps on the shared fixture pool, leaving its selfmanaged_snaps flag set
 func TestCephOSDSnapshotSparseReadIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE") != "1" {

@@ -89,7 +89,8 @@ func (p mdsCephFSRecoveryPlan) path(target string) (string, error) {
 		return root, nil
 	case target == "replayed":
 		// The replayed create has a fresh parent whose scatter locks carry
-		// no aged dirty state (see MDS_CEPHFS_RECOVERY_VALIDATION.md).
+		// no aged dirty state, so a Locker::scatter_writebehind cannot hold
+		// the create's wrlocks.
 		return root + "/boundary/" + target, nil
 	case slices.Contains(mdsCephFSRecoveryNames, target):
 		return root + "/" + target, nil

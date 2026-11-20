@@ -12,10 +12,16 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/osd"
 )
 
-// Fresh native SDK objects encoded these payloads independently of Go. The
-// synthetic peer verifies public submission, ONDISK acceptance, FAILOK and
-// known-refusal conversion with raw outputs. It does not establish live OMAP
-// execution, staging, durability, header storage or authentication.
+// Fresh native SDK objects encoded these payloads independently of Go: the five
+// omap-write-native-* vectors (GETHEADER plus SETVALS, SETHEADER, RMKEYS and a
+// FAILOK CLEAR; regenerate with `encode-osd-omap-writes`, see runNativeEncoder in
+// integration/fixture; provenance in
+// internal/osd/testdata/omap-write-native-provenance.json). The SETVALS map and
+// RMKEYS set are native std::map/std::set members, so native byte order is the
+// reference for Go's sorting. The synthetic peer verifies public submission,
+// ONDISK acceptance, FAILOK and known-refusal conversion with raw outputs. It
+// does not establish live OMAP execution, staging, durability, header storage or
+// authentication.
 func TestOSDOmapWritePublicResultsMatchFreshNativePayloads(t *testing.T) {
 	header := OSDOperation{Code: OSDGetOmapHeader, Omap: OSDOmapInput{MaxOutputBytes: 5}}
 	set := OSDOperation{Code: OSDSetOmapValues, Omap: OSDOmapInput{Entries: []OSDOmapEntry{

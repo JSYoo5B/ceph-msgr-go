@@ -18,6 +18,14 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+// TestCephOSDXattrCrashIntegration commits one APPEND+SET+RM vector with
+// ONDISK, SIGKILLs the selected primary (exit 137, not OOM) and reads the
+// degraded PG through the new primary from native placement: STAT, READ, GET,
+// GETALL and the removed attribute's ENODATA match the native snapshot, and no
+// recovery write replays the vector. The remaining two replicas are readable
+// but not clean.
+//
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills the metadata primary OSD and restarts it; the clean wait lacks a pg_temp proof
 func TestCephOSDXattrCrashIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

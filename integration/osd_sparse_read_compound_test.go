@@ -37,6 +37,20 @@ func sparseReadCompoundExpect(op cephmsgr.OSDOperation, full []cephmsgr.OSDExten
 	return uint64(len(bytesOut)), extents, bytesOut
 }
 
+// TestCephOSDSparseReadCompoundIntegration sends read-only SPARSE_READ and
+// READ compounds (mixed dense ranges, EOF clipping, the librbd layout across
+// holes, hole-only ranges, per-op fadvise hints) and checks each per-op union,
+// result, extents and bytes against the intersection of the native rados
+// mapext full map with the operation's range, plus the raw data partition.
+// Every SPARSE_READ result must equal the same operation sent alone, and the
+// reply user version the native stat version. A missing object is -2 with
+// all-zero per-op results and no output; SPARSE_READ beside STAT, MAPEXT,
+// FAILOK or a write is refused locally; an over-budget output is an unknown
+// outcome on a separate client. The native client does not execute the
+// compound itself. Not verified: snapshot compounds, replica reads, EC,
+// mid-vector daemon errors, faults and resubmission.
+//
+//scenario:covers CLIENT to OSD
 //fixture:shareable writes owned UUID objects in the fixture pool; checked cleanup removes them
 func TestCephOSDSparseReadCompoundIntegration(t *testing.T) {
 	fixture := osdFixture

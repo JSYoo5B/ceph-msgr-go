@@ -10,7 +10,7 @@ import (
 
 // The native wrapper built the same logical inputs with MOSDOp's snapshot
 // setters and the pinned rollback/list_snaps builders, which add no per-op
-// flag. See testdata/snap-native-README.md.
+// flag (see TestSnapshotRequestsMatchFreshNativeEncoder).
 func snapNativeRequest(ops ...Operation) Request {
 	return Request{ClientInc: 1, MapEpoch: 11, Hash: 0x11223344, Object: "snap-codec",
 		Locator: Locator{Pool: 7, Key: "route-key", Namespace: "tenant", Hash: -1}, Operations: ops}
@@ -29,8 +29,16 @@ var (
 	snapNativeList     = Operation{Code: ListSnaps, ListSnaps: ListSnapsInput{MaxOutputBytes: 512}}
 )
 
-// These payloads came from fresh native encoders and separate native decoders.
-// Their headers use explicit offline sequence/ACK inputs, not a live session.
+// TestSnapshotRequestsMatchFreshNativeEncoder compares the four requests of the
+// eight snap-native-* vectors (regenerate with `encode-osd-snap`, see
+// runNativeEncoder in integration/fixture; provenance in
+// testdata/snap-native-provenance.json): READ/STAT at clone snap 4, an ORDERSNAP
+// WRITEFULL and a ROLLBACK to snap 4 with context 7/[7,4,2], and LIST_SNAPS at
+// SNAPDIR. Fresh native encoders built them through the public Objecter builders
+// and request setters in the order Objecter::_prepare_osd_op uses
+// (ceph/ceph/blob/v20.2.4/src/osdc/Objecter.cc 3394-3396); separate native
+// decoders checked them. Headers use offline sequence/ACK inputs, not a live
+// session.
 func TestSnapshotRequestsMatchFreshNativeEncoder(t *testing.T) {
 	read := snapNativeRequest(snapNativeRead...)
 	read.ReadSnap = 4
@@ -76,6 +84,16 @@ func TestSnapshotRequestsMatchFreshNativeEncoder(t *testing.T) {
 	}
 }
 
+// TestDecodeFreshNativeSnapshotReplies decodes the four constructed snap-native
+// replies. Their shapes follow ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc:
+// the listing is obj_list_snap_response_t (src/osd/osd_types.h) with the head
+// last, completed by complete_read_ctx (ACK|ONDISK, versions 0'0 and the head
+// user version); ROLLBACK commits through the on-commit ACK|ONDISK callback;
+// EOLDSNAPC (-85, rados.h, not a host errno) repeats OSDService::reply_op_error
+// (src/osd/OSD.cc), keeping only the request's ONDISK bit, zero versions and the
+// unexecuted op echo; the clone READ/STAT reply is complete_read_ctx output.
+// They claim no live snapshot creation, clone layout, rollback or EOLDSNAPC
+// detection.
 func TestDecodeFreshNativeSnapshotReplies(t *testing.T) {
 	read := FlagRead | FlagAck | FlagOnDisk | FlagReturnVec
 	for _, tc := range []struct {

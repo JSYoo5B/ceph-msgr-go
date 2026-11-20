@@ -14,6 +14,16 @@ size/min_size 1/1 to 2/2, and restores the recorded values in finally. A detache
 worker also restores after a bounded observation deadline if the Go test dies.
 It does not create or decode backoff messages: actual BLOCK/ACK/UNBLOCK evidence
 must come from the Go connection and daemon, separately from these state receipts.
+
+A successful Go AckBackoff only means the local send path accepted the ACK.
+PG query holds no backoff state and UNBLOCK is sent even without an ACK
+(PG.cc:626-655), so the optional ack-history observation matches a completed
+`dump_historic_ops` record instead: MOSDBackoff::print gives the PG, ack-block
+op, ID and epoch (messages/MOSDBackoff.h:75-81), OpRequest::_dump attributes
+`client.<global_id>` (osd/OpRequest.cc:53-65), and `reached_pg` is set by
+OSD::dequeue_op before the PG handler (osd/OSD.cc:9929-9936). Only that minimal
+identity is retained. This proves ACK reception at the PG, not
+Session::Backoff::STATE_ACKED, mutation execution or durability.
 Native Ceph CLI/librados dependencies are development-only. No upstream code is
 copied; referenced Ceph implementation sources carry LGPL-2.1 notices.
 """
@@ -36,7 +46,9 @@ NAME = "osd-backoff"
 PROFILES = ("replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8")
 MAX_OUTPUT = 1 << 20
 # The fixture deliberately retains 1024 native operations for ACK evidence.
-# Only its fixed historic-op query has this separate bounded JSON budget.
+# A full history of that size can exceed MAX_OUTPUT, so only its fixed
+# historic-op query has this separate bounded JSON budget; ordinary commands
+# keep MAX_OUTPUT. The limit applies after capture, not as a streaming bound.
 MAX_HISTORY_OUTPUT = 4 << 20
 HISTORY_TIMEOUT = 2
 HOLD_SECONDS = 180

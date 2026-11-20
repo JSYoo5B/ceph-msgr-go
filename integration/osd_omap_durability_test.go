@@ -20,6 +20,14 @@ import (
 // primary, and an OMAP compare-then-set vector whose reply was lost resolves
 // through an explicit resubmission: re-executing it would fail its compare.
 //
+// The explicit resubmission uses the same transaction ID with retry attempt 1
+// on a fresh connection and returns success with the native version and
+// ONDISK; the same vector as a new request is refused with -125 and changes
+// nothing. Not verified: OMAP writes under primary failover on three replicas
+// (the killed OSD is the fixture object's primary), host power loss, and OMAP
+// opcodes outside the vector.
+//
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills and restarts an OSD; recovery has no pg_temp proof and rewrites the fixture object
 func TestCephOSDOmapDurabilityIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

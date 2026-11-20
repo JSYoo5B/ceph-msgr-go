@@ -50,6 +50,19 @@ import (
 // mds_client_delegate_inos_pct), mds/MDSRank.cc (MDSRankDispatcher::get_tracked_keys),
 // mon/MDSMonitor.cc (fail_mds_gid) and mds/MDSDaemon.cc (respawn) at
 // mdsFreshSource (LGPL-2.1 references; no code copied).
+//
+// It excludes the other MDS profiles because its restarts and daemon settings
+// would change their receipts. A lost reply cannot be made with the blackhole
+// alone (the Messenger acks and drops the request): mds_log_pause and
+// mds_early_reply false come first, then the blackhole, then the journal is
+// resumed. Runtime changes are admin-socket set and get bound to one
+// incarnation and marked discarded by a restart. Native driver work and
+// evictions are refused while the blackhole or the pause is active, since a
+// mount or session close would wait forever. Between fire and adopt only
+// status, adopt, config reads, debug and log actions run, and daemon-local
+// ones first require the admin-socket GID to equal the FSMap rank-0 GID. A
+// runtime set of mds_client_delegate_inos_pct reads back but never takes
+// effect (it is absent from get_tracked_keys), so it is set centrally.
 
 const (
 	mdsCephFSCompletionJSONLimit    = 4 << 20
@@ -1188,6 +1201,8 @@ func (c *fixtureCluster) mdsCephFSCompletionControl(ctx context.Context, out str
 	result.Complete = true
 	return nil
 }
+
+var _ = defineRequestControl("mds-cephfs-completion", frozenControlRank(9), (*fixtureCluster).mdsCephFSCompletionControl)
 
 func (c *fixtureCluster) mdsCephFSCompletionAct(ctx context.Context, id int64, action mdsCephFSCompletionAction, result *mdsCephFSCompletionResult) error {
 	x := c.mdsCephFSCompletion

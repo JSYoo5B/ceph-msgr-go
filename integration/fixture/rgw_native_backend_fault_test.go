@@ -22,7 +22,7 @@ import (
 const rgwNativeOverlapWindow = 5 * time.Second
 
 // TestRGWNativeBackendFaultIntegration is the dedicated fixture-only RGW
-// backend-fault checkpoint (RGW_NATIVE_VALIDATION.md). On its own owned
+// backend-fault checkpoint. On its own owned
 // one-MON, one-MGR, one-BlueStore-OSD, one-gateway cluster it stops and
 // restarts the single OSD while one S3 PUT and one S3 GET are outstanding,
 // then stops and restarts the manager around one S3 PUT. Each overlapping
@@ -32,6 +32,20 @@ const rgwNativeOverlapWindow = 5 * time.Second
 // to the gateway's own client identities. A catalog row with rgw_native=1
 // routes the trusted native workflow to this test (rgw_native_route.go).
 //
+// Pinned v20.2.4 behaviour it relies on (ceph/ceph/blob/v20.2.4/src/...):
+// osd_fast_shutdown_notify_mon makes a stopping OSD tell the MON;
+// rados_osd_op_timeout defaults to 0, so gateway requests wait for the OSD;
+// ceph_osd.cc takes a new random Messenger nonce; Objecter::_send_linger
+// resends a watch as "watch reconnect"; DaemonServer gives a new manager a
+// zero status_stamp that only an MMgrReport with daemon status sets, so the
+// stamp (not last_beacon) shows the gateway's report. HTTP outcome, reception,
+// reconnection and native state are separate evidence; the gateway's internal
+// queueing is not observed, and a request that did not succeed is never
+// reissued. Daemons stop gracefully: a killed OSD, a partition and a fault
+// during a multi-stripe or multipart upload are not covered.
+//
+//scenario:row rgw.aes256k.ip4.container.t-rgwbackendfault key=aes256k service=aes256k family=4 stress= rgw_native=1
+//scenario:covers Service-induced paths
 //fixture:isolated starts its own owned RGW cluster and stops and restarts its OSD and manager
 func TestRGWNativeBackendFaultIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_RGW_NATIVE") == "" {

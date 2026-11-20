@@ -21,8 +21,11 @@ import (
 // is frozen the native pool shows no allocation, and after it resumes the
 // client's next allocation follows whatever the native pool then holds (the
 // frozen MON may still deliver the request it had buffered).
+// The test accepts either fate of the buffered request. It runs only with
+// CEPH_MSGR_TEST_MON_FREEZE=1.
 //
-//fixture:isolated pauses and recycles a MON; a known open issue leaves an OSD on an old OSDMap afterwards (MON_FREEZE_FIXTURE_ISSUE.md)
+//scenario:covers CLIENT to MON/MGR
+//fixture:isolated pauses and recycles a MON; an unexplained failure can leave an OSD on an old OSDMap afterwards
 func TestCephMonPoolOpConnectedStallIntegration(t *testing.T) {
 	requireMonFreezeOptIn(t)
 	fixture := osdFixture
@@ -171,7 +174,8 @@ func TestCephMonPoolOpConnectedStallIntegration(t *testing.T) {
 // requests from the remaining quorum, and its next allocation follows the
 // native snap_seq whatever happened to the held one.
 //
-//fixture:isolated pauses the leader and stops a MON; a known open issue leaves an OSD on an old OSDMap (MON_FREEZE_FIXTURE_ISSUE.md)
+//scenario:covers CLIENT to MON/MGR
+//fixture:isolated pauses the leader and stops a MON; an unexplained failure can leave an OSD on an old OSDMap
 func TestCephMonPoolOpConnectedStopIntegration(t *testing.T) {
 	requireMonFreezeOptIn(t)
 	fixture := osdFixture
@@ -374,7 +378,7 @@ func quorumPeonSeed(t *testing.T, ctx context.Context, c *cephmsgr.Client) (lead
 // recycleResumedMon restarts a MON that was frozen and resumed. This attempts
 // to retire its daemon sessions, but is not an OSDMap recovery barrier: a later
 // pool probe still failed in one recorded run with this restart. Keep these
-// tests opt-in while investigating MON_FREEZE_FIXTURE_ISSUE.md.
+// tests opt-in until that failure is explained.
 func recycleResumedMon(ctx context.Context, control, name string) error {
 	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", name); err != nil {
 		return err
@@ -384,10 +388,11 @@ func recycleResumedMon(ctx context.Context, control, name string) error {
 
 // requireMonFreezeOptIn skips the connected-MON freeze tests unless
 // CEPH_MSGR_TEST_MON_FREEZE=1: after a MON freeze the fixture's OSD sometimes
-// keeps an old OSDMap and breaks later tests (MON_FREEZE_FIXTURE_ISSUE.md).
+// keeps an old OSDMap and breaks later tests: the next pool creation times
+// out with the new PG unknown, its cause not established.
 func requireMonFreezeOptIn(t *testing.T) {
 	t.Helper()
 	if os.Getenv("CEPH_MSGR_TEST_MON_FREEZE") != "1" {
-		t.Skip("set CEPH_MSGR_TEST_MON_FREEZE=1; see integration/fixture/MON_FREEZE_FIXTURE_ISSUE.md")
+		t.Skip("set CEPH_MSGR_TEST_MON_FREEZE=1; a MON freeze can leave the OSD on an old OSDMap")
 	}
 }
