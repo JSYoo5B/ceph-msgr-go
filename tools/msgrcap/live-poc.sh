@@ -8,7 +8,7 @@
 # - provider: ceph-testcontainers-go v0.5.0 capture.Start with CAPTURE_IMAGE
 #   (pinned by digest) in the MON's network namespace. A session is bound to
 #   one container generation, so the MON restart splits it into two segments
-#   with one declared gap (see README.md, "Provider capture").
+#   with one declared gap (coverage.go reads the segment manifest).
 # Both are analyzed, and a parity step compares the analyses. PRIMARY below
 # selects which capture the top-level reports and the expectation gate use.
 # The disposable client key stays in a private work directory and is never
