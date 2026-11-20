@@ -197,14 +197,16 @@ type OSDOperation struct {
 }
 
 // OSDCopyFromInput is the active input for OSDCopyFrom and OSDCopyFrom2. The
-// source is the head of SourceName in SourcePool/SourceKey/SourceNamespace;
-// the OSD computes the source PG and fetches it with its own connection, so
-// the caller supplies no source placement. SourceSnapshot zero (or
-// OSDHeadSnapshot) is the head; 1 through OSDMaxSnapshot names a snap id the
-// OSD resolves like a read at that id: an id above the source's snapset seq
-// (OSDMaxSnapshot, an unallocated id, a snapshot removed after the source's
-// last write) copies the head, and an id no clone covers, or a removed
-// snapshot whether pending trim or trimmed, fails with ENOENT. A source equal
+// source is the object SourceName in SourcePool/SourceKey/SourceNamespace at
+// SourceSnapshot; the OSD computes the source PG and fetches it with its own
+// connection, so the caller supplies no source placement. SourceSnapshot zero
+// (or OSDHeadSnapshot) is the head; 1 through OSDMaxSnapshot names a snap id
+// the OSD resolves like a read at that id. An id above the source's snapset
+// seq copies the head: OSDMaxSnapshot, an unallocated id, and a snapshot
+// removed after the source's last write, whether its removal is pending trim
+// or trimmed. An id at or below that seq that resolves to no readable clone
+// fails with ENOENT: an id the covering clone does not list, a removed
+// snapshot still pending trim, and one whose clone was trimmed. A source equal
 // to the target fails with EINVAL at the head and is refused before
 // submission at any other snapshot, where the pinned OSD would block the
 // object waiting on itself. SourceVersion zero accepts any source version;

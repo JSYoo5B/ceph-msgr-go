@@ -48,9 +48,10 @@ const (
 // The OSD reads the source with its own Objecter at the requested snap id,
 // so find_object_context resolves it like a client read: an id above the
 // source snapset seq (MaxSnap, an id the pool never allocated, a snapshot
-// removed after the source's last write) selects the head and its user
-// version; an id the covering clone does not list, a snapshot in the OSDMap
-// removed_snaps_queue (pending trim) and a trimmed one are -ENOENT. SnapDir
+// removed after the source's last write, pending trim or trimmed) selects the
+// head and its user version. At or below that seq, an id the covering clone
+// does not list, a snapshot in the OSDMap removed_snaps_queue (pending trim)
+// and one whose clone was trimmed are -ENOENT. SnapDir
 // stays refused here; the pinned OSD would fail that read with -EINVAL. Every
 // source failure, including the version assertion (1 below the source is
 // -ERANGE, the largest value -EOVERFLOW), comes after the copy started:

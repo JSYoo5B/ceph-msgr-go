@@ -26,11 +26,12 @@ import (
 // The source of a copy is read by the OSD's own Objecter at the requested
 // snap id, so find_object_context resolves it like a client read: an id above
 // the source snapset seq (CEPH_MAXSNAP, an id the pool never allocated, a
-// snapshot removed after the source's last write) selects the head, whose
-// user version the version assertion then checks; an id the covering clone
-// does not list, or one in the OSDMap removed_snaps_queue, is -ENOENT. A
-// removed snapshot whose clone was trimmed no longer has a clone and is
-// -ENOENT too. These failures happen after the copy started: aggregate code
+// snapshot removed after the source's last write, pending trim or trimmed)
+// selects the head, whose user version the version assertion then checks. At
+// or below that seq, an id the covering clone does not list, or one in the
+// OSDMap removed_snaps_queue, is -ENOENT, and a removed snapshot whose clone
+// was trimmed no longer has a clone and is -ENOENT too. These failures happen
+// after the copy started: aggregate code
 // with per-op -EINPROGRESS, destination unchanged. Version 1 below the source
 // is -ERANGE and the largest version -EOVERFLOW, like ASSERT_VER. The
 // destination SnapContext is filtered by filter_snapc (snap_trimq and
