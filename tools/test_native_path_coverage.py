@@ -453,6 +453,7 @@ class MergeTests(unittest.TestCase):
             self.run_git("add", "-A")
             self.run_git("commit", "-q", "-m", "base")
             self.run_git("branch", "base")
+            base_keys = {cells[0] for _, _, rows in coverage.compose(coverage.read_documents(self.root))[0] for cells in rows}
             added = {}
             for branch, key in (("a", "RBD-first-path"), ("b", "RBD-second-path")):
                 self.run_git("checkout", "-q", "-b", branch, "base")
@@ -467,8 +468,11 @@ class MergeTests(unittest.TestCase):
             merged = coverage.read_documents(self.root)
             self.assertEqual(coverage.check(documents=merged, tests=self.tests), [])
             keys = [cells[0] for _, _, rows in coverage.compose(merged)[0] for cells in rows]
-            self.assertEqual([key for key in keys if key.startswith("RBD-") and not key[4:].isdigit()],
-                             ["RBD-first-path", "RBD-second-path"])
+            # Exactly this test's two rows are new; the map's own rows, named or
+            # numbered, whatever they are, stay as they were.
+            self.assertEqual(len(keys), len(set(keys)))
+            self.assertEqual(set(keys) - base_keys, {"RBD-first-path", "RBD-second-path"})
+            self.assertEqual(base_keys - set(keys), set())
 
 
 class SplitTests(unittest.TestCase):
