@@ -48,9 +48,10 @@ import (
 // find_object_context, execute_ctx, make_writeable) and src/osd/PG.cc
 // (filter_snapc, on_active_advmap) at v20.2.4. The pending state holds the
 // nosnaptrim flag before the removal, so each PG keeps the removed ids in its
-// snap_trimq. Not verified: destination filtering after trimming
-// (purged_snaps), a removed source snapshot on an erasure-coded pool, and the
-// self-copy wait itself, which is never sent.
+// snap_trimq. Destination filtering after trimming (purged_snaps) is
+// TestCephOSDCopyFromPurgedSnapContextIntegration's. Not verified: a removed
+// source snapshot on an erasure-coded pool, and the self-copy wait itself,
+// which is never sent.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdcopyfromsnapshotedges key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
 //scenario:covers CLIENT to OSD

@@ -47,6 +47,19 @@ func (o *OSDConnection) validateIgnoreCache(request OSDRequest) error {
 	return nil
 }
 
+// validateCopyFromCacheFlags refuses the cache-tier source-read flags of a
+// copy unless the client opted into cache pools, before shared-slot
+// admission, monitor readiness or TID allocation, like the IgnoreCache
+// request flag. The copy's own validator checks every other input.
+func (o *OSDConnection) validateCopyFromCacheFlags(request OSDRequest) error {
+	for _, op := range request.Operations {
+		if (op.CopyFrom.SourceIgnoreOverlay || op.CopyFrom.SourceIgnoreCache) && !o.client.options.EnableOSDCachePools {
+			return fmt.Errorf("%w: the copy source cache flags require EnableOSDCachePools", ErrUnsupportedFeatures)
+		}
+	}
+	return nil
+}
+
 // validateSetChunk applies the SET_CHUNK contract before shared-slot
 // admission, monitor readiness or TID allocation. Requests without
 // OSDSetChunk only refuse a Chunk input.

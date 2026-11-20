@@ -44,6 +44,9 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 	if err := o.validateCacheOperation(request); err != nil {
 		return result, err
 	}
+	if err := o.validateCopyFromCacheFlags(request); err != nil {
+		return result, err
+	}
 	if err := o.validateTierOperation(request); err != nil {
 		return result, err
 	}
@@ -223,6 +226,15 @@ func copyFromWireInput(op OSDOperation) osd.CopyFromInput {
 	if in.TruncateSequence != 0 || in.TruncateSize != 0 {
 		out.Flags = osd.CopyFromTruncateSequence
 		out.TruncateSequence, out.TruncateSize = in.TruncateSequence, in.TruncateSize
+	}
+	if in.SourceCloneID {
+		out.Flags |= osd.CopyFromMapSnapClone
+	}
+	if in.SourceIgnoreOverlay {
+		out.Flags |= osd.CopyFromIgnoreOverlay
+	}
+	if in.SourceIgnoreCache {
+		out.Flags |= osd.CopyFromIgnoreCache
 	}
 	return out
 }

@@ -48,45 +48,52 @@ func TestCopyFromV6V8UnionAndIndata(t *testing.T) {
 			if truncate && code == CopyFrom {
 				continue
 			}
-			for _, version := range []int{6, 8} {
-				t.Run(fmt.Sprintf("%#x/%v/v%d", code, truncate, version), func(t *testing.T) {
-					r := nativeV8Request("mutation")
-					op := copyFromOperation(code)
-					if truncate {
-						op.CopyFrom.Flags, op.CopyFrom.TruncateSequence, op.CopyFrom.TruncateSize = CopyFromTruncateSequence, 9, 0xfedcba98
-						op.CopyFrom.Snap = 6 // a snapshot source changes only the union's snapid
-					}
-					r.Operations = []Operation{op}
-					r.SnapSeq, r.Snaps = 4, []uint64{4, 2}
-					var m msgr.MessageData
-					var err error
-					tailBytes := 32
-					if version == 6 {
-						m, err = EncodeRequest(r.Request, oracleFeatures, 1024)
-						tailBytes = 59
-					} else {
-						m, err = EncodeRequestV8(r, v8OracleFeatures, 1024)
-					}
-					if err != nil {
-						t.Fatal(err)
-					}
-					start := len(m.Front) - tailBytes - 16 - opWireSize
-					union := m.Front[start : start+opWireSize]
-					want := expectedCopyFromData(op.CopyFrom)
-					if binary.LittleEndian.Uint16(union) != code || binary.LittleEndian.Uint32(union[2:]) != 0 ||
-						binary.LittleEndian.Uint64(union[6:]) != copyFromSnap(op.CopyFrom) || binary.LittleEndian.Uint64(union[14:]) != op.CopyFrom.Version ||
-						union[22] != op.CopyFrom.Flags || binary.LittleEndian.Uint32(union[23:]) != 0 || !bytes.Equal(union[27:34], make([]byte, 7)) ||
-						binary.LittleEndian.Uint32(union[34:]) != uint32(len(want)) {
-						t.Fatalf("packed copy_from union %x", union)
-					}
-					if !bytes.Equal(m.Data, want) {
-						t.Fatalf("indata\n got %x\nwant %x", m.Data, want)
-					}
-					r.Operations[0].CopyFrom.Object = "mutated"
-					if !bytes.Equal(m.Data, want) {
-						t.Fatal("indata borrowed caller memory")
-					}
-				})
+			// The admitted source-read flags occupy the same byte and add no indata.
+			for _, read := range []uint8{0, CopyFromIgnoreOverlay, CopyFromIgnoreCache, CopyFromMapSnapClone, copyFromReadFlags} {
+				for _, version := range []int{6, 8} {
+					t.Run(fmt.Sprintf("%#x/%v/%02x/v%d", code, truncate, read, version), func(t *testing.T) {
+						r := nativeV8Request("mutation")
+						op := copyFromOperation(code)
+						if truncate {
+							op.CopyFrom.Flags, op.CopyFrom.TruncateSequence, op.CopyFrom.TruncateSize = CopyFromTruncateSequence, 9, 0xfedcba98
+							op.CopyFrom.Snap = 6 // a snapshot source changes only the union's snapid
+						}
+						if read != 0 {
+							op.CopyFrom.Flags |= read
+							op.CopyFrom.Snap = 6
+						}
+						r.Operations = []Operation{op}
+						r.SnapSeq, r.Snaps = 4, []uint64{4, 2}
+						var m msgr.MessageData
+						var err error
+						tailBytes := 32
+						if version == 6 {
+							m, err = EncodeRequest(r.Request, oracleFeatures, 1024)
+							tailBytes = 59
+						} else {
+							m, err = EncodeRequestV8(r, v8OracleFeatures, 1024)
+						}
+						if err != nil {
+							t.Fatal(err)
+						}
+						start := len(m.Front) - tailBytes - 16 - opWireSize
+						union := m.Front[start : start+opWireSize]
+						want := expectedCopyFromData(op.CopyFrom)
+						if binary.LittleEndian.Uint16(union) != code || binary.LittleEndian.Uint32(union[2:]) != 0 ||
+							binary.LittleEndian.Uint64(union[6:]) != copyFromSnap(op.CopyFrom) || binary.LittleEndian.Uint64(union[14:]) != op.CopyFrom.Version ||
+							union[22] != op.CopyFrom.Flags || binary.LittleEndian.Uint32(union[23:]) != 0 || !bytes.Equal(union[27:34], make([]byte, 7)) ||
+							binary.LittleEndian.Uint32(union[34:]) != uint32(len(want)) {
+							t.Fatalf("packed copy_from union %x", union)
+						}
+						if !bytes.Equal(m.Data, want) {
+							t.Fatalf("indata\n got %x\nwant %x", m.Data, want)
+						}
+						r.Operations[0].CopyFrom.Object = "mutated"
+						if !bytes.Equal(m.Data, want) {
+							t.Fatal("indata borrowed caller memory")
+						}
+					})
+				}
 			}
 		}
 	}
@@ -98,29 +105,33 @@ func TestCopyFromValidationBounds(t *testing.T) {
 		o.CopyFrom.Flags, o.CopyFrom.TruncateSequence, o.CopyFrom.TruncateSize = CopyFromTruncateSequence, 2, 1
 	}
 	bad := map[string]func(*Operation){
-		"snap dir":            func(o *Operation) { o.CopyFrom.Snap = SnapDir },
-		"empty source":        func(o *Operation) { o.CopyFrom.Object = "" },
-		"nul source":          func(o *Operation) { o.CopyFrom.Object = "a\x00b" },
-		"negative pool":       func(o *Operation) { o.CopyFrom.Locator.Pool = -1 },
-		"explicit hash":       func(o *Operation) { o.CopyFrom.Locator.Hash = 3 },
-		"unknown flag":        func(o *Operation) { o.CopyFrom.Flags = 2 },
-		"flush flag":          func(o *Operation) { o.CopyFrom.Flags = 1 },
-		"orphan sequence":     func(o *Operation) { o.CopyFrom.TruncateSequence = 2 },
-		"orphan size":         func(o *Operation) { o.CopyFrom.TruncateSize = 2 },
-		"zero sequence":       func(o *Operation) { trunc(o); o.CopyFrom.TruncateSequence = 0 },
-		"rewritten pair":      func(o *Operation) { trunc(o); o.CopyFrom.TruncateSequence, o.CopyFrom.TruncateSize = 1, math.MaxUint64 },
-		"extent":              func(o *Operation) { o.Offset = 1 },
-		"length":              func(o *Operation) { o.Length = 1 },
-		"outer version":       func(o *Operation) { o.Version = 1 },
-		"payload":             func(o *Operation) { o.Data = []byte{1} },
-		"snap":                func(o *Operation) { o.Snap = 3 },
-		"xattr":               func(o *Operation) { o.Xattr.Name = "x" },
-		"extent truncate":     func(o *Operation) { o.TruncateSize, o.TruncateSequence = 1, 2 },
-		"class":               func(o *Operation) { o.Class.Class = "c" },
-		"exclusive":           func(o *Operation) { o.Flags = OpExclusive },
-		"failok":              func(o *Operation) { o.Flags = OpFailOK },
-		"copy-from truncate":  func(o *Operation) { o.Code = CopyFrom; trunc(o) },
-		"copy-from any flags": func(o *Operation) { o.Code = CopyFrom; o.CopyFrom.Flags = 4 },
+		"snap dir":           func(o *Operation) { o.CopyFrom.Snap = SnapDir },
+		"empty source":       func(o *Operation) { o.CopyFrom.Object = "" },
+		"nul source":         func(o *Operation) { o.CopyFrom.Object = "a\x00b" },
+		"negative pool":      func(o *Operation) { o.CopyFrom.Locator.Pool = -1 },
+		"explicit hash":      func(o *Operation) { o.CopyFrom.Locator.Hash = 3 },
+		"unknown flag":       func(o *Operation) { o.CopyFrom.Flags = 64 },
+		"flush flag":         func(o *Operation) { o.CopyFrom.Flags = copyFromFlush },
+		"rwordered flag":     func(o *Operation) { o.CopyFrom.Flags = copyFromRWOrdered },
+		"clone id at head":   func(o *Operation) { o.CopyFrom.Flags = CopyFromMapSnapClone },
+		"clone id at nosnap": func(o *Operation) { o.CopyFrom.Flags, o.CopyFrom.Snap = CopyFromMapSnapClone, NoSnap },
+		"orphan sequence":    func(o *Operation) { o.CopyFrom.TruncateSequence = 2 },
+		"orphan size":        func(o *Operation) { o.CopyFrom.TruncateSize = 2 },
+		"zero sequence":      func(o *Operation) { trunc(o); o.CopyFrom.TruncateSequence = 0 },
+		"rewritten pair":     func(o *Operation) { trunc(o); o.CopyFrom.TruncateSequence, o.CopyFrom.TruncateSize = 1, math.MaxUint64 },
+		"extent":             func(o *Operation) { o.Offset = 1 },
+		"length":             func(o *Operation) { o.Length = 1 },
+		"outer version":      func(o *Operation) { o.Version = 1 },
+		"payload":            func(o *Operation) { o.Data = []byte{1} },
+		"snap":               func(o *Operation) { o.Snap = 3 },
+		"xattr":              func(o *Operation) { o.Xattr.Name = "x" },
+		"extent truncate":    func(o *Operation) { o.TruncateSize, o.TruncateSequence = 1, 2 },
+		"class":              func(o *Operation) { o.Class.Class = "c" },
+		"exclusive":          func(o *Operation) { o.Flags = OpExclusive },
+		"failok":             func(o *Operation) { o.Flags = OpFailOK },
+		"copy-from truncate": func(o *Operation) { o.Code = CopyFrom; trunc(o) },
+		"copy-from flush":    func(o *Operation) { o.Code = CopyFrom; o.CopyFrom.Flags = copyFromFlush },
+		"copy-from unknown":  func(o *Operation) { o.Code = CopyFrom; o.CopyFrom.Flags = 128 },
 	}
 	for name, edit := range bad {
 		op := base
