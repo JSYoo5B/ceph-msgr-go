@@ -1,16 +1,13 @@
-import csv
-from pathlib import Path
 import unittest
 
 import osd_cache_op_native_encoder as encoder
 
-ROOT = Path(__file__).resolve().parent.parent
-
 
 class CacheOpNativeEncoderTests(unittest.TestCase):
-    def test_model_opcodes_match_the_pinned_catalog(self):
-        catalog = {row[0]: int(row[1], 16) for row in csv.reader(
-            (ROOT / "internal/osd/opcodes-tentacle.csv").read_text().splitlines()) if row and row[0].isupper()}
+    def test_model_opcodes_match_the_pinned_rados_values(self):
+        # include/rados.h CEPH_OSD_OP_* values at the pinned Tentacle tag.
+        catalog = {"CACHE_FLUSH": 0x821f, "CACHE_TRY_FLUSH": 0x8221, "CACHE_EVICT": 0x8220,
+                   "CACHE_PIN": 0x2224, "CACHE_UNPIN": 0x2225}
         names = {"flush": "CACHE_FLUSH", "try-flush": "CACHE_TRY_FLUSH", "evict": "CACHE_EVICT",
                  "pin": "CACHE_PIN", "pin-ignore-cache": "CACHE_PIN",
                  "unpin": "CACHE_UNPIN", "unpin-ignore-cache": "CACHE_UNPIN"}

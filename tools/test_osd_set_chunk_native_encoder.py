@@ -1,18 +1,13 @@
-import csv
-from pathlib import Path
 import struct
 import unittest
 
 import osd_set_chunk_native_encoder as encoder
 
-ROOT = Path(__file__).resolve().parent.parent
-
 
 class SetChunkNativeEncoderTests(unittest.TestCase):
-    def test_model_opcode_matches_the_pinned_catalog(self):
-        catalog = {row[0]: int(row[1], 16) for row in csv.reader(
-            (ROOT / "internal/osd/opcodes-tentacle.csv").read_text().splitlines()) if row and row[0].isupper()}
-        self.assertEqual(encoder.SET_CHUNK, catalog["SET_CHUNK"])
+    def test_model_opcode_matches_the_pinned_rados_value(self):
+        # include/rados.h CEPH_OSD_OP_SET_CHUNK at the pinned Tentacle tag.
+        self.assertEqual(encoder.SET_CHUNK, 0x8228)
         self.assertEqual(set(encoder.SHAPES), set(encoder.MODEL))
 
     def test_request_flags_are_the_native_read_path_only(self):
