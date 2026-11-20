@@ -75,6 +75,24 @@ func nativeWriteSame(t *testing.T, ctx context.Context, input writeSameNativeInp
 	return result
 }
 
+// TestCephOSDWriteSameIntegration compares Go WRITESAME vectors with a native
+// C++ twin on separate owned objects, observed through the C API (bytes,
+// attributes, stat2, own version): binary pattern replacement, partial ranges,
+// hole extension, missing-object creation, a false xattr guard after WRITESAME
+// (aggregate -125, state unchanged), an offset of 2^32 (-27; with FAILOK the
+// later ops commit like the twin), a self-managed write SnapContext, and zero
+// length (existing objects unchanged, missing objects stay absent). After a
+// sequenced TRUNCATE to six bytes, both clients keep six actual bytes while
+// the reply echoes the logical length; the echo is never read as bytes
+// written. A sequenced TRUNCATE applies only when its sequence is newer, so
+// each preparation uses a strictly increasing sequence and confirms the six
+// bytes first.
+//
+// Every successful mutation requires ONDISK, a server completion report only
+// (MemStore has no restart persistence). Native per-op WRITESAME results are
+// not available and are not invented. Not verified: v8 profiles, EC and power
+// loss.
+//
 //scenario:covers CLIENT to OSD
 //fixture:isolated its snapshot case allocates a self-managed snap on the fixture pool, leaving the selfmanaged_snaps flag
 func TestCephOSDWriteSameIntegration(t *testing.T) {

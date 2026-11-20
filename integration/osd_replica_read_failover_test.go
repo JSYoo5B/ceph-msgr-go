@@ -21,6 +21,9 @@ import (
 // still valid) and one after the lease has expired but before the cluster
 // marks the primary down; the test then waits for the new primary.
 //
+// Both reads have retry attempt 0. Not verified: a replica read during the new
+// interval's peering.
+//
 //scenario:covers CLIENT to OSD
 //scenario:covers Daemon-to-daemon
 //fixture:isolated pauses, kills and restarts the primary OSD without a pg_temp proof; owned-pool cleanup leaves config set
@@ -45,7 +48,7 @@ func TestCephOSDReplicaReadPrimaryFailoverIntegration(t *testing.T) {
 		t.Fatalf("expected a healthy three-replica placement: %+v", route)
 	}
 	// A Go write to another object of the PG makes the seeded write stable on
-	// every replica (OSD_REPLICA_READ_VALIDATION.md, unstable write).
+	// every replica (see TestCephOSDReplicaReadBounceIntegration).
 	for i := 0; ; i++ {
 		if i == 400 {
 			t.Fatal("no further object name maps to the subject's PG")

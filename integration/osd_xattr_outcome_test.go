@@ -16,6 +16,12 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+// TestCephOSDXattrOutcomeIntegration withholds the reply of an executed
+// APPEND+SETXATTR vector (binary value, non-UTF-8 name) and closes the Go
+// handle while the caller context is still live; independent native reads
+// establish the exact append, attribute, version and mtime, and the caller
+// gets an unknown outcome without replay.
+//
 //fixture:shareable sets an xattr on the fixture object; cleanup removes it, restores bytes and mtime and natively verifies
 func TestCephOSDXattrOutcomeIntegration(t *testing.T) {
 	observer, _, oracle, original := osdFixture(t)

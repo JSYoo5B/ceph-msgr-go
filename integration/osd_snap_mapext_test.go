@@ -65,6 +65,16 @@ func mapExtRangeOracle(t *testing.T, ctx context.Context, object string, offset,
 	return r
 }
 
+// TestCephOSDSnapshotMapExtIntegration compares Go MAPEXT at an optional read
+// snap with a test-only C++ helper calling IoCtx::mapext at exactly the same
+// offset, length and snap. The native success code is an extent count,
+// normalized to zero for comparison with the Go aggregate; IoCtx::mapext does
+// not update get_last_version, so version evidence is an independent STAT2 of
+// the selected snapshot. Extent count, order, boundaries, signed errors and
+// the raw map are compared; the map is the store's logical allocation, not
+// physical usage. Without the staged helper (CEPH_MSGR_TEST_MAPEXT_ORACLE) the
+// test skips and proves nothing. Not verified: EC and compounds.
+//
 //fixture:isolated allocates self-managed snaps on the shared fixture pool, leaving its selfmanaged_snaps flag set
 func TestCephOSDSnapshotMapExtIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_MAPEXT_ORACLE") != "1" {

@@ -598,6 +598,14 @@ func (p profile) cleanupBudget() time.Duration {
 	return time.Minute
 }
 
+// osdPGV8 selects the explicit-PG fixture: an eight-PG replicated data pool
+// with HASHPSPOOL (also the global pool default before daemon startup, so the
+// .mgr pool has it too), the controlled legacy CRUSH map, automatic CRUSH
+// updates and the balancer off. The caller uses the natively observed PG and
+// target; the product computes no hash-to-PG or CRUSH placement. Tentacle's
+// default optimal CRUSH is outside this fixture: CRUSH_TUNABLES5 shares its
+// bit with NEW_OSDOPREPLY_ENCODING. Preparing this fixture does not show that
+// a Go session negotiated the profile's feature bits.
 func (p profile) osdPGV8() bool {
 	// This is the shared explicit-PG topology gate, not a request-version selector.
 	return p.osdProfile == "replicated-pg-v8" || p.osdProfile == "replicated-pg-reply-v8" || p.osdProfile == "replicated-pg-request-v9-reply-v8"

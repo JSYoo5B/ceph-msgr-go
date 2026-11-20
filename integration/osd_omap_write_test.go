@@ -223,6 +223,26 @@ func equalOmapModel(got, want map[string][]byte) bool {
 	return true
 }
 
+// TestCephOSDOmapWritesIntegration checks OMAPGETHEADER, OMAPSETVALS,
+// OMAPSETHEADER, OMAPCLEAR and OMAPRMKEYS against complete native observations
+// (bytes, stat2, user version, xattrs, OMAP and the raw header through rados
+// getomapheader), and mirrors the C-expressible vectors on a native object. An
+// empty SETVALS, RMKEYS or SETHEADER still commits (version and mtime
+// advance); SETHEADER creates an absent object; RMKEYS or CLEAR on an absent
+// object is -2.
+//
+// ONDISK on a negative aggregate is not a commit receipt: complete_read_ctx
+// adds ACK|ONDISK to refused vectors
+// (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc), so only successful
+// mutation vectors require it. A RETURNVEC output over
+// osd_max_write_op_reply_len is refused with EOVERFLOW, which the product
+// returns as a known *OSDError because the limit is server configuration.
+//
+// Not verified: per-op native results (the C API exposes only aggregates for
+// SET2, RM_KEYS2 and CLEAR), read-only EPERM, configured caps, namespaces, and
+// whether the cached object_info advance after EOVERFLOW survives restart or
+// promotion.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable OMAP writes on its owned UUID objects and removed mirrors; checked cleanup removes all four owned objects
 func TestCephOSDOmapWritesIntegration(t *testing.T) {

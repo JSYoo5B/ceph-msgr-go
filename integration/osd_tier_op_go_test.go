@@ -218,6 +218,29 @@ func tierGoBind(t *testing.T, ctx context.Context, pools ownedPools) {
 	}
 }
 
+// TestCephOSDTierOpGoIntegration pairs every Go TIER_PROMOTE, TIER_FLUSH and
+// TIER_EVICT with the same operation issued once by a native C++ librados twin
+// (rados tier-* request flags) and compares the signed result; slot-1 manifest
+// objects are observed with IGNORE_REDIRECT reads and is_dirty, so the
+// observer never promotes them. Cases: absent object -2; plain object without
+// dedup options evict and flush -22, promote 0; a dirty chunked object flush
+// -22, then clean flush, evict (local range zeroed, proxied read returns the
+// target) and promote; a redirect evict and promote; a sha256 fixed-chunk
+// dedup flush, evict and promote, with chunk objects polled by fingerprint
+// name and released on DELETE.
+//
+// The dedup flush reply has aggregate 0 with per-op -11 and no ACK:
+// finish_set_dedup answers through reply_op_error, which copies the request's
+// ops after the handler stored -EAGAIN, so its ONDISK says nothing about the
+// CLEAN transaction. The native call exposes no per-op result, so only
+// aggregates are compared there.
+//
+// Not verified: TIER_* on a pool in a cache-tier relation (source-derived
+// refusals only), scoped identities, EC (refused locally), snapshot clones,
+// fastcdc chunking, chunks shared between objects, a promote whose target is
+// absent, overwrites of a deduped object, the tier agent and crash
+// persistence.
+//
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdtieropgo key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6
 //scenario:covers CLIENT to OSD
 //fixture:isolated owned-pool cleanup leaves central config mon/mon_allow_pool_delete=true set

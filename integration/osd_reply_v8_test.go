@@ -104,6 +104,17 @@ func replyV8Omap(t *testing.T, state omapWriteState) map[string]string {
 // daemon requests supplement its independently built five reply codec vectors;
 // they do not establish every opcode family or general placement support.
 //
+// A signed refusal keeps aggregate -125, the raw per-op results, the earlier
+// READ payload and own-head state unchanged; a FAILOK refusal commits the
+// later OMAP SET and allocation hint while keeping the negative per-op result,
+// with reply versions matching the classic-pool non-watch mutation path
+// (ceph/ceph/blob/v20.2.4/src/messages/MOSDOpReply.h separates legacy, replay
+// and user versions). Bounded GETXATTR, GETXATTRS and OMAP BYKEYS outputs join
+// exactly into RawData. The native C mirrors reconstruct only the write part,
+// never the mixed READ plus write vector, and versions of different objects
+// are never equated. ONDISK has the fixture store's semantics; a MemStore
+// success does not show restart durability.
+//
 //fixture:shareable writes owned UUID objects and native mirrors in the fixture pool; checked cleanup removes them
 func TestCephOSDReplyV8Integration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-reply-v8" && os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-request-v9-reply-v8" {

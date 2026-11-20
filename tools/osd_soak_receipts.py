@@ -4,6 +4,16 @@
 The requested revision/image/duration are caller expectations. Native image
 identity and the fixture manifest remain independently attributed observations.
 Only closed workload filenames and the fixed fixture manifest are read.
+
+The expected parent set (steady, failover or the pair) comes from the caller,
+never from the receipts. For each parent, verify requires the started, setup,
+four worker, workload and cleanup receipts, and for failover every fault and
+recovery stage with offsets inside the recorded monotonic interval; each worker
+receipt must match full expected and native bytes, xattrs, lengths and digests;
+no original submission may remain unresolved; every owned object must be
+removed or natively absent; fixture termination must be recorded. Receipt
+hashes are emitted only after every check passes. The receipts carry no claim
+about longer soaks, continuous capacity monitoring or ticket renewal.
 """
 import argparse
 import base64

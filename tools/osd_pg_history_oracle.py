@@ -34,7 +34,13 @@ shard-local reader (osd_shard_history_oracle.py) does, for one bounded shape.
 A complete snapshot reports where an exact identity occurs on the primary at
 that bracketed epoch. Absence from one snapshot is not evidence that the
 identity is absent from other shards, other epochs or the PG's history in
-general; this module does not make that claim.
+general; this module does not make that claim. ``RetryAttempt`` is not part
+of the request key. The native calibration exercises only the ordinary ``log``
+tier; ``dups`` positions are pinned only by synthetic cluster-free tests. No
+PG-log retention bound, trim boundary or replay safety follows from a match.
+The offline ``ceph-objectstore-tool --op log`` is not used here: its mount
+policy (src/tools/ceph_objectstore_tool.cc:3992-4011) does not list ``log`` as
+a read-only operation.
 """
 import base64
 import hashlib

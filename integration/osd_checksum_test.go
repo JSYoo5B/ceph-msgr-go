@@ -54,6 +54,15 @@ func nativeChecksum(t *testing.T, ctx context.Context, object string, offset, le
 	return receipt
 }
 
+// TestCephOSDChecksumIntegration compares Go CRC32C CHECKSUM output bytes and
+// values with the independent C rados_checksum API on binary contents: one CRC
+// over the extent, seeded chunks, aligned EOF trimming, unaligned EOF trimming
+// (-EINVAL), exact and past EOF with no output, and a missing object
+// (-ENOENT). Object bytes and version stay unchanged, and echoed type and
+// chunk metadata survive successful and failed replies. Native librados may
+// route and retry its reads; that behavior is not part of the Go transport.
+// Not verified: scoped read-only credentials and mutation races.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable read-only checksums on its owned UUID objects; checked omap-write cleanup removes them
 func TestCephOSDChecksumIntegration(t *testing.T) {

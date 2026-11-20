@@ -266,7 +266,10 @@ func fixtureTicketTTLs(p profile) (auth, service time.Duration) {
 // fixtureOSDBlockSize returns an explicit sparse-file capacity only for the
 // closed soak selection. Both four-minute workloads share the same devices:
 // bounded object bytes do not bound BlueStore/RocksDB metadata allocation.
-// Zero leaves the producer's default untouched for every other profile.
+// With the producer's 1 GiB devices an OSD went full; a full OSD discards
+// write-ordered ops submitted before the full transition without a reply
+// (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc), and the workers then
+// end unknown. Sparse files reserve no RAM or disk in advance. Zero leaves the producer's default untouched for every other profile.
 func fixtureOSDBlockSize(p profile) int64 {
 	if p.osd == "1" && p.osdStore == "bluestore" && p.osdReplicas == "3" &&
 		p.osdSoak != "" && p.runsDefault() {

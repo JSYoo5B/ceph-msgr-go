@@ -16,6 +16,14 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+// The CRC gate recognizes the owned object name in outgoing MOSDOp frames and
+// withholds the whole reply frame for that connection and TID; the cancelled
+// wait must be an OutcomeUnknownError with the original submission and no
+// resubmission. The marked-request count covers subject transmissions in the
+// observation window; the state transition is established by independent
+// native reads, not by daemon execution counts. Crash durability and lost
+// replies of TIER_PROMOTE and TIER_FLUSH are not verified live.
+//
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-manifesttierevictlostreply key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6
 //fixture:isolated owned-pool cleanup leaves central config mon/mon_allow_pool_delete=true set
 func TestCephManifestTierEvictLostReplyIntegration(t *testing.T) {

@@ -178,6 +178,17 @@ func xattrEncodedInventory(t *testing.T, data []byte) map[string]string {
 	return result
 }
 
+// TestCephOSDXattrsIntegration runs independent Go/native vectors on the
+// caller-routed fixture head: the native oracle resets a separate mirror,
+// executes the same vector through the C API and compares state. Comparisons
+// cover all six STRING operators with lesser, equal and greater binary
+// operands (Go keeps per-op +1 and -125; the C API gives aggregate and state
+// evidence only), binary, empty, underscore and non-UTF-8 SET/RM,
+// guard-before-SET/RM refusal, FAILOK commit, a missing attribute versus a
+// missing object, raw list encoding and mixed GET/GETALL/READ/STAT output.
+// Original bytes, attributes and mtime are restored afterwards; version
+// increases are kept.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable edits fixture object xattrs and bytes; cleanup restores and natively verifies bytes, xattrs and mtime
 func TestCephOSDXattrsIntegration(t *testing.T) {

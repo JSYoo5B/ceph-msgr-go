@@ -78,6 +78,21 @@ func watchReconnectNotify(ctx context.Context, action, name string) (nativeRecon
 	return result, err
 }
 
+// TestCephOSDWatchReconnectIntegration registers a Go watch, completes a
+// native binary NOTIFY with an explicit ACK, closes the OSD connection and
+// calls ReconnectWatch once on a new connection of the same Client. The cookie
+// and GlobalID stay, the RECONNECT reply echoes the new generation, and the
+// native watcher list shows the same single registration with its original
+// timeout (the zero timeout in the RECONNECT union does not replace it). After
+// reconnect the old handle's Ping and an old-session notification used as ACK
+// authority are refused locally without a submission, and a second native
+// NOTIFY reaches the new handle and completes with its ACK.
+//
+// Not verified here: OSD restart or failover, a changed client identity, watch
+// expiry, a lost RECONNECT reply and a pending notification during reconnect
+// (separate tests cover several of these); the registration generation is
+// echoed wire metadata, not observed native event fencing.
+//
 //scenario:covers CLIENT to OSD
 //fixture:shareable the watch is unwatched, the native notifier finished and the owned object removed in checked cleanup
 func TestCephOSDWatchReconnectIntegration(t *testing.T) {

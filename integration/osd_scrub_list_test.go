@@ -19,6 +19,13 @@ import (
 // one raw inconsistent-object value for that object, under the interval the
 // native CLI reports; a stale interval is -EAGAIN.
 //
+// The request carries the actual PG seed, not the raw object hash: do_scrub_ls
+// compares the PG id unfolded and answers -22 otherwise. The injected data
+// error reads as EIO only with bluestore_debug_inject_read_err set, so the
+// test sets it for the OSDs and removes it afterwards. A snapset listing under
+// the same interval returns none, as native. Not verified: decoding of the
+// inconsistent-object wrapper, snapset inconsistencies, EC shards and repair.
+//
 //scenario:covers CLIENT to OSD
 //scenario:covers Daemon-to-daemon
 //fixture:isolated injects OSD data errors and deep-scrubs; checked config rm restores bluestore_debug_inject_read_err

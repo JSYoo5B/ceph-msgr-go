@@ -248,6 +248,16 @@ func checkUpmapRestored(t *testing.T, s nativeUpmapScope, prepared nativeUpmapSc
 // This is caller-side acceptance for an exclusively owned auxiliary pool. It
 // never calculates CRUSH placement, decodes inner maps or replays a mutation.
 //
+// The recipe uses an owned HASHPSPOOL pool with size 2 and eight PGs; pool
+// compatibility must already permit upmap, which the recipe never raises. The
+// items transition replaces a secondary while keeping the primary; the full
+// transition changes membership and primary; both restore the exact baseline
+// vectors. Go addresses the natively observed target, the APPEND is submitted
+// once and must appear exactly once at the returned version. Not verified: two
+// objects in the same PG natively (model coverage only), mutation failover
+// during an upmap change, ticket renewal during the controls (the long-ticket
+// capability avoids it), and power loss.
+//
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8 capabilities=osd-long-tickets
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8 capabilities=osd-long-tickets
 //scenario:covers CLIENT to OSD

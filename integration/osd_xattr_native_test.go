@@ -15,8 +15,13 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
-// This is a native oracle prerequisite, not a test of Go xattr support.
-// Product xattr opcodes remain unsupported until their separate milestone.
+// This is a native oracle prerequisite, not a test of Go xattr support:
+// TestCephOSDXattrsIntegration compares the Go client with this oracle. It
+// checks binary, empty and underscore attributes, all six STRING comparison
+// operators (caller operand on the left) in read and write vectors, rollback
+// of a staged SET by a false guard and FAILOK continuation. The C API exposes
+// no per-op CMPXATTR/SET/RM result, so the positive CMP result 1 is source
+// evidence (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc), not observed.
 //
 //scenario:covers CLIENT to OSD
 //fixture:shareable the native oracle writes a -native-xattr object and removes it with a checked delete
