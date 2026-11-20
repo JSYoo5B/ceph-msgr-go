@@ -10,7 +10,7 @@ import "testing"
 // and the full CEPH_FEATURES_ALL mask is never used. Rows marked "adds" are
 // additions to the selected role or profile, made to both masks only when
 // the caller selects that profile. The meaning of each advertised bit is in
-// featureObligations.
+// tentacleFeatureBits.
 func TestFeatureMasksByRole(t *testing.T) {
 	delta := func(role uint8, auth Authenticator) [2]uint64 {
 		baseS, baseR := handshakeFeatures(role, nil)
