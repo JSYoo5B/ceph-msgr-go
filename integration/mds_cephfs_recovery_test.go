@@ -765,6 +765,8 @@ func recoveryOSDRead(ctx context.Context, o *cephmsgr.OSDConnection, request cep
 	return r
 }
 
+//scenario:covers Messenger/CephX
+//scenario:covers CLIENT to MDS/CephFS
 //fixture:isolated pauses the MDS journal, fails the owned rank-0 MDS and evicts a session (blocklist entry); no restore proof
 func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 	runCephFSRecovery(t, exclusiveHeldFlock)

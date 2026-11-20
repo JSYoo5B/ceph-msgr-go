@@ -16,6 +16,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated adds and removes a spare MON with a settled election, then runs mgr fail; the MGR is not restored
 func TestCephMapWaitIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

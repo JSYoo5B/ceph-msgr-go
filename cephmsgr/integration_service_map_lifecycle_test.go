@@ -25,6 +25,7 @@ import (
 // created only after the first watch's actual MON has stopped, so receiving it
 // on that same watch cannot be satisfied by a buffered pre-fault snapshot.
 //
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated cleanup kills live holders without proving their service map entries are gone; the service map is not checked
 func TestCephMonServiceMapLifecycleIntegration(t *testing.T) {
 	runServiceMapLifecycle(t, false)

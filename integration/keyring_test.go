@@ -13,6 +13,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//scenario:covers Messenger/CephX
 //fixture:shareable authenticates fixture identities from a keyring and runs reads only
 func TestCephKeyringIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

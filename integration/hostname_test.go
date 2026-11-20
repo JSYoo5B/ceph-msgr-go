@@ -15,6 +15,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//scenario:covers Messenger/CephX
 //fixture:shareable dials by hostname and reads status and pg stat only
 func TestCephHostnameSeedIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" || os.Getenv("CEPH_MSGR_TEST_PROXY") != "" {
@@ -56,6 +57,7 @@ type genericHostnameConn struct {
 
 func (c *genericHostnameConn) RemoteAddr() net.Addr { return c.peer }
 
+//scenario:covers Messenger/CephX
 //fixture:shareable dials through an aliased seed and reads status and pg stat only
 func TestCephGenericHostnameSeedIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {

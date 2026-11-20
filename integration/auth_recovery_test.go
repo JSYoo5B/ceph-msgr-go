@@ -85,6 +85,7 @@ func TestAuthenticationRejectionOracle(t *testing.T) {
 	}
 }
 
+//scenario:covers Messenger/CephX
 //fixture:isolated removes and re-imports the fixture's client.revocable from a test copy; auth is not in the start-state check
 func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 	admin, ctx := fixtureClient(t, time.Minute)

@@ -24,6 +24,7 @@ func (conn *publicLimitConn) Write(p []byte) (int, error) {
 	return n, err
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable oversized requests refused locally; reads and tells only
 func TestCephPublicLimitErrorsIntegration(t *testing.T) {
 	ordinaryLogFixture(t)

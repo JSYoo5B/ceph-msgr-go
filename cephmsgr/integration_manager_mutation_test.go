@@ -35,6 +35,7 @@ func fixtureBalancerModeWith(t *testing.T, c *Client, ctx context.Context, comma
 	return status.Mode
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated runs mgr fail (failover not undone); the balancer mode is restored and checked with fresh native views
 func TestCephAppliedManagerMutationIsNotReplayedIntegration(t *testing.T) {
 	observer, ctx := fixtureClient(t, 3*time.Minute)

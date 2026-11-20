@@ -19,6 +19,7 @@ import (
 // committed: they survive SIGKILL and restart of a BlueStore OSD. This covers
 // daemon termination only, not host power loss or device durability.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills and restarts the primary OSD; no pg_temp or placement proof, recovery rewrites the fixture object
 func TestCephOSDCopyFromCrashIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

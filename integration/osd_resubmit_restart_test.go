@@ -21,6 +21,7 @@ import (
 // (new address nonce): the OSD answers from the PG log it reloaded from
 // BlueStore with the original user version, and nothing executes again.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills and restarts an OSD; recovery has no pg_temp proof and rewrites the fixture object
 func TestCephOSDResubmitRestartIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" || isReplicatedPGFixtureProfile() {

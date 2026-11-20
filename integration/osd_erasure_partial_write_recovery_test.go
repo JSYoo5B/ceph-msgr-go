@@ -405,6 +405,7 @@ func (r *partialWriteRun) leftOutShard(state partialOverwrite) int {
 // time; it claims nothing about eviction, loss or replay.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteshardreturnshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
 func TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration(t *testing.T) {
 	run := startPartialWriteRun(t, 900*time.Second)
@@ -525,6 +526,7 @@ func (r *partialWriteRun) recoveredShardLogs(label string, primary pgHistorySnap
 // shard's chunk and claims nothing about eviction, loss or replay.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritedegradedwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
 //fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
 func TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration(t *testing.T) {
 	run := startPartialWriteRun(t, 900*time.Second)

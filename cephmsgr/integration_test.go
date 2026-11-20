@@ -106,6 +106,7 @@ func TestCephIntegration(t *testing.T) {
 // Faults require the disposable fixture's control directory. Ordinary external
 // cluster credentials alone cannot trigger mutations or stop any daemon.
 //
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated runs mgr fail and stops mon.a through stop-mon-a; mon.a is never restarted
 func TestCephRecoveryIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")

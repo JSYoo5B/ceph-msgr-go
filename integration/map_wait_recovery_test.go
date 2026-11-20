@@ -12,6 +12,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated runs mgr fail on the active MGR; not restored
 func TestCephMapWaitRecoveryIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

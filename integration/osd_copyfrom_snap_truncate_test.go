@@ -24,6 +24,7 @@ import (
 // reads, object_info and rados listsnaps, never against the Go client's view.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdcopyfromsnaptruncate key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
+//scenario:covers CLIENT to OSD
 //fixture:isolated allocates self-managed snapshots, leaving the fixture pool flag set
 func TestCephOSDCopyFromSnapTruncateIntegration(t *testing.T) {
 	fixture, request := osdFixture, osdObjectRequest

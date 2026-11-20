@@ -10,6 +10,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated appends cluster log entries and reads log history from version 1; the start-state check omits the log
 func TestCephLogRecoveryIntegration(t *testing.T) {
 	ordinaryLogFixture(t)

@@ -15,6 +15,7 @@ import (
 // attribute equals the value; rejected objects still advance the cursor. The
 // expected set comes from native xattr observation of every seeded object.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable filtered PG listing of seeded objects in one owned pool; checked owned-pool cleanup removes it
 func TestCephOSDPGListFilterIntegration(t *testing.T) {
 	fixture := osdFixture

@@ -159,6 +159,7 @@ func mdsMapsCompare(t *testing.T, native nativeMDSMaps, fs cephmsgr.FSMapUserUpd
 	}
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated creates a filesystem and two pools; removes the filesystem but keeps the pools
 func TestCephMDSMapsIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")

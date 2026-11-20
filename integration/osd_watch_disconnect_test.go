@@ -15,6 +15,7 @@ import (
 // client deleted the object. The handle delivers that event and then reports
 // ErrOSDWatchDisconnected; nothing is re-registered automatically.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable watches owned UUID objects and deletes them; checked cleanup removes the remaining owned objects
 func TestCephOSDWatchDisconnectIntegration(t *testing.T) {
 	modern := isReplicatedPGFixtureProfile()

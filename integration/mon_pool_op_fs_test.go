@@ -17,6 +17,7 @@ import (
 // pool's snapshots and snap_seq unchanged. The filesystem is removed before
 // the pools.
 //
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated attaches owned pools to a new filesystem, removal registered after fs new and fs rm not confirmed by a read
 func TestCephMonPoolOpFilesystemPoolIntegration(t *testing.T) {
 	fixture := osdFixture

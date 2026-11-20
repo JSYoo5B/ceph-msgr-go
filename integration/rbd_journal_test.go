@@ -794,6 +794,7 @@ type rbdJournalTestEvidence struct {
 
 var rbdJournalInspectShutdownLine = regexp.MustCompile(`^\S+ [0-9a-f]+ -1 JournalMetadata: 0x[0-9a-f]+ failed to locate client: INSPECT$`)
 
+//scenario:covers RBD underlying I/O
 //fixture:isolated creates a journaling image in the fixture's RBD pool and writes journal entries; image not removed
 func TestCephRBDJournalIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")

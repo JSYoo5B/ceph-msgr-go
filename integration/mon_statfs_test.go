@@ -15,6 +15,7 @@ import (
 // Client.Statfs sends the MStatfs that librados cluster_stat and libcephfs
 // statfs send. The independent native client asks for the same figures.
 //
+//scenario:covers CLIENT to MON/MGR
 //fixture:shareable statfs reads and seeds in one owned pool; checked owned-pool cleanup removes it and restores the config it changed
 func TestCephMonStatfsIntegration(t *testing.T) {
 	fixture := osdFixture

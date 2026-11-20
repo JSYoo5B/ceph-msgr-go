@@ -299,6 +299,7 @@ func poolPlaceOn(t *testing.T, ctx context.Context, slot int, object, namespace 
 
 func attrNames(a nativeXattrSnapshot) map[string]string { return xattrInventory(a) }
 
+//scenario:covers CLIENT to OSD
 //fixture:shareable copies across two owned pools and namespaces; checked owned-pool cleanup removes them and restores the config
 func TestCephOSDCrossPoolAndNamespaceCopyFromIntegration(t *testing.T) {
 	fixture := osdFixture
@@ -375,6 +376,7 @@ func TestCephOSDCrossPoolAndNamespaceCopyFromIntegration(t *testing.T) {
 // from the pool, so the client sends none for writes and names the pool snap
 // id only when reading or rolling back.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable pool snapshot, writes and rollback in one owned pool; checked owned-pool cleanup removes it
 func TestCephOSDPoolSnapshotIntegration(t *testing.T) {
 	fixture := osdFixture

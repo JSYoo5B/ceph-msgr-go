@@ -85,6 +85,7 @@ func TestColdBootstrapDialAttributionIncludesLaterManager(t *testing.T) {
 // every dial attempt and renewed MON ticket precede one explicit activation.
 //
 //scenario:row mgr-service.aes256k.ip4.container.managers-0.t-mgrservicecoldbootstrap key=aes256k service=aes256k family=4 runtime=container managers=0 mgr_service=1
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated starts MGRs on a zero-MGR fixture through start-mgrs; never returns to no MGR
 func TestCephMgrServiceColdBootstrapIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MGR_SERVICE") != "1" || os.Getenv("CEPH_MSGR_TEST_MGR_COUNT") != "0" || os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {

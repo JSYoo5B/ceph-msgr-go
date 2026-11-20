@@ -998,6 +998,7 @@ func waitRBDLockState(ctx context.Context, path, phase string, finished <-chan s
 	}
 }
 
+//scenario:covers RBD underlying I/O
 //fixture:isolated creates an image and a Go set_id object in the fixture's RBD pool; leaves both, only lock/watch released
 func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")

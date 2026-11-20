@@ -12,6 +12,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//scenario:covers Messenger/CephX
 //fixture:isolated replaces the key of the fixture's client.revocable and re-imports a test copy; auth is not checked
 func TestCephReplacedCredentialIntegration(t *testing.T) {
 	admin, ctx := fixtureClient(t, time.Minute)

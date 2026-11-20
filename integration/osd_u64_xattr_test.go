@@ -74,6 +74,7 @@ func nativeU64Xattr(t *testing.T, ctx context.Context, input u64XattrNativeInput
 	return result
 }
 
+//scenario:covers CLIENT to OSD
 //fixture:shareable edits owned UUID subject and mirror objects in the fixture pool; checked cleanup removes them
 func TestCephOSDU64XattrIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_U64_XATTR_ORACLE") != "1" {

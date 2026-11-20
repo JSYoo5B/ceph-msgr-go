@@ -28,6 +28,7 @@ type namedMonStatus struct {
 	} `json:"monmap"`
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated appends a cluster log entry and reads log history from version 1; the start-state check omits the log
 func TestCephNamedMonitorTellIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

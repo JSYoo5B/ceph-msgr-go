@@ -75,6 +75,7 @@ func nativeWriteSame(t *testing.T, ctx context.Context, input writeSameNativeInp
 	return result
 }
 
+//scenario:covers CLIENT to OSD
 //fixture:isolated its snapshot case allocates a self-managed snap on the fixture pool, leaving the selfmanaged_snaps flag
 func TestCephOSDWriteSameIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_WRITESAME_ORACLE") != "1" {

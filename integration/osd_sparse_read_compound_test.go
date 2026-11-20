@@ -37,6 +37,7 @@ func sparseReadCompoundExpect(op cephmsgr.OSDOperation, full []cephmsgr.OSDExten
 	return uint64(len(bytesOut)), extents, bytesOut
 }
 
+//scenario:covers CLIENT to OSD
 //fixture:shareable writes owned UUID objects in the fixture pool; checked cleanup removes them
 func TestCephOSDSparseReadCompoundIntegration(t *testing.T) {
 	fixture := osdFixture

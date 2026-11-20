@@ -24,6 +24,7 @@ func callXattrs(state omapWriteState) map[string][]byte {
 	return result
 }
 
+//scenario:covers CLIENT to OSD
 //fixture:shareable class calls on its owned UUID objects and removed mirrors only; checked cleanup removes owned objects
 func TestCephOSDClassCallIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

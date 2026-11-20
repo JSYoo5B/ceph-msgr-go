@@ -26,6 +26,7 @@ func (c *commandWriteProbe) Write(p []byte) (int, error) {
 	return n, err
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated runs mgr fail; balancer mode restore is unverified and may leave an explicit config entry
 func TestCephManagerSetupFailoverIntegration(t *testing.T) {
 	observer, ctx := fixtureClient(t, time.Minute)

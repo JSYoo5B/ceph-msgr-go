@@ -223,6 +223,7 @@ func equalOmapModel(got, want map[string][]byte) bool {
 	return true
 }
 
+//scenario:covers CLIENT to OSD
 //fixture:shareable OMAP writes on its owned UUID objects and removed mirrors; checked cleanup removes all four owned objects
 func TestCephOSDOmapWritesIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

@@ -20,6 +20,7 @@ import (
 // objects. Snap ids are allocated natively (a MON pool operation outside the
 // product) and the shared fixture pool enters self-managed snapshot mode.
 //
+//scenario:covers CLIENT to OSD
 //fixture:isolated allocates self-managed snaps on the shared fixture pool, leaving its selfmanaged_snaps flag set
 func TestCephOSDSnapshotIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

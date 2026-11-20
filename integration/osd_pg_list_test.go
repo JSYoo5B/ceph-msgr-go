@@ -66,6 +66,7 @@ func sortedPGList(entries []cephmsgr.OSDPGListEntry) []cephmsgr.OSDPGListEntry {
 	return result
 }
 
+//scenario:covers CLIENT to OSD
 //fixture:shareable writes owned UUID objects and one namespace head; deletes the head and removes owned objects, checked
 func TestCephOSDPGListIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)

@@ -18,6 +18,7 @@ import (
 // three-OSD fixture leaves two OSDs without its PG. The native client's
 // command to the same OSD is the reference.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable PG command to an OSD outside a single-replica owned pool; checked owned-pool cleanup removes the pool
 func TestCephOSDCommandOutsideActingSetIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" {

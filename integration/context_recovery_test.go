@@ -52,6 +52,7 @@ func (ctx *recoverySnapshotContext) Err() error {
 	return ctx.Context.Err()
 }
 
+//scenario:covers Messenger/CephX
 //fixture:isolated leaves a config-key entry and runs mgr fail; neither is restored
 func TestCephContextRecoveryIntegration(t *testing.T) {
 	observer, ctx := fixtureClient(t, 35*time.Second)

@@ -138,6 +138,7 @@ func hobjectHead(route osdFixtureOracle) string {
 // replica or shard-local history, trimming or replay.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2primaryhistorycalibration key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
 //fixture:shareable I/O in its own EC pool only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
 func TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration(t *testing.T) {
 	width := erasureK2M2

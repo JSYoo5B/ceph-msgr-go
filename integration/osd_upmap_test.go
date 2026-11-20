@@ -250,6 +250,8 @@ func checkUpmapRestored(t *testing.T, s nativeUpmapScope, prepared nativeUpmapSc
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8 capabilities=osd-long-tickets
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8 capabilities=osd-long-tickets
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
 //fixture:isolated creates an owned upmap pool that its finish deliberately keeps; only upmap items and objects are removed
 func TestCephOSDUpmapIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-v8" || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

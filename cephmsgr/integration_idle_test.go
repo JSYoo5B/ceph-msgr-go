@@ -29,6 +29,7 @@ func (c *idleSessionReadProbe) Read(p []byte) (int, error) {
 }
 
 //scenario:suite mon-mgr.aes256k.ip6.host.idle-1 key=aes256k service=aes256k family=6 stress= runtime=host idle=1
+//scenario:covers Messenger/CephX
 //fixture:isolated runs mgr fail to switch the active MGR; it does not restore the original active MGR
 func TestCephIdleSessionsIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_IDLE_SESSIONS") != "1" || os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {

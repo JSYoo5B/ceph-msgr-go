@@ -62,6 +62,7 @@ func waitLogEntry(t *testing.T, ctx context.Context, stream *cephmsgr.LogStream,
 	}
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated appends cluster log entries and reads log history from version 1; the start-state check omits the log
 func TestCephLogWatchIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

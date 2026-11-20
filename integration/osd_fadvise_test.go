@@ -13,6 +13,7 @@ import (
 // FADVISE cache hints ride on the data-path operations and change no result:
 // writes and reads carrying them match the native client's view of the object.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable hinted I/O in one owned pool only; checked owned-pool cleanup removes it and restores the config it changed
 func TestCephOSDFadviseIntegration(t *testing.T) {
 	fixture := osdFixture

@@ -60,6 +60,8 @@ func soakPlace(ctx context.Context, object string) (osdFixtureOracle, error) {
 // ones. The replicated PG log answers those resubmissions, so at the end the
 // native client must read exactly the bytes and xattr each worker expects.
 //
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
 //fixture:isolated repeatedly kills and restarts OSDs; the final wait is active+clean only, no pg_temp proof
 func TestCephOSDSoakFailoverIntegration(t *testing.T) {
 	value := os.Getenv("CEPH_MSGR_TEST_OSD_SOAK")

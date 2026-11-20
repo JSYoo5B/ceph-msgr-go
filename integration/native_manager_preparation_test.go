@@ -13,6 +13,8 @@ import (
 )
 
 //scenario:suite mon-mgr.aes-svc-aes256k.ip4.native-mgr-preparation-1 key=aes service=aes256k family=4 stress= native_mgr_preparation=1
+//scenario:covers CLIENT to MON/MGR
+//scenario:covers Daemon-to-daemon
 //fixture:isolated pauses a standby MGR and restarts it with a new GID; needs a fresh preparation receipt
 func TestCephNativeManagerPreparationIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION") != "1" {

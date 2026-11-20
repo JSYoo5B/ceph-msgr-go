@@ -58,6 +58,7 @@ func namedMgrNativeObserve(t *testing.T, ctx context.Context, control, phase str
 	return receipt
 }
 
+//scenario:covers CLIENT to MON/MGR
 //fixture:isolated runs mgr fail on the named MGR; the active MGR is not restored
 func TestCephNamedManagerTellIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)

@@ -19,6 +19,7 @@ import (
 // Both admitted copy opcodes may lead xattr edits. Native C API/CLI reads
 // independently observe object state; they do not execute a twin copy vector.
 //
+//scenario:covers CLIENT to OSD
 //fixture:shareable copies and edits only its owned UUID objects; checked omap-write cleanup removes them
 func TestCephOSDCopyFromCompoundIntegration(t *testing.T) {
 	fixture, request := osdFixture, osdObjectRequest

@@ -51,6 +51,8 @@ func fixtureRecoveryRead(ctx context.Context, c *Client, mgr bool) error {
 
 //scenario:row mon-mgr.aes.ip4.crc.host.t-suite-afb7b2 key=aes service=aes mode=crc family=4 stress= runtime=host test_run=^TestCeph(CompleteMonitorOutage|NamedMonitorTell|NamedManagerTell)Integration$
 //scenario:row mon-mgr.aes256k.ip4.host.t-suite-afb7b2 key=aes256k service=aes256k family=4 stress= runtime=host test_run=^TestCeph(CompleteMonitorOutage|NamedMonitorTell|NamedManagerTell)Integration$
+//scenario:covers CLIENT to MON/MGR
+//scenario:covers Daemon-to-daemon
 //fixture:shareable stops and starts all MONs 3 times; start waits for 3-MON quorum and an MGR read succeeds after each
 func TestCephCompleteMonitorOutageIntegration(t *testing.T) {
 	baseline := runtime.NumGoroutine()
