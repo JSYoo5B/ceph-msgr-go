@@ -173,6 +173,28 @@ def load_catalog_document(revision=None):
         raise PlanError(str(error)) from None
 
 
+def fixed_only(selectors, fixed_jobs):
+    """Whether every selector names a check suite of the trusted platform
+    workflow (an ID or group:checks), so no row of the tested revision is
+    needed."""
+    ids = {job["id"] for job in fixed_jobs}
+    return bool(selectors) and all(selector in ids or selector == "group:checks" for selector in selectors)
+
+
+def plan_document(revision, selectors):
+    """The catalog plan reads for these selectors. A request of check suites
+    only takes them from the trusted platform workflow and reads none of the
+    tested revision's declarations, so a revision from before rows were
+    declared beside their tests still gets its check suites; any row
+    selector reads the revision and refuses such a revision with a request
+    to merge the default branch."""
+    if revision:
+        fixed = scenario_catalog.fixed_jobs((ROOT / scenario_catalog.PLATFORM_WORKFLOW).read_text(encoding="utf-8"))
+        if fixed_only(selectors, fixed):
+            return {"scenarios": [], "fixed_jobs": fixed}
+    return load_catalog_document(revision)
+
+
 def load_catalog(revision=None):
     return load_catalog_document(revision)["scenarios"]
 
@@ -755,9 +777,11 @@ def main(argv=None):
             for name, value in forwarded.items():
                 print("export %s=%s" % (name, shlex.quote(value)))
         else:
-            document = load_catalog_document(args.revision)
+            document = plan_document(args.revision, args.select)
             scenarios = document["scenarios"]
-            problems = validate_catalog(scenarios) + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
+            # A request of check suites only reads no row (plan_document).
+            problems = ((validate_catalog(scenarios) if scenarios or not fixed_only(args.select, document["fixed_jobs"]) else [])
+                        + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8")))
             if problems:
                 raise PlanError("; ".join(problems))
             vocabulary = scenarios + fixed_entries(document)
@@ -765,7 +789,9 @@ def main(argv=None):
             for line in explanation:
                 print(line, file=sys.stderr)
             print("selected %d of %d scenarios/checks" % (len(entries), len(vocabulary)), file=sys.stderr)
-            planned = matrix(entries, plan_sources(args.revision))
+            # Sharing declarations are read only when a row is selected.
+            native = any("check" not in entry["params"] for entry in entries)
+            planned = matrix(entries, plan_sources(args.revision) if native else {})
             sequences = [job for job in planned["include"] if "test_sequence" in job]
             for job in sequences:
                 print("fixture sequence of %s rows: %s" % (job["sequence_rows"], job["scenarios"]), file=sys.stderr)

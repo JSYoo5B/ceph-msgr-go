@@ -140,6 +140,20 @@ class RevisionTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("the tested revision has .github/scenarios/catalog.d from before rows were declared beside their tests;"
                       " merge the default branch", err)
+        # Check suites come from the trusted platform workflow and need no row
+        # of the revision, so such a revision still gets them; any row
+        # selector, a group or all, still asks for the default branch.
+        fixed = [job["id"] for job in catalog.load()["fixed_jobs"]]
+        for selectors, wanted in (([fixed[0]], [fixed[0]]), (fixed[:2], fixed[:2]), (["group:checks"], fixed)):
+            arguments = [word for selector in selectors for word in ("--select", selector)]
+            code, out, err = self.plan("plan", "--revision", revision, *arguments)
+            self.assertEqual(code, 0, err)
+            self.assertEqual(json.loads(out), {"include": [], "fixed": wanted})
+        for selectors in ([fixed[0], "osd.a"], [fixed[0], "group:osd"]):
+            arguments = [word for selector in selectors for word in ("--select", selector)]
+            code, _, err = self.plan("plan", "--revision", revision, *arguments)
+            self.assertEqual(code, 2)
+            self.assertIn("merge the default branch", err)
         self.git("rm", "-rq", ".github")
         self.write("integration/x_test.go", declaring("//scenario:row osd.a key", "//scenario:row osd.a key=aes"))
         code, _, err = self.plan("plan", "--revision", self.commit(), "--select", "all")

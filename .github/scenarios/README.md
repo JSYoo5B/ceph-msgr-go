@@ -147,9 +147,21 @@ and are judged by the calling revision's result gate
 must PASS, and a skipped, missing or failed selected test fails the job. A
 broad suite row requires at least one PASS and does not claim that its
 optional tests ran. Separate trusted jobs publish the request's status; a
-failed, canceled, skipped or missing selected suite never becomes a pass. A
-new workflow opt-in must land on the default branch before a pull request
-can request a row that uses it.
+failed, canceled, skipped or missing selected suite never becomes a pass.
+A row's fixture inputs need no workflow change: the trusted
+`tools/native_env.py` forwards each row parameter as `CEPH_MSGR_TEST_<NAME>`
+to the runner step only, so a pull request's new input runs in that pull
+request.
+
+The controller and the native workflow it calls are always the default
+branch's, also for a manual dispatch, so a change to either is first
+exercised by the first request after it lands; no pull request can run its
+own copy. A revision from before rows were declared beside their tests (it
+still has `.github/scenarios/catalog.d` or `catalog.json`) still gets the
+check suites, which come from the trusted platform workflow, but no row: a
+row, group or `all` selector is refused with a request to merge the default
+branch. Conversely, a default branch from before that change cannot plan the
+rows of a revision that declares them.
 
 Only a same-repository pull request that changes nothing but `README.md` or
 `THIRD_PARTY_NOTICES.md` may skip basic and quality work
