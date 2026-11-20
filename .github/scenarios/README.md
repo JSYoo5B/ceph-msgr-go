@@ -315,9 +315,12 @@ the workflow sets itself (`CEPH_MSGR_TEST_DIAGNOSTICS`) or the variable of
 another parameter; the trusted planner and the helper both refuse it. Which
 parameters exist is the fixture's decision: `loadEnvironmentProfile` refuses a
 `CEPH_MSGR_TEST_` variable that `loadProfile` does not read, and `validate`
-passes every row through it. A new fixture input therefore edits only the
-fixture code that reads it and the rows that set it, and a pull request's new
-input runs natively on that pull request.
+passes every row through it. A new fixture input is declared beside the code
+that reads it (`var fooInput = defineInput("foo", "<fallback>")`, read with
+`p.input(fooInput)`; `integration/fixture/input.go`); the fields of `profile`
+are frozen, so it adds no field and no line to `loadSingleProfile`. It edits
+only that code and the rows that set it, and a pull request's new input runs
+natively on that pull request.
 
 Native runs use the calling revision's result gate. For an explicit `test_run`,
 it lists the matching top-level tests that `go test -list` reports for the tested

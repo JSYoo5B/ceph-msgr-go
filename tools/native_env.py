@@ -20,8 +20,9 @@ CEPH_MSGR_TEST_<P>, its value unchanged, and only when the matrix sets it;
 the fixture owns its default. Which parameters exist is the fixture's own
 decision: loadEnvironmentProfile refuses a CEPH_MSGR_TEST_ name that no input
 of loadProfile reads, and validate passes every row through that admission.
-A new fixture input therefore edits only the fixture code that reads it and
-the rows that set it; it edits nothing here and no workflow line.
+A new fixture input is declared with defineInput
+(integration/fixture/input.go) beside the code that reads it, and the rows
+set it; it edits nothing here, no workflow line and no field of profile.
 
 The parameters that the workflow bound before this rule (LEGACY) keep their
 names and fallbacks exactly; that set is frozen and a new parameter never
