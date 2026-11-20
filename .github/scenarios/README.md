@@ -114,6 +114,14 @@ way: in files of its own, never in a shared list, count or sequence.
   module that says which rows it claims and what it projects; the workflow
   asks the collector for a job's family.
 - `tools/test_native_<name>_evidence.py`: the tests of that family.
+- `integration/fixture/rgw_native_<name>_test.go`: a routed RGW checkpoint,
+  a `TestRGWNative<Name>Integration` test of the fixture module with its
+  `//scenario:row ... rgw_native=1` declaration (see
+  [Routed RGW checkpoint rows](#routed-rgw-checkpoint-rows)).
+- `tools/rgw_native_gate_<name>.py`: that checkpoint's receipt check in the
+  trusted result gate.
+- `tools/test_rgw_native_gate_<name>.py`: its tests, with the accepted receipt
+  line as `SAMPLE`.
 
 `tools/test_merge_proof.py` makes pull requests that add a native test with
 every file of the section above and every registration of this section, in a

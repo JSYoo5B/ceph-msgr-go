@@ -22,8 +22,11 @@ and only that:
 - and, from the section "Adding other registrations", a fixture control
   declared beside its function (defineControl) in the capability file, a
   native receipt cephmsgr/receipts/<name>.md, a catalog check
-  tools/scenario_checks/<name>.py with its tests, and a successful-evidence
-  family tools/native_evidence_<name>.py with its tests.
+  tools/scenario_checks/<name>.py with its tests, a successful-evidence
+  family tools/native_evidence_<name>.py with its tests, and a routed RGW
+  checkpoint (a TestRGWNative...Integration test of the fixture module with
+  its rgw_native=1 row, and its receipt check tools/rgw_native_gate_<name>.py
+  with its tests).
 
 Every branch is made from the base and its author's own name only: no
 number, name or file is allocated across the branches, and the test
@@ -128,6 +131,9 @@ class Author:
         self.receipt_id = self.slug
         self.check = self.snake
         self.family = "mergeproof" + name.lower()
+        self.checkpoint = "TestRGWNativeMergeProof%sIntegration" % name
+        self.checkpoint_id = "rgw.aes256k.ip4.container.t-rgwmergeproof%s" % name.lower()
+        self.gate_marker = "RGW_NATIVE_MERGE_PROOF_%s " % name
 
     # The files, as an author writes them.
 
@@ -269,6 +275,42 @@ class Author:
                 "if __name__ == \"__main__\":\n"
                 "    unittest.main()\n" % (self.name, self.name, self.family))
 
+    def checkpoint_test(self):
+        return ("package main\n\n"
+                "import \"testing\"\n\n"
+                "// %s is a routed RGW checkpoint of the merge proof (tools/test_merge_proof.py).\n"
+                "// It exists only in that test's temporary repository.\n"
+                "//\n"
+                "//scenario:row %s key=aes256k service=aes256k family=4 stress= rgw_native=1\n"
+                "//fixture:isolated would start its own owned RGW cluster; it exists only in the merge proof\n"
+                "func %s(t *testing.T) {\n"
+                "\tt.Skip(\"merge proof checkpoint; selected only in the merge proof's temporary repository\")\n"
+                "}\n" % (self.checkpoint, self.checkpoint_id, self.checkpoint))
+
+    def gate_module(self):
+        return ('"""Receipt check of %s for tools/rgw_native_gate.py.\n\n'
+                "It exists only in the temporary repository of tools/test_merge_proof.py.\n"
+                '"""\n'
+                "TEST = %r\n"
+                "MARKER = %r\n\n\n"
+                "def check(line, gate):\n"
+                "    \"\"\"(problems, summary fields) of the one receipt line.\"\"\"\n"
+                "    return ([] if gate.SOURCE in line else [\"merge proof receipt lacks its pinned source\"]), {}\n"
+                % (self.checkpoint, self.checkpoint, self.gate_marker))
+
+    def gate_test(self):
+        return ('"""Receipt tests of %s."""\n'
+                "import unittest\n\n"
+                "import rgw_native_gate as gate\n"
+                "import rgw_native_gate_%s as checkpoint\n"
+                "from test_rgw_native_gate import IMAGE, stream\n\n"
+                "SAMPLE = checkpoint.MARKER + \"image=%%s source=%%s\" %% (IMAGE, gate.SOURCE)\n\n\n"
+                "class MergeProof%sReceiptTest(unittest.TestCase):\n"
+                "    def test_receipt_names_the_source(self):\n"
+                "        self.assertTrue(gate.verify(stream(checkpoint.TEST), checkpoint.TEST)[\"passed\"])\n\n\n"
+                "if __name__ == \"__main__\":\n"
+                "    unittest.main()\n" % (self.checkpoint, self.snake, self.name))
+
     def coverage_row(self):
         return ("| %s | Merge proof path %s | `released` | Merge proof fixture | Merge proof observation "
                 "| Merge proof cleanup | `%s`, `%s` | dedicated row |"
@@ -298,6 +340,9 @@ class Author:
             "scenario_check_test": "tools/test_scenario_check_%s.py" % self.check,
             "family": "tools/native_evidence_%s.py" % self.family,
             "family_test": "tools/test_native_%s_evidence.py" % self.family,
+            "checkpoint": "integration/fixture/rgw_native_%s_test.go" % self.snake,
+            "gate": "tools/rgw_native_gate_%s.py" % self.snake,
+            "gate_test": "tools/test_rgw_native_gate_%s.py" % self.snake,
         }
 
     def files(self):
@@ -307,7 +352,9 @@ class Author:
                 paths["checks"]: self.row_checks(), paths["coverage"]: self.coverage_file(),
                 paths["mode"]: self.oracle_mode(), paths["receipt"]: self.receipt_file(),
                 paths["scenario_check"]: self.scenario_check(), paths["scenario_check_test"]: self.scenario_check_test(),
-                paths["family"]: self.evidence_family(), paths["family_test"]: self.evidence_family_test()}
+                paths["family"]: self.evidence_family(), paths["family_test"]: self.evidence_family_test(),
+                paths["checkpoint"]: self.checkpoint_test(), paths["gate"]: self.gate_module(),
+                paths["gate_test"]: self.gate_test()}
 
 
 # Two controls of the four-OSD erasure topology, the most frequent kind of
@@ -475,13 +522,13 @@ class MergeProofTest(unittest.TestCase):
         """Run the validators of the merged tree in it and check they saw the
         added rows, tests and capabilities."""
         repo, python = self.repo, sys.executable
-        added = [author.id for author in authors]
+        added = [author.id for author in authors] + [author.checkpoint_id for author in authors]
         listed = repo.run(python, "tools/scenario_plan.py", "list").stdout.split()
         self.assertEqual(sorted(sid for sid in listed if sid not in self.base_ids), sorted(added))
         validate = repo.run(python, "tools/scenario_plan.py", "validate", check=False)
         self.assertEqual(validate.returncode, 0, "scenario_plan.py validate refused the merged tree:\n" + validate.stderr[-6000:])
         rows = int(re.search(r"catalog valid: (\d+) scenarios", validate.stdout).group(1))
-        self.assertEqual(rows, self.base_rows + len(authors))
+        self.assertEqual(rows, self.base_rows + 2 * len(authors))
         for author in authors:
             plan = json.loads(repo.run(python, "tools/scenario_plan.py", "plan", "--select", author.id).stdout)
             self.assertEqual(plan["include"], [dict(author.params, scenario=author.id)])
@@ -552,7 +599,11 @@ class MergeProofTest(unittest.TestCase):
                           cwd=repo.path / "tools").stdout.split()
         families = repo.run(python, "-c", "import native_evidence as e; print(' '.join(sorted(e.families())))",
                             cwd=repo.path / "tools").stdout.split()
+        routed = repo.run(python, "-c", "import rgw_native_gate as g; print(' '.join(g.TESTS))", cwd=repo.path / "tools").stdout.split()
         for author in authors:
+            self.assertIn(author.checkpoint, routed, "the merged gate does not verify " + author.checkpoint)
+            job = json.loads(repo.run(python, "tools/scenario_plan.py", "plan", "--select", author.checkpoint_id).stdout)["include"]
+            self.assertEqual([entry.get("test_run") for entry in job], ["^%s$" % author.checkpoint])
             self.assertIn(author.receipt_id, listing)
             self.assertIn(author.check, checks)
             self.assertIn(author.family, families)
