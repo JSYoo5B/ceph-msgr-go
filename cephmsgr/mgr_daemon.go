@@ -1094,6 +1094,10 @@ func (d *MgrDaemon) WaitRotatingKeys(ctx context.Context, after uint64) (MgrRota
 // wait consumes nothing.
 func (d *MgrDaemon) NextMgrMap(ctx context.Context) (MgrMapEvent, error) {
 	for {
+		// A canceled wait consumes nothing, also with an event queued.
+		if err := ctx.Err(); err != nil {
+			return MgrMapEvent{}, err
+		}
 		d.mu.Lock()
 		if len(d.events) > 0 {
 			event := d.events[0]
@@ -1115,12 +1119,16 @@ func (d *MgrDaemon) NextMgrMap(ctx context.Context) (MgrMapEvent, error) {
 }
 
 // NextDigest returns the latest unread MMgrDigest of a SubscribeDigest
-// daemon; a newer digest replaces an unread one.
+// daemon; a newer digest replaces an unread one. ctx bounds only this wait;
+// a canceled wait consumes nothing.
 func (d *MgrDaemon) NextDigest(ctx context.Context) (ClusterDigest, error) {
 	if !d.options.SubscribeDigest {
 		return ClusterDigest{}, errors.New("ceph: MGR daemon has no digest subscription")
 	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return ClusterDigest{}, err
+		}
 		d.mu.Lock()
 		if d.digest != nil {
 			digest := *d.digest

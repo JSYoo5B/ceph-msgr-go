@@ -903,3 +903,28 @@ func TestMgrDaemonEndedSessionCannotPublish(t *testing.T) {
 		t.Fatal("an ended session published its rotating set", state.RotatingKeys, state.Err)
 	}
 }
+
+// TestMgrDaemonCanceledWaitConsumesNothing calls NextMgrMap and NextDigest
+// with a canceled context while an event and a digest are queued.
+func TestMgrDaemonCanceledWaitConsumesNothing(t *testing.T) {
+	d := &MgrDaemon{changed: make(chan struct{}), options: MgrDaemonOptions{SubscribeDigest: true}}
+	d.events = []MgrMapEvent{{Null: true}}
+	d.digest = &ClusterDigest{MonStatus: []byte("{}")}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := d.NextMgrMap(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatal("NextMgrMap", err)
+	}
+	if _, err := d.NextDigest(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatal("NextDigest", err)
+	}
+	if len(d.events) != 1 || d.digest == nil {
+		t.Fatal("a canceled wait consumed a queued value", d.events, d.digest)
+	}
+	if event, err := d.NextMgrMap(context.Background()); err != nil || !event.Null {
+		t.Fatal("queued event", event, err)
+	}
+	if digest, err := d.NextDigest(context.Background()); err != nil || string(digest.MonStatus) != "{}" {
+		t.Fatal("queued digest", digest, err)
+	}
+}
