@@ -52,13 +52,15 @@ Track implementation and verification separately:
 - Verification: unverified, synthetic/unit-tested, verified on selected native
   profiles, or accepted against every requirement of the specified stage.
 
-[PROTOCOL_EVIDENCE.md](cephmsgr/PROTOCOL_EVIDENCE.md) joins each declared frame,
-client message, implemented OSD opcode and role-feature profile to its public
-boundary/contract, unit/vector selector and attributed native receipt or
-explicit gap. Unsupported opcodes have their own exhaustive classification.
-Frame captures, reported native results and source-path inference are distinct.
-Reference validation prevents missing rows/tests/records; it does not execute
-those tests or establish every semantic promise of an advertised feature bit.
+Each frame tag, message type, OSD opcode, advertised feature bit and CephFS
+client feature bit is classified beside its Go declaration, and a Go test
+fails when one is unclassified. An item's unit evidence is its tests. Its
+native evidence is the CI result of the catalog rows (the `//scenario:row`
+declarations beside the native tests) whose tests exercise it; an item that
+no row exercises has no native evidence. Run results live in PR bodies,
+issue comments and CI results, not in the repository. A classification does
+not execute a test or establish every semantic promise of an advertised
+feature bit.
 
 Current code includes secure/CRC framing, CephX aes/aes256k, MON/MGR commands,
 subscriptions and recovery; targeted OSD operations and control messages; and
@@ -67,7 +69,7 @@ constitute complete RADOS, RBD or CephFS clients.
 
 | Area | Contract and evidence | Remaining boundary |
 | --- | --- | --- |
-| Messenger/CephX | `internal/msgr/`, `internal/cephx/`, `internal/session/`; native role/key/mode profiles | A wire feature does not prove a release family or every security/platform combination; declared masks are in [FEATURE_LEDGER.md](internal/session/FEATURE_LEDGER.md), nested auth exchanges and source-attributed evidence in [EXCHANGE_LEDGER.md](internal/cephx/EXCHANGE_LEDGER.md) |
+| Messenger/CephX | `internal/msgr/`, `internal/cephx/`, `internal/session/`; native role/key/mode profiles | A wire feature does not prove a release family or every security/platform combination; declared masks are pinned by `TestFeatureMasksByRole` in `internal/session/`, nested auth exchanges and source-attributed evidence in [EXCHANGE_LEDGER.md](internal/cephx/EXCHANGE_LEDGER.md) |
 | MON/MGR commands | `cephmsgr/api.go`, `cephmsgr/named_mon.go`, [MGR Tell](cephmsgr/MGR_TELL_CONTRACT.md) | No typed management layer, standby command routing or automatic mutation replay |
 | MGR service registration | [opt-in lifecycle](cephmsgr/MGR_SERVICE_CONTRACT.md), [native codec vectors](internal/msgr/testdata/mgr-service-native-README.md) and selected live open/report/close profiles | Selected [recovery](integration/fixture/MGR_SERVICE_RECOVERY_VALIDATION.md), [unconfirmed close](integration/fixture/MGR_SERVICE_CLOSE_VALIDATION.md), [applied metadata](integration/fixture/MGR_SERVICE_METADATA_VALIDATION.md), [native field comparison](integration/fixture/MGR_SERVICE_COMPARISON_VALIDATION.md), [initial unavailable-MGR setup](integration/fixture/MGR_SERVICE_UNAVAILABLE_VALIDATION.md), [CLIENT configuration boundaries](integration/fixture/MGR_SERVICE_CONFIGURATION_VALIDATION.md) and [zero-initial-MGR bootstrap](integration/fixture/MGR_SERVICE_COLD_BOOTSTRAP_VALIDATION.md) on one secure/aes256k IPv4 container profile without OSDs; additional profiles (cold bootstrap included) and the separate service worker handoff boundary remain unverified; no implicit re-registration |
 | MON subscriptions | Log/config/digest and raw map APIs in `cephmsgr/` | No authorization ACK, complete event history or autonomous map application |
@@ -170,9 +172,8 @@ opcodes, encodings and required features explicitly.
 Required operation groups include read/stat, writes/partial writes/append/truncate/
 delete, conditions and compound vectors, xattrs/OMAP, class calls, allocation hints,
 sparse reads/checksums, snapshots/clones and relevant cache/control operations.
-The opcode catalog is [opcodes-tentacle.csv](internal/osd/opcodes-tentacle.csv);
-its unsupported entries are classified in
-[UNSUPPORTED_OPCODES.md](internal/osd/UNSUPPORTED_OPCODES.md).
+Every pinned Tentacle opcode has its status, and each unsupported one its
+reason, in `tentacleOpcodes` in `internal/osd/`.
 Detailed supported subsets are the contracts in `internal/osd/`.
 
 Do not equate Messenger ACK with execution, or an operation reply with a stronger
