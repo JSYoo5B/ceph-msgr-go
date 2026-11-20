@@ -108,6 +108,26 @@ class DeclarationTest(unittest.TestCase):
                 rows, _ = self.assert_refused({"integration/x_test.go": text}, message.strip())
                 self.assertEqual(rows, [])
 
+    def test_covers_names_a_path_of_its_owner(self):
+        sources = {"integration/x_test.go": source(ROW, "//scenario:covers CLIENT to OSD", "//scenario:covers Daemon-to-daemon"),
+                   "integration/fixture/r_test.go": source("//scenario:covers Service-induced paths",
+                                                           test="TestRGWNativeRIntegration", package="main")}
+        rows, problems = self.discover(sources)
+        self.assertEqual((problems, len(rows)), ([], 1))
+        self.assertEqual(declarations.coverage(sources), [
+            ("TestRGWNativeRIntegration", "Service-induced paths", "integration/fixture/r_test.go:5"),
+            ("TestCephXIntegration", "CLIENT to OSD", "integration/x_test.go:6"),
+            ("TestCephXIntegration", "Daemon-to-daemon", "integration/x_test.go:7"),
+        ])
+        for message, text in {
+            "covers CLIENT to OSD twice": source("//scenario:covers CLIENT to OSD", "//scenario:covers CLIENT to OSD"),
+            "is not in the doc comment of a native test": source("//scenario:covers CLIENT to OSD", test="TestHelper"),
+            "malformed scenario declaration": source("//scenario:covers "),
+            "malformed scenario declaration ": source("//scenario:covers CLIENT to OSD "),
+        }.items():
+            with self.subTest(message=message):
+                self.assert_refused({"integration/x_test.go": text}, message.strip())
+
     def test_duplicate_identifiers_are_refused(self):
         _, problems = self.discover({"integration/a_test.go": source(ROW), "cephmsgr/b_test.go": source(ROW, package="cephmsgr")})
         self.assertEqual(problems, ["integration/a_test.go:5: duplicate scenario identifier osd.aes.t-x, also declared at "
