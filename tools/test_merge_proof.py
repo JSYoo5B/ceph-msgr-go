@@ -32,8 +32,14 @@ merges two controls of the four-OSD erasure topology. Every case requires a
 clean merge without conflict resolution. No two branches edit one file, and
 each branch edits only its own files.
 
-Each merged tree then passes the repository's own validators, run from that
-tree: scenario_plan.py validate (catalog, selectors, the fixture's admission
+Case D merges every branch into one tree, again without conflict
+resolution, and runs the whole tools test suite (this module excepted), the
+.github/scripts tests and protocol_evidence.py in it, so that a total or a
+shared list reintroduced in any tools test fails here, not only in the
+validators named below.
+
+Each merged tree of Cases A to C passes the repository's own validators, run
+from that tree: scenario_plan.py validate (catalog, selectors, the fixture's admission
 and sharing of every row), the cluster-free listing tools and the cluster-free
 tests with their result gate, native_path_coverage.py, every test of the
 fixture module, the coverage map's tests, every tools/test_ci_rows_* module
@@ -65,6 +71,9 @@ import tempfile
 import unittest
 
 
+# Set in the merged tree of Case D, whose whole tools suite runs this module
+# too: the nested run skips it instead of repeating the proof.
+NESTED = "CEPH_MSGR_MERGE_PROOF_NESTED"
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / ".github" / "scenarios" / "README.md"
 SECTION = "## Adding a native test"
@@ -308,6 +317,7 @@ def readme_patterns(text=None):
             for pattern in patterns]
 
 
+@unittest.skipIf(os.environ.get(NESTED) == "1", "running inside the merge proof's own merged tree")
 class MergeProofTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -493,6 +503,23 @@ class MergeProofTest(unittest.TestCase):
         self.same_area("rbda", "rbdb")
         # Case C: two controls of the four-OSD erasure topology in one area.
         self.same_area("eca", "ecb")
+
+    def test_every_branch_composes_and_passes_the_whole_tools_suite(self):
+        """Case D: all branches in one tree, and every tools test in it."""
+        repo = self.repo
+        keys = list(AUTHORS)
+        repo.git("checkout", "-q", "-f", "-B", "all", self.branches[keys[0]])
+        for key in keys[1:]:
+            self.merge("all", self.branches[key])
+        env = dict(repo.env, GOWORK="off", **{NESTED: "1"})
+        for args, cwd in (([sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_*.py"], repo.path),
+                          ([sys.executable, "-m", "unittest", "discover", "-s", ".github/scripts", "-p", "test_*.py"], repo.path),
+                          ([sys.executable, "tools/protocol_evidence.py"], repo.path)):
+            result = subprocess.run(args, cwd=str(cwd), env=env, capture_output=True, text=True, encoding="utf-8",
+                                    errors="replace", timeout=TIMEOUT)
+            self.assertEqual(result.returncode, 0, "%s failed on the tree of every branch:\n%s"
+                             % (" ".join(args[1:]), (result.stdout + result.stderr)[-8000:]))
+        self.assertEqual(repo.git("status", "--porcelain", "--untracked-files=no").stdout, "")
 
     def same_area(self, first, second):
         ours, theirs = AUTHORS[first], AUTHORS[second]
