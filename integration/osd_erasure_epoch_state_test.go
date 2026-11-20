@@ -623,8 +623,9 @@ func checkECClones(t *testing.T, label string, list cephmsgr.OSDSnapshotList, si
 // and a notification completes again before the UNWATCH. The native watcher
 // list must hold exactly that registration throughout and nothing after the
 // UNWATCH, and the client must open no OSD connection the caller did not ask
-// for. Not verified: a notification to a registration while it is
-// disconnected, watch timeout or expiry, and the nonoptimized pool.
+// for. A notification to the registration while it is disconnected is
+// TestCephOSDErasureOptimizedK2M2DisconnectedNotifyIntegration. Not verified:
+// watch timeout or expiry, and the nonoptimized pool.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2watchfailover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
@@ -758,7 +759,8 @@ func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
 // match the native reads. After the original primary returns and every PG is
 // clean, the same reads and LIST_SNAPS through it must give the same bytes,
 // clones and user versions; that read does not show which shard's chunk the
-// returned primary used. Snapshot removal and trimming are not exercised.
+// returned primary used. Snapshot removal and trimming are
+// TestCephOSDErasureOptimizedK2M2SnapTrimFailoverIntegration.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2snapshotfailover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
@@ -832,10 +834,11 @@ func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 // active again without the nonprimary shard. The dropped APPEND keeps its
 // unknown outcome; the native object is unchanged, and one explicit
 // resubmission under the original identity applies it once. After the last
-// OSD returns and every PG is clean, the native state is unchanged. Not
-// verified: a BLOCK from a primary leading under a primary-first pg_temp
-// (actual versus wire shard), native reception of the ACK on the EC PG, and
-// object-level backoff on an EC pool.
+// OSD returns and every PG is clean, the native state is unchanged. A BLOCK
+// from a primary leading under a primary-first pg_temp, with the ACK in the
+// op history, and an object-level backoff are in
+// osd_erasure_epoch_backoff_test.go. Not verified: the op history of this
+// BLOCK's ACK.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2pgbackoff key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
