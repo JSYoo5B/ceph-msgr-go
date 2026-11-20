@@ -1,0 +1,487 @@
+package integration_test
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
+)
+
+// A write to an object that a returned shard of an optimized isa k=2,m=2 pool
+// is missing, while the norecover and nobackfill flags keep the PG from
+// recovering it and osd_backoff_on_degraded keeps its default (false). The
+// pinned source (Ceph v20.2.4) gives the expected native behaviour:
+//
+//   - do_op decodes the ops first and resets the op's description, so the
+//     op tracker prints the object and the ops from then on
+//     (src/osd/PrimaryLogPG.cc:2008-2011, src/messages/MOSDOp.h:622-641).
+//   - An object is degraded while an acting shard that is not an async
+//     recovery target has it in its missing set (src/osd/PrimaryLogPG.cc:655-696
+//     is_degraded_or_backfilling_object). A write-ordered op on it, without
+//     the backoff setting, waits in waiting_for_degraded_object and reports
+//     the delay as its flag point (src/osd/PrimaryLogPG.cc:2225-2234,
+//     :705-712 wait_for_degraded_object; src/osd/OpRequest.h:116-126,
+//     :161-163), before any execution event.
+//   - The wait starts that object's recovery at once (src/osd/PrimaryLogPG.cc:618-643
+//     maybe_kick_recovery), which the norecover flag does not stop; when the
+//     recovered object is complete on every shard, on_global_recover requeues
+//     the waiters (src/osd/PrimaryLogPG.cc:499-537), and the write runs as any
+//     other.
+//
+// The OSD of the returned shard is paused through the fixture's daemon
+// control while the write waits, so the push of the recovered shard cannot
+// complete and the wait lasts until the test ends the pause. The pause stays
+// below degradedWaitPauseBudget, well inside the 20 s default
+// osd_heartbeat_grace, and each control requires the PG's interval not to
+// have changed while it was paused. These consumer helpers are test-only.
+
+// degradedWaitEvent is the delay do_op marks for a write that waits for a
+// degraded object (src/osd/PrimaryLogPG.cc:705-712).
+const degradedWaitEvent = "waiting for degraded object"
+
+// degradedWaitPauseBudget bounds how long the returned shard's OSD stays
+// paused: below the 20 s default osd_heartbeat_grace, so that its peers
+// cannot report it before the pause ends.
+const degradedWaitPauseBudget = 15 * time.Second
+
+// checkDegradedWait judges one snapshot of the primary's op tracker,
+// independently of the oracle's parse: a complete receipt between identical
+// placement records that equal route but for an epoch not older than its
+// own, answered by route's primary, holding exactly one op of the client
+// entity and incarnation, for route's PG and shard at route's epoch, with its
+// operations decoded for route's head object, delayed waiting for the
+// degraded object right after its arrival at the PG, and with no execution
+// event. It returns that op.
+func checkDegradedWait(s opsInFlightSnapshot, route osdFixtureOracle, gid uint64, incarnation int32) (opsInFlightOp, error) {
+	if !s.Complete || len(s.Failures) != 0 || s.Code != 0 || s.AbsenceEstablished {
+		return opsInFlightOp{}, fmt.Errorf("incomplete in-flight snapshot: code %d, %q", s.Code, s.Failures)
+	}
+	if !samePlacement(s.Before, s.After) || s.Before.Epoch != s.After.Epoch || s.Before.Address != s.After.Address {
+		return opsInFlightOp{}, fmt.Errorf("the placement records around the dump differ: %+v vs %+v", s.Before, s.After)
+	}
+	if !samePlacement(s.Before, route) || s.Before.Epoch < route.Epoch || s.OSD != route.PrimaryID || s.PGID != route.PGID {
+		return opsInFlightOp{}, fmt.Errorf("the dump of osd.%d for %s at %+v is not the route's primary: %+v", s.OSD, s.PGID, s.Before, route)
+	}
+	if want := fmt.Sprintf("client.%d.%d", gid, incarnation); s.Client != want || len(s.Ops) != 1 {
+		return opsInFlightOp{}, fmt.Errorf("%d in-flight ops of %s (want 1 of %s)", len(s.Ops), s.Client, want)
+	}
+	op := s.Ops[0]
+	if op.Reqid != fmt.Sprintf("client.%d.%d:%d", gid, incarnation, op.TID) || op.TID == 0 {
+		return op, fmt.Errorf("op identity %s, tid %d", op.Reqid, op.TID)
+	}
+	if op.PGID != route.PGID+"s"+strconv.Itoa(int(route.Shard)) || op.Epoch != route.Epoch {
+		return op, fmt.Errorf("op for %s at epoch %d; want %ss%d at %d", op.PGID, op.Epoch, route.PGID, route.Shard, route.Epoch)
+	}
+	if strings.Contains(op.Description, "(undecoded)") || !strings.Contains(op.Description, " "+hobjectHead(route)+" [") {
+		return op, fmt.Errorf("op description %q does not show the decoded operations of %s", op.Description, hobjectHead(route))
+	}
+	reached := slices.Index(op.Events, "reached_pg")
+	if op.FlagPoint != degradedWaitEvent || reached < 0 || !slices.Equal(op.Events[reached+1:], []string{degradedWaitEvent}) || slices.Contains(op.Events, "started") {
+		return op, fmt.Errorf("op is at %q with events %q; want %q right after reached_pg and nothing executed", op.FlagPoint, op.Events, degradedWaitEvent)
+	}
+	return op, nil
+}
+
+// degradedObject is one object that the returned last parity shard is
+// missing, with another object of the same PG that it is not.
+type degradedObject struct {
+	object string
+	// route is the healthy placement before the outage, since the start of
+	// its interval.
+	route osdFixtureOracle
+	// now is the degraded placement on the full acting set after the
+	// return, in the interval that started at nowSince.
+	now      osdFixtureOracle
+	nowSince uint32
+	// other is the placement of another object of the same PG.
+	other osdFixtureOracle
+	// written is the reply of the overwrite while the shard was away, and
+	// pre the native object after the return.
+	written cephmsgr.OSDReply
+	pre     nativeXattrSnapshot
+	data    []byte
+	// returned is the OSD of the shard that is missing the object.
+	returned int32
+	// flagged reports that the recovery flags are set; the run's cleanup
+	// unsets them while it is true.
+	flagged *bool
+}
+
+// degradedObject seeds object and another object of its PG, kills the OSD of
+// the last parity shard, overwrites object while it is away, sets norecover
+// and nobackfill and starts the OSD again, and waits until the PG is active
+// and degraded on its full placement (degradedOn).
+func (r *ecEpochRun) degradedObject(object string, seeded, degradedAt uint32) degradedObject {
+	t := r.t
+	t.Helper()
+	d := degradedObject{object: object, flagged: new(bool)}
+	route, _ := r.healthy(object)
+	other := ""
+	for i := range 64 {
+		name := object + "-other-" + strconv.Itoa(i)
+		if p := r.place(name); p.PGID == route.PGID {
+			other = name
+			break
+		}
+	}
+	if other == "" {
+		t.Fatal("no name of 64 candidates maps to the PG of", object, route.PGID)
+	}
+	r.write("seed", route, bytes.Repeat([]byte{0x44, 0, 0xff, 'W'}, 1500), seeded, cephmsgr.OSDSnapContext{})
+	r.write("seed the other object", r.place(other), []byte("another object of the same PG\x00\xff"), seeded, cephmsgr.OSDSnapContext{})
+	route, since := r.healthy(object)
+	d.route = route
+
+	last := r.facts.size - 1
+	parity := r.kill(route.Acting[last])
+	absent := r.waitState("active without the last parity shard", object, func(o pgIntervalObservation) error { return o.activeWithout(route, []int{last}, since) })
+	d.data = bytes.Repeat([]byte("written while the parity shard is away\x02"), 100)
+	d.written = r.write("overwrite while the shard is away", *absent.After, d.data, degradedAt, cephmsgr.OSDSnapContext{})
+
+	// Registered after the run's own cleanups, so it runs before their
+	// recovery, which waits for clean PGs.
+	t.Cleanup(func() {
+		if *d.flagged {
+			cleanup, stop := context.WithTimeout(context.Background(), 60*time.Second)
+			defer stop()
+			nativePool(t, cleanup, "osdflags", map[string]any{"action": "unset"})
+		}
+	})
+	*d.flagged = true
+	flags := nativePool(t, r.ctx, "osdflags", map[string]any{"action": "set"})
+	if !slices.Contains(flags.OSDMapFlags, "norecover") || !slices.Contains(flags.OSDMapFlags, "nobackfill") {
+		t.Fatal("recovery flags were not set", flags.OSDMapFlags)
+	}
+	r.start(parity)
+	d.returned = parity.osd
+	seen := r.waitState("degraded on the returned shard", object, func(o pgIntervalObservation) error { return o.degradedOn(route, absent.Query.SameIntervalSince) })
+	d.now, d.nowSince = *seen.After, seen.Query.SameIntervalSince
+	d.pre = poolObserve(t, r.ctx, 1, object, "", "")
+	if d.pre.Code != 0 || !bytes.Equal(d.pre.Data, d.data) || d.pre.Version != d.written.UserVersion || d.pre.Seconds != int64(degradedAt) {
+		t.Fatal("native state before the held write differs", d.pre.Code, d.pre.Version, d.written.UserVersion)
+	}
+	d.other = r.place(other)
+	if d.other.PGID != d.now.PGID || d.other.ID != d.now.ID || d.other.Shard != d.now.Shard {
+		t.Fatal("the other object left the PG or its primary", d.other, d.now)
+	}
+	return d
+}
+
+// unsetFlags clears norecover and nobackfill.
+func (r *ecEpochRun) unsetFlags(d degradedObject) {
+	r.t.Helper()
+	nativePool(r.t, r.ctx, "osdflags", map[string]any{"action": "unset"})
+	*d.flagged = false
+}
+
+// osdPause is one owned pause of an OSD through the fixture's daemon
+// control.
+type osdPause struct {
+	r        *ecEpochRun
+	osd      int32
+	deadline time.Time
+	paused   bool
+}
+
+// pause pauses the OSD and returns its lease, which the run's cleanup
+// resumes if the test did not. The lease is recorded before the pause is
+// requested, because a control error cannot prove that the daemon runs.
+func (r *ecEpochRun) pause(id int32) *osdPause {
+	r.t.Helper()
+	p := &osdPause{r: r, osd: id, paused: true}
+	r.t.Cleanup(func() {
+		if !p.paused {
+			return
+		}
+		cleanup, stop := context.WithTimeout(context.Background(), 60*time.Second)
+		defer stop()
+		if err := r.control(cleanup, "resume", "osd", strconv.FormatInt(int64(id), 10)); err != nil {
+			r.t.Error("resume the paused osd", id, err)
+		}
+	})
+	if err := r.control(r.ctx, "pause", "osd", strconv.FormatInt(int64(id), 10)); err != nil {
+		r.t.Fatal("pause", id, err)
+	}
+	p.deadline = time.Now().Add(degradedWaitPauseBudget)
+	return p
+}
+
+// resume ends the pause and requires it to have ended within its budget.
+func (p *osdPause) resume() {
+	p.r.t.Helper()
+	if err := p.r.control(p.r.ctx, "resume", "osd", strconv.FormatInt(int64(p.osd), 10)); err != nil {
+		p.r.t.Fatal("resume", p.osd, err)
+	}
+	p.paused = false
+	if late := time.Since(p.deadline); late > 0 {
+		p.r.t.Fatalf("osd.%d stayed paused %v past its %v budget", p.osd, late, degradedWaitPauseBudget)
+	}
+	p.r.t.Logf("osd.%d resumed %v before the end of its pause budget", p.osd, time.Until(p.deadline).Round(100*time.Millisecond))
+}
+
+// waitDegraded takes bounded snapshots of the primary's op tracker until one
+// holds the write of client gid under incarnation waiting for the degraded
+// object, before the pause's deadline, and returns that op.
+func (r *ecEpochRun) waitDegraded(d degradedObject, p *osdPause, call heldCall, gid uint64, incarnation int32) opsInFlightOp {
+	r.t.Helper()
+	err := errors.New("no snapshot taken")
+	for attempt := 1; attempt <= 10 && time.Now().Before(p.deadline); attempt++ {
+		s := primaryOpsInFlight(r.t, r.ctx, 1, d.object, gid, incarnation)
+		var op opsInFlightOp
+		if op, err = checkDegradedWait(s, d.now, gid, incarnation); err == nil {
+			r.t.Logf("held at osd.%d (snapshot %d, %d ops in flight): %s, flag point %s, events %q", s.OSD, attempt, s.NumOps, op.Description, op.FlagPoint, op.Events)
+			select {
+			case early := <-call.finished:
+				r.t.Fatal("the held write ended", early.reply.Code, early.err)
+			default:
+			}
+			return op
+		}
+		r.t.Logf("snapshot %d: %v", attempt, err)
+		time.Sleep(300 * time.Millisecond)
+	}
+	r.t.Fatal("the primary did not hold the write for the degraded object within the pause budget:", err)
+	return opsInFlightOp{}
+}
+
+// cleanInInterval unsets nothing; it waits for every PG to be clean and for
+// one observation of the PG active+clean on route's placement in the
+// interval that started at since: no OSD was marked down in between.
+func (r *ecEpochRun) cleanInInterval(object string, route osdFixtureOracle, since uint32) {
+	r.t.Helper()
+	r.clean()
+	r.waitState("clean in the same interval", object, func(o pgIntervalObservation) error {
+		if err := o.cleanOn(); err != nil {
+			return err
+		}
+		if !samePlacement(*o.Before, route) || o.Query.SameIntervalSince != since {
+			return fmt.Errorf("the placement %+v in the interval since %d is not %+v in the interval since %d", *o.Before, o.Query.SameIntervalSince, route, since)
+		}
+		return nil
+	})
+}
+
+// degradedWaitOps is the held write: an APPEND of tail and a SETXATTR.
+func degradedWaitOps(tail, value []byte, attr string) []cephmsgr.OSDOperation {
+	return []cephmsgr.OSDOperation{
+		{Code: cephmsgr.OSDAppend, Length: uint64(len(tail)), Data: tail},
+		{Code: cephmsgr.OSDSetXattr, Xattr: cephmsgr.OSDXattrInput{Name: attr}, Data: value},
+	}
+}
+
+// TestCephOSDErasureOptimizedK2M2DegradedWriteWaitIntegration: a write
+// during recovery of its object on an optimized EC PG. The OSD of the last
+// parity shard is killed, the object is overwritten through the unchanged
+// shard-0 primary while it is away, and the norecover and nobackfill flags
+// keep the returned shard from recovering it: the PG is active and degraded
+// on its full placement. With the returned OSD paused, one Go
+// APPEND+SETXATTR of that object must be held at the primary: a bracketed
+// dump_ops_in_flight shows exactly that op, decoded for the object at its
+// PG shard and epoch, waiting for the degraded object, with nothing
+// executed, and a STAT of another object of the same PG on the same
+// connection completes meanwhile. After the pause ends, the primary
+// completes the object's recovery and the held write must complete once
+// with ONDISK under its original transaction, with the flags still set; the
+// native bytes, xattr, user version and mtime must show one application.
+// The flags are restored and every PG is clean again in the same interval,
+// so the pause never marked the OSD down.
+//
+// Not verified: a write that waits for an unreadable object (missing on the
+// primary), an op held inside the EC backend for sub-write commits, a pause
+// past the heartbeat grace, backfill and async recovery targets.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2degradedwritewait key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills and pauses an OSD and sets norecover/nobackfill; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK2M2DegradedWriteWaitIntegration(t *testing.T) {
+	r := startECEpochRun(t, 900*time.Second)
+	const (
+		object          = "ec-degraded-wait"
+		attr            = "ec-degraded-wait"
+		heldIncarnation = 71
+		seeded          = 1700012000
+		degradedAt      = 1700012001
+		mutated         = 1700012002
+	)
+	d := r.degradedObject(object, seeded, degradedAt)
+
+	client := dialErasureFaultClient(t, r.ctx, r.hash, "")
+	defer client.Close()
+	gid := client.Snapshot().GlobalID
+	o := mutationConnection(t, client.Client, r.ctx, d.now)
+	defer o.Close()
+	tail := []byte("degraded-wait\x00\xff" + object)
+	value := []byte{0, 0xff, 'w'}
+	held := r.request(d.now, degradedWaitOps(tail, value, attr)...)
+	held.ClientIncarnation = heldIncarnation
+	held.ModificationTime = cephmsgr.OSDTime{Seconds: mutated}
+
+	p := r.pause(d.returned)
+	call := startHeldCall(r.ctx, o, held)
+	op := r.waitDegraded(d, p, call, gid, heldIncarnation)
+	stat := r.request(d.other, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat})
+	stat.ClientIncarnation = heldIncarnation + 1
+	statCtx, stopStat := context.WithDeadline(r.ctx, p.deadline)
+	statReply, err := o.Request(statCtx, stat)
+	stopStat()
+	if err != nil || statReply.Code != 0 || len(statReply.Operations) != 1 {
+		t.Fatal("STAT of another object of the PG while the write waits", err, statReply.Code)
+	}
+	select {
+	case early := <-call.finished:
+		t.Fatal("the held write ended while the returned OSD was paused", early.reply.Code, early.err)
+	default:
+	}
+	p.resume()
+
+	var done heldResult
+	select {
+	case done = <-call.finished:
+	case <-time.After(60 * time.Second):
+		call.cancel()
+		t.Fatal("the held write did not complete within 60 s after the pause ended")
+	}
+	reply := done.reply
+	t.Logf("held write completed: tid %d code %d flags %#x user version %d replay %s epoch %d", reply.Transaction, reply.Code, reply.Flags, reply.UserVersion, replayVersion(reply), reply.MapEpoch)
+	if done.err != nil || reply.Code != 0 || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || reply.Transaction != op.TID || reply.RetryAttempt != 0 ||
+		reply.UserVersion <= d.pre.Version || reply.Submission.GlobalID != gid || reply.Submission.ClientIncarnation != heldIncarnation {
+		t.Fatal("the held write's reply differs", done.err, reply.Code, reply.Flags, reply.Transaction, op.TID, reply.UserVersion)
+	}
+	if !versionAfter(reply.ReplayVersion, d.written.ReplayVersion) {
+		t.Fatalf("the held write applied at %s, not after the overwrite at %s", replayVersion(reply), replayVersion(d.written))
+	}
+	final := poolObserve(t, r.ctx, 1, object, "", "")
+	want := append(bytes.Clone(d.data), tail...)
+	if final.Code != 0 || !bytes.Equal(final.Data, want) || bytes.Count(final.Data, tail) != 1 || final.Version != reply.UserVersion || final.Seconds != mutated || xattrInventory(final)[attr] != string(value) {
+		t.Fatal("native state after the held write differs", len(final.Data), final.Version, reply.UserVersion, final.Seconds)
+	}
+	t.Logf("applied once after the object's recovery: version %d -> %d", d.pre.Version, final.Version)
+
+	r.unsetFlags(d)
+	r.cleanInInterval(object, d.route, d.nowSince)
+	recovered := poolObserve(t, r.ctx, 1, object, "", "")
+	if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || recovered.Seconds != final.Seconds || !maps.Equal(xattrInventory(recovered), xattrInventory(final)) {
+		t.Fatal("native state after recovery differs", recovered.Version, final.Version)
+	}
+}
+
+// versionAfter reports whether a is a newer PG version than b.
+func versionAfter(a, b cephmsgr.OSDVersion) bool {
+	return a.Epoch > b.Epoch || a.Epoch == b.Epoch && a.Version > b.Version
+}
+
+// degradedWaitSnapshot builds one synthetic receipt of PG 3.7's primary
+// osd.3 holding client.4171.71:5, decoded, waiting for the degraded object
+// at the placement's epoch 25. No daemon produced it.
+func degradedWaitSnapshot() (opsInFlightSnapshot, osdFixtureOracle) {
+	s, route := heldSnapshot()
+	s.Client = "client.4171.71"
+	op := &s.Ops[0]
+	op.Reqid, op.Epoch, op.FlagPoint = "client.4171.71:5", 25, degradedWaitEvent
+	op.Events = []string{"initiated", "throttled", "header_read", "all_read", "dispatched", "queued_for_pg", "reached_pg", degradedWaitEvent}
+	op.Description = "osd_op(client.4171.71:5 3.7s0 " + hobjectHead(route) + " [append 0~13,setxattr ec (3)] snapc 0=[] ondisk+write+known_if_redirected e25)"
+	return s, route
+}
+
+func TestCheckDegradedWait(t *testing.T) {
+	s, route := degradedWaitSnapshot()
+	if op, err := checkDegradedWait(s, route, 4171, 71); err != nil || op.TID != 5 {
+		t.Fatal("held write refused:", op, err)
+	}
+	newer, _ := degradedWaitSnapshot()
+	newer.Before.Epoch, newer.After.Epoch = 26, 26
+	if _, err := checkDegradedWait(newer, route, 4171, 71); err != nil {
+		t.Fatal("held write in a dump at a newer epoch of the same placement refused:", err)
+	}
+	for name, edit := range map[string]func(*opsInFlightSnapshot){
+		"incomplete":         func(s *opsInFlightSnapshot) { s.Complete = false },
+		"a recorded failure": func(s *opsInFlightSnapshot) { s.Failures = []string{"placement or epoch changed"} },
+		"refused":            func(s *opsInFlightSnapshot) { s.Code = -22 },
+		"claims absence":     func(s *opsInFlightSnapshot) { s.AbsenceEstablished = true },
+		"placement moved":    func(s *opsInFlightSnapshot) { s.After.Epoch = 26 },
+		"acting moved":       func(s *opsInFlightSnapshot) { s.After.Acting = []int32{3, 2, 1, crushItemNone} },
+		"an older epoch":     func(s *opsInFlightSnapshot) { s.Before.Epoch, s.After.Epoch = 24, 24 },
+		"another primary":    func(s *opsInFlightSnapshot) { s.OSD = 2 },
+		"another PG":         func(s *opsInFlightSnapshot) { s.PGID = "3.6" },
+		"another address": func(s *opsInFlightSnapshot) {
+			s.Before.Address, s.After.Address = "v2:192.0.2.7:6800/2", "v2:192.0.2.7:6800/2"
+		},
+		"another client":          func(s *opsInFlightSnapshot) { s.Client = "client.4171.70" },
+		"no op":                   func(s *opsInFlightSnapshot) { s.Ops = nil },
+		"two ops":                 func(s *opsInFlightSnapshot) { s.Ops = append(s.Ops, s.Ops[0]) },
+		"identity of another tid": func(s *opsInFlightSnapshot) { s.Ops[0].Reqid = "client.4171.71:6" },
+		"zero tid":                func(s *opsInFlightSnapshot) { s.Ops[0].Reqid, s.Ops[0].TID = "client.4171.71:0", 0 },
+		"another shard":           func(s *opsInFlightSnapshot) { s.Ops[0].PGID = "3.7s2" },
+		"no shard":                func(s *opsInFlightSnapshot) { s.Ops[0].PGID = "3.7" },
+		"another epoch":           func(s *opsInFlightSnapshot) { s.Ops[0].Epoch = 26 },
+		"undecoded": func(s *opsInFlightSnapshot) {
+			s.Ops[0].Description = "osd_op(client.4171.71:5 3.7s0 3.d6c2a1e7 (undecoded) ondisk+write+known_if_redirected e25)"
+		},
+		"another object": func(s *opsInFlightSnapshot) {
+			s.Ops[0].Description = strings.Replace(s.Ops[0].Description, ":::obj:head", ":::other:head", 1)
+		},
+		"a snapshot object": func(s *opsInFlightSnapshot) {
+			s.Ops[0].Description = strings.Replace(s.Ops[0].Description, ":::obj:head", ":::obj:4", 1)
+		},
+		"not delayed":         func(s *opsInFlightSnapshot) { s.Ops[0].FlagPoint = "started" },
+		"waiting for missing": func(s *opsInFlightSnapshot) { s.Ops[0].FlagPoint = "waiting for missing object" },
+		"waiting for the map": func(s *opsInFlightSnapshot) { s.Ops[0].FlagPoint = heldEvent },
+		"never reached the PG": func(s *opsInFlightSnapshot) {
+			s.Ops[0].Events = []string{"initiated", "queued_for_pg", degradedWaitEvent}
+		},
+		"another delay event":     func(s *opsInFlightSnapshot) { s.Ops[0].Events[len(s.Ops[0].Events)-1] = "waiting for scrub" },
+		"executed after the wait": func(s *opsInFlightSnapshot) { s.Ops[0].Events = append(s.Ops[0].Events, "started") },
+		"executed before the wait": func(s *opsInFlightSnapshot) {
+			s.Ops[0].Events = slices.Insert(s.Ops[0].Events, 6, "started")
+		},
+		"requeued and held again": func(s *opsInFlightSnapshot) {
+			s.Ops[0].Events = append(s.Ops[0].Events, "reached_pg", degradedWaitEvent)
+		},
+	} {
+		changed, _ := degradedWaitSnapshot()
+		edit(&changed)
+		if _, err := checkDegradedWait(changed, route, 4171, 71); err == nil {
+			t.Error("snapshot accepted:", name)
+		}
+	}
+	for name, c := range map[string]struct {
+		gid uint64
+		inc int32
+	}{
+		"another entity":      {4172, 71},
+		"another incarnation": {4171, 72},
+	} {
+		if _, err := checkDegradedWait(s, route, c.gid, c.inc); err == nil {
+			t.Error("request accepted:", name)
+		}
+	}
+	moved := route
+	moved.Epoch = 26
+	if _, err := checkDegradedWait(s, moved, 4171, 71); err == nil {
+		t.Error("a dump older than the route accepted")
+	}
+}
+
+func TestVersionAfter(t *testing.T) {
+	for _, c := range []struct {
+		a, b cephmsgr.OSDVersion
+		want bool
+	}{
+		{cephmsgr.OSDVersion{Epoch: 27, Version: 3}, cephmsgr.OSDVersion{Epoch: 27, Version: 2}, true},
+		{cephmsgr.OSDVersion{Epoch: 28, Version: 1}, cephmsgr.OSDVersion{Epoch: 27, Version: 2}, true},
+		{cephmsgr.OSDVersion{Epoch: 27, Version: 2}, cephmsgr.OSDVersion{Epoch: 27, Version: 2}, false},
+		{cephmsgr.OSDVersion{Epoch: 26, Version: 9}, cephmsgr.OSDVersion{Epoch: 27, Version: 2}, false},
+	} {
+		if got := versionAfter(c.a, c.b); got != c.want {
+			t.Errorf("versionAfter(%+v, %+v) = %v", c.a, c.b, got)
+		}
+	}
+}
