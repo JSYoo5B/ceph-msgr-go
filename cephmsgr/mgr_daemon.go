@@ -297,6 +297,9 @@ type mgrDaemonHooks struct {
 	// beforeRotatingPublish runs after a rotating reply verified and before
 	// its publication check, outside the daemon lock.
 	beforeRotatingPublish func(generation uint64)
+	// beforeSessionClosed runs in a MON session's close callback, after the
+	// session made Done observable and before sessionClosed.
+	beforeSessionClosed func(generation uint64)
 }
 
 type mgrDaemonHooksKey struct{}
@@ -456,6 +459,15 @@ func (d *MgrDaemon) wakeWorker() {
 // does not wait for workers; Close does.
 func (d *MgrDaemon) fail(err error) {
 	d.mu.Lock()
+	all := d.failLocked(err)
+	d.mu.Unlock()
+	d.stop(all, err)
+}
+
+// failLocked records the first terminal cause and returns the sessions the
+// caller passes to stop once it has released daemon.mu: failing a session
+// runs its close callback, which takes the lock. daemon.mu held.
+func (d *MgrDaemon) failLocked(err error) []*session.Session {
 	if d.failure == nil {
 		d.failure = err
 	}
@@ -464,7 +476,10 @@ func (d *MgrDaemon) fail(err error) {
 		all = append(all, s)
 	}
 	d.signal()
-	d.mu.Unlock()
+	return all
+}
+
+func (d *MgrDaemon) stop(all []*session.Session, err error) {
 	d.cancel()
 	for _, s := range all {
 		s.Fail(err)
@@ -557,7 +572,12 @@ func (d *MgrDaemon) attempt(ctx context.Context, target monTarget) error {
 	var generation uint64
 	handler := &mgrDaemonSession{daemon: d, admitted: admitted}
 	config := session.Config{WriteTimeout: d.options.ConnectTimeout, KeepaliveInterval: d.options.KeepaliveInterval, KeepaliveTimeout: d.options.KeepaliveTimeout}
-	s = session.New(transport, config, func(m msgr.MessageData) error { return handler.handle(m) }, func(err error) { d.sessionClosed(s, err) })
+	s = session.New(transport, config, func(m msgr.MessageData) error { return handler.handle(m) }, func(err error) {
+		if d.hooks != nil && d.hooks.beforeSessionClosed != nil {
+			d.hooks.beforeSessionClosed(handler.generation)
+		}
+		d.sessionClosed(s, err)
+	})
 	d.mu.Lock()
 	if d.closed || d.failure != nil {
 		d.mu.Unlock()
@@ -631,23 +651,46 @@ func (d *MgrDaemon) attempt(ctx context.Context, target monTarget) error {
 	return nil
 }
 
-// sessionClosed runs once per MON session with its cause. Only the current
-// session's cause can end the daemon (mgrDaemonFatal); a replaced session's
-// cause belongs to state the daemon already left.
+// sessionClosed runs once per MON session with its cause, after the session
+// made Done observable and closed its transport.
 func (d *MgrDaemon) sessionClosed(s *session.Session, cause error) {
 	d.mu.Lock()
-	current := d.mon == s
-	if current {
-		d.monReady = false
-		d.pending = nil
-		d.signal()
-	}
-	terminal := current && d.failure == nil && !d.closed && mgrDaemonFatal(cause)
+	all, fatal := d.settleLocked(s, cause)
 	d.mu.Unlock()
-	if terminal {
-		d.fail(cause)
+	if fatal {
+		d.stop(all, cause)
 	}
 	d.wakeWorker()
+}
+
+// settleLocked accounts for the end of MON session s with its cause. Only
+// the current session's cause can end the daemon (mgrDaemonFatal); a
+// replaced session's cause belongs to state the daemon already left. A
+// session makes Done observable before its close callback runs, so the
+// supervisor settles the current session itself before it reconnects:
+// whichever of the two runs first decides under the same lock that d.mon
+// still names s, and the replacing admission, which also takes that lock,
+// can only follow. A fatal cause is recorded here, and the caller passes the
+// returned sessions to stop after releasing daemon.mu. daemon.mu held.
+func (d *MgrDaemon) settleLocked(s *session.Session, cause error) ([]*session.Session, bool) {
+	if d.mon != s || cause == nil {
+		return nil, false
+	}
+	d.monReady = false
+	d.pending = nil
+	d.signal()
+	if d.failure != nil || d.closed || !mgrDaemonFatal(cause) {
+		return nil, false
+	}
+	return d.failLocked(cause), true
+}
+
+// ownsLocked reports whether s is the current MON session and has not
+// ended. Only such a session publishes maps, tickets or rotating secrets or
+// queues an auth request: between a session's end and its settlement, d.mon
+// still names it. daemon.mu held.
+func (d *MgrDaemon) ownsLocked(s *session.Session) bool {
+	return d.mon == s && s.Err() == nil
 }
 
 // supervise reconnects after MON loss and keeps tickets and rotating secrets
@@ -658,12 +701,26 @@ func (d *MgrDaemon) supervise() {
 	defer tick.Stop()
 	for {
 		d.mu.Lock()
-		s, ready, failed := d.mon, d.monReady, d.closed || d.failure != nil
+		s := d.mon
+		var all []*session.Session
+		var fatal bool
+		var cause error
+		if s != nil {
+			// The session's error is set before Done closes, so a session
+			// that woke this loop is settled here even if its close
+			// callback has not run yet.
+			cause = s.Err()
+			all, fatal = d.settleLocked(s, cause)
+		}
+		ready, failed := d.monReady, d.closed || d.failure != nil
 		d.mu.Unlock()
+		if fatal {
+			d.stop(all, cause)
+		}
 		if failed || d.ctx.Err() != nil {
 			return
 		}
-		if s == nil || !ready || s.Err() != nil {
+		if s == nil || !ready {
 			err := d.connect(d.ctx)
 			if err != nil && mgrDaemonFatal(err) {
 				d.fail(err)
@@ -696,7 +753,7 @@ func (d *MgrDaemon) maintain(s *session.Session) {
 	now := time.Now()
 	var messages []msgr.MessageData
 	d.mu.Lock()
-	if d.mon != s || !d.monReady {
+	if !d.ownsLocked(s) || !d.monReady {
 		d.mu.Unlock()
 		return
 	}
@@ -784,7 +841,7 @@ func (h *mgrDaemonSession) handle(m msgr.MessageData) error {
 		}
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if d.mon != h.session {
+		if !d.ownsLocked(h.session) {
 			return nil
 		}
 		if d.fsid != [16]byte{} && d.fsid != mon.FSID {
@@ -819,7 +876,7 @@ func (h *mgrDaemonSession) handle(m msgr.MessageData) error {
 		}
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if d.mon != h.session {
+		if !d.ownsLocked(h.session) {
 			return nil
 		}
 		if !h.released {
@@ -835,7 +892,7 @@ func (h *mgrDaemonSession) handle(m msgr.MessageData) error {
 			return err
 		}
 		d.mu.Lock()
-		if d.mon == h.session {
+		if d.ownsLocked(h.session) {
 			d.digest = &ClusterDigest{MonStatus: digest.MonStatus, Health: digest.Health}
 			d.signal()
 		}
@@ -887,7 +944,7 @@ func (h *mgrDaemonSession) authReply(m msgr.MessageData) error {
 		return err
 	}
 	d.mu.Lock()
-	if d.mon != h.session {
+	if !d.ownsLocked(h.session) {
 		d.mu.Unlock()
 		return nil
 	}
@@ -918,7 +975,7 @@ func (h *mgrDaemonSession) authReply(m msgr.MessageData) error {
 			return err
 		}
 		d.mu.Lock()
-		if d.mon == h.session && request.authEpoch == d.monMap.AuthEpoch && request.invalidations == d.invalidations {
+		if d.ownsLocked(h.session) && request.authEpoch == d.monMap.AuthEpoch && request.invalidations == d.invalidations {
 			d.auth = auth
 			d.renewals++
 			d.signal()
@@ -935,7 +992,7 @@ func (h *mgrDaemonSession) authReply(m msgr.MessageData) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.mon != h.session || request.generation != d.monGeneration || request.authEpoch != d.monMap.AuthEpoch || request.invalidations != d.invalidations {
+	if !d.ownsLocked(h.session) || request.generation != d.monGeneration || request.authEpoch != d.monMap.AuthEpoch || request.invalidations != d.invalidations {
 		d.staleRotating++
 		d.wakeWorker()
 		return nil
