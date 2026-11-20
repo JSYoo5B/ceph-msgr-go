@@ -14,8 +14,8 @@ import (
 // Synthetic MDS peers; the REJECT reason follows pinned Tentacle
 // Server::handle_client_session (mds/Server.cc:743-748), which formats the
 // missing feature_bitset_t as "0x" plus 16 hex digits per 64-bit block
-// (mds/mdstypes.cc:559-571). The live session-profile refusal is in
-// integration/fixture/MDS_SESSIONS_VALIDATION.md; this is not native evidence.
+// (mds/mdstypes.cc:559-571). This is not native evidence; the live refusal is
+// a leaf of TestCephMDSSessionsIntegration.
 
 // TestMDSWithheldFeatureRequirementIsRejectedExplicitly requires, for both
 // session profiles and every bit of the first feature block that the profile

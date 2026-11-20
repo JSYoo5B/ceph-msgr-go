@@ -35,11 +35,22 @@ import (
 // forward_message_mds), mds/Server.cc (handle_set_vxattr ceph.dir.pin) and
 // mon/MDSMonitor.cc (fail_mds_gid) at mdsFreshSource (LGPL-2.1 references; no
 // code copied). The pin recipe follows JSYoo5B/ceph-testcontainers-go#48.
+//
+// A stored pin is policy, not placement: placement requires the pinned rank's
+// get subtrees to show it authoritative, and restoring -1 removes the pin
+// without moving authority back. balance_automate stays false, so only export
+// pins move subtrees. The replay extension runs three actives and makes the
+// spare an up:standby-replay follower of rank 0; while its journal pause is in
+// effect no native mount runs, because a mount opens a journaled session on
+// every rank. fail_mds_gid does not blocklist a standby-replay daemon.
 
 const mdsCephFSRanksJSONLimit = 64 << 10
 
-// Native OpHistory retains the longest operations, not the newest ones.
-// Reserve a bounded history for the replay acceptance before any client opens.
+// Native OpHistory retains the longest operations, not the newest ones
+// (common/TrackedOp.cc drops expired ops and, at capacity, the shortest one).
+// Reserve a bounded history for the replay acceptance before any client opens;
+// a check proves capacity at observation time only. Cleanup restores each
+// setting by daemon name and GID and never applies it to a respawned process.
 const mdsCephFSRanksHistorySize = 256
 
 // mdsCephFSRanksPlan is the fixed namespace of one run. The Go client creates

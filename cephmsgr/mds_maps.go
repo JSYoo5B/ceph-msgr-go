@@ -55,6 +55,10 @@ type FSMapUserStream struct{ watch *monMDSMapWatch }
 // map watch on that same MON session. Use a fresh Client for another watch.
 // Recovery on a fresh MON retains the explicit ID and highest accepted epoch.
 // Duplicate/decreasing epochs are ignored; no complete history is promised.
+// A map is accepted only when its cluster UUID equals the authenticated
+// cluster's and its outer epoch equals the inner map epoch. Queue overflow
+// ends the stream with ErrMDSMapWatchOverflow instead of dropping maps, and
+// accepting epoch MaxUint32 ends it with ErrMDSMapEpochExhausted.
 // This API establishes no MDS daemon session or CephFS operation support.
 type MDSMapStream struct{ watch *monMDSMapWatch }
 

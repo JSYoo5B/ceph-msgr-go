@@ -307,7 +307,15 @@ func HandshakeNonce(ctx context.Context, conn net.Conn, target msgr.Address, rol
 // MDS rank, including rank zero. It takes ownership of conn. It does not open a
 // CephFS session, reconnect, resume or replay messages. The context governs setup
 // only; after success the owner must close the transport on failure or shutdown.
-// Its bounded native acceptance is documented in MDS_FRESH_CONTRACT.md.
+// The MDS CLIENT policy is stateful_server(0) (src/ceph_mds.cc,
+// src/msg/Policy.h), so the client sends flags 0 and a nonzero random cookie
+// and requires a ServerIdent with flags 0, a nonzero server cookie, the target
+// address and the exact rank (src/msg/async/ProtocolV2.cc). Required features
+// are exactly MSG_ADDR2; MON or OSD profile features are never copied. Reset,
+// Retry, RetryGlobal, ReconnectOK, SessionReconnect and Wait are terminal here.
+// ServerIdent proves the rank, not a daemon GID: the MDS service key is
+// shared, and no FSCID is asserted. Standby-replay identities, which use the
+// daemon GID (src/mds/MDSRank.cc), are outside this profile.
 func HandshakeFreshMDS(ctx context.Context, conn net.Conn, target msgr.Address, rank int32, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration) (*Transport, error) {
 	if rank < 0 {
 		conn.Close()
@@ -342,6 +350,9 @@ func HandshakeFreshCephFS(ctx context.Context, conn net.Conn, target msgr.Addres
 // caller which retained outgoing messages the server already received. RETRY
 // and RETRY_GLOBAL are answered within a fixed bound; RESET returns
 // ErrSessionReset and WAIT is terminal. It never falls back to a fresh ident.
+// The frame is the pinned src/msg/async/frames_v2.h ReconnectFrame; the server
+// finds the existing connection by the address vector and nonce
+// (ProtocolV2::handle_reconnect).
 func HandshakeResumeCephFS(ctx context.Context, conn net.Conn, target msgr.Address, rank int32, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, state ResumeState) (*Transport, error) {
 	if rank < 0 || len(state.Addresses) == 0 || state.ClientCookie == 0 || state.ServerCookie == 0 || state.GlobalID == 0 {
 		conn.Close()

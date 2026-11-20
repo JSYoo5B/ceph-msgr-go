@@ -31,6 +31,12 @@ func mdsCommandsCaps() ceph.ClientCaps {
 	return ceph.ClientCaps{Mon: "allow r", MDS: "allow *"}
 }
 
+// prepareMDSCommands needs one legacy-v6 OSD with no-HASHPSPOOL pools so the
+// Go client enables MDS without OSD or modern MON admission bits. The native
+// oracle sends three fixed actions through libcephfs mds_command to the
+// recorded daemon GID, without a mount or OPEN, and keeps the signed code, raw
+// data and status unparsed; native TIDs are not equated with Go TIDs. The
+// only daemon control is a final stop of the MDS, which nothing restarts.
 func (c *fixtureCluster) prepareMDSCommands(ctx context.Context, out string) error {
 	if c.profile.mdsCommands != "1" || c.profile.mdsFresh != "1" || c.profile.osdProfile != "legacy-v6" || c.mdsFresh == nil || c.mdsCommands != nil {
 		return errors.New("invalid MDS commands preparation scope")

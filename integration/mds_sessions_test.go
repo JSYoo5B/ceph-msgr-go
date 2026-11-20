@@ -273,6 +273,16 @@ func waitMDSSession(ctx context.Context, s *cephmsgr.MDSSession, limit time.Dura
 	}
 }
 
+// TestCephMDSSessionsIntegration accepts the CephFS session against a live
+// Tentacle MDS with native `session ls`: open, renewal, STALE and resume,
+// confirmed close, REJECT reasons, native and autoclose eviction observed as
+// Lost with the address guard, required-feature admission per profile and
+// reclaim. STALE needs mds_defer_session_stale=false, because
+// Server::find_idle_sessions never marks a capless session stale by default.
+// Reclaim encoding is checked only against the daemon. Not verified live:
+// RECALL_STATE, FLUSHMSG, FORCE_RO, root-claim and duplicate-uuid REJECTs, a
+// cancelled OPEN, reclaim EPERM and failover.
+//
 //scenario:row mds-sessions.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdssessions key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_sessions=1
 //scenario:row mds-sessions.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdssessions key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_sessions=1
 //scenario:covers CLIENT to MDS/CephFS

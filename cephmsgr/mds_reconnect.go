@@ -36,7 +36,15 @@ type MDSReconnectCapFlush struct {
 // after it restarts: one entry per held head-inode capability (with its short
 // path, wanted/issued masks, realm and opaque file-lock blob) and the snap
 // realms they belong to. The caller owns these values; native clients reset
-// cap sequence numbers before reconnecting.
+// cap sequence numbers before reconnecting. Caps are sent ordered by inode as
+// cap_reconnect_t v2 and realms as snaprealm_reconnect_t v1, with every realm
+// in the final message. The whole exchange is limited to 1<<20 caps and 1<<16
+// realms, and a duplicate cap inode, a cap that cannot fit one message or
+// realms that cannot fit the final message are refused before any admission.
+// The complete message sequence is materialized first, so MaxMessageSize
+// bounds each message, not the caller's total state. Once a fragment enters
+// the writer the MDS may have received a prefix; nothing is rolled back or
+// retried.
 type MDSReconnectState struct {
 	// MaxMessageSize optionally bounds each MClientReconnect, including its
 	// message header, independently of bootstrap/receive MaxFrameSize. Zero

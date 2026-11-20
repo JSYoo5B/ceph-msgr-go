@@ -30,20 +30,6 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
-// TestCephMDSCephFSRecoveryIntegration accepts journal flush, fencing through
-// the shared CephFS address nonce, and CephFS reconnect with request
-// resubmission after a restart of the owned rank-0 MDS daemon, against live
-// Tentacle daemons with native oracles. See integration/fixture/
-// MDS_CEPHFS_FIXTURE.md and MDS_CEPHFS_RECOVERY_VALIDATION.md. One whole-file
-// FLOCK held by the restart session crosses the same restart; see
-// MDS_FILELOCK_RESTART_VALIDATION.md. runCephFSRecovery is the recipe; the
-// held lock set is its parameter (heldFlockRecipe), and
-// TestCephMDSCephFSSharedFlockRecoveryIntegration runs it with two shared
-// locks of two owners; see MDS_FILELOCK_SHARED_RESTART_VALIDATION.md.
-// TestCephMDSCephFSFcntlRangeRecoveryIntegration runs it with two FCNTL
-// byte-range locks and one FLOCK lock; see
-// MDS_FILELOCK_FCNTL_RESTART_VALIDATION.md.
-
 type nativeMDSCephFSRecoveryPlan struct {
 	Directory        string   `json:"directory"`
 	FlushPlain       []string `json:"flush_plain"`
@@ -765,6 +751,25 @@ func recoveryOSDRead(ctx context.Context, o *cephmsgr.OSDConnection, request cep
 	return r
 }
 
+// TestCephMDSCephFSRecoveryIntegration accepts journal flush, fencing through
+// the shared CephFS address nonce, and CephFS reconnect with request
+// resubmission after a restart of the owned rank-0 MDS daemon, against live
+// Tentacle daemons with native oracles. An eviction must blocklist exactly
+// <ip>:0/<CephFSNonce> and fail the fenced client's OSD read with -108, while
+// a reader with another nonce on the same IP still reads. After the restart
+// the session ends Lost through RESET; ReconnectSession resubmits an
+// unsafe-replied call as REPLAY and an unsent one with retry 1, and sends one
+// caller-chosen head UPDATE before MClientReconnect. That UPDATE is first sent
+// after Lost: it is neither a retransmission of an earlier flush nor native
+// early-kick selection.
+//
+// One whole-file FLOCK crosses the restart in the caller's
+// MDSCapReconnect.Flock blob (Client::_encode_filelocks layout) without a
+// second SETFILELOCK; there is no restart-without-blob control.
+// runCephFSRecovery is the recipe and heldFlockRecipe its lock-set parameter.
+// Not exercised: reconnect denial or a missed window, standby or multiple
+// ranks, non-root realms, waiting locks and crash durability.
+//
 //scenario:covers Messenger/CephX
 //scenario:covers CLIENT to MDS/CephFS
 //fixture:isolated pauses the MDS journal, fails the owned rank-0 MDS and evicts a session (blocklist entry); no restore proof

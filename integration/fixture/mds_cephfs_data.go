@@ -34,6 +34,19 @@ import (
 // removal, handle_client_mksnap/rmsnap), osdc/Striper.cc (object naming and
 // striping) and tools/rados (listsnaps) at mdsFreshSource (LGPL-2.1
 // references; no code copied).
+//
+// The profile is exclusive against every other MDS profile. The Go identity
+// has no p or s MDS caps: layout and snapshots are native only. 64 KiB is the
+// minimum stripe unit (file_layout_t::is_valid). While a restart is armed and
+// unadopted, or the journal is paused, or MDS or OSD client messages are
+// blackholed, LibCephFS work and native mutations are refused. A blackholed
+// incoming caps message carries no GlobalID, so cap log lines are attributed
+// only by the exact peer nonce and the UPDATE/FLUSHSNAP tuple. The one
+// background native reader starts only while no drop, restart or MDS fault is
+// in effect, because Client::check_pool_perm issues its own OSD ops before
+// waiting for caps. Cleanup restores overrides on the same proven incarnation
+// and treats them as discarded only after the old GID is absent and every
+// value reads back at baseline.
 
 const (
 	mdsCephFSDataJSONLimit   = 256 << 10

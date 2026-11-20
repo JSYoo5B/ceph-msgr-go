@@ -148,7 +148,11 @@ func (m *MDSConnection) beginSession(ctx context.Context, options MDSSessionOpti
 // a confirmed CLOSE or REJECT. A ctx error leaves the session Closing; Close
 // can be called again to keep waiting. If the transport ends first, the remote
 // session is unconfirmed: the error wraps ErrMDSSessionActive and this client
-// refuses further connections to that MDS address.
+// refuses further connections to that MDS address. Pinned mds/Server.cc
+// handle_client_session drops a REQUEST_CLOSE whose sequence is behind the
+// push sequence without replying, so a counted push that arrives while the
+// CLOSE waits for writer admission makes the session send a fresh CLOSE with
+// the current sequence, as Client::got_mds_push does.
 func (s *MDSSession) Close(ctx context.Context) error {
 	if err := s.lockRequestAdmission(ctx); err != nil {
 		return s.closeResult(err)

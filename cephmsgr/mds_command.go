@@ -32,7 +32,11 @@ type MDSCommandResult struct {
 // starts preserves OutcomeUnknownError. A closed CephFS application session
 // does not prevent native MDS command dispatch. Native allow_all command checks
 // can ignore an fsname restriction when UID/path are unrestricted, so the local
-// target and capability text do not establish filesystem permission isolation.
+// target and capability text do not establish filesystem permission isolation
+// (pinned mds/MDSDaemon.cc handle_command uses MDSAuthCaps::allow_all, and
+// mds/MDSAuthCaps.h is_match_all does not consider fs_name). MCommand and its
+// reply use the canonical header version 1/compat 1 that msg/Message.cc
+// encode normalizes a zero compat to; a compat 0 reply is refused.
 func (m *MDSConnection) Command(ctx context.Context, command Command) (MDSCommandResult, error) {
 	var result MDSCommandResult
 	c := m.client

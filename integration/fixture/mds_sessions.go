@@ -29,6 +29,11 @@ import (
 // find_idle_sessions, update_required_client_features), mds/MDSRank.cc
 // (evict_client, dump_sessions), mds/SessionMap.cc (Session::dump) and
 // mon/FSCommands.cc. LGPL-2.1 references; no code copied.
+//
+// A required-client-feature mutation needs an empty native session list,
+// because update_required_client_features evicts and blocklists every open
+// session lacking the feature. Cleanup removes only blocklist entries of owned
+// session addresses and leaves an eviction entry whose expiry changed.
 
 const mdsSessionsJSONLimit = 512 << 10
 const mdsSessionsMaxGlobalIDs = 8
