@@ -13,6 +13,13 @@ import (
 // probe's closed 66-call matrix nor uses the product client.
 const cacheTierOpsAction = "tier-ops"
 
+var _ = defineCachePoolAction(cacheTierOpsAction, func(fields []string) (func(*fixtureCluster, context.Context) error, error) {
+	if len(fields) != 3 {
+		return nil, errors.New(cacheTierOpsAction + " takes no case")
+	}
+	return (*fixtureCluster).cacheTierOpsNative, nil
+})
+
 // The checkpoint is selected at most once per fixture. A failed or uncertain
 // run is retained in its receipt and the fixture step, never reissued.
 func (c *fixtureCluster) cacheTierOpsNative(ctx context.Context) error {

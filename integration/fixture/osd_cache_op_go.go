@@ -17,6 +17,14 @@ const cacheOpGoAction = "go-ops"
 
 var cacheOpGoLabels = map[string]bool{"after-evict-dirty": true, "pinned": true, "unpinned": true, "flushed": true, "try-flushed": true, "evicted": true, "absent-final": true, "clean-flush": true, "clean-try-flush": true, "absent-flush": true, "absent-try-flush": true, "absent-evict": true, "lost-flushed": true, "lost-flush-settled": true}
 
+var _ = defineCachePoolAction(cacheOpGoAction, func(fields []string) (func(*fixtureCluster, context.Context) error, error) {
+	phase, label, ok := cacheOpGoControl(fields)
+	if !ok {
+		return nil, errors.New("unsupported Go cache-op observer control")
+	}
+	return func(c *fixtureCluster, ctx context.Context) error { return c.cacheOpGoNative(ctx, phase, label) }, nil
+})
+
 func cacheOpGoControl(fields []string) (phase, label string, ok bool) {
 	switch {
 	case len(fields) == 4 && (fields[3] == "prepare" || fields[3] == "finish"):

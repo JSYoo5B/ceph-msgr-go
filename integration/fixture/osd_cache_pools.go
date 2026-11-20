@@ -426,15 +426,15 @@ func (c *fixtureCluster) osdCachePoolsControl(ctx context.Context, out string, f
 		return errors.New("stale cache-pool control identity")
 	}
 	action, which := fields[2], ""
-	if action == cacheOpGoAction {
-		phase, label, ok := cacheOpGoControl(fields)
-		if !ok {
-			return errors.New("unsupported Go cache-op observer control")
+	if define, ok := cachePoolActions[action]; ok {
+		run, err := define(fields)
+		if err != nil {
+			return err
 		}
 		x.LastID = id
-		return c.cacheOpGoNative(ctx, phase, label)
+		return run(c, ctx)
 	}
-	if action == "finish" || action == cacheTierOpsAction {
+	if action == "finish" {
 		if len(fields) != 3 {
 			return errors.New(action + " takes no case")
 		}
@@ -448,10 +448,25 @@ func (c *fixtureCluster) osdCachePoolsControl(ctx context.Context, out string, f
 	if action == "finish" {
 		return c.finishOSDCachePools(ctx)
 	}
-	if action == cacheTierOpsAction {
-		return c.cacheTierOpsNative(ctx)
-	}
 	return c.cachePoolNative(ctx, action, which)
+}
+
+// cachePoolAction is one checkpoint's action of the live cache-pool control,
+// beside the IGNORE_CACHE probe's own native, observe and finish. It checks
+// the control's fields and returns the run the control then records under
+// its identity; a refused field set records nothing.
+type cachePoolAction func(fields []string) (func(*fixtureCluster, context.Context) error, error)
+
+// cachePoolActions holds the actions each checkpoint declares beside its
+// code with defineCachePoolAction, so no list names them.
+var cachePoolActions = map[string]cachePoolAction{}
+
+func defineCachePoolAction(name string, action cachePoolAction) bool {
+	if _, ok := cachePoolActions[name]; ok || name == "finish" || name == "native" || name == "observe" {
+		panic("cache-pool action declared twice or shadowing the probe: " + name)
+	}
+	cachePoolActions[name] = action
+	return true
 }
 
 func (c *fixtureCluster) finishOSDCachePools(ctx context.Context) (result error) {
