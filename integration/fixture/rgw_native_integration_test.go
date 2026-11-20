@@ -26,6 +26,16 @@ const rgwNativeImage = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946
 // rgw_native=1 routes the trusted native workflow to this test
 // (rgw_native_route.go).
 //
+// One small-object PUT, a gateway restart and one DELETE are attributed to the
+// gateway's own Messenger identities through OSD dump_historic_ops: head
+// WRITE/WRITEFULL and rgw.bucket_prepare_op/bucket_complete_op CALLs on an
+// owned index shard (src/rgw/driver/rados/rgw_rados.cc, src/cls/rgw at
+// ceph/ceph/blob/v20.2.4), and S3 DELETE as CALL rgw.obj_remove, not a RADOS
+// DELETE. A reached_pg entry establishes reception only, not a return code,
+// durability or atomicity; bucket-index OMAP contents do not imply that RGW
+// sent OMAPSETVALS. No PUT is replayed after the restart. Large objects,
+// multipart, multisite, compression and other profiles are not covered.
+//
 //scenario:row rgw.aes256k.ip4.container.t-rgwcheckpoint key=aes256k service=aes256k family=4 stress= rgw_native=1
 //scenario:covers Service-induced paths
 //fixture:isolated starts its own owned RGW cluster and restarts its gateway

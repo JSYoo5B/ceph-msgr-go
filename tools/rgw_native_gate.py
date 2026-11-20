@@ -16,7 +16,13 @@ gate imports every such module from its own directory only, so the set of
 checkpoints it verifies (TESTS) has no list to edit, and a copy of the gate
 never imports another revision's modules from the import path.
 
-It runs no test, starts no fixture and makes no network request.
+It runs no test, starts no fixture and makes no network request. On an
+authorized Linux Docker runner, never against an existing cluster:
+
+    CEPH_MSGR_TEST_RGW_NATIVE=1 go -C integration/fixture test -json \
+      -run '^TestRGWNativeMultiStripeIntegration$' -count=1 -timeout=20m . > run.jsonl
+    python3 tools/rgw_native_gate.py --jsonl run.jsonl \
+      --test TestRGWNativeMultiStripeIntegration --output gate.json
 """
 import argparse
 import hashlib
