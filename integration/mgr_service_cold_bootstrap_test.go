@@ -81,8 +81,16 @@ func TestColdBootstrapDialAttributionIncludesLaterManager(t *testing.T) {
 	}
 }
 
-// A distinct closed fixture starts with no MGR processes. The native MON map,
-// every dial attempt and renewed MON ticket precede one explicit activation.
+// A distinct closed fixture starts with no MGR processes and no OSDs. The native
+// MON map, every dial attempt and renewed MON ticket precede one explicit
+// activation. Before it, deadline, cancellation and Close are known pre-send
+// failures and every dial must be attributed to an authenticated MON endpoint;
+// unknown endpoints are never discarded to infer zero MGR dials. The fixture
+// creates MGRs once through start-mgrs (an uncertain activation is not
+// replayed), the pending open then completes, and the acknowledged close must
+// be followed by stable native absence. Host relay mode is not admitted: its
+// startup-only target allowlist lacks the later MGR endpoints. Other platforms,
+// modes, topologies and service failover after registration are not covered.
 //
 //scenario:row mgr-service.aes256k.ip4.container.managers-0.t-mgrservicecoldbootstrap key=aes256k service=aes256k family=4 runtime=container managers=0 mgr_service=1
 //scenario:covers CLIENT to MON/MGR

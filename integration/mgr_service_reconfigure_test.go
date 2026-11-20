@@ -88,6 +88,17 @@ func waitMgrServiceConfigure(t *testing.T, ctx context.Context, svc *cephmsgr.Mg
 	}
 }
 
+// testMgrServiceConfiguration changes mgr_stats_period and
+// mgr_stats_threshold (with autotune disabled) at runtime on the owned active
+// MGR. Pinned DaemonServer::handle_open excludes CLIENT service sessions from
+// the handle_conf_change broadcast set
+// (ceph/ceph/blob/v20.2.4/src/mgr/DaemonServer.cc), so the existing handle
+// must keep its initial Configure while progressing native beacons keep its
+// status and identity, and a distinct probe registration per phase must
+// receive the current values. Each mutation is submitted once and never
+// retried; restoration preserves an originally absent override with
+// "config unset". Option semantics: src/common/ceph_context.cc,
+// src/common/config.cc and src/common/options/mgr.yaml.in at the same tag.
 func testMgrServiceConfiguration(t *testing.T, ctx context.Context, c *cephmsgr.Client, svc *cephmsgr.MgrService, service, daemon string, metadata, status, task map[string]string) {
 	t.Helper()
 	receipt := struct {

@@ -18,6 +18,14 @@ type mgrServiceMetadataReceipt struct {
 	Snapshots   map[string]map[string]string `json:"snapshots"`
 }
 
+// prepareMgrServiceMetadata enables the native selftest MGR module (only if
+// absent, restored afterwards) so the servicemetadata oracle can read
+// MgrModule.get_metadata inside the MGR. That daemon-state index, not the MON
+// ServiceMap, is where DaemonServer::handle_update applies MMgrUpdate; the
+// observation requires exact replacement with omitted keys removed (only the
+// native hostname projection is excluded) and an unchanged map after a locally
+// refused empty update. Sources: src/mgr/DaemonState.h, src/mgr/ActivePyModules.cc
+// and src/pybind/mgr/selftest/module.py at ceph/ceph/blob/v20.2.4.
 func prepareMgrServiceMetadata(t *testing.T, ctx context.Context) *mgrServiceMetadataReceipt {
 	t.Helper()
 	r := &mgrServiceMetadataReceipt{Snapshots: make(map[string]map[string]string)}

@@ -25,6 +25,17 @@ type mgrServiceComparison struct {
 	RemovalSeconds       float64                      `json:"removal_seconds"`
 }
 
+// testMgrServiceNativeComparison registers the same service from Go and from
+// native librados (rados_service_register and rados_service_update_status,
+// src/librados/RadosClient.cc at v20.2.4) under distinct daemon names, and
+// requires native observation of identical caller metadata and three exact
+// status maps (initial, replacement, empty). A nil Go report must preserve
+// status across a strictly newer native last_beacon. This is field equality,
+// not equal message sequences or bytes: the C API sends the first status as an
+// update, adds native system metadata that is not compared, and rados_shutdown
+// returns without a removal acknowledgement (MgrClient::shutdown waits only
+// mgr_client_service_daemon_unregister_timeout), so native removal is awaited
+// through beacon grace.
 func testMgrServiceNativeComparison(t *testing.T, ctx context.Context, c *cephmsgr.Client) {
 	t.Helper()
 	receipt := struct {

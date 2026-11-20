@@ -772,6 +772,13 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 // The request is <id> <ownership token> <action>. Only "watch" exists: the
 // driver keeps the image open, waits for the test's two proceed signals and
 // resizes the image after each.
+//
+// The base, write and lock proceed signals stay control-directory files rather
+// than NativeCommand.Input records: the control loop runs each native action
+// synchronously and the test sends the signals while it runs, so moving them
+// to standard input would need concurrent actions, deferred acknowledgement
+// and settling every uncertain write, and would shift the proceed waits that
+// the librbd 5 s notify timeout checks rely on.
 func parseRBDBaseRequest(fields []string, token string, previousID int64) (int64, string, error) {
 	if len(fields) != 3 || len(token) != 32 || fields[1] != token {
 		return 0, "", errors.New("invalid owned RBD base request scope")

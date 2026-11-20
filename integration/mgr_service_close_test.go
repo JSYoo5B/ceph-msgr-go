@@ -34,6 +34,15 @@ type mgrServiceCloseReceipt struct {
 	ManagerDials           int32   `json:"manager_dials"`
 }
 
+// testMgrServiceUnconfirmedClose arms one transport fault on a dedicated
+// service connection after native visibility, with automatic reports off.
+// Withheld receive bytes: the native observer sees the daemon removed while
+// Close is pending, yet the canceled Close still returns
+// ErrMgrServiceCloseUnconfirmed; native removal never becomes caller success.
+// Discarded writes: local writes succeed but nothing reaches the MGR, so the
+// daemon stays listed after local teardown until native beacon grace removes
+// it. Each case allows one MGR dial. The faults neither decode the suppressed
+// frame nor prove a transmitted close; other failure schedules are untested.
 func testMgrServiceUnconfirmedClose(t *testing.T, ctx context.Context) {
 	t.Helper()
 	var receipts []mgrServiceCloseReceipt

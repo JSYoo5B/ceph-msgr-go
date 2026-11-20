@@ -1,7 +1,7 @@
 name: RGW native fixture run
 
 # Development-only runner for the dedicated native RGW fixture checkpoints in
-# integration/fixture (see RGW_NATIVE_VALIDATION.md). It is not the trusted
+# integration/fixture (TestRGWNative*Integration). It is not the trusted
 # `/ci run` catalog and does not gate the product. It executes the pull
 # request's own fixture code with read-only permissions, so it runs only for
 # changes that touch the RGW fixture files or this workflow, or on explicit

@@ -29,8 +29,14 @@ import (
 // header objects, data-object reads (and SPARSE_READ) at the head and at a
 // self-managed snapshot, LIST_SNAPS, LIST_WATCHERS of the header with librbd's
 // own watch, and a Go watch that receives and acknowledges a librbd header
-// update notify. See integration/fixture/RBD_BASE_FIXTURE.md and
-// RBD_BASE_VALIDATION.md.
+// update notify. librbd's C_NotifyUpdate (ceph/ceph/blob/v20.2.4/src/librbd/Operations.cc)
+// turns a timed-out header notify (watcher/Notifier.cc, 5 s) into resize
+// success, so while the second notify stays unacknowledged the new head size
+// is already visible through the OSD before native completion is published.
+// SPARSE_READ is head-only in the product contract and is not tried at a
+// snapshot here. Not covered: images with exclusive-lock, object-map,
+// journaling or fancy striping, EC or separate data pools, namespaces, watch
+// reconnect or timeout with librbd, and the replicated-PG profiles.
 //
 // Everything RBD-specific below is test-only consumer logic: the class input
 // encodings, the decoding of their outputs, data-object naming and the

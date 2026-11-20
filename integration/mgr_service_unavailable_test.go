@@ -56,6 +56,14 @@ func (c *mgrServiceWaitContext) Done() <-chan struct{} {
 	return c.Context.Done()
 }
 
+// testMgrServiceInitiallyUnavailable sets the MON "mgr set down" flag once
+// (MgrMap::FLAG_DOWN; MgrMonitor::prepare_command and promote_standby in
+// ceph/ceph/blob/v20.2.4/src/mon/MgrMonitor.cc), so no MGR is active while the
+// daemons keep running. Setup deadline, cancellation and client close must be
+// known local failures with zero MGR dials; a pending open completes with one
+// dial after the inverse mutation, canceled identities stay absent natively,
+// and a released identity is reused only by a new explicit call. This is not
+// the zero-daemon bootstrap of TestCephMgrServiceColdBootstrapIntegration.
 func testMgrServiceInitiallyUnavailable(t *testing.T, ctx context.Context, admin *cephmsgr.Client) {
 	t.Helper()
 	receipt := struct {

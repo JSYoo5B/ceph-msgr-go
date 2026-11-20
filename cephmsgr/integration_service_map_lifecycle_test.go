@@ -24,6 +24,11 @@ import (
 // Native holders outlive their control requests. The second registration is
 // created only after the first watch's actual MON has stopped, so receiving it
 // on that same watch cannot be satisfied by a buffered pre-fault snapshot.
+// The fault is an orderly Stop of the watch's connected MON, not SIGKILL or an
+// unprocessed-request barrier; Stop, registration, release and MON Start are
+// each attempted once. A returned native shutdown is not removal: absence needs
+// fresh native observations two seconds apart and a newer Go map without
+// either daemon, and the stopped MON is restored to the full settled quorum.
 //
 //scenario:covers CLIENT to MON/MGR
 //fixture:isolated cleanup kills live holders without proving their service map entries are gone; the service map is not checked
@@ -39,7 +44,10 @@ const serviceMapLifecycleHoldSelector = "^TestCephMonServiceMapLifecycleFailedMo
 // MON that has already failed is held until its dial context ends (the normal
 // setup timeout) before the failure is returned. This makes the failed-seed
 // delay deterministic. It runs only when exclusively selected, so broad rows
-// keep the unmodified lifecycle as their only lifecycle cell.
+// keep the unmodified lifecycle as their only lifecycle cell. With ordinary
+// 12-second tickets it reproduces the case where every renewal dialed the
+// stopped seed first and the rotating AUTH secret behind the reclaim proof
+// expired; TestRoutineRenewalPrefersAdmittedMonitor is the daemon-free check.
 //
 //scenario:row mon-mgr.aes256k.ip4.t-monservicemaplifecyclefailedmonhold key=aes256k service=aes256k family=4 stress=
 //fixture:isolated cleanup kills live holders without proving their service map entries are gone; the service map is not checked

@@ -71,8 +71,7 @@ func TestServiceWatchRequestMatchesNativeOracleInputs(t *testing.T) {
 // retains its initial metadata. The Go stream is cross-checked with that map.
 //
 // The test registers a daemon in the cluster's service map, so it runs only in
-// the opt-in CEPH_MSGR_TEST_MGR_SERVICE=1 profile; see
-// cephmsgr/MGR_SERVICE_CONTRACT.md.
+// the opt-in CEPH_MSGR_TEST_MGR_SERVICE=1 profile.
 //
 //scenario:row mgr-service.aes.ip4.crc.host.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrserviceregistration key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mgr_service=1
 //scenario:row mgr-service.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrserviceregistration key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mgr_service=1
@@ -228,6 +227,15 @@ type mgrServiceRecoveryReceipt struct {
 	Removed             bool              `json:"removed"`
 }
 
+// testMgrServiceRecovery keeps an established service past its original MGR
+// ticket expiry (a report is still observed natively), then fails the observed
+// active MGR once with "mgr fail" (never retried). The old handle must end with
+// a terminal cause that Report, UpdateMetadata and Close preserve; the cause is
+// not required to be ErrManagerChanged because transport loss may come first.
+// After three seconds of consecutive native absence, the caller explicitly
+// registers the same identity on a new connection with the current ticket.
+// Session use after expiry and a new connection with a renewed ticket are
+// distinct stages; in-session reauthentication is not claimed.
 func testMgrServiceRecovery(t *testing.T, ctx context.Context, c *cephmsgr.Client, service, daemon string) {
 	t.Helper()
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")

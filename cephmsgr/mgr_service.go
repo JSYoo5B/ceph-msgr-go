@@ -63,6 +63,32 @@ type mgrServiceKey struct{ service, daemon string }
 // connection to the active MGR, bound to that daemon's identity and map
 // address. If the connection fails or the active MGR changes, the handle
 // fails; registering again is an explicit new OpenMgrService call.
+//
+// This is a communication primitive, not an RGW or daemon implementation,
+// translated from Ceph v20.2.4 src/mgr/MgrClient.cc and src/mgr/DaemonServer.cc
+// (ceph/ceph/blob/v20.2.4/src/mgr/DaemonServer.cc). The ordinary MGR command
+// session sends no MMgrOpen (MgrClient::reconnect opens only for a service
+// daemon or a non-CLIENT entity), and enabling registration adds no feature bit.
+// Pinned DaemonServer behaviour bounds what a handle can promise:
+//   - handle_open performs no capability check on the opener, so registration
+//     has no defined permission-denial result.
+//   - handle_open adds a CLIENT service registration to no daemon_connections
+//     set, so handle_conf_change never broadcasts runtime period or threshold
+//     changes to it: an open handle keeps its initial Configure, and only a new
+//     registration observes current values.
+//   - handle_update replaces metadata in the MGR's daemon-state index
+//     (DaemonStateIndex::update_metadata in src/mgr/DaemonState.h, which drops
+//     omitted keys) but not the initial metadata in the MON's ServiceMap, so a
+//     ServiceMap watch or "service status" cannot show an applied update. It
+//     ignores an empty map, which UpdateMetadata therefore refuses locally.
+//   - ms_handle_reset does not unregister CLIENT services; a daemon whose close
+//     was lost stays listed until mgr_service_beacon_grace expires.
+//
+// Not verified against a live daemon: repeated Configure delivery to a CLIENT
+// session (the pinned broadcast path excludes it; only synthetic tests cover
+// it), native vectors for nonempty configure extensions or older configure
+// versions, and failure schedules other than withheld receive bytes, discarded
+// writes, active-MGR replacement and an initially unavailable MGR.
 type MgrService struct {
 	c       *Client
 	options MgrServiceOptions
@@ -339,7 +365,11 @@ func (s *MgrService) onMessage(m msgr.MessageData) error {
 }
 
 // beaconLoop sends the empty service report at the period the MGR configured,
-// as the native client does. A period of zero means no reports.
+// as the native client does. A period of zero means no reports. Every
+// configure push restarts the timer at the latest period (threshold-only
+// changes included); a report admitted before the push may still be sent, so
+// Configure is not a transport barrier. A disabled beacon is never enabled by
+// reconfiguration.
 func (s *MgrService) beaconLoop() {
 	defer s.c.wg.Done()
 	if s.options.DisableBeacon {

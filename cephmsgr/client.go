@@ -345,6 +345,9 @@ func (c *Client) openHandshake(ctx context.Context, endpoint string, address msg
 	if freshMDSRank != nil {
 		return session.HandshakeFreshMDS(ctx, conn, address, *freshMDSRank, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout)
 	}
+	// Any other connection gets its own address nonce, so a blocklist entry
+	// for one OSD connection's address (as a librbd lock break adds from a
+	// lock record) fences that connection only.
 	return session.Handshake(ctx, conn, address, role, id, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout)
 }
 

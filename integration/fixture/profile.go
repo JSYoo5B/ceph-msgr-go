@@ -412,7 +412,9 @@ func admitSingleProfile(p profile, getenv func(string) string) (profile, error) 
 		// The RBD base, clone, journaling, write and exclusive-lock acceptances own
 		// a pool, two identities and six native images on the single-OSD
 		// legacy-v6 fixture; their Go client admits no HASHPSPOOL bit, so
-		// every pool must keep the legacy placement seed.
+		// every pool must keep the legacy placement seed. The replicated-PG
+		// profiles are refused: their explicit-PG requests and HASHPSPOOL
+		// pools are not verified with RBD.
 		selected = "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$"
 		// The lost-append-reply acceptance needs a journal no other test has
 		// advanced. The lock-owner-loss acceptances blocklist two client

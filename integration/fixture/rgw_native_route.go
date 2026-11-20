@@ -16,7 +16,7 @@ import (
 )
 
 // rgwNativeEnv routes a catalog row to the dedicated RGW checkpoints of this
-// module (RGW_NATIVE_VALIDATION.md) instead of the controller's own fixture.
+// module (TestRGWNative*Integration) instead of the controller's own fixture.
 // The native workflow forwards it from the row parameter rgw_native.
 const rgwNativeEnv = "CEPH_MSGR_TEST_RGW_NATIVE"
 
