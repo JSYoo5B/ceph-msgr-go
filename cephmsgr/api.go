@@ -236,7 +236,14 @@ type Options struct {
 }
 
 // Command is one raw Ceph command. The caller owns its construction and the
-// interpretation of the result.
+// interpretation of the result. Each channel (MonCommand, MgrCommand, MonTell,
+// MgrTell, MonTellTo, MgrTellTo, OSDConnection.Command and PGCommand,
+// MDSConnection.Command) stands alone: one that works proves nothing about
+// another. A command is an unknown outcome exactly when its transmission had
+// started; an unavailable or wrong target found before that returns its
+// cause, and a daemon's refusal is a completed reply carrying the signed code
+// in a CommandError, never retried. No channel has a typed administrative
+// API, wildcard target expansion, local admin socket or HTTP module endpoint.
 type Command struct {
 	// JSON is one Ceph command object with a non-empty string prefix.
 	JSON  json.RawMessage
@@ -294,7 +301,8 @@ const (
 // admitted when its MON session is retired is sent on the recovered session.
 // Once transmission starts, cancellation, session loss or Close returns an
 // OutcomeUnknownError and the command is never sent again. A negative server
-// code returns *CommandError with the preserved Result.
+// code returns *CommandError with the preserved Result. The wire message is
+// MMonCommand (type 50), answered by type 51.
 func (c *Client) MonCommand(ctx context.Context, command Command) (Result, error) {
 	return c.command(ctx, command, monitorCommand, "")
 }
@@ -303,7 +311,8 @@ func (c *Client) MonCommand(ctx context.Context, command Command) (Result, error
 // ctx for an available MGR in the MgrMap and opening its session on demand.
 // Uncertainty, replay and server-code handling follow MonCommand; an active
 // MGR change after transmission starts reports ErrManagerChanged as the Cause
-// of an OutcomeUnknownError.
+// of an OutcomeUnknownError. The wire message is MMgrCommand (type 0x709),
+// answered by type 0x70a.
 func (c *Client) MgrCommand(ctx context.Context, command Command) (Result, error) {
 	return c.command(ctx, command, managerCommand, "")
 }
@@ -312,6 +321,7 @@ func (c *Client) MgrCommand(ctx context.Context, command Command) (Result, error
 // target can change after recovery or ticket renewal. It does not select a
 // monitor by name, send to a quorum, or replay an uncertain command.
 // The server requires MON read, write and execute capabilities for tell.
+// The wire message is MCommand (type 97), answered by type 98.
 func (c *Client) MonTell(ctx context.Context, command Command) (Result, error) {
 	return c.command(ctx, command, monitorTell, "")
 }
@@ -319,7 +329,8 @@ func (c *Client) MonTell(ctx context.Context, command Command) (Result, error) {
 // MgrTell sends a daemon-local command to the current active MGR. These commands
 // use the daemon's admin command schema, distinct from MGR module commands, and
 // require the server's allow-all MGR capability. Context cancellation ends the
-// local wait; an uncertain command is never replayed after recovery.
+// local wait; an uncertain command is never replayed after recovery. The wire
+// message is MCommand (type 97), answered by type 98.
 func (c *Client) MgrTell(ctx context.Context, command Command) (Result, error) {
 	return c.command(ctx, command, managerTell, "")
 }
