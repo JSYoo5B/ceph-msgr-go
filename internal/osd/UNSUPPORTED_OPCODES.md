@@ -6,9 +6,10 @@ Reference: Ceph 20.2.4, commit `7f793731f1b39eb4f465e960113d2363c311b964`
 files. This is a source classification, not an interoperability result, and
 the entries are not implementation tasks by name alone.
 
-[opcodes-tentacle.csv](opcodes-tentacle.csv) marks 24 of 80 entries
-`unsupported`. That count mixes client operations, daemon-only suboperations
-and entries without a server handler; it is not a completion percentage.
+This file classifies every entry that
+[opcodes-tentacle.csv](opcodes-tentacle.csv) marks `unsupported`. Those entries
+mix client operations, daemon-only suboperations and entries without a server
+handler; their share of the catalog is not a completion percentage.
 `unsupported` means this repository emits no such operation. It does not claim
 the daemon lacks a handler. Listing an entry here does not enable any feature
 bit or imply support; older public APIs are not restored.
