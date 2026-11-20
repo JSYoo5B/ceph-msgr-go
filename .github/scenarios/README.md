@@ -303,10 +303,21 @@ Only Tentacle 20.2.x is accepted. Every catalog row is in the default coverage
 (`all`, which the periodic run selects); there is no separate list of required
 rows or row total to edit, and deleting a row is a visible catalog change.
 
-The trusted planner refuses catalog parameters that its native workflow cannot
-forward. Land new workflow opt-ins before requesting a feature PR's new profile;
-checking out that PR does not replace the default branch's reusable workflow.
-The MGR-service opt-in is forwarded in advance of its feature implementation.
+The native workflow forwards a row's parameters to the fixture runner by a
+rule, with no line per parameter: the trusted helper `tools/native_env.py`,
+copied from the default branch before the tested commit is checked out, turns
+the job's matrix into `CEPH_MSGR_TEST_<P>` for a parameter `p` and execs
+`integration/run.sh` with them; the result gate, the evidence collector and the
+terminal recorder never receive them. The parameters the workflow bound before
+this rule keep their variable names and fallbacks (a frozen table in the
+helper that no parameter joins). A row cannot set a planner key, a variable
+the workflow sets itself (`CEPH_MSGR_TEST_DIAGNOSTICS`) or the variable of
+another parameter; the trusted planner and the helper both refuse it. Which
+parameters exist is the fixture's decision: `loadEnvironmentProfile` refuses a
+`CEPH_MSGR_TEST_` variable that `loadProfile` does not read, and `validate`
+passes every row through it. A new fixture input therefore edits only the
+fixture code that reads it and the rows that set it, and a pull request's new
+input runs natively on that pull request.
 
 Native runs use the calling revision's result gate. For an explicit `test_run`,
 it lists the matching top-level tests that `go test -list` reports for the tested
@@ -475,9 +486,10 @@ Basic CI verifies two inventories without starting a cluster:
   fuzz function without updating the inventory fails CI. This checks the current
   runner's default build, not every GOOS or optional tag combination.
 
-`TestCICatalogInventory` reads the native workflow's actual matrix-to-environment
-bindings (including fallback values) and passes each catalog row through the
-fixture's real `loadProfile`. Unsupported expressions, unforwarded parameters,
+`TestCICatalogInventory` asks the native workflow's forwarding helper
+(`tools/native_env.py serve`) for each catalog row's environment, fallback
+values included, and passes it through the fixture's real
+`loadEnvironmentProfile`. Parameters the helper refuses or no fixture input reads,
 invalid fixture combinations, rows whose effective selection includes no native
 test and native tests that no row selects fail the check. It uses Go regular
 expressions, matching the native runner's selector semantics. This complements
