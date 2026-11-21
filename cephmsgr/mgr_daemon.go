@@ -24,8 +24,9 @@ import (
 // A MgrDaemon is the MON side of a manager implementation above this
 // library: it authenticates a named mgr.<id> principal to stock MON as the
 // MGR entity type, keeps the MON-assigned global ID, subscribes to mgrmap,
-// carries the consumer's beacons, delivers MgrMaps with this daemon's role
-// in them, and holds the principal's rotating MGR service secrets. The
+// carries the consumer's beacons and reports (mgr_report.go), delivers
+// MgrMaps with this daemon's role in them, and holds the principal's
+// rotating MGR service secrets. The
 // consumer decides availability, what the beacon advertises and what work
 // an active or standby daemon does; stock MON stays the authority that
 // selects the active daemon, publishes the map and issues keys. Listen
@@ -304,6 +305,9 @@ type mgrDaemonHooks struct {
 	// afterListenerPublished runs in Listen once the daemon published the
 	// listener, before Listen returns.
 	afterListenerPublished func(*MgrListener)
+	// closeRecorded runs in Close once the closed state is recorded, before
+	// any session is failed.
+	closeRecorded func()
 }
 
 type mgrDaemonHooksKey struct{}
@@ -354,6 +358,10 @@ type MgrDaemon struct {
 
 	listeners map[*MgrListener]struct{}
 	globalSeq atomic.Uint64
+
+	// sends are the reports in flight (mgr_report.go), each withdrawn under
+	// this lock when its session's end is recorded.
+	sends map[*mgrMonitorSend]struct{}
 }
 
 // DialMgrDaemon authenticates options.Identity to a MON as the MGR entity
@@ -435,7 +443,7 @@ func DialMgrDaemon(ctx context.Context, options MgrDaemonOptions) (*MgrDaemon, e
 		return nil, err
 	}
 	base, cancel := context.WithCancel(context.Background())
-	d := &MgrDaemon{options: options, ctx: base, cancel: cancel, wake: make(chan struct{}, 1), changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{})}
+	d := &MgrDaemon{options: options, ctx: base, cancel: cancel, wake: make(chan struct{}, 1), changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{}), sends: make(map[*mgrMonitorSend]struct{})}
 	d.hooks, _ = ctx.Value(mgrDaemonHooksKey{}).(*mgrDaemonHooks)
 	d.identity = MgrDaemonIdentity{Entity: auth.Name, Name: auth.ID()}
 	if options.ExpectedFSID != "" {
@@ -478,6 +486,7 @@ func (d *MgrDaemon) failLocked(err error) []*session.Session {
 	if d.failure == nil {
 		d.failure = err
 	}
+	d.expireSendsLocked(nil, d.failure)
 	all := make([]*session.Session, 0, len(d.sessions))
 	for s := range d.sessions {
 		all = append(all, s)
@@ -644,6 +653,7 @@ func (d *MgrDaemon) attempt(ctx context.Context, target monTarget) error {
 	handler.session, handler.generation = s, generation
 	old := d.mon
 	d.mon, d.monReady, d.monEndpoint, d.pending = s, false, target.endpoint, nil
+	d.expireSendsLocked(s, errors.New("ceph: MGR daemon MON session replaced"))
 	d.sessions[s] = struct{}{}
 	s.Start()
 	d.wg.Add(1)
@@ -733,6 +743,7 @@ func (d *MgrDaemon) settleLocked(s *session.Session, cause error) ([]*session.Se
 	}
 	d.monReady = false
 	d.pending = nil
+	d.expireSendsLocked(nil, cause)
 	d.signal()
 	if d.failure != nil || d.closed || !mgrDaemonFatal(cause) {
 		return nil, false
@@ -1277,12 +1288,16 @@ func (d *MgrDaemon) Close() error {
 		d.closed = true
 		d.signal()
 	}
+	d.expireSendsLocked(nil, ErrClosed)
 	all := make([]*session.Session, 0, len(d.sessions))
 	for s := range d.sessions {
 		all = append(all, s)
 	}
 	listeners := d.listenersLocked()
 	d.mu.Unlock()
+	if d.hooks != nil && d.hooks.closeRecorded != nil {
+		d.hooks.closeRecorded()
+	}
 	d.cancel()
 	for _, s := range all {
 		s.Fail(ErrClosed)
