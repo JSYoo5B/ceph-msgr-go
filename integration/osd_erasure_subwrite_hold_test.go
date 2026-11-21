@@ -20,7 +20,7 @@ import (
 // A write held inside the EC backend of an optimized isa k=2,m=2 pool while
 // it waits for its sub-write commits, and what an epoch change does to it.
 // The OSD of the last parity shard is paused through the fixture's daemon
-// control (pauseLease, pause_lease_test.go) before one
+// control (heldPause, daemon_lease_test.go) before one
 // Go APPEND of a full stripe plus SETXATTR is sent, so every shard is in the
 // write plan. The pinned source (Ceph v20.2.4) gives the expected native
 // behaviour:
@@ -57,7 +57,7 @@ import (
 // shard never reads the sub-write that waits in its socket. Every held-phase
 // observation and the STAT run under the lease's held phase; one still
 // outstanding at its end is abandoned and fails the test, and the lease
-// resumes the OSD by its deadline all the same (pauseLease). The op history
+// resumes the OSD by its deadline all the same (heldPause). The op history
 // is bounded and no count bounds what entered it in a window
 // (opHistoryWitness), so a roll-forward it does not show, and the exact count
 // of the ones it shows, are reported unverified; a roll-forward it shows,
@@ -391,7 +391,7 @@ func (r *subWriteRun) seedKey() pgHistoryTarget {
 // sends the held write and returns the lease, the call, the held op of the
 // primary's op tracker and the committed sub-write of every other shard: the
 // shards that are neither the primary's nor the paused one.
-func (r *subWriteRun) pauseAndHold() (*pauseLease, heldCall, opsInFlightOp, map[int]subWriteRecord) {
+func (r *subWriteRun) pauseAndHold() (*heldPause, heldCall, opsInFlightOp, map[int]subWriteRecord) {
 	t := r.t
 	t.Helper()
 	r.baseline = map[int32]subWriteHistoryRead{}
@@ -421,7 +421,7 @@ func (r *subWriteRun) pauseAndHold() (*pauseLease, heldCall, opsInFlightOp, map[
 // waitSubWriteHold takes bounded snapshots of the primary's op tracker, each
 // under the held phase, until one holds the write waiting for its sub-write
 // commits.
-func (r *subWriteRun) waitSubWriteHold(p *pauseLease, call heldCall) opsInFlightOp {
+func (r *subWriteRun) waitSubWriteHold(p *heldPause, call heldCall) opsInFlightOp {
 	r.t.Helper()
 	err := errors.New("no snapshot taken")
 	for attempt := 1; attempt <= 10 && p.held.Err() == nil; attempt++ {
@@ -449,7 +449,7 @@ func (r *subWriteRun) waitSubWriteHold(p *pauseLease, call heldCall) opsInFlight
 // roll-forward of it fails the test; its absence is proven only when the
 // history's window is bounded (opHistoryWitness), and is logged
 // as unverified otherwise.
-func (r *subWriteRun) waitSubWriteCommitted(p *pauseLease, osd int32, shard int, key pgHistoryTarget) subWriteRecord {
+func (r *subWriteRun) waitSubWriteCommitted(p *heldPause, osd int32, shard int, key pgHistoryTarget) subWriteRecord {
 	r.t.Helper()
 	err := errors.New("no history read")
 	for attempt := 1; attempt <= 5 && p.held.Err() == nil; attempt++ {
@@ -1165,23 +1165,43 @@ func TestJudgeNoRollForward(t *testing.T) {
 	}
 }
 
-// A stalled held-phase read must not keep the paused shard frozen: the
-// lease's watchdog ends the pause by its deadline while the read has not
-// returned. The stalled observation is a real owned-pool subwrites request
-// into a control directory that no fixture serves; the stalled STAT is a
-// send that ignores its context until the test releases it, the worst case
-// of a STAT under the held phase. Nothing waits on a clock.
+// A stalled held-phase read must not keep the paused shard frozen. The
+// fixture ends a lease by the deadline the pause request carries, beside a
+// still running oracle request (integration/fixture/daemon_lease.go;
+// TestDaemonLeaseExpiresBesideAStalledOwnedPoolOracle); on the test side the
+// held phase ends the reserve before it, a read under it is abandoned there,
+// and the test's resume is published while the read has not returned. The
+// test plays the fixture on a real control directory. The stalled
+// observation is a real owned-pool subwrites request that nobody answers;
+// the stalled STAT is a send that ignores its context until the test
+// releases it, the worst case of a STAT under the held phase. Nothing waits
+// on a clock but the bounded polls for the published requests.
 func TestSubWriteHeldPhaseStallsEndThePauseByItsDeadline(t *testing.T) {
 	for _, stall := range []string{"observation", "STAT"} {
 		t.Run(stall, func(t *testing.T) {
 			dir := t.TempDir()
-			f := &fakePauseControl{arrived: make(chan string, 4)}
-			parent, deadline := context.WithCancel(context.Background())
-			p, err := startPauseLease(parent, f.request, "3", time.Minute, 10*time.Second)
-			if err != nil {
-				t.Fatal(err)
+			deadline := time.Now().Add(time.Minute)
+			answer := func(action string, record func(r []string) testcluster.DaemonLeaseRecord) <-chan struct{} {
+				answered := make(chan struct{})
+				go func() {
+					defer close(answered)
+					for range 10000 {
+						if requests := leaseRequests(t, dir, action); len(requests) != 0 {
+							writeLeaseRecord(t, dir, record(requests[0]))
+							return
+						}
+						time.Sleep(time.Millisecond)
+					}
+				}()
+				return answered
 			}
-			<-f.arrived
+			paused := answer("pause-daemon", func(r []string) testcluster.DaemonLeaseRecord {
+				return testcluster.DaemonLeaseRecord{Lease: r[1], Daemon: r[2] + "." + r[3], State: testcluster.DaemonLeasePaused, PausedAt: 1, Deadline: deadline.UnixNano()}
+			})
+			parent, end := context.WithCancel(context.Background())
+			defer end()
+			p := startHeldPause(t, parent, dir, "osd", "3", deadline, 10*time.Second)
+			<-paused
 			release := make(chan struct{})
 			returned := make(chan error, 1)
 			go func() {
@@ -1193,22 +1213,23 @@ func TestSubWriteHeldPhaseStallsEndThePauseByItsDeadline(t *testing.T) {
 				returned <- p.check("the STAT of another object of the PG")
 			}()
 			// The held phase ends (here through its parent; its deadline
-			// does the same) with the read outstanding.
-			deadline()
-			if got := <-f.arrived; got != "recover-paused-osd" {
-				t.Fatal("the watchdog sent", got)
+			// does the same) with the read outstanding, and the test
+			// resumes: the end is published and settled while the read has
+			// not returned.
+			end()
+			resumed := answer("end-daemon-lease", func(r []string) testcluster.DaemonLeaseRecord {
+				return testcluster.DaemonLeaseRecord{Lease: r[1], State: testcluster.DaemonLeaseEnded, Reason: testcluster.DaemonLeaseResumed, PausedAt: 1, EndedAt: deadline.UnixNano() - int64(time.Second), Deadline: deadline.UnixNano()}
+			})
+			if left, err := p.resume(); err != nil || left != time.Second {
+				t.Fatal("the resume with a read outstanding", left, err)
 			}
-			if !f.deadlines["recover-paused-osd"].Equal(p.deadline) {
-				t.Fatal("the pause did not end by the lease deadline", f.deadlines["recover-paused-osd"], p.deadline)
+			<-resumed
+			if p.lease.Deadline != deadline {
+				t.Fatal("the lease does not carry the deadline the fixture enforces", p.lease.Deadline, deadline)
 			}
 			close(release)
 			if err := <-returned; err == nil {
 				t.Fatal("a read that outlived the held phase was accepted")
-			}
-			restore, stop := context.WithTimeout(context.Background(), time.Minute)
-			defer stop()
-			if err := p.restore(restore); err != nil || !slices.Equal(f.sent(), []string{"pause-osd 3", "recover-paused-osd 3"}) {
-				t.Fatal("the pause was not ended once", err, f.sent())
 			}
 		})
 	}
