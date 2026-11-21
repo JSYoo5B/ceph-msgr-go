@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -22,22 +21,21 @@ func TestCopyFromThawAcknowledgementDeadline(t *testing.T) {
 			defer cancel()
 			request := func(action string) string {
 				t.Helper()
-				path := filepath.Join(dir, action)
 				for {
-					data, err := os.ReadFile(path)
-					if err == nil {
-						fields := strings.Fields(string(data))
-						if len(fields) != 2 || fields[1] != "2" {
-							t.Fatalf("unexpected %s request: %q", action, data)
+					pending, err := controlEnvelopes(dir, action)
+					if err == nil && len(pending) != 0 {
+						if fields := pending[0].fields; len(pending) != 1 || len(fields) != 2 || fields[1] != "2" {
+							t.Fatalf("unexpected %s requests: %+v", action, pending)
 						}
-						return fields[0]
+						return pending[0].id
 					}
-					if !errors.Is(err, os.ErrNotExist) || parent.Err() != nil {
+					if err != nil || parent.Err() != nil {
 						t.Fatalf("waiting for %s: %v, %v", action, err, parent.Err())
 					}
 					time.Sleep(time.Millisecond)
 				}
 			}
+			envelope := func(action, id string) string { return filepath.Join(dir, action+"."+id+".request") }
 			ack := func(name string) {
 				t.Helper()
 				if err := os.WriteFile(filepath.Join(dir, name), nil, 0600); err != nil {
@@ -49,8 +47,8 @@ func TestCopyFromThawAcknowledgementDeadline(t *testing.T) {
 			pauseID := make(chan string, 1)
 			go func() {
 				for parent.Err() == nil {
-					if data, err := os.ReadFile(filepath.Join(dir, "pause-osd")); err == nil {
-						if fields := strings.Fields(string(data)); len(fields) == 2 && os.WriteFile(filepath.Join(dir, "osd-pause."+fields[0]), nil, 0600) == nil {
+					if pending, err := controlEnvelopes(dir, "pause-osd"); err == nil && len(pending) == 1 {
+						if fields := pending[0].fields; len(fields) == 2 && os.WriteFile(filepath.Join(dir, "osd-pause."+fields[0]), nil, 0600) == nil {
 							pauseID <- fields[0]
 							return
 						}
@@ -70,7 +68,7 @@ func TestCopyFromThawAcknowledgementDeadline(t *testing.T) {
 			}
 			resumeID := request("resume-osd")
 			if stage != "resume pending" {
-				if err := os.Remove(filepath.Join(dir, "resume-osd")); err != nil {
+				if err := os.Remove(envelope("resume-osd", resumeID)); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -91,8 +89,8 @@ func TestCopyFromThawAcknowledgementDeadline(t *testing.T) {
 				t.Fatal("uncertain replica was not scheduled for restart", err, r.frozen, r.killed)
 			}
 			if stage != "resume pending" {
-				if _, err := os.Stat(filepath.Join(dir, "resume-osd")); !errors.Is(err, os.ErrNotExist) {
-					t.Fatal("cleanup published a second ordinary resume", err)
+				if pending, err := controlEnvelopes(dir, "resume-osd"); err != nil || len(pending) != 0 {
+					t.Fatal("cleanup published a second ordinary resume", pending, err)
 				}
 			}
 		})
