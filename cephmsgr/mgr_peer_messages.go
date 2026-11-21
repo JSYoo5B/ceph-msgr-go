@@ -181,6 +181,7 @@ func notSent(err error) error { return fmt.Errorf("%w: %w", ErrNotSent, err) }
 // answer sends one reply through h, once.
 func (h *mgrReply) answer(ctx context.Context, m msgr.MessageData) error {
 	p := h.peer
+	done := ctx.Done()
 	p.mu.Lock()
 	switch {
 	case h.state != replyOpen:
@@ -191,7 +192,7 @@ func (h *mgrReply) answer(ctx context.Context, m msgr.MessageData) error {
 		h.state = replyDone
 		p.mu.Unlock()
 		return fmt.Errorf("%w: %w", ErrMgrReplyExpired, notSent(cause))
-	case ctx.Err() != nil:
+	case signaled(done):
 		p.mu.Unlock()
 		return notSent(ctx.Err())
 	}

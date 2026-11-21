@@ -489,18 +489,20 @@ func (l *MgrListener) handshake(conn net.Conn) {
 // ctx bounds only this wait; a canceled wait consumes nothing, also with a
 // peer queued. Cancellation is decided under the listener lock immediately
 // before the dequeue, so a peer published after ctx ends, even one
-// published while this call waits for the lock, stays queued. After Close
-// or a listener failure it returns the terminal cause once no published
-// peer is waiting.
+// published while this call waits for the lock, stays queued. Under the
+// lock only ctx's Done channel is received from, without blocking; no
+// method of ctx runs while the lock is held. After Close or a listener
+// failure it returns the terminal cause once no published peer is waiting.
 func (l *MgrListener) Accept(ctx context.Context) (*MgrPeer, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		done := ctx.Done()
 		l.mu.Lock()
-		if err := ctx.Err(); err != nil {
+		if signaled(done) {
 			l.mu.Unlock()
-			return nil, err
+			return nil, ctx.Err()
 		}
 		if len(l.pending) > 0 {
 			p := l.pending[0]
@@ -519,6 +521,19 @@ func (l *MgrListener) Accept(ctx context.Context) (*MgrPeer, error) {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+	}
+}
+
+// signaled reports, without blocking, whether done is closed. Callers
+// take a context's Done channel before their lock and receive from it
+// under the lock, so a cancellation decision commits with the dequeue or
+// start it guards without calling a context method under the lock.
+func signaled(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -684,10 +699,11 @@ func (p *MgrPeer) Next(ctx context.Context) (MgrInboundMessage, error) {
 		if err := ctx.Err(); err != nil {
 			return MgrInboundMessage{}, err
 		}
+		done := ctx.Done()
 		p.mu.Lock()
-		if err := ctx.Err(); err != nil {
+		if signaled(done) {
 			p.mu.Unlock()
-			return MgrInboundMessage{}, err
+			return MgrInboundMessage{}, ctx.Err()
 		}
 		if len(p.queue) > 0 {
 			m := p.queue[0]
