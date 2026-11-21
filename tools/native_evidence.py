@@ -74,6 +74,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 
 SCHEMA_VERSION = 1
 SOURCE = "7f793731f1b39eb4f465e960113d2363c311b964"
@@ -200,6 +201,36 @@ FIXTURE_GO_MOD = "integration/fixture/go.mod"
 GO_LISTING = (("pin",), ("integration/fixture",))
 
 
+# The go.work paths Go consults from integration/fixture upward.
+FIXTURE_WORKSPACES = ("go.work", "integration/go.work", "integration/fixture/go.work")
+PIN_TIMEOUT = 60
+
+
+def bounded_output(arguments, limit, env=None):
+    """The stdout of one trusted command, read only up to limit bytes.
+
+    Output past the limit is never read: the command is killed and the call
+    refused, as is a nonzero exit or a run past PIN_TIMEOUT.
+    """
+    try:
+        process = subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, env=env)
+    except OSError as error:
+        raise EvidenceError("provider-pin") from error
+    timer = threading.Timer(PIN_TIMEOUT, process.kill)
+    timer.start()
+    try:
+        data = process.stdout.read(limit + 1)
+        overflow = len(data) > limit
+        if overflow:
+            process.kill()
+        process.stdout.close()
+        code = process.wait()
+    finally:
+        timer.cancel()
+    need(not overflow and code == 0, "provider-pin")
+    return data
+
+
 def pinned_provider_text(data):
     """The collectable provider release one go.mod pins.
 
@@ -213,13 +244,9 @@ def pinned_provider_text(data):
     with tempfile.TemporaryDirectory() as root:
         path = Path(root) / "go.mod"
         path.write_bytes(data)
-        try:
-            result = subprocess.run(["go", "mod", "edit", "-json", str(path)], capture_output=True, timeout=60,
-                                    env=dict(os.environ, GOWORK="off", GOFLAGS="", GOTOOLCHAIN="local"), check=False)
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise EvidenceError("provider-pin") from error
-    need(result.returncode == 0 and len(result.stdout) <= INPUT_LIMIT, "provider-pin")
-    module = decode(result.stdout)
+        output = bounded_output(["go", "mod", "edit", "-json", str(path)], INPUT_LIMIT,
+                                env=dict(os.environ, GOWORK="off", GOFLAGS="", GOTOOLCHAIN="local"))
+    module = decode(output)
     need(isinstance(module, dict), "provider-pin")
     requires = module.get("Require") or []
     replaces = module.get("Replace") or []
@@ -235,24 +262,25 @@ def pinned_provider(repo, commit):
     """The collectable provider release the tested commit pins.
 
     The go.mod comes from the commit's object, not the working tree, so a
-    file the tested run edits cannot change the expected release. A commit
-    that tracks any go.work is refused: the build runs with GOWORK=off, and a
-    workspace would select modules this check does not read.
+    file the tested run edits cannot change the expected release. Every Git
+    read is bounded before anything candidate-controlled is materialized:
+    the blob's size is checked before its contents are read, and only the
+    FIXTURE_WORKSPACES paths are listed. A commit that tracks a go.work on
+    one of them is refused: the build runs with GOWORK=off, and a workspace
+    would select modules this check does not read.
     """
     need(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) is not None, "provider-pin")
 
-    def git(*arguments):
-        try:
-            result = subprocess.run(["git", "-C", str(repo), *arguments], capture_output=True, timeout=60, check=False)
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise EvidenceError("provider-pin") from error
-        need(result.returncode == 0, "provider-pin")
-        return result.stdout
+    def git(limit, *arguments):
+        return bounded_output(["git", "-C", str(repo), *arguments], limit)
 
-    need(git("cat-file", "-t", commit).strip() == b"commit", "provider-pin")
-    names = git("ls-tree", "-r", "-z", "--name-only", commit).split(b"\0")
-    need(not any(name == b"go.work" or name.endswith(b"/go.work") for name in names), "provider-pin")
-    return pinned_provider_text(git("cat-file", "blob", "%s:%s" % (commit, FIXTURE_GO_MOD)))
+    need(git(64, "cat-file", "-t", commit).strip() == b"commit", "provider-pin")
+    need(git(4096, "ls-tree", "-z", "--name-only", commit, "--", *FIXTURE_WORKSPACES) == b"", "provider-pin")
+    blob = "%s:%s" % (commit, FIXTURE_GO_MOD)
+    need(git(64, "cat-file", "-t", blob).strip() == b"blob", "provider-pin")
+    size = git(64, "cat-file", "-s", blob).strip()
+    need(size.isdigit() and int(size) <= PIN_LIMIT, "provider-pin")
+    return pinned_provider_text(git(PIN_LIMIT, "cat-file", "blob", blob))
 
 
 def encoded(value):

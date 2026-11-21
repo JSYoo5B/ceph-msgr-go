@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -170,6 +171,36 @@ class NativeEvidenceTests(unittest.TestCase):
                 self.collect(pin)
         self.write(self.receipts / "fixture-manifest.json", self.raw["fixture-manifest.json"])
 
+    def test_an_oversized_committed_pin_is_refused_before_its_contents_are_read(self):
+        repo = self.root / "large"
+        mod = repo / "integration" / "fixture" / "go.mod"
+        mod.parent.mkdir(parents=True)
+        mod.write_text("module m\nrequire %s v0.5.0\n" % evidence.PROVIDER + "// x\n" * (evidence.PIN_LIMIT // 4))
+        env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.org", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.org"}
+        for arguments in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "large"]):
+            subprocess.run(["git", "-C", str(repo), *arguments], check=True, capture_output=True, env=env)
+        commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True, env=env).stdout.strip()
+        calls = []
+        real = evidence.bounded_output
+
+        def recording(arguments, limit, env=None):
+            calls.append(list(arguments))
+            return real(arguments, limit, env)
+
+        with mock.patch.object(evidence, "bounded_output", recording), self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+            evidence.pinned_provider(repo, commit)
+        self.assertIn("-s", [argument for call in calls for argument in call])
+        self.assertFalse(any(call[-2:-1] == ["blob"] for call in calls), calls)
+
+    def test_trusted_command_output_is_never_read_past_its_bound(self):
+        # A command that would print far past the bound is cut off and refused.
+        with self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+            evidence.bounded_output([sys.executable, "-c", "import sys; sys.stdout.write('x' * (1 << 22))"], 4096)
+        with self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+            evidence.bounded_output([sys.executable, "-c", "import sys; sys.exit(3)"], 4096)
+        self.assertEqual(evidence.bounded_output([sys.executable, "-c", "print('ok')"], 4096), b"ok\n")
+
     def test_the_tested_pin_uses_the_go_module_parser(self):
         module = evidence.PROVIDER
         self.assertIn(PIN, evidence.COLLECTABLE_PROVIDER_VERSIONS)
@@ -224,11 +255,23 @@ class NativeEvidenceTests(unittest.TestCase):
         for value in ("HEAD", commit[:12], "0" * 40, ""):
             with self.subTest(commit=value), self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
                 evidence.pinned_provider(repo, value)
-        (repo / "go.work").write_text("go 1.26.0\nuse ./integration/fixture\n")
-        git("add", "go.work")
-        git("commit", "-q", "-m", "workspace")
-        with self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
-            evidence.pinned_provider(repo, git("rev-parse", "HEAD"))
+        # Only the workspace paths that select fixture modules are listed; a
+        # go.work elsewhere selects nothing for integration/fixture.
+        (repo / "other").mkdir()
+        (repo / "other" / "go.work").write_text("go 1.26.0\n")
+        git("add", "other")
+        git("commit", "-q", "-m", "unrelated workspace")
+        self.assertEqual(evidence.pinned_provider(repo, git("rev-parse", "HEAD")), "v0.5.0")
+        base = git("rev-parse", "HEAD")
+        for workspace in evidence.FIXTURE_WORKSPACES:
+            git("checkout", "-q", base)
+            path = repo / workspace
+            path.write_text("go 1.26.0\nuse ./integration/fixture\n")
+            git("add", workspace)
+            git("commit", "-q", "-m", "workspace")
+            with self.subTest(workspace=workspace), self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+                evidence.pinned_provider(repo, git("rev-parse", "HEAD"))
+        git("checkout", "-q", base)
         with mock.patch("builtins.print") as printed:
             self.assertEqual(evidence.main(["pin", "--repo", str(repo), "--commit", commit]), 0)
         self.assertEqual(printed.call_args.args, ("provider_pin=v0.5.0",))
