@@ -321,7 +321,7 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	work, stopWork := context.WithDeadline(ctx, workDeadline)
 	defer stopWork()
 	for _, osd := range frozen {
-		recovery.freeze(t, work, osd)
+		recovery.freeze(t, ctx, osd, thawDeadline, thawDeadline.Sub(workDeadline))
 	}
 	call, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
@@ -347,15 +347,13 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	var staged opsInFlightOp
 	for {
 		pending("before the barrier")
-		// The snapshots run under the test's context and are judged
-		// against the budget once they return (budgetedObservation).
-		var ops opsInFlightSnapshot
-		var objecter objecterRequestsSnapshot
-		if late := budgetedObservation(ctx, pauseDeadline(workDeadline), func(observe context.Context) {
-			ops = copyOpsInFlight(t, observe, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
-			objecter = copyObjecterRequests(t, observe, 2, r.dest, nil, pools.ids[1], r.source)
-		}); late != nil {
-			t.Fatal("pause budget expired before the staged barrier:", late)
+		// The snapshots run under the held phase: one still outstanding at
+		// its end is abandoned and fails the test, and the leases resume
+		// the replicas by their deadline all the same (pauseLease).
+		ops := copyOpsInFlight(t, work, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
+		objecter := copyObjecterRequests(t, work, 2, r.dest, nil, pools.ids[1], r.source)
+		if !time.Now().Before(workDeadline) {
+			t.Fatal("pause budget expired before the staged barrier")
 		}
 		if staged, err = checkCopyStaged(ops, objecter, route, r.gid, copyPrimaryCopyIncarnation, cell.commits); err == nil {
 			receipt.BarrierEpoch, receipt.BarrierReqid, receipt.BarrierPoint, receipt.BarrierEvents = ops.Before.Epoch, staged.Reqid, staged.FlagPoint, staged.Events
@@ -389,7 +387,7 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 		t.Fatal("pause budget expired before thaw")
 	}
 	for _, osd := range frozen {
-		if err := recovery.thaw(ctx, osd, thawDeadline); err != nil {
+		if err := recovery.thaw(osd); err != nil {
 			t.Fatalf("resume osd.%d within the pause budget: %v", osd, err)
 		}
 	}

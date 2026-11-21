@@ -518,27 +518,24 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 	// the 16 s read lease, as in the destination-loss test.
 	thawDeadline := frozen.Add(16 * time.Second)
 	workDeadline := thawDeadline.Add(-3 * time.Second)
-	// Native observations run under the test's context and are judged
-	// against the budget once they return (budgetedObservation).
-	budget := pauseDeadline(workDeadline)
+	// Native observations run under the held phase: one still outstanding
+	// at its end is abandoned and fails the test, and the lease resumes the
+	// replica by its deadline all the same (pauseLease).
 	work, stopWork := context.WithDeadline(ctx, workDeadline)
 	defer stopWork()
-	r.recovery.freeze(t, work, paused)
+	r.recovery.freeze(t, ctx, paused, thawDeadline, thawDeadline.Sub(workDeadline))
 	go func() {
 		reply, err := writer.Request(ctx, write)
 		written <- copyChunkOutcome{reply, err}
 	}()
 	var writeOp opsInFlightOp
 	for {
-		var ops opsInFlightSnapshot
-		late := budgetedObservation(ctx, budget, func(observe context.Context) {
-			ops = copyOpsInFlight(t, observe, 1, r.source, nil, r.gid, copyPrimaryWriteIncarnation)
-		})
+		ops := copyOpsInFlight(t, work, 1, r.source, nil, r.gid, copyPrimaryWriteIncarnation)
 		var err error
-		if writeOp, err = checkSourceWriteHeld(ops, source, r.gid, copyPrimaryWriteIncarnation); err == nil && late == nil {
+		if writeOp, err = checkSourceWriteHeld(ops, source, r.gid, copyPrimaryWriteIncarnation); err == nil && work.Err() == nil {
 			break
-		} else if late != nil {
-			t.Fatalf("the source write was not held before the pause budget expired: %v (%v)\nop tracker: %s", err, late, boundedRaw(ops.Raw))
+		} else if work.Err() != nil {
+			t.Fatalf("the source write was not held before the pause budget expired: %v (%v)\nop tracker: %s", err, work.Err(), boundedRaw(ops.Raw))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -552,36 +549,30 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 	}()
 	for {
 		h.pending(t, "before its first copy-get was sent")
-		var objecter objecterRequestsSnapshot
-		late := budgetedObservation(ctx, budget, func(observe context.Context) {
-			objecter = copyObjecterRequests(t, observe, 2, r.dest, nil, r.pools.ids[1], r.source)
-		})
+		objecter := copyObjecterRequests(t, work, 2, r.dest, nil, r.pools.ids[1], r.source)
 		var err error
-		if h.first, err = checkFirstChunkSent(objecter, route, source.ID, false); err == nil && late == nil {
+		if h.first, err = checkFirstChunkSent(objecter, route, source.ID, false); err == nil && work.Err() == nil {
 			break
-		} else if late != nil {
-			t.Fatalf("the first copy-get was not sent before the pause budget expired: %v (%v)\nobjecter: %s", err, late, boundedRaw(objecter.Raw))
+		} else if work.Err() != nil {
+			t.Fatalf("the first copy-get was not sent before the pause budget expired: %v (%v)\nobjecter: %s", err, work.Err(), boundedRaw(objecter.Raw))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	r.recovery.pauserd = true
-	if err := copyMonCommand(ctx, r.client, `{"prefix":"osd set","key":"pause"}`); err != nil {
+	if err := copyMonCommand(work, r.client, `{"prefix":"osd set","key":"pause"}`); err != nil {
 		t.Fatal("osd set pause", err)
 	}
 	for {
-		var objecter objecterRequestsSnapshot
-		late := budgetedObservation(ctx, budget, func(observe context.Context) {
-			objecter = copyObjecterRequests(t, observe, 2, r.dest, nil, r.pools.ids[1], r.source)
-		})
+		objecter := copyObjecterRequests(t, work, 2, r.dest, nil, r.pools.ids[1], r.source)
 		got, err := checkFirstChunkSent(objecter, route, source.ID, true)
-		if err == nil && got.TID == h.first.TID && late == nil {
+		if err == nil && got.TID == h.first.TID && work.Err() == nil {
 			break
-		} else if late != nil {
-			t.Fatalf("the sent first copy-get was not paused before the pause budget expired: %v (%v)\nobjecter: %s", err, late, boundedRaw(objecter.Raw))
+		} else if work.Err() != nil {
+			t.Fatalf("the sent first copy-get was not paused before the pause budget expired: %v (%v)\nobjecter: %s", err, work.Err(), boundedRaw(objecter.Raw))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if err := r.recovery.thaw(ctx, paused, thawDeadline); err != nil {
+	if err := r.recovery.thaw(paused); err != nil {
 		t.Fatalf("resume osd.%d within the pause budget: %v", paused, err)
 	}
 	receipt.PausedFor = time.Since(frozen).Round(10 * time.Millisecond).String()
