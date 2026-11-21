@@ -32,9 +32,12 @@ attempt, scenario, selector, normalized requested profile, configured image,
 observed runtime, and the size and SHA-256 of each payload file), tests.json
 and runtime.json (inspected image ID and architecture, native daemon version,
 provider version, fixture-reported profile). Every field is required and
-unknown fields are refused. Collection requires the pinned SOURCE, IMAGE and
-PROVIDER_VERSION; verification also admits the provider releases of bundles
-recorded earlier. verify requires an expected run request (--request, or the
+unknown fields are refused. Collection requires the pinned SOURCE and IMAGE,
+and the provider release that the tested commit pins in
+integration/fixture/go.mod (`pin` reads it from the commit object before the
+tested code runs; collect takes it as --provider-pin), which must be one of
+COLLECTABLE_PROVIDER_VERSIONS; verification also admits the provider releases
+of bundles recorded earlier. verify requires an expected run request (--request, or the
 workflow's EXECUTION_SOURCE, TESTED_SHA, CONTROLLER_SHA, RUN_ID, RUN_ATTEMPT
 and MATRIX_JSON) supplied independently of the manifest; the manifest's own
 identity given back establishes only self-consistency.
@@ -49,11 +52,14 @@ PASS with failed collection or upload stays test_result=passed with
 evidence_result=incomplete and a fixed public failure code; the final
 evidence step then fails the job. Missing required-test evidence is unknown,
 never PASS, and no retry replaces the first attempt. The collector uses only
-Python's standard library, executes nothing it reads, and its daemon-free
+Python's standard library, executes nothing it reads (`pin` runs only the
+trusted git and Go toolchain, which read the tested go.mod as data), and its daemon-free
 tests are tools/test_native_*evidence*.py.
 
+    native_evidence.py pin --repo TESTED_CHECKOUT --commit TESTED_SHA
     native_evidence.py collect --request REQUEST --receipts METADATA \
-        --tests native-tests.json --output BUNDLE --status STATUS
+        --tests native-tests.json --output BUNDLE --status STATUS \
+        --provider-pin RELEASE
     native_evidence.py verify --request REQUEST --bundle BUNDLE
 """
 import argparse
@@ -65,17 +71,27 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import subprocess
 import sys
+import tempfile
+import threading
 
 SCHEMA_VERSION = 1
 SOURCE = "7f793731f1b39eb4f465e960113d2363c311b964"
 IMAGE = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
-# Collection admits only the fixture provider release that integration/fixture
-# pins now. Verification of a retained bundle also admits the earlier releases
-# named by bundles recorded before each move; a bundle never changes release.
+# The trusted collector runs from the controller revision while the receipts
+# come from the tested revision, and a provider move changes the release
+# between them. So collection reads the release the tested revision pins in
+# integration/fixture/go.mod, admits it only when it is one of
+# COLLECTABLE_PROVIDER_VERSIONS, and requires the receipt to report exactly
+# that release. A release outside the set, a missing or ambiguous pin, a
+# replace of the provider and a receipt of another release are refused.
+# Verification of a retained bundle also admits the earlier releases named by
+# bundles recorded before each move; a bundle never changes release.
 PROVIDER = "github.com/JSYoo5B/ceph-testcontainers-go"
-PROVIDER_VERSION = "v0.5.0"
-RETAINED_PROVIDER_VERSIONS = frozenset({"v0.3.0", "v0.4.0", PROVIDER_VERSION})
+COLLECTABLE_PROVIDER_VERSIONS = frozenset({"v0.5.0", "v1.0.1"})
+RETAINED_PROVIDER_VERSIONS = frozenset({"v0.3.0", "v0.4.0"}) | COLLECTABLE_PROVIDER_VERSIONS
+PIN_LIMIT = 64 << 10
 INPUT_LIMIT = 16 << 20
 FILE_LIMIT = 256 << 10
 TOTAL_LIMIT = 1 << 20
@@ -175,6 +191,96 @@ def read(path, limit):
 
 def document(path, limit=INPUT_LIMIT):
     return decode(read(path, limit))
+
+
+FIXTURE_GO_MOD = "integration/fixture/go.mod"
+# The Go listings this tool runs: (subcommands that run Go, or None for every
+# invocation; the module directories Go loads). tools/test_workflow_toolchains.py
+# reads this declaration to require a Go that can list those modules.
+# Here: pin parses the tested fixture module's go.mod with `go mod edit -json`.
+GO_LISTING = (("pin",), ("integration/fixture",))
+
+
+# The go.work paths Go consults from integration/fixture upward.
+FIXTURE_WORKSPACES = ("go.work", "integration/go.work", "integration/fixture/go.work")
+PIN_TIMEOUT = 60
+
+
+def bounded_output(arguments, limit, env=None):
+    """The stdout of one trusted command, read only up to limit bytes.
+
+    Output past the limit is never read: the command is killed and the call
+    refused, as is a nonzero exit or a run past PIN_TIMEOUT.
+    """
+    try:
+        process = subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, env=env)
+    except OSError as error:
+        raise EvidenceError("provider-pin") from error
+    timer = threading.Timer(PIN_TIMEOUT, process.kill)
+    timer.start()
+    try:
+        data = process.stdout.read(limit + 1)
+        overflow = len(data) > limit
+        if overflow:
+            process.kill()
+        process.stdout.close()
+        code = process.wait()
+    finally:
+        timer.cancel()
+    need(not overflow and code == 0, "provider-pin")
+    return data
+
+
+def pinned_provider_text(data):
+    """The collectable provider release one go.mod pins.
+
+    The file is parsed by the Go toolchain's own module parser (`go mod edit
+    -json`, which reads the file and changes nothing), so quoted paths and
+    versions, comments and blocks mean what they mean to the build. Exactly
+    one requirement must name PROVIDER, its release must be collectable, and
+    no replace directive may name PROVIDER on its old side.
+    """
+    need(isinstance(data, bytes) and len(data) <= PIN_LIMIT, "provider-pin")
+    with tempfile.TemporaryDirectory() as root:
+        path = Path(root) / "go.mod"
+        path.write_bytes(data)
+        output = bounded_output(["go", "mod", "edit", "-json", str(path)], INPUT_LIMIT,
+                                env=dict(os.environ, GOWORK="off", GOFLAGS="", GOTOOLCHAIN="local"))
+    module = decode(output)
+    need(isinstance(module, dict), "provider-pin")
+    requires = module.get("Require") or []
+    replaces = module.get("Replace") or []
+    need(isinstance(requires, list) and isinstance(replaces, list), "provider-pin")
+    found = [item.get("Version") for item in requires if isinstance(item, dict) and item.get("Path") == PROVIDER]
+    need(not any(isinstance(item, dict) and isinstance(item.get("Old"), dict) and item["Old"].get("Path") == PROVIDER
+                 for item in replaces), "provider-pin")
+    need(len(found) == 1 and found[0] in COLLECTABLE_PROVIDER_VERSIONS, "provider-pin")
+    return found[0]
+
+
+def pinned_provider(repo, commit):
+    """The collectable provider release the tested commit pins.
+
+    The go.mod comes from the commit's object, not the working tree, so a
+    file the tested run edits cannot change the expected release. Every Git
+    read is bounded before anything candidate-controlled is materialized:
+    the blob's size is checked before its contents are read, and only the
+    FIXTURE_WORKSPACES paths are listed. A commit that tracks a go.work on
+    one of them is refused: the build runs with GOWORK=off, and a workspace
+    would select modules this check does not read.
+    """
+    need(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) is not None, "provider-pin")
+
+    def git(limit, *arguments):
+        return bounded_output(["git", "-C", str(repo), *arguments], limit)
+
+    need(git(64, "cat-file", "-t", commit).strip() == b"commit", "provider-pin")
+    need(git(4096, "ls-tree", "-z", "--name-only", commit, "--", *FIXTURE_WORKSPACES) == b"", "provider-pin")
+    blob = "%s:%s" % (commit, FIXTURE_GO_MOD)
+    need(git(64, "cat-file", "-t", blob).strip() == b"blob", "provider-pin")
+    size = git(64, "cat-file", "-s", blob).strip()
+    need(size.isdigit() and int(size) <= PIN_LIMIT, "provider-pin")
+    return pinned_provider_text(git(PIN_LIMIT, "cat-file", "blob", blob))
 
 
 def encoded(value):
@@ -321,7 +427,8 @@ def runtime_projection(raw, ctx):
     reported = {key: raw[field] for key, field in mapping.items()}
     need(reported == {key: ctx["profile"][key] for key in mapping}, "fixture-profile-mismatch")
     profile_family(ctx["profile"]).runtime_facts(raw, ctx)
-    need(raw["provider"] == PROVIDER and raw["provider_version"] == PROVIDER_VERSION, "provider-mismatch")
+    need(ctx.get("provider_pin") in COLLECTABLE_PROVIDER_VERSIONS, "provider-pin")
+    need(raw["provider"] == PROVIDER and raw["provider_version"] == ctx["provider_pin"], "provider-mismatch")
     value = {"image_id": raw["image_id"], "architecture": raw["architecture"], "daemon_version": raw["daemon_version"],
              "fixture_reported_profile": reported, "provider_version": raw["provider_version"]}
     validate_runtime(value, ctx)
@@ -394,13 +501,16 @@ def verify(bundle, expected):
     return manifest
 
 
-def collect(request, receipts, tests, output):
+def collect(request, receipts, tests, output, provider_pin):
+    """Collect one bundle; provider_pin is the release `pin` read from the tested commit."""
     ctx = context(request)
+    need(provider_pin in COLLECTABLE_PROVIDER_VERSIONS, "provider-pin")
     receipts, output = Path(receipts), Path(output)
     need(not output.exists() and not output.is_symlink(), "attempt-collision")
     need(not receipts.is_symlink() and receipts.is_dir(), "unsafe-receipt-directory")
     family = profile_family(ctx["profile"])
-    payloads = family.project(receipts, tests, ctx)
+    # Only the projection sees the pin; the manifest keeps the run context.
+    payloads = family.project(receipts, tests, dict(ctx, provider_pin=provider_pin))
     need(set(payloads) == family.FILES, "bundle-inventory")
     files, total, content = [], 0, {}
     for name in sorted(payloads):
@@ -451,11 +561,22 @@ def main(argv=None):
     capture.add_argument("--tests", required=True)
     capture.add_argument("--output", required=True)
     capture.add_argument("--status", required=True)
+    capture.add_argument("--provider-pin", required=True, help="the release `pin` printed for the tested commit")
+    pin = sub.add_parser("pin", help="print the GitHub step output naming the provider release the tested commit pins")
+    pin.add_argument("--repo", required=True)
+    pin.add_argument("--commit", required=True)
     check = sub.add_parser("verify")
     check.add_argument("--bundle", required=True)
     for command in (capture, check):
         command.add_argument("--request", help="run request JSON; omitted reads trusted workflow environment")
     args = parser.parse_args(argv)
+    if args.command == "pin":
+        try:
+            print("provider_pin=%s" % pinned_provider(args.repo, args.commit))
+            return 0
+        except EvidenceError as error:
+            print(str(error), file=sys.stderr)
+            return 1
     if args.command == "family":
         try:
             print(family_output())
@@ -483,7 +604,7 @@ def main(argv=None):
         if failure:
             raise failure
         if args.command == "collect":
-            collect(request, args.receipts, args.tests, args.output)
+            collect(request, args.receipts, args.tests, args.output, args.provider_pin)
         else:
             verify(args.bundle, context(request))
         status["test_result"] = "passed"
