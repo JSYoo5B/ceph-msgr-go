@@ -415,19 +415,15 @@ func notSent(cause error) error { return fmt.Errorf("%w: %w", ErrNotSent, cause)
 // session failed first) and is known not to have been sent. An
 // OutcomeUnknownError means the write started and then the transport
 // failed, or ctx ended after the start: the peer may have received it.
-// Whether an ending ctx withdraws the message is decided under the session
-// lock against the writer's start, so a withdrawn message is never written.
+// ctx stays with the queued message: the writer checks it last immediately
+// before the session-lock critical section that marks the write started,
+// and the caller's withdrawal takes that lock too, so a message whose ctx
+// ended before the writer's last check is never written, whether the
+// writer or the waiting caller sees the end first.
 func (s *Session) Deliver(ctx context.Context, m msgr.MessageData) error {
-	if err := ctx.Err(); err != nil {
-		return notSent(err)
-	}
-	r := &request{ctx: context.Background(), message: m, delivered: make(chan error, 1)}
-	select {
-	case <-s.done:
-		return notSent(s.Err())
-	case <-ctx.Done():
-		return notSent(ctx.Err())
-	case s.queue <- r:
+	r, err := s.queueDelivery(ctx, m)
+	if err != nil {
+		return err
 	}
 	withdraw := func(cause error) (error, bool) {
 		s.mu.Lock()
@@ -458,6 +454,23 @@ func (s *Session) Deliver(ctx context.Context, m msgr.MessageData) error {
 		}
 		// A started write always reports its outcome.
 		return <-r.delivered
+	}
+}
+
+// queueDelivery admits one Deliver request, carrying ctx, to the writer's
+// queue; the request's delivered channel then receives its outcome once.
+func (s *Session) queueDelivery(ctx context.Context, m msgr.MessageData) (*request, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, notSent(err)
+	}
+	r := &request{ctx: ctx, message: m, delivered: make(chan error, 1)}
+	select {
+	case <-s.done:
+		return nil, notSent(s.Err())
+	case <-ctx.Done():
+		return nil, notSent(ctx.Err())
+	case s.queue <- r:
+		return r, nil
 	}
 }
 
@@ -549,14 +562,22 @@ func (s *Session) writeLoop(t *Transport, epoch uint64, stop <-chan struct{}, lo
 			var admissionErr error
 			if s.config.BeforeWrite != nil {
 				admissionErr = s.config.BeforeWrite(m)
-				if ctx.Err() != nil {
-					r.unsent(nil, ctx)
-					continue
-				}
 			}
+			// The caller's ctx gets its last look here, immediately
+			// before the critical section that marks the start (ctx.Err
+			// runs outside mu: a context may inspect the session). An end
+			// this check sees is never started; one after it finds the
+			// request started, or withdrawn by its waiting caller under
+			// mu first.
+			ended := ctx.Err()
 			s.mu.Lock()
 			valid = s.err == nil && (r.result == nil || s.pending[id] == r) && !r.abandoned
 			cause = s.err
+			if valid && ended != nil {
+				s.mu.Unlock()
+				r.unsent(nil, ctx)
+				continue
+			}
 			if valid && admissionErr != nil {
 				if r.result != nil {
 					s.remove(id)

@@ -14,9 +14,14 @@ import (
 
 func pipeSession(t *testing.T) (*Session, net.Conn) {
 	t.Helper()
+	return pipeSessionWith(t, Config{WriteTimeout: 2 * time.Second, Inbound: true})
+}
+
+func pipeSessionWith(t *testing.T, config Config) (*Session, net.Conn) {
+	t.Helper()
 	client, peer := net.Pipe()
 	peer.SetDeadline(time.Now().Add(5 * time.Second))
-	s := New(&Transport{Conn: client, Reader: msgr.NewReader(client, 0), Writer: msgr.NewWriter(client, 0)}, Config{WriteTimeout: 2 * time.Second, Inbound: true}, nil, nil)
+	s := New(&Transport{Conn: client, Reader: msgr.NewReader(client, 0), Writer: msgr.NewWriter(client, 0)}, config, nil, nil)
 	t.Cleanup(func() { s.Fail(ErrClosed); peer.Close(); s.Wait() })
 	s.Start()
 	return s, peer
@@ -102,5 +107,73 @@ func TestDeliverSessionFailureWithdrawsQueuedMessage(t *testing.T) {
 	s.Fail(cause)
 	if err := <-queued; !errors.Is(err, ErrNotSent) || !errors.Is(err, cause) {
 		t.Fatal("queued Deliver at session failure", err)
+	}
+}
+
+// TestDeliverCanceledBeforeWriterAdmissionIsNeverWritten queues a Deliver
+// request behind a held frame and cancels its ctx with no waiter to
+// withdraw it (the waiter's withdrawal has not run): the writer itself
+// sees the end, reports it not sent and never writes it, and the next
+// message takes the next sequence.
+func TestDeliverCanceledBeforeWriterAdmissionIsNeverWritten(t *testing.T) {
+	s, peer := pipeSession(t)
+	first := make(chan error, 1)
+	go func() { first <- s.Deliver(context.Background(), msgr.MessageData{Type: 98, Front: []byte("held")}) }()
+	prefix := make([]byte, 16)
+	if _, err := io.ReadFull(peer, prefix); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r, err := s.queueDelivery(ctx, msgr.MessageData{Type: 98, Front: []byte("canceled")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	reader := msgr.NewReader(io.MultiReader(bytes.NewReader(prefix), peer), 0)
+	if m := readRequest(t, reader); string(m.Front) != "held" {
+		t.Fatal("held frame", m)
+	}
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-r.delivered; !errors.Is(err, ErrNotSent) || !errors.Is(err, context.Canceled) {
+		t.Fatal("a request canceled before admission must be known not sent", err)
+	}
+	third := make(chan error, 1)
+	go func() { third <- s.Deliver(context.Background(), msgr.MessageData{Type: 98, Front: []byte("next")}) }()
+	if m := readRequest(t, reader); string(m.Front) != "next" || m.Sequence != 2 {
+		t.Fatal("the canceled request was written, or consumed a sequence", m)
+	}
+	if err := <-third; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDeliverCanceledDuringBeforeWriteIsNeverStarted ends the ctx inside
+// the writer's admission callback, after the writer's first context check:
+// its last check before the start sees the end, so the request is not sent
+// and the next message takes the first sequence.
+func TestDeliverCanceledDuringBeforeWriteIsNeverStarted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s, peer := pipeSessionWith(t, Config{WriteTimeout: 2 * time.Second, Inbound: true, BeforeWrite: func(m msgr.MessageData) error {
+		if string(m.Front) == "canceled" {
+			cancel()
+		}
+		return nil
+	}})
+	r, err := s.queueDelivery(ctx, msgr.MessageData{Type: 98, Front: []byte("canceled")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-r.delivered; !errors.Is(err, ErrNotSent) || !errors.Is(err, context.Canceled) {
+		t.Fatal("a request canceled during admission must be known not sent", err)
+	}
+	next := make(chan error, 1)
+	go func() { next <- s.Deliver(context.Background(), msgr.MessageData{Type: 98, Front: []byte("next")}) }()
+	if m := readRequest(t, msgr.NewReader(peer, 0)); string(m.Front) != "next" || m.Sequence != 1 {
+		t.Fatal("the canceled request was written, or consumed a sequence", m)
+	}
+	if err := <-next; err != nil {
+		t.Fatal(err)
 	}
 }
