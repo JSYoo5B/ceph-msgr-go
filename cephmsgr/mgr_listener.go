@@ -19,30 +19,38 @@ import (
 
 // MGR daemon-role acceptor (protocol stage 3, SPEC.md "Protocol stages").
 //
-// A MgrListener accepts msgr2.1 connections from stock OSDs on a listener
-// the consumer bound, as the MGR its MgrDaemon is: it verifies each OSD's
-// CephX MGR service authorizer against the daemon's rotating MGR secrets
-// (exact secret ID), answers the native challenge, authenticates both
-// transcripts, identifies itself as MGR(global ID) with the advertised
-// address vector, and publishes an authenticated per-peer session whose
-// inbound messages it delivers raw. It decides nothing about the peer: the
-// consumer's Authorize hook admits or refuses each authenticated peer
-// (deny by default), and what the messages mean, any reply and every role
-// decision stay with the consumer. The wire contract and its refusals are
-// internal/session Accept (accept.go) and internal/cephx ServiceVerifier
-// (service.go); native policy: ceph/ceph/blob/v20.2.4/src/mgr/DaemonServer.cc
-// (stateless_server policy for OSDs requiring SERVER_LUMINOUS,
-// ms_handle_fast_authentication caps handling) and
-// ceph/ceph/blob/v20.2.4/src/mon/MonClient.cc handle_auth_request.
+// A MgrListener accepts msgr2.1 connections from stock OSDs and clients on
+// a listener the consumer bound, as the MGR its MgrDaemon is: it verifies
+// each peer's CephX MGR service authorizer against the daemon's rotating
+// MGR secrets (exact secret ID), answers the native challenge,
+// authenticates both transcripts, identifies itself as MGR(global ID) with
+// the advertised address vector, and publishes an authenticated per-peer
+// session. It decides nothing about the peer: the consumer's Authorize
+// hook admits or refuses each authenticated peer (deny by default), and
+// what the messages mean, every reply and every role decision stay with
+// the consumer. The wire contract and its refusals are internal/session
+// Accept (accept.go) and internal/cephx ServiceVerifier (service.go);
+// native policy: ceph/ceph/blob/v20.2.4/src/mgr/DaemonServer.cc
+// (stateless_server policy for OSDs requiring SERVER_LUMINOUS, the default
+// stateless_server(0) for clients, ms_handle_fast_authentication caps
+// handling) and ceph/ceph/blob/v20.2.4/src/mon/MonClient.cc
+// handle_auth_request.
 //
-// Only OSD peers are admitted, in the one ConnectionMode selected, and no
-// compression is negotiated. MON, MDS and CLIENT peers, which native MGR
+// OSD and CLIENT peers are admitted, in the one ConnectionMode selected,
+// and no compression is negotiated. MON and MDS peers, which native MGR
 // also accepts, are refused at HELLO; stock MONs do connect to the active
 // MGR (their MgrClient), so their refusals appear in the listener's
-// records. Sending messages to a peer (MMgrConfigure, command replies) is
-// not implemented. A peer session is lossy, like native: its loss ends
-// it, and the stock OSD reconnects on its own as a new session with a new
-// Generation; nothing is resumed or replayed.
+// records. A peer session is lossy, like native: its loss ends it, and a
+// stock peer reconnects on its own as a new session with a new Generation;
+// nothing is resumed or replayed.
+//
+// Inbound messages are delivered in order with their raw segments; the
+// MGR daemon messages are also decoded (mgr_peer_messages.go), and a
+// malformed one ends the session as native decode failure does. Outbound,
+// a peer is sent only what the consumer asks for: MMgrConfigure
+// (MgrPeer.Configure), the MMgrClose acknowledgement (MgrPeerClose) and
+// command replies (MgrPeerCommand), each through a reply handle bound to
+// its connection.
 
 // ErrMgrPeerOverflow ends a MgrPeer whose undelivered inbound messages
 // exceeded its bounds. Accepted messages still drain before it.
@@ -121,8 +129,8 @@ type MgrPeerIdentity struct {
 	// numeric name.
 	MgrGlobalID uint64
 	// The peer's CLIENT_IDENT: its address vector, the target it dialed,
-	// numeric name (the OSD ID), global sequence, feature masks, flags and
-	// cookie.
+	// numeric name (an OSD's ID, a client's global ID; either is bound to
+	// the ticket), global sequence, feature masks, flags and cookie.
 	Addresses     []ManagerAddress
 	Target        ManagerAddress
 	PeerID        uint64
@@ -138,11 +146,20 @@ type MgrPeerIdentity struct {
 }
 
 // MgrInboundMessage is one message received from a peer, with owned copies
-// of its segments.
+// of its segments. Exactly one of the decoded fields is set for a MGR
+// daemon message of its type (mgr_peer_messages.go); every other type is
+// delivered raw only.
 type MgrInboundMessage struct {
 	Sequence, Transaction                  uint64
 	Type, Priority, Version, CompatVersion uint16
 	Front, Middle, Data                    []byte
+
+	Open    *MgrDaemonOpen
+	Update  *MgrDaemonUpdate
+	Report  *MgrPeerReport
+	PGStats *MgrPGStats
+	Close   *MgrPeerClose
+	Command *MgrPeerCommand
 }
 
 // MgrListenerRefusal is one connection that did not become a session.
@@ -178,6 +195,9 @@ type MgrListenerState struct {
 }
 
 const maxRecentRefusals = 32
+
+// entityTypeClient is CEPH_ENTITY_TYPE_CLIENT.
+const entityTypeClient = 0x08
 
 // MgrListener accepts OSD sessions for one MgrDaemon. Its methods are safe
 // for concurrent use.
@@ -285,8 +305,11 @@ func (d *MgrDaemon) Listen(options MgrListenerOptions) (*MgrListener, error) {
 	gid := d.Identity().GlobalID
 	l.policy = session.AcceptPolicy{
 		Self: uint8(cephx.ServiceMgr), ServerID: gid, Addresses: wireAddresses(options.Addresses),
-		PeerType: uint8(cephx.ServiceOSD), Mode: mode,
-		Supported: session.MgrOSDPeerFeatures, Required: session.MgrOSDPeerRequiredFeatures,
+		Peers: map[uint8]uint64{
+			uint8(cephx.ServiceOSD): session.MgrOSDPeerRequiredFeatures,
+			entityTypeClient:        session.MgrClientPeerRequiredFeatures,
+		},
+		Mode: mode, Supported: session.MgrOSDPeerFeatures,
 		Service: cephx.ServiceMgr, Keys: d.rotatingKey,
 		HandshakeLimit: min(64<<10, options.MaxFrameSize), MessageLimit: options.MaxFrameSize,
 		GlobalSeq: d.nextGlobalSeq,
@@ -334,7 +357,7 @@ func (l *MgrListener) authorize(ctx context.Context, peer session.AcceptedPeer, 
 }
 
 func entityName(kind uint32, id string) string {
-	names := map[uint32]string{cephx.ServiceMon: "mon", cephx.ServiceMDS: "mds", cephx.ServiceOSD: "osd", 0x08: "client", cephx.ServiceMgr: "mgr", cephx.ServiceAuth: "auth"}
+	names := map[uint32]string{cephx.ServiceMon: "mon", cephx.ServiceMDS: "mds", cephx.ServiceOSD: "osd", entityTypeClient: "client", cephx.ServiceMgr: "mgr", cephx.ServiceAuth: "auth"}
 	name, ok := names[kind]
 	if !ok {
 		name = "type" + strconv.FormatUint(uint64(kind), 10)
@@ -587,8 +610,13 @@ type MgrPeer struct {
 	mu      sync.Mutex
 	changed chan struct{}
 	queue   []MgrInboundMessage
+	sizes   []int
 	bytes   int
 	err     error
+
+	// schema is the connection's counter declarations; only the session's
+	// reader (enqueue) uses it.
+	schema msgr.MgrCounterSchema
 }
 
 func (p *MgrPeer) signal() { close(p.changed); p.changed = make(chan struct{}) } // mu held
@@ -601,8 +629,23 @@ func (id MgrPeerIdentity) clone() MgrPeerIdentity {
 // Identity returns the connection's identity; its slices are copies.
 func (p *MgrPeer) Identity() MgrPeerIdentity { return p.identity.clone() }
 
+// enqueue runs on the session's reader, one message at a time and in
+// order. A decoded message counts twice toward MaxBufferedBytes: its raw
+// segments and its decoded copy.
 func (p *MgrPeer) enqueue(m msgr.MessageData) error {
+	in := MgrInboundMessage{
+		Sequence: m.Sequence, Transaction: m.Transaction, Type: m.Type, Priority: m.Priority,
+		Version: m.Version, CompatVersion: m.CompatVersion,
+		Front: slices.Clone(m.Front), Middle: slices.Clone(m.Middle), Data: slices.Clone(m.Data),
+	}
 	size := len(m.Front) + len(m.Middle) + len(m.Data) + 64
+	decoded, err := p.decode(m, &in)
+	if err != nil {
+		return err
+	}
+	if decoded {
+		size *= 2
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.err != nil {
@@ -614,11 +657,8 @@ func (p *MgrPeer) enqueue(m msgr.MessageData) error {
 	if len(p.queue) >= p.listener.options.MaxBufferedMessages || p.bytes+size > p.listener.options.MaxBufferedBytes {
 		return fmt.Errorf("%w: %w", ErrMgrPeerOverflow, wire.ErrLimit)
 	}
-	p.queue = append(p.queue, MgrInboundMessage{
-		Sequence: m.Sequence, Transaction: m.Transaction, Type: m.Type, Priority: m.Priority,
-		Version: m.Version, CompatVersion: m.CompatVersion,
-		Front: slices.Clone(m.Front), Middle: slices.Clone(m.Middle), Data: slices.Clone(m.Data),
-	})
+	p.queue = append(p.queue, in)
+	p.sizes = append(p.sizes, size)
 	p.bytes += size
 	p.signal()
 	return nil
@@ -652,7 +692,8 @@ func (p *MgrPeer) Next(ctx context.Context) (MgrInboundMessage, error) {
 			m := p.queue[0]
 			p.queue[0] = MgrInboundMessage{}
 			p.queue = p.queue[1:]
-			p.bytes -= len(m.Front) + len(m.Middle) + len(m.Data) + 64
+			p.bytes -= p.sizes[0]
+			p.sizes = p.sizes[1:]
 			p.mu.Unlock()
 			return m, nil
 		}
