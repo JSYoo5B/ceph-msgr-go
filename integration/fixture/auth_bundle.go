@@ -26,7 +26,7 @@ import (
 // docs/guides/messenger-client-fixtures.md "Authentication first-failure
 // bundle"); the code here is written for this fixture.
 //
-// Every step composes public ceph-testcontainers-go v0.5.0 primitives:
+// Every step composes public ceph-testcontainers-go v1.0.1 primitives:
 // mon_status and sessions run through MonitorContainer.AdminSocket (looked up
 // by Container.Monitors), quorum_names through Observer.QuorumStatus, MGR and
 // MON container instances through the Managers/Monitors handles' State and
