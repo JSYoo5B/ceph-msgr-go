@@ -28,7 +28,8 @@ import (
 // (MgrPeerClose.Acknowledge, native handle_close's echo) and the reply to a
 // received command (MgrPeerCommand.Reply, in the family it came in, with its
 // TID). A close or command carries a reply handle bound to the connection
-// that received it, the message family and the TID. A handle answers at
+// that received it and to the message family and TID it carried, captured
+// at receipt (editing the exported fields changes nothing). A handle answers at
 // most once: a second answer, also one racing the first, is refused with
 // ErrMgrReplyDuplicate, and once its connection has ended (a replacement
 // connection of the same peer is another MgrPeer with its own handles) it
@@ -92,7 +93,10 @@ type MgrPeerClose struct {
 
 // MgrPeerCommand is a received MMgrCommand or MCommand: its family, TID,
 // FSID field, command strings and bulk input (the data segment), on the
-// connection Generation. Executing it is the consumer's.
+// connection Generation. Executing it is the consumer's. The exported
+// fields are a report of what arrived: Reply answers with the family and
+// TID its handle captured on receipt, so editing them, on this value or on
+// a copy sharing its handle, never changes the correlation.
 type MgrPeerCommand struct {
 	Family      uint16
 	Transaction uint64
@@ -103,10 +107,14 @@ type MgrPeerCommand struct {
 	handle      *mgrReply
 }
 
-// mgrReply is one reply handle; state is guarded by its peer's mu.
+// mgrReply is one reply handle: its connection and, for a command, the
+// family and TID received, fixed at receipt. state is guarded by its
+// peer's mu.
 type mgrReply struct {
-	peer  *MgrPeer
-	state uint8
+	peer        *MgrPeer
+	family      uint16
+	transaction uint64
+	state       uint8
 }
 
 const (
@@ -153,7 +161,7 @@ func (p *MgrPeer) decode(m msgr.MessageData, in *MgrInboundMessage) (bool, error
 		var c msgr.MgrCommandRequest
 		if c, err = msgr.DecodeMgrCommandRequest(m, limit); err == nil {
 			in.Command = &MgrPeerCommand{Family: m.Type, Transaction: m.Transaction, FSID: c.FSID, Command: c.Command,
-				Input: slices.Clone(m.Data), Generation: generation, handle: &mgrReply{peer: p}}
+				Input: slices.Clone(m.Data), Generation: generation, handle: &mgrReply{peer: p, family: m.Type, transaction: m.Transaction}}
 		}
 	default:
 		return false, nil
@@ -222,13 +230,15 @@ func (c *MgrPeerClose) Acknowledge(ctx context.Context) error {
 
 // Reply answers the command in its family (MMgrCommandReply or
 // MCommandReply) with its TID: the signed result, the status string and
-// the bulk output as the data segment. Nothing is retried; see the
-// outcomes above.
+// the bulk output as the data segment. The family and TID are the
+// received ones, captured by the handle; the Family and Transaction fields
+// are not read. Nothing is retried; see the outcomes above.
 func (c *MgrPeerCommand) Reply(ctx context.Context, result int32, status string, output []byte) error {
 	if c == nil || c.handle == nil {
 		return errors.New("ceph: no received MGR command to reply to")
 	}
-	m, err := msgr.CommandReplyFor(c.Family, c.Transaction, result, status, output, c.handle.peer.listener.options.MaxFrameSize)
+	h := c.handle
+	m, err := msgr.CommandReplyFor(h.family, h.transaction, result, status, output, h.peer.listener.options.MaxFrameSize)
 	if err != nil {
 		return err
 	}

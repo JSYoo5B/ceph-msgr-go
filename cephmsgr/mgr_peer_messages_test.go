@@ -221,6 +221,28 @@ func TestMgrPeerCommandRepliesAreBoundToFamilyTIDAndConnection(t *testing.T) {
 	}
 }
 
+// TestMgrPeerCommandReplyIgnoresEditedMetadata edits the exported family
+// and TID of a received command and of a copy sharing its handle: the
+// reply still goes out in the received family with the received TID, once.
+func TestMgrPeerCommandReplyIgnoresEditedMetadata(t *testing.T) {
+	f := newListenerFixture(t, MgrListenerOptions{Authorize: allowAll})
+	o, p := acceptPeer(t, f, testOSDConfig{client: true, globalID: 9003})
+	o.message(t, commandMessage(1, 3, msgr.MgrCommandMessage, nil))
+	received := nextMessage(t, p).Command
+	copied := *received
+	copied.Family, copied.Transaction = TellCommandFamily, 4
+	received.Family, received.Transaction = TellCommandFamily, 5
+	if err := copied.Reply(context.Background(), 0, "ok", nil); err != nil {
+		t.Fatal(err)
+	}
+	if r := o.next(t); r.Type != msgr.MgrCommandReplyMessage || r.Transaction != 3 {
+		t.Fatal("reply correlation followed edited fields", r.Type, r.Transaction)
+	}
+	if err := received.Reply(context.Background(), 0, "again", nil); !errors.Is(err, ErrMgrReplyDuplicate) {
+		t.Fatal("the original shares the copy's spent handle", err)
+	}
+}
+
 func TestMgrPeerCloseAcknowledgementEchoesOnce(t *testing.T) {
 	f := newListenerFixture(t, MgrListenerOptions{Authorize: allowAll})
 	o, p := acceptPeer(t, f, testOSDConfig{client: true, globalID: 9002})
