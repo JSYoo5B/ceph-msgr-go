@@ -53,7 +53,15 @@ const mgrBeaconPriority uint16 = 196
 // descriptors and addresses keep the caller's order. Clients are a native
 // multimap: they are ordered by name, keeping the caller's order among equal
 // names, with their names and address vectors in two parallel lists.
-func EncodeMgrBeacon(b MgrBeacon) msgr.MessageData {
+//
+// limit bounds the deduplication scratch of the sets: a set keeps an index
+// of its distinct entries only, so a repeated entry costs a lookup and no
+// copy, and once the distinct entries of all sets would exceed limit bytes
+// encoded the beacon is refused as wire.ErrLimit (the frame could not fit).
+// The caller bounds every other collection before calling, from its
+// constant per-element size; the encoded front is the caller's to check.
+func EncodeMgrBeacon(b MgrBeacon, limit uint32) (msgr.MessageData, error) {
+	sets := &setBudget{remaining: uint64(limit)}
 	e := wire.Encoder{}
 	msgr.Paxos(&e)
 	msgr.EncodeAddresses(&e, b.ServerAddresses)
@@ -69,7 +77,7 @@ func EncodeMgrBeacon(b MgrBeacon) msgr.MessageData {
 	for _, module := range b.Modules {
 		names = append(names, module.Name)
 	}
-	encodeStringSet(&e, names)
+	sets.encode(&e, names)
 	e.U32(uint32(len(b.Commands)))
 	for _, command := range b.Commands {
 		body := wire.Encoder{}
@@ -85,7 +93,7 @@ func EncodeMgrBeacon(b MgrBeacon) msgr.MessageData {
 	encodeStringMap(&e, b.Services)
 	e.U32(uint32(len(b.Modules)))
 	for _, module := range b.Modules {
-		encodeModuleInfo(&e, module)
+		encodeModuleInfo(&e, module, sets)
 	}
 	e.U64(b.Features)
 	clients := slices.Clone(b.Clients)
@@ -106,13 +114,45 @@ func EncodeMgrBeacon(b MgrBeacon) msgr.MessageData {
 	for _, client := range clients {
 		e.String(client.Name)
 	}
-	return msgr.MessageData{Type: msgr.MgrBeaconMessage, Version: 11, CompatVersion: 8, Priority: mgrBeaconPriority, Front: e.Data}
+	if sets.err != nil {
+		return msgr.MessageData{}, sets.err
+	}
+	return msgr.MessageData{Type: msgr.MgrBeaconMessage, Version: 11, CompatVersion: 8, Priority: mgrBeaconPriority, Front: e.Data}, nil
 }
 
-func encodeStringSet(e *wire.Encoder, values []string) {
-	sorted := slices.Compact(slices.Sorted(slices.Values(values)))
-	e.U32(uint32(len(sorted)))
-	for _, value := range sorted {
+// setBudget is the encoded bytes the distinct entries of the beacon's sets
+// may still take.
+type setBudget struct {
+	remaining uint64
+	err       error
+}
+
+// encode writes values as a std::set: sorted and deduplicated. Only the
+// distinct entries are indexed, each charged its encoded size against the
+// budget before it is kept, so the scratch stays within the bytes that can
+// fit whatever the number of repeats.
+func (b *setBudget) encode(e *wire.Encoder, values []string) {
+	if b.err != nil {
+		return
+	}
+	seen := make(map[string]struct{})
+	var distinct []string
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		size := 4 + uint64(len(value))
+		if size > b.remaining {
+			b.err = wire.ErrLimit
+			return
+		}
+		b.remaining -= size
+		seen[value] = struct{}{}
+		distinct = append(distinct, value)
+	}
+	slices.Sort(distinct)
+	e.U32(uint32(len(distinct)))
+	for _, value := range distinct {
 		e.String(value)
 	}
 }
@@ -127,7 +167,7 @@ func encodeStringMap(e *wire.Encoder, values map[string]string) {
 
 // encodeModuleInfo is MgrMap::ModuleInfo::encode, envelope 2/1, with its
 // options map sorted by key.
-func encodeModuleInfo(e *wire.Encoder, module ModuleInfo) {
+func encodeModuleInfo(e *wire.Encoder, module ModuleInfo, sets *setBudget) {
 	body := wire.Encoder{}
 	body.String(module.Name)
 	if module.CanRun {
@@ -139,13 +179,13 @@ func encodeModuleInfo(e *wire.Encoder, module ModuleInfo) {
 	body.U32(uint32(len(module.Options)))
 	for _, key := range slices.Sorted(maps.Keys(module.Options)) {
 		body.String(key)
-		encodeModuleOption(&body, module.Options[key])
+		encodeModuleOption(&body, module.Options[key], sets)
 	}
 	e.Struct(2, 1, body.Data)
 }
 
 // encodeModuleOption is MgrMap::ModuleOption::encode, envelope 1/1.
-func encodeModuleOption(e *wire.Encoder, option ModuleOption) {
+func encodeModuleOption(e *wire.Encoder, option ModuleOption, sets *setBudget) {
 	body := wire.Encoder{}
 	body.String(option.Name)
 	body.U8(option.Type)
@@ -154,10 +194,10 @@ func encodeModuleOption(e *wire.Encoder, option ModuleOption) {
 	body.String(option.DefaultValue)
 	body.String(option.Min)
 	body.String(option.Max)
-	encodeStringSet(&body, option.EnumAllowed)
+	sets.encode(&body, option.EnumAllowed)
 	body.String(option.Description)
 	body.String(option.LongDescription)
-	encodeStringSet(&body, option.Tags)
-	encodeStringSet(&body, option.SeeAlso)
+	sets.encode(&body, option.Tags)
+	sets.encode(&body, option.SeeAlso)
 	e.Struct(1, 1, body.Data)
 }
