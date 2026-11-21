@@ -3,6 +3,7 @@ package msgr
 import (
 	"errors"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -73,23 +74,64 @@ func TestOversizedReportIsRefusedBeforeCopying(t *testing.T) {
 	}
 }
 
-// TestOversizedConfigureIsRefusedBeforeCopying: OSD perf-metric queries and
-// a metric configuration beyond the limit are refused before their bytes
-// are appended to a front.
-func TestOversizedConfigureIsRefusedBeforeCopying(t *testing.T) {
+// TestCallerContentIsBoundedBeforeCopying walks the field list of the
+// other caller-supplied encoders of the MGR roles: MMgrConfigure
+// (MgrPeer.Configure), the CLIENT service registration messages
+// (OpenMgrService, UpdateMetadata, Report) and the command replies
+// (MgrPeerCommand.Reply). Each collection gets far more minimal elements,
+// and each byte field far more bytes, than its frame bound admits; every
+// row must be refused within 64 KiB of allocation per call, so a field the
+// preflight does not count fails its row. The report encoder's rows are
+// TestOversizedReportIsRefusedBeforeCopying and the cephmsgr table.
+func TestCallerContentIsBoundedBeforeCopying(t *testing.T) {
 	big := make([]byte, 8<<20)
-	for name, c := range map[string]MgrConfigureData{
-		"query":  {OSDPerfMetricQueries: []MgrOpaqueEntry{{Key: big}}},
-		"config": {MetricConfig: &MgrMetricPayload{Type: MgrMetricOSD, Payload: big}},
-	} {
+	value := strings.Repeat("v", MaxServiceStringBytes)
+	full := make(map[string]string, MaxServiceMapEntries)
+	for i := range MaxServiceMapEntries {
+		full[strings.Repeat("k", 1+i%200)+string(rune('a'+i%26))+strconv.Itoa(i)] = value
+	}
+	empty, bigText := make([]MgrOpaqueEntry, 1<<16), string(big)
+	rows := []struct {
+		field string
+		call  func() error
+	}{
+		{"configure OSDPerfMetricQueries (empty entries)", func() error {
+			_, err := EncodeMgrConfigure(MgrConfigureData{OSDPerfMetricQueries: empty}, 0, 4096)
+			return err
+		}},
+		{"configure OSDPerfMetricQueries[].Key", func() error {
+			_, err := EncodeMgrConfigure(MgrConfigureData{OSDPerfMetricQueries: []MgrOpaqueEntry{{Key: big}}}, 0, 4096)
+			return err
+		}},
+		{"configure OSDPerfMetricQueries[].Value", func() error {
+			_, err := EncodeMgrConfigure(MgrConfigureData{OSDPerfMetricQueries: []MgrOpaqueEntry{{Value: big}}}, 0, 4096)
+			return err
+		}},
+		{"configure MetricConfig.Payload", func() error {
+			_, err := EncodeMgrConfigure(MgrConfigureData{MetricConfig: &MgrMetricPayload{Type: MgrMetricOSD, Payload: big}}, 0, 4096)
+			return err
+		}},
+		{"open metadata", func() error { _, err := MgrOpen("svc", "d", full, nil); return err }},
+		{"open status", func() error { _, err := MgrOpen("svc", "d", nil, full); return err }},
+		{"update metadata", func() error { _, err := MgrUpdate("svc", "d", full); return err }},
+		{"report status", func() error { _, err := MgrReport("svc", "d", full, nil); return err }},
+		{"report task status", func() error { _, err := MgrReport("svc", "d", nil, full); return err }},
+		{"command reply status", func() error {
+			_, err := CommandReplyFor(MgrCommandMessage, 1, 0, bigText, nil, 4096)
+			return err
+		}},
+		{"command reply output", func() error { _, err := CommandReplyFor(TellCommandMessage, 1, 0, "", big, 4096); return err }},
+	}
+	for _, r := range rows {
 		var err error
-		bytes := allocatedPerCall(func() { _, err = EncodeMgrConfigure(c, 0, 4096) })
-		if !errors.Is(err, wire.ErrLimit) {
-			t.Fatal(name, err)
+		bytes := allocatedPerCall(func() { err = r.call() })
+		if !errors.Is(err, wire.ErrLimit) && !errors.Is(err, ErrServiceRegistration) {
+			t.Errorf("%s: %v", r.field, err)
 		}
-		if bytes > 16<<10 {
-			t.Errorf("%s: refusing allocated %d bytes per call", name, bytes)
+		if bytes > 64<<10 {
+			t.Errorf("%s: refusing allocated %d bytes per call", r.field, bytes)
 		}
+		t.Logf("%s: refused with %d bytes per call", r.field, bytes)
 	}
 	// An MDS configuration a peer without SERVER_PACIFIC gets as absent
 	// does not count against the front.

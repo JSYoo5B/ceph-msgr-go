@@ -623,16 +623,19 @@ func checkLimits(b []byte) bool {
 // peer whose negotiated features lack SERVER_PACIFIC.
 func EncodeMgrConfigure(c MgrConfigureData, peerFeatures uint64, limit uint32) (MessageData, error) {
 	// The caller's queries and configuration are bounded before any of
-	// their bytes is copied: the front holds at least these.
+	// their bytes is copied: the front holds at least these. Each query
+	// counts at least its minimal encoding (a 6-byte structure envelope and
+	// a 4-byte limits count), so even malformed empty entries are bounded
+	// before the loop that rejects them.
 	if len(c.OSDPerfMetricQueries) > maxMgrMapEntries {
 		return MessageData{}, wire.ErrLimit
 	}
 	size := uint64(4 + 4 + 4 + 1)
 	for _, q := range c.OSDPerfMetricQueries {
-		size += uint64(len(q.Key)) + uint64(len(q.Value))
+		size += uint64(max(len(q.Key), 6)) + uint64(max(len(q.Value), 4))
 	}
 	if m := c.MetricConfig; m != nil && (m.Type != MgrMetricMDS || peerFeatures&serverPacificMask == serverPacificMask) {
-		size += 4 + uint64(len(m.Payload))
+		size += 4 + uint64(max(len(m.Payload), 6))
 	}
 	if size > uint64(limit) {
 		return MessageData{}, wire.ErrLimit
