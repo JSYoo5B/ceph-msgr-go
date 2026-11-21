@@ -130,7 +130,8 @@ class FamilyDecisionTests(unittest.TestCase):
         self.assertIn("if: steps.ceph.outcome == 'success' && %s\n" % decision, text)
         self.assertIn("if: always() && steps.ceph.outcome == 'success' && %s\n" % decision, text)
         self.assertIn("EVIDENCE_PILOT: ${{ %s }}\n" % decision, text)
-        self.assertEqual(text.count(decision), 3)
+        # The provider pin step joins the three evidence steps.
+        self.assertEqual(text.count(decision), 4)
         # No evidence step names a family's selector or matrix field.
         evidence_steps = text[text.index("      - name: Collect reviewed successful-native evidence"):
                               text.index("      - name: Preserve the scenario result")]

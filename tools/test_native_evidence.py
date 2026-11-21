@@ -4,12 +4,17 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
 import native_evidence as evidence
 import native_evidence_capsend as capsend
+
+REPO = Path(__file__).resolve().parents[1]
+# The release this repository's fixture pins; receipts default to it.
+PIN = evidence.pinned_provider_text((REPO / "integration" / "fixture" / "go.mod").read_bytes())
 import scenario_plan
 
 
@@ -54,7 +59,7 @@ class NativeEvidenceTests(unittest.TestCase):
                    "osd": "1", "osd_profile": "legacy-v6", "osd_store": "bluestore", "osd_replicas": "1",
                    "mds_fresh": True, "mds_cephfs_data": True, "image": evidence.IMAGE, "image_id": "sha256:" + "c" * 64,
                    "architecture": "amd64", "daemon_version": "ceph version 20.2.4 (%s) tentacle (stable)" % evidence.SOURCE,
-                   "provider": evidence.PROVIDER, "provider_version": evidence.PROVIDER_VERSION}
+                   "provider": evidence.PROVIDER, "provider_version": PIN}
         return {"fixture-manifest.json": runtime,
                 "mds-cephfs-data-results.json": {"source_commit": evidence.SOURCE, "global_id": 10, "cephfs_nonce": 17,
                                                 "facts": {"restart_recipe": "cap-send", "cap_send_recovery": facts},
@@ -63,8 +68,8 @@ class NativeEvidenceTests(unittest.TestCase):
                     "residual_owned_sessions": [], "kept_new_blocklist": [], "config": {"unreviewed": "omitted"}},
                 "mds-fresh-cleanup.json": dict.fromkeys(capsend.FRESH_FLAGS, True) | {"source_commit": evidence.SOURCE}}
 
-    def collect(self):
-        return evidence.collect(self.request, self.receipts, self.tests, self.output)
+    def collect(self, pin=PIN):
+        return evidence.collect(self.request, self.receipts, self.tests, self.output, pin)
 
     def test_successful_bundle_is_closed_hashed_and_exactly_attributed(self):
         manifest = self.collect()
@@ -141,18 +146,135 @@ class NativeEvidenceTests(unittest.TestCase):
                 self.collect()
             self.write(self.receipts / name, self.raw[name])
 
-    def test_collection_admits_only_the_pinned_provider_release(self):
-        self.assertEqual(evidence.PROVIDER_VERSION, "v1.0.1")
-        for field, value in (("provider_version", "v0.3.0"), ("provider_version", "v0.4.0"), ("provider_version", "v0.5.0"),
-                             ("provider_version", "v1.0.0"),
-                             ("provider_version", ""),
-                             ("provider", "example.org/other-provider")):
-            data = dict(self.raw["fixture-manifest.json"], **{field: value})
-            self.write(self.receipts / "fixture-manifest.json", data)
-            with self.subTest(field=field, value=value), self.assertRaisesRegex(evidence.EvidenceError, "provider-mismatch"):
-                self.collect()
+    def test_collection_admits_the_release_the_tested_revision_pins(self):
+        # The trusted controller and the tested revision can pin different
+        # collectable releases during a provider move. The receipt must
+        # report the tested revision's pin, never the controller's.
+        self.assertEqual(evidence.COLLECTABLE_PROVIDER_VERSIONS, {"v0.5.0", "v1.0.1"})
+        for pin in sorted(evidence.COLLECTABLE_PROVIDER_VERSIONS):
+            others = sorted(evidence.COLLECTABLE_PROVIDER_VERSIONS - {pin})
+            for field, value in [("provider_version", other) for other in others] + [
+                    ("provider_version", "v0.3.0"), ("provider_version", "v1.0.0"), ("provider_version", ""),
+                    ("provider", "example.org/other-provider")]:
+                data = dict(self.raw["fixture-manifest.json"], provider_version=pin) | {field: value}
+                self.write(self.receipts / "fixture-manifest.json", data)
+                with self.subTest(pin=pin, field=field, value=value), self.assertRaisesRegex(evidence.EvidenceError, "provider-mismatch"):
+                    self.collect(pin)
+            self.write(self.receipts / "fixture-manifest.json", dict(self.raw["fixture-manifest.json"], provider_version=pin))
+            self.assertEqual(self.collect(pin)["observed"]["provider_version"], pin)
+            for name in list(self.output.iterdir()):
+                name.unlink()
+            self.output.rmdir()
+        self.write(self.receipts / "fixture-manifest.json", dict(self.raw["fixture-manifest.json"], provider_version="v1.0.0"))
+        for pin in ("v1.0.0", "v0.4.0", "", None):
+            with self.subTest(pin=pin), self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+                self.collect(pin)
         self.write(self.receipts / "fixture-manifest.json", self.raw["fixture-manifest.json"])
-        self.assertEqual(self.collect()["observed"]["provider_version"], "v1.0.1")
+
+    def test_an_oversized_committed_pin_is_refused_before_its_contents_are_read(self):
+        repo = self.root / "large"
+        mod = repo / "integration" / "fixture" / "go.mod"
+        mod.parent.mkdir(parents=True)
+        mod.write_text("module m\nrequire %s v0.5.0\n" % evidence.PROVIDER + "// x\n" * (evidence.PIN_LIMIT // 4))
+        env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.org", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.org"}
+        for arguments in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "large"]):
+            subprocess.run(["git", "-C", str(repo), *arguments], check=True, capture_output=True, env=env)
+        commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True, env=env).stdout.strip()
+        calls = []
+        real = evidence.bounded_output
+
+        def recording(arguments, limit, env=None):
+            calls.append(list(arguments))
+            return real(arguments, limit, env)
+
+        with mock.patch.object(evidence, "bounded_output", recording), self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+            evidence.pinned_provider(repo, commit)
+        self.assertIn("-s", [argument for call in calls for argument in call])
+        self.assertFalse(any(call[-2:-1] == ["blob"] for call in calls), calls)
+
+    def test_trusted_command_output_is_never_read_past_its_bound(self):
+        # A command that would print far past the bound is cut off and refused.
+        with self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+            evidence.bounded_output([sys.executable, "-c", "import sys; sys.stdout.write('x' * (1 << 22))"], 4096)
+        with self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+            evidence.bounded_output([sys.executable, "-c", "import sys; sys.exit(3)"], 4096)
+        self.assertEqual(evidence.bounded_output([sys.executable, "-c", "print('ok')"], 4096), b"ok\n")
+
+    def test_the_tested_pin_uses_the_go_module_parser(self):
+        module = evidence.PROVIDER
+        self.assertIn(PIN, evidence.COLLECTABLE_PROVIDER_VERSIONS)
+        good = {
+            "block": "module m\n\ngo 1.26.0\n\nrequire (\n\t%s v1.0.1\n\tother.example/x v1.2.3\n)\n" % module,
+            "single line": "module m\nrequire %s v0.5.0\n" % module,
+            "indirect comment": "module m\nrequire (\n\t%s v1.0.1 // indirect\n)\n" % module,
+            "quoted path and release": 'module m\nrequire "%s" "v1.0.1"\n' % module,
+            "replace of another module": "module m\nrequire %s v1.0.1\nreplace other.example/x => ../x\n" % module,
+        }
+        for name, text in good.items():
+            with self.subTest(name):
+                self.assertIn(evidence.pinned_provider_text(text.encode()), evidence.COLLECTABLE_PROVIDER_VERSIONS)
+        bad = {
+            "missing": "module m\nrequire other.example/x v1.2.3\n",
+            "unknown release": "module m\nrequire %s v1.0.0\n" % module,
+            "two requirements": "module m\nrequire %s v0.5.0\nrequire %s v1.0.1\n" % (module, module),
+            "no release": "module m\nrequire (\n\t%s\n)\n" % module,
+            "replace line": "module m\nrequire %s v1.0.1\nreplace %s => ../ctg\n" % (module, module),
+            "replace block": "module m\nrequire %s v1.0.1\nreplace (\n\t%s v1.0.1 => ../ctg\n)\n" % (module, module),
+            "quoted replace": 'module m\nrequire %s v1.0.1\nreplace "%s" => "../ctg"\n' % (module, module),
+            "pseudo-version": "module m\nrequire %s v1.0.2-0.20261120000000-abcdefabcdef\n" % module,
+            "unparsable": "module m\nrequire (\n\t%s v1.0.1\n" % module,
+            "binary": "require \xff\n",
+        }
+        for name, text in bad.items():
+            with self.subTest(name), self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+                evidence.pinned_provider_text(text.encode("latin-1"))
+        with self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+            evidence.pinned_provider_text(b"// x\n" * (evidence.PIN_LIMIT // 4))
+
+    def test_the_expected_release_comes_from_the_tested_commit(self):
+        # The tested run may edit its working tree; the expected release is
+        # read from the commit object before it runs and must not follow an edit.
+        repo = self.root / "tested"
+        mod = repo / "integration" / "fixture" / "go.mod"
+        mod.parent.mkdir(parents=True)
+        mod.write_text("module m\nrequire %s v0.5.0\n" % evidence.PROVIDER)
+
+        def git(*arguments):
+            return subprocess.run(["git", "-C", str(repo), *arguments], check=True, capture_output=True, text=True,
+                                  env={"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+                                       "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.org",
+                                       "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.org"}).stdout.strip()
+
+        git("init", "-q")
+        git("add", ".")
+        git("commit", "-q", "-m", "pin")
+        commit = git("rev-parse", "HEAD")
+        mod.write_text("module m\nrequire %s v1.0.1\n" % evidence.PROVIDER)
+        self.assertEqual(evidence.pinned_provider(repo, commit), "v0.5.0")
+        for value in ("HEAD", commit[:12], "0" * 40, ""):
+            with self.subTest(commit=value), self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+                evidence.pinned_provider(repo, value)
+        # Only the workspace paths that select fixture modules are listed; a
+        # go.work elsewhere selects nothing for integration/fixture.
+        (repo / "other").mkdir()
+        (repo / "other" / "go.work").write_text("go 1.26.0\n")
+        git("add", "other")
+        git("commit", "-q", "-m", "unrelated workspace")
+        self.assertEqual(evidence.pinned_provider(repo, git("rev-parse", "HEAD")), "v0.5.0")
+        base = git("rev-parse", "HEAD")
+        for workspace in evidence.FIXTURE_WORKSPACES:
+            git("checkout", "-q", base)
+            path = repo / workspace
+            path.write_text("go 1.26.0\nuse ./integration/fixture\n")
+            git("add", workspace)
+            git("commit", "-q", "-m", "workspace")
+            with self.subTest(workspace=workspace), self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+                evidence.pinned_provider(repo, git("rev-parse", "HEAD"))
+        git("checkout", "-q", base)
+        with mock.patch("builtins.print") as printed:
+            self.assertEqual(evidence.main(["pin", "--repo", str(repo), "--commit", commit]), 0)
+        self.assertEqual(printed.call_args.args, ("provider_pin=v0.5.0",))
 
     def test_verification_admits_only_the_named_retained_provider_releases(self):
         ctx = evidence.context(self.request)
@@ -242,7 +364,8 @@ class NativeEvidenceTests(unittest.TestCase):
         request, status = self.root / "request.json", self.root / "status.json"
         self.write(request, self.request)
         self.assertEqual(evidence.main(["collect", "--request", str(request), "--receipts", str(self.receipts),
-                                        "--tests", str(self.tests), "--output", str(self.output), "--status", str(status)]), 1)
+                                        "--tests", str(self.tests), "--output", str(self.output), "--status", str(status),
+                                        "--provider-pin", PIN]), 1)
         self.assertEqual(json.loads(status.read_text())["test_result"], "unknown")
 
     def test_retained_native_bundle_matches_the_independently_recorded_run(self):
@@ -280,7 +403,16 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertLess(text.index('sh integration/run.sh'), text.index('native_evidence.py" collect'))
         # The family decision is the trusted collector's step output
         # (test_native_evidence_families.py).
-        self.assertEqual(text.count("steps.evidence_family.outputs.family != ''"), 3)
+        self.assertEqual(text.count("steps.evidence_family.outputs.family != ''"), 4)
+        # The expected provider release is read from the tested commit before
+        # any tested code runs, and collect takes only that step's output.
+        pin = text.index('native_evidence.py" pin --repo "$GITHUB_WORKSPACE" --commit "$TESTED_SHA"')
+        self.assertLess(text.index('test "$(git rev-parse HEAD)" = "$TESTED_SHA"'), pin)
+        self.assertLess(pin, text.index('go -C integration/fixture mod download'))
+        self.assertLess(pin, text.index('sh integration/run.sh'))
+        self.assertIn('PROVIDER_PIN: ${{ steps.provider_pin.outputs.provider_pin }}', text)
+        self.assertIn('--provider-pin "$PROVIDER_PIN"', text)
+        self.assertNotIn('--provider-pin "$GITHUB_WORKSPACE', text)
         artifact = text[text.index('      - name: Preserve reviewed successful-native evidence'):text.index('      - name: Require complete evidence')]
         self.assertIn('path: ${{ runner.temp }}/success-evidence/', artifact)
         self.assertIn('retention-days: 7', artifact)
@@ -297,7 +429,8 @@ class NativeEvidenceTests(unittest.TestCase):
         status = self.root / "status.json"
         (self.receipts / "mds-fresh-cleanup.json").unlink()
         self.assertEqual(evidence.main(["collect", "--request", str(request), "--receipts", str(self.receipts),
-                                        "--tests", str(self.tests), "--output", str(self.output), "--status", str(status)]), 1)
+                                        "--tests", str(self.tests), "--output", str(self.output), "--status", str(status),
+                                        "--provider-pin", PIN]), 1)
         result = json.loads(status.read_text())
         self.assertEqual((result["test_result"], result["evidence_result"]), ("passed", "incomplete"))
         self.assertFalse(self.output.exists())

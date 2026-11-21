@@ -422,10 +422,17 @@ func restoreOSDOutages(down []int32, start func(int32) error, clean func() error
 // may have taken further OSDs out.
 func (r *ecEpochRun) kill(id int32) *ecOutage {
 	r.t.Helper()
+	return r.killWithin(r.ctx, id)
+}
+
+// killWithin is kill with the wait for the fixture's acknowledgement bounded
+// by ctx instead of the run's context.
+func (r *ecEpochRun) killWithin(ctx context.Context, id int32) *ecOutage {
+	r.t.Helper()
 	dir, name := os.Getenv("CEPH_MSGR_CONTROL_DIR"), strconv.FormatInt(int64(id), 10)
 	o := &ecOutage{osd: id}
 	r.outages = append(r.outages, o)
-	if err := r.control(r.ctx, "kill", "osd", name); err != nil {
+	if err := r.control(ctx, "kill", "osd", name); err != nil {
 		r.t.Fatal("kill", id, err)
 	}
 	var state struct {
