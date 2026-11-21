@@ -527,7 +527,8 @@ func DecodeMgrCommandRequest(m MessageData, limit uint32) (c MgrCommandRequest, 
 
 // CommandReplyFor builds the reply of the received command family: an
 // MMgrCommandReply for MMgrCommand, an MCommandReply for MCommand, header
-// 1/1, carrying the request's TID, the signed result (errorcode32_t: Linux
+// 1/1, carrying the request's TID (zero included: a native MgrClient's
+// CommandTable numbers its first command 0, ceph/ceph/blob/v20.2.4/src/common/CommandTable.h), the signed result (errorcode32_t: Linux
 // errno values on the wire), the status string and the bulk output as the
 // data segment.
 func CommandReplyFor(request uint16, transaction uint64, result int32, status string, output []byte, limit uint32) (MessageData, error) {
@@ -538,9 +539,6 @@ func CommandReplyFor(request uint16, transaction uint64, result int32, status st
 		typ = TellCommandReplyMessage
 	default:
 		return MessageData{}, fmt.Errorf("%w: type %d is not a command", ErrFrame, request)
-	}
-	if transaction == 0 {
-		return MessageData{}, fmt.Errorf("%w: a command reply needs the request's TID", ErrFrame)
 	}
 	if uint64(len(status))+uint64(len(output))+8 > uint64(limit) {
 		return MessageData{}, wire.ErrLimit

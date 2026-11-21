@@ -234,8 +234,8 @@ func TestMgrCommandRequestAndReply(t *testing.T) {
 	if _, err := CommandReplyFor(MgrOpenMessage, 5, 0, "", nil, 1<<20); err == nil {
 		t.Fatal("reply to a non-command")
 	}
-	if _, err := CommandReplyFor(MgrCommandMessage, 0, 0, "", nil, 1<<20); err == nil {
-		t.Fatal("reply without a TID")
+	if r, err := CommandReplyFor(MgrCommandMessage, 0, 0, "", nil, 1<<20); err != nil || r.Transaction != 0 {
+		t.Fatal("a native client's first command has TID 0", r, err)
 	}
 	if _, err := CommandReplyFor(MgrCommandMessage, 1, 0, "", make([]byte, 64), 32); !errors.Is(err, wire.ErrLimit) {
 		t.Fatal("oversized reply", err)
