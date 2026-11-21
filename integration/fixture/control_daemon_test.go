@@ -1,6 +1,15 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"path/filepath"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	"github.com/testcontainers/testcontainers-go"
+)
 
 // The daemon controls and the pause leases (daemon_lease.go, action "pause")
 // keep every action for MON, MGR and OSD. An MDS may only be stopped, and
@@ -52,5 +61,46 @@ func TestDaemonControlAdmitsOnlyStoppingTheCommandFixtureMDS(t *testing.T) {
 	}
 	if len(daemonControlKinds) != 4 || daemonControlKinds[3] != "mds" {
 		t.Fatal("daemon control kinds changed", daemonControlKinds)
+	}
+}
+
+// orderedDaemon records the daemon actions in the order they ran.
+type orderedDaemon struct {
+	testcontainers.Container
+	actions []string
+}
+
+func (d *orderedDaemon) Stop(context.Context, *time.Duration) error {
+	d.actions = append(d.actions, "stop")
+	return nil
+}
+
+func (d *orderedDaemon) Start(context.Context) error {
+	d.actions = append(d.actions, "start")
+	return nil
+}
+
+// The pending actions of one daemon kind run in publication order, whatever
+// their action names, so a start that a cleanup published after a kill or
+// stop the test abandoned runs after it and restarts the daemon. (Before,
+// each poll ran the oldest stop, then the oldest start, then the oldest
+// kill, so such a start ran first and the late kill left the daemon down.)
+func TestDaemonControlRunsTheActionsOfAKindInPublicationOrder(t *testing.T) {
+	out := t.TempDir()
+	d := &orderedDaemon{}
+	c := &fixtureCluster{cluster: &ceph.Container{Container: d}}
+	writeControlRequest(t, out, "start-mon", "11 a")
+	writeControlRequest(t, out, "stop-mon", "10 a")
+	writeControlRequest(t, out, "start-mon", "9 a")
+	if err := c.controls(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(d.actions, []string{"start", "stop", "start"}) {
+		t.Fatal("the daemon actions ran out of publication order", d.actions)
+	}
+	for _, ack := range []string{"mon-start.9", "mon-stop.10", "mon-start.11"} {
+		if !fileExists(filepath.Join(out, ack)) {
+			t.Fatal("not acknowledged:", ack)
+		}
 	}
 }
