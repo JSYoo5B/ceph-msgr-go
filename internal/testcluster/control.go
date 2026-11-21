@@ -185,7 +185,14 @@ func RestartMonitor(ctx context.Context, control, name string) error {
 	return RequestControl(ctx, control, "restart-mon", "mon-restarted", name)
 }
 
+// ControlDaemon requests one daemon action (stop, start, kill, or the
+// verify and other actions of a control). A pause is not an action: it is a
+// fixture-owned lease (DaemonLease), and a pause or resume action is
+// refused here, since the fixture no longer serves one.
 func ControlDaemon(ctx context.Context, control, action, daemon, name string) error {
+	if action == "pause" || action == "resume" {
+		return fmt.Errorf("a %s of %s.%s is a daemon lease (DaemonLease), not a daemon action", action, daemon, name)
+	}
 	return RequestControl(ctx, control, action+"-"+daemon, daemon+"-"+action, name)
 }
 

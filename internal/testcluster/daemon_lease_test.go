@@ -192,3 +192,17 @@ func TestDaemonLeaseCancellationAtEachStep(t *testing.T) {
 		}
 	})
 }
+
+// The fixture serves no pause or resume daemon action, so one is refused
+// before anything is published instead of waiting out its context.
+func TestPauseIsNotADaemonAction(t *testing.T) {
+	dir := t.TempDir()
+	for _, action := range []string{"pause", "resume"} {
+		if err := ControlDaemon(context.Background(), dir, action, "osd", "1"); err == nil || !strings.Contains(err.Error(), "daemon lease") {
+			t.Fatal(action, err)
+		}
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Fatal("a refused action was published", entries, err)
+	}
+}
