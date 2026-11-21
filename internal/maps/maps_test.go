@@ -128,7 +128,7 @@ func TestRealTentacleIPv6Maps(t *testing.T) {
 	if address := mgr.Addresses[0]; address.Type != 2 || address.Endpoint.String() != "[::1]:36801" || address.Nonce != 3962530023 {
 		t.Fatal("independent MgrMap address", address)
 	}
-	if !reflect.DeepEqual(mgr.Standbys, []Standby{{Name: "a", GlobalID: 4114}}) {
+	if len(mgr.Standbys) != 1 || mgr.Standbys[0].Name != "a" || mgr.Standbys[0].GlobalID != 4114 {
 		t.Fatal("independent MgrMap standbys", mgr.Standbys)
 	}
 	if !reflect.DeepEqual(mgr.EnabledModules, []string{"iostat", "nfs", "nvmeof"}) || mgr.AvailableModules != nil {

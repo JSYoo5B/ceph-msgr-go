@@ -77,6 +77,10 @@ type Config struct {
 	// before retained frames are resent; it must not block or call into the
 	// session.
 	OnResume func()
+	// Inbound marks an accepted session that issues no requests: every
+	// received message, whatever its type, goes to onMessage, and none is
+	// matched to a pending request.
+	Inbound bool
 }
 
 type Session struct {
@@ -545,7 +549,7 @@ func (s *Session) readLoop(t *Transport, epoch uint64, stop <-chan struct{}, loo
 			case s.ack <- struct{}{}:
 			default:
 			}
-			if m.Type == msgr.MonCommandReplyMessage || m.Type == msgr.MgrCommandReplyMessage || m.Type == msgr.TellCommandReplyMessage || m.Type == msgr.OSDOpReplyMessage || m.Type == msgr.PoolOpReplyMessage || m.Type == msgr.StatfsReplyMessage || m.Type == msgr.MonGetVersionReplyMessage {
+			if !s.config.Inbound && (m.Type == msgr.MonCommandReplyMessage || m.Type == msgr.MgrCommandReplyMessage || m.Type == msgr.TellCommandReplyMessage || m.Type == msgr.OSDOpReplyMessage || m.Type == msgr.PoolOpReplyMessage || m.Type == msgr.StatfsReplyMessage || m.Type == msgr.MonGetVersionReplyMessage) {
 				s.mu.Lock()
 				r := s.pending[m.Transaction]
 				if r != nil {

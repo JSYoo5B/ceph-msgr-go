@@ -86,6 +86,30 @@ func mockTicket(key cephx.Key, encoded []byte, service uint32, validity time.Dur
 	out.Bytes(blob.Data)
 	return out.Data, nil
 }
+
+// mockServiceTickets encodes the extra tickets of every requested non-AUTH
+// service: MGR first, as the original mock did, then OSD, MON and MDS.
+func mockServiceTickets(key cephx.Key, encoded []byte, services uint32, validity time.Duration) ([]byte, error) {
+	extra, err := mockTicket(key, encoded, cephx.ServiceMgr, validity)
+	if err != nil {
+		return nil, err
+	}
+	count := uint32(1)
+	for _, service := range []uint32{cephx.ServiceOSD, cephx.ServiceMon, cephx.ServiceMDS} {
+		if services&service == 0 {
+			continue
+		}
+		ticket, err := mockTicket(key, encoded, service, validity)
+		if err != nil {
+			return nil, err
+		}
+		count++
+		binary.LittleEndian.PutUint32(extra[1:5], count)
+		extra = append(extra, ticket[5:]...)
+	}
+	return extra, nil
+}
+
 func mockMonMap(release uint8, fsid [16]byte) []byte {
 	return mockMonMapAddresses(release, fsid, []msgr.Address{{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}})
 }
@@ -190,6 +214,11 @@ type peerConfig struct {
 	// authProof observes a MON request's previous GlobalID and the AUTH
 	// ticket (secret ID and blob) it presents as the reclaim proof.
 	authProof func(previousGlobalID, oldSecretID uint64, oldTicket []byte)
+	// entity and name are the expected initial identity (default CLIENT,
+	// "test"); helloEntity observes the HELLO entity type.
+	entity      uint32
+	name        string
+	helloEntity func(uint8)
 }
 
 // The synthetic peer exercises actual CephX state transitions and client
@@ -223,8 +252,10 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		}
 		return f.Segments[0], nil
 	}
-	if _, err := read(msgr.Hello); err != nil {
+	if p, err := read(msgr.Hello); err != nil {
 		return nil, nil, err
+	} else if cfg.helloEntity != nil && len(p) > 0 {
+		cfg.helloEntity(p[0])
 	}
 	hello := wire.Encoder{}
 	hello.U8(cfg.role)
@@ -251,8 +282,12 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 	}
 	var final []byte
 	if cfg.role == 1 {
+		entity, name := cfg.entity, cfg.name
+		if entity == 0 {
+			entity, name = 8, "test"
+		}
 		initial := wire.NewDecoder(authPayload)
-		if initial.U8() != 10 || initial.U32() != 8 || initial.String() != "test" {
+		if initial.U8() != 10 || initial.U32() != entity || initial.String() != name {
 			return nil, nil, errors.New("identity")
 		}
 		previousGlobalID := initial.U64()
@@ -312,17 +347,9 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		}
 		wrapped := wire.Encoder{}
 		wrapped.Bytes(encrypted)
-		extra, err := mockTicket(key.value, encoded, cephx.ServiceMgr, cfg.mgrTTL)
+		extra, err := mockServiceTickets(key.value, encoded, services, cfg.mgrTTL)
 		if err != nil {
 			return nil, nil, err
-		}
-		if services&cephx.ServiceOSD != 0 {
-			osdTicket, err := mockTicket(key.value, encoded, cephx.ServiceOSD, cfg.mgrTTL)
-			if err != nil {
-				return nil, nil, err
-			}
-			binary.LittleEndian.PutUint32(extra[1:5], 2)
-			extra = append(extra, osdTicket[5:]...)
 		}
 		response := wire.Encoder{}
 		response.U16(0x100)

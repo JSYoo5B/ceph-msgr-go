@@ -1,4 +1,5 @@
-// Package session coordinates authenticated msgr2.1 client connections.
+// Package session coordinates authenticated msgr2.1 client connections and,
+// for the MGR daemon role, accepted ones (accept.go).
 package session
 
 import (
@@ -92,6 +93,16 @@ type MonAuth struct {
 func (a MonAuth) replicatedPGV8MON() bool { return a.ReplicatedPGV8 }
 func (a MonAuth) mdsMapsMON() bool        { return a.MDSMaps }
 func (a MonAuth) osdCachePoolsMON() bool  { return a.OSDCachePools }
+
+// entityType is this identity's HELLO entity type: CLIENT (8) for client.*
+// and MGR (0x10) for a MGR daemon identity, which a MON then treats as that
+// daemon's session (ceph/ceph/blob/v20.2.4/src/msg/async/ProtocolV2.cc HELLO).
+func (a MonAuth) entityType() uint8 {
+	if a.Client == nil {
+		return 8
+	}
+	return uint8(a.Client.EntityType())
+}
 
 func (a MonAuth) Initial() ([]byte, error)      { return a.Client.Initial(), nil }
 func (a MonAuth) More(p []byte) ([]byte, error) { return a.Client.Challenge(p) }
@@ -491,7 +502,11 @@ func authenticateChannel(conn io.ReadWriter, stage *string, target msgr.Address,
 		return nil, err
 	}
 	*stage = "hello"
-	if c.localAddr, err = c.exchangeHello(target, role); err != nil {
+	self := uint8(8)
+	if identity, ok := auth.(interface{ entityType() uint8 }); ok {
+		self = identity.entityType()
+	}
+	if c.localAddr, err = c.exchangeHello(target, self, role); err != nil {
 		return nil, err
 	}
 	*stage = "authentication"
@@ -512,10 +527,11 @@ func authenticateChannel(conn io.ReadWriter, stage *string, target msgr.Address,
 	return c, nil
 }
 
-// exchangeHello returns this client's address as reported by the peer.
-func (c *authenticatedChannel) exchangeHello(target msgr.Address, role uint8) (msgr.Address, error) {
+// exchangeHello sends this identity's entity type and returns its address as
+// reported by the peer.
+func (c *authenticatedChannel) exchangeHello(target msgr.Address, self, role uint8) (msgr.Address, error) {
 	hello := wire.Encoder{}
-	hello.U8(8)
+	hello.U8(self)
 	target.Encode(&hello)
 	if err := c.write(msgr.Hello, hello.Data); err != nil {
 		return msgr.Address{}, err
