@@ -154,6 +154,13 @@ type nativeInodeReceipt struct {
 	FscryptAuth      string            `json:"fscrypt_auth_hex"`
 	FscryptFile      string            `json:"fscrypt_file_hex"`
 	OptMetadataCount uint32            `json:"optmetadata_count"`
+	// OptCharmap is the charmap_md_t the native decoder found, null when
+	// the multiton has no CHARMAP option.
+	OptCharmap *struct {
+		CaseSensitive bool   `json:"casesensitive"`
+		Normalization string `json:"normalization"`
+		Encoding      string `json:"encoding"`
+	} `json:"optmetadata_charmap"`
 }
 
 type nativeDirStatReceipt struct {
@@ -400,7 +407,9 @@ func TestDecodeFreshNativeRequestForward(t *testing.T) {
 // and unused words are written as zero by file_layout_t::to_legacy.
 func inodeFromReceipt(t *testing.T, n *nativeInodeReceipt) InodeStat {
 	t.Helper()
-	if n.OptMetadataCount != 0 {
+	// The native receipt models no option but CHARMAP: zero options, or
+	// exactly one that is a charmap.
+	if n.OptMetadataCount != 0 && (n.OptMetadataCount != 1 || n.OptCharmap == nil) || n.OptMetadataCount == 0 && n.OptCharmap != nil {
 		t.Fatal("receipt carries optmetadata options this comparison does not model", n.OptMetadataCount)
 	}
 	pool := int32(n.Layout.PoolID)
@@ -418,8 +427,7 @@ func inodeFromReceipt(t *testing.T, n *nativeInodeReceipt) InodeStat {
 		QuotaMaxBytes: n.Quota.MaxBytes, QuotaMaxFiles: n.Quota.MaxFiles, BTime: n.BTime.time(), ChangeAttr: n.ChangeAttr, DirPin: n.DirPin,
 		SnapBTime: n.SnapBTime.time(), RSnaps: n.RSnaps, Fscrypt: n.FscryptFlag,
 		FscryptAuth: nilIfEmpty(mustHex(t, n.FscryptAuth)), FscryptFile: nilIfEmpty(mustHex(t, n.FscryptFile)),
-		// A zero-option multiton: the u32 option count only.
-		OptionalMetadata: binary.LittleEndian.AppendUint32(nil, n.OptMetadataCount)}
+		OptionalMetadata: nativeOptionalMetadata(n)}
 	if n.Layout.PoolID == -1 && (n.Layout.StripeUnit|n.Layout.StripeCount|n.Layout.ObjectSize) != 0 {
 		t.Fatal("native pool -1 with a populated layout cannot come from from_legacy")
 	}
@@ -436,6 +444,28 @@ func inodeFromReceipt(t *testing.T, n *nativeInodeReceipt) InodeStat {
 	return s
 }
 
+// nativeOptionalMetadata restates the option vector the receipt describes:
+// the u32 count, then for a charmap its u64 kind and v1/compat1 envelope
+// around the bool and two strings. Comparing it with the decoded raw bytes
+// binds the native field order; the typed view is compared separately.
+func nativeOptionalMetadata(n *nativeInodeReceipt) []byte {
+	e := wire.Encoder{}
+	e.U32(n.OptMetadataCount)
+	if c := n.OptCharmap; c != nil {
+		e.U64(OptionalMetadataCharmap)
+		body := wire.Encoder{}
+		if c.CaseSensitive {
+			body.U8(1)
+		} else {
+			body.U8(0)
+		}
+		body.String(c.Normalization)
+		body.String(c.Encoding)
+		e.Struct(1, 1, body.Data)
+	}
+	return e.Data
+}
+
 func checkNativeInode(t *testing.T, what string, got *InodeStat, n *nativeInodeReceipt) {
 	t.Helper()
 	if got == nil || n == nil {
@@ -443,6 +473,14 @@ func checkNativeInode(t *testing.T, what string, got *InodeStat, n *nativeInodeR
 	}
 	if want := inodeFromReceipt(t, n); !reflect.DeepEqual(*got, want) {
 		t.Fatalf("%s differs from native decode\n got %+v\nnative %+v", what, *got, want)
+	}
+	opt, err := got.DecodeOptionalMetadata()
+	if err != nil || len(opt.Options) != int(n.OptMetadataCount) || (opt.Charmap == nil) != (n.OptCharmap == nil) {
+		t.Fatalf("%s optional metadata %+v (%v), native count %d charmap %+v", what, opt, err, n.OptMetadataCount, n.OptCharmap)
+	}
+	if c := n.OptCharmap; c != nil && (*opt.Charmap != Charmap{CaseSensitive: c.CaseSensitive, Normalization: c.Normalization, Encoding: c.Encoding} ||
+		opt.Options[0].Kind != OptionalMetadataCharmap || opt.Options[0].Version != 1 || opt.Options[0].Compat != 1) {
+		t.Fatalf("%s charmap %+v / %+v, native %+v", what, *opt.Charmap, opt.Options[0], *c)
 	}
 	xattrs, err := DecodeXattrs(got.Xattrs)
 	if err != nil {
