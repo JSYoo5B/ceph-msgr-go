@@ -101,3 +101,17 @@ func TestSuiteTimeoutRefusesAnExhaustedOrMalformedDeadline(t *testing.T) {
 		t.Error("an unparsable explicit timeout was used")
 	}
 }
+
+// The derived timeout is reported only under a job deadline, on a line the
+// result gate does not read as a suite boundary.
+func TestSuiteTimeoutReportNamesTheDeadline(t *testing.T) {
+	var none, some strings.Builder
+	jobBudget{}.report(&none, "api", "10m")
+	jobBudget{deadline: time.Unix(1_800_000_000, 0)}.report(&some, "api", "36m0s")
+	if none.Len() != 0 {
+		t.Error("a local run reported a deadline:", none.String())
+	}
+	if want := "Ceph test suite api: -test.timeout 36m0s, job deadline 2027-01-15T08:00:00Z\n"; some.String() != want {
+		t.Errorf("report %q, want %q", some.String(), want)
+	}
+}

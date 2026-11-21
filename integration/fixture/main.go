@@ -260,6 +260,7 @@ func run(ctx context.Context, project, out string, p profile, budget jobBudget) 
 			if err != nil {
 				return fmt.Errorf("%s native suite: %w", name, err)
 			}
+			budget.report(os.Stderr, name, timeout)
 			fmt.Printf("Running Ceph test suite: %s\n", name)
 			if err := c.runSuite(ctx, out, proxy, p, name, []string{"-test.run", p.testRun, "-test.v", "-test.timeout", timeout}, os.Stdout); err != nil {
 				return err

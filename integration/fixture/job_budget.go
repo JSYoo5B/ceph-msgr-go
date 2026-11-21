@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -105,4 +106,13 @@ func (b jobBudget) suiteTimeout(p profile, now time.Time, perTest bool) (string,
 		left = min(left, static)
 	}
 	return left.Truncate(time.Second).String(), nil
+}
+
+// report prints, under a job deadline, the timeout a suite run was given, so
+// a log shows how much of the job the run could use.
+func (b jobBudget) report(w io.Writer, suite, timeout string) {
+	if b.deadline.IsZero() {
+		return
+	}
+	fmt.Fprintf(w, "Ceph test suite %s: -test.timeout %s, job deadline %s\n", suite, timeout, b.deadline.UTC().Format(time.RFC3339))
 }
