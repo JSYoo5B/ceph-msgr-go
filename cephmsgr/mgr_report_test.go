@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/JSYoo5B/ceph-msgr-go/internal/maps"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
 )
 
@@ -277,5 +280,107 @@ func TestMgrMonitorWaitsForAdmissionAndHonorsContext(t *testing.T) {
 	stop()
 	if _, err := d.Monitor(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatal("canceled Monitor", err)
+	}
+}
+
+// allocatedPerCall is the heap bytes f allocates per call, averaged over
+// ten calls; the daemon's own workers add only small noise.
+func allocatedPerCall(f func()) uint64 {
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range 10 {
+		f()
+	}
+	runtime.ReadMemStats(&after)
+	return (after.TotalAlloc - before.TotalAlloc) / 10
+}
+
+// TestOversizedReportAndBeaconAreRefusedBeforeCopying: an 8 MiB health
+// summary, detail line or progress message, and an 8 MiB beacon metadata
+// value, module option or command, are refused as ErrLimitExceeded under a
+// 64 KiB frame limit without converting or copying them, and nothing
+// reaches the MON.
+func TestOversizedReportAndBeaconAreRefusedBeforeCopying(t *testing.T) {
+	f := newFakeMgrMon(t)
+	options := f.options()
+	options.MaxFrameSize = 64 << 10
+	d, err := DialMgrDaemon(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	f.next(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	h, err := d.Monitor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := nativeTestDigest(t, "digest-empty")
+	big := strings.Repeat("x", 8<<20)
+	for name, r := range map[string]MgrMonReport{
+		"summary":  {Digest: digest, HealthChecks: []MgrHealthCheck{{Code: "A", Summary: big}}},
+		"detail":   {Digest: digest, HealthChecks: []MgrHealthCheck{{Code: "A", Detail: []string{big}}}},
+		"progress": {Digest: digest, ProgressEvents: []MgrProgressEvent{{ID: "p", Message: big}}},
+	} {
+		var err error
+		bytes := allocatedPerCall(func() { err = h.SendReport(ctx, r) })
+		if !errors.Is(err, ErrLimitExceeded) || errors.Is(err, ErrNotSent) {
+			t.Fatal(name, err)
+		}
+		if bytes > 64<<10 {
+			t.Errorf("report %s: refusing allocated %d bytes per call", name, bytes)
+		}
+	}
+	for name, b := range map[string]MgrBeacon{
+		"metadata": {Metadata: map[string]string{"k": big}},
+		"option":   {Modules: []ManagerModule{{Name: "m", Options: map[string]ManagerModuleOption{"o": {Tags: []string{big}}}}}},
+		"command":  {Commands: []MgrCommandDescriptor{{Help: big}}},
+	} {
+		var err error
+		bytes := allocatedPerCall(func() { err = d.SendBeacon(ctx, b) })
+		if !errors.Is(err, ErrLimitExceeded) {
+			t.Fatal(name, err)
+		}
+		if bytes > 64<<10 {
+			t.Errorf("beacon %s: refusing allocated %d bytes per call", name, bytes)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	f.mu.Lock()
+	beacons, reports := len(f.beacons), len(f.reports)
+	f.mu.Unlock()
+	if beacons != 0 || reports != 0 {
+		t.Fatal("refused content reached the MON", beacons, reports)
+	}
+}
+
+// TestMgrBeaconLowerBoundNeverExceedsTheFrame: the early beacon bound
+// never refuses a beacon whose encoding fits, duplicated set entries
+// included.
+func TestMgrBeaconLowerBoundNeverExceedsTheFrame(t *testing.T) {
+	address := ManagerAddress{Type: 2, Nonce: 7, Endpoint: netip.MustParseAddrPort("192.0.2.1:6800")}
+	option := ManagerModuleOption{Name: "o", DefaultValue: "d", EnumAllowed: []string{"a", "a", "bb"}, Tags: []string{"t", "t"}, SeeAlso: []string{"s"}}
+	for name, b := range map[string]MgrBeacon{
+		"empty":     {},
+		"populated": {Available: true, Addresses: []ManagerAddress{address, address}, Metadata: map[string]string{"a": "b"}, Services: map[string]string{"x": "y"}, Features: 9},
+		"modules": {Modules: []ManagerModule{{Name: "m", ErrorString: "e", Options: map[string]ManagerModuleOption{"o": option, "p": {}}}, {Name: "m"}},
+			Commands: []MgrCommandDescriptor{{Command: "c", Help: "h", Module: "m", Permissions: "r", Flags: 1}},
+			Clients:  []MgrBeaconClient{{Name: "c", Addresses: []ManagerAddress{address}}, {Name: "b"}}},
+	} {
+		content := maps.MgrBeacon{Available: b.Available, ServerAddresses: wireAddresses(b.Addresses), Features: b.Features, Metadata: b.Metadata, Services: b.Services, Name: "x"}
+		for _, m := range b.Modules {
+			content.Modules = append(content.Modules, wireModule(m))
+		}
+		for _, c := range b.Commands {
+			content.Commands = append(content.Commands, maps.MgrCommand{Command: c.Command, Help: c.Help, Module: c.Module, Permissions: c.Permissions, Flags: c.Flags})
+		}
+		for _, c := range b.Clients {
+			content.Clients = append(content.Clients, maps.MgrClient{Name: c.Name, Addresses: wireAddresses(c.Addresses)})
+		}
+		if bound, front := mgrBeaconLowerBound(b), uint64(len(maps.EncodeMgrBeacon(content).Front)); bound > front {
+			t.Errorf("%s: bound %d exceeds the %d-byte front", name, bound, front)
+		}
 	}
 }

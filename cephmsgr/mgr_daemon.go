@@ -1233,6 +1233,9 @@ func (d *MgrDaemon) NextDigest(ctx context.Context) (ClusterDigest, error) {
 // acceptance: MON never acknowledges a beacon, and an unchanged beacon need
 // not change the map. A frame-size violation is ErrLimitExceeded.
 func (d *MgrDaemon) SendBeacon(ctx context.Context, beacon MgrBeacon) error {
+	if mgrBeaconLowerBound(beacon)+41 > uint64(d.options.MaxFrameSize) {
+		return fmt.Errorf("ceph: MGR beacon exceeds frame limit: %w", wire.ErrLimit)
+	}
 	content := maps.MgrBeacon{
 		Available: beacon.Available, ServerAddresses: wireAddresses(beacon.Addresses), Features: beacon.Features,
 		Metadata: beacon.Metadata, Services: beacon.Services,
@@ -1276,6 +1279,60 @@ func (d *MgrDaemon) SendBeacon(ctx context.Context, beacon MgrBeacon) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// mgrBeaconLowerBound is at most the front size of the MMgrBeacon b encodes
+// to (maps.EncodeMgrBeacon), read from lengths and counts without copying
+// anything, so SendBeacon refuses an oversized beacon before converting or
+// sorting its lists. Every string and map entry is counted exactly; an
+// address counts nothing beyond its vector's count, and a set, which the
+// encoder deduplicates, counts only its longest entry. The encoded frame is
+// checked exactly afterwards.
+func mgrBeaconLowerBound(b MgrBeacon) uint64 {
+	str := func(v string) uint64 { return 4 + uint64(len(v)) }
+	set := func(values []string) uint64 {
+		if len(values) == 0 {
+			return 4
+		}
+		longest := 0
+		for _, v := range values {
+			longest = max(longest, len(v))
+		}
+		return 4 + 4 + uint64(longest)
+	}
+	pairs := func(m map[string]string) uint64 {
+		n := uint64(4)
+		for k, v := range m {
+			n += str(k) + str(v)
+		}
+		return n
+	}
+	// Paxos prefix, address count, gid, available, name length, fsid, and the
+	// counts of the module-name set, commands, modules, features and the two
+	// client lists.
+	n := uint64(18) + 4 + 8 + 1 + 4 + 16 + 4 + 4 + 4 + 8 + 4 + 4
+	longest := 0
+	for _, m := range b.Modules {
+		longest = max(longest, len(m.Name))
+	}
+	if len(b.Modules) > 0 {
+		n += 4 + uint64(longest)
+	}
+	for _, c := range b.Commands {
+		n += 6 + str(c.Command) + str(c.Help) + str(c.Module) + str(c.Permissions) + str("cli,rest") + 8
+	}
+	n += pairs(b.Metadata) + pairs(b.Services)
+	for _, m := range b.Modules {
+		n += 6 + str(m.Name) + 1 + str(m.ErrorString) + 4
+		for key, o := range m.Options {
+			n += str(key) + 6 + str(o.Name) + 1 + 1 + 4 + str(o.DefaultValue) + str(o.Min) + str(o.Max) +
+				set(o.EnumAllowed) + str(o.Description) + str(o.LongDescription) + set(o.Tags) + set(o.SeeAlso)
+		}
+	}
+	for _, c := range b.Clients {
+		n += 4 + str(c.Name)
+	}
+	return n
 }
 
 // Close is idempotent: it ends the MON session, every listener with its
