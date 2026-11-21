@@ -52,10 +52,7 @@ func nativeWriteSame(t *testing.T, ctx context.Context, input writeSameNativeInp
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "osd-writesame-input.json"), raw); err != nil {
-		t.Fatal(err)
-	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-writesame", "compare"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-writesame", "compare", testcluster.ControlInput{Name: "osd-writesame-input.json", Data: raw}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err = os.ReadFile(filepath.Join(dir, "osd-writesame-result.json"))

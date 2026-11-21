@@ -131,13 +131,10 @@ func nativeOmapWrite(t *testing.T, ctx context.Context, base osdFixtureOracle, m
 	if err != nil || len(data) > 1<<20 {
 		t.Fatal("bounded OMAP write native input", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "osd-omap-write-input.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(filepath.Join(dir, "osd-omap-write-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-omap-write", mode); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-omap-write", mode, testcluster.ControlInput{Name: "osd-omap-write-input.json", Data: data, Private: true}); err != nil {
 		t.Fatal("native OMAP write "+mode, err)
 	}
 	f, err := os.Open(filepath.Join(dir, "osd-omap-write-result.json"))

@@ -75,10 +75,7 @@ func checksumCompoundNativeOnce(t *testing.T, ctx context.Context, name, which s
 	t.Helper()
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	input, _ := json.Marshal(map[string]string{"object": name, "case": which})
-	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "osd-checksum-compound-input.json"), input); err != nil {
-		t.Fatal(err)
-	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-checksum-compound", "compare"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-checksum-compound", "compare", testcluster.ControlInput{Name: "osd-checksum-compound-input.json", Data: input}); err != nil {
 		t.Fatal("native compound", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "osd-checksum-compound-result.json"))

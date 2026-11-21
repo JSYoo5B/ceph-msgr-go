@@ -137,13 +137,10 @@ func replicatedPGControl(t *testing.T, ctx context.Context, kind, action, inputN
 	if err != nil || len(data) > 1<<20 {
 		t.Fatal("bounded replicated-PG native input", err)
 	}
-	if err := testcluster.WritePublicEvidence(filepath.Join(dir, inputName), data); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(filepath.Join(dir, resultName)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", kind, action); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", kind, action, testcluster.ControlInput{Name: inputName, Data: data}); err != nil {
 		t.Fatal("replicated-PG native oracle", err)
 	}
 	file, err := os.Open(filepath.Join(dir, resultName))
