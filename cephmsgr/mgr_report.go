@@ -56,32 +56,23 @@ var ErrMgrMonitorExpired = errors.New("ceph: MGR daemon MON session handle expir
 // malformed ServiceMap. Nothing was sent.
 var ErrMgrReportContent = msgr.ErrMgrReportContent
 
-// MgrHealthSeverity is a health check's health_status_t.
-type MgrHealthSeverity uint8
-
+// Health check severities (health_status_t) of MgrHealthCheck.Severity.
 const (
-	MgrHealthError MgrHealthSeverity = MgrHealthSeverity(msgr.HealthError)
-	MgrHealthWarn  MgrHealthSeverity = MgrHealthSeverity(msgr.HealthWarn)
-	MgrHealthOK    MgrHealthSeverity = MgrHealthSeverity(msgr.HealthOK)
+	MgrHealthError = msgr.HealthError
+	MgrHealthWarn  = msgr.HealthWarn
+	MgrHealthOK    = msgr.HealthOK
 )
 
-// MgrHealthCheck is one health check of a report, keyed by Code. The MON
-// replaces the checks of its MGR stat service with the report's, so a
-// check absent from the next accepted report is cleared.
-type MgrHealthCheck struct {
-	Code     string
-	Severity MgrHealthSeverity
-	Summary  string
-	Detail   []string // In order.
-	Count    int64
-}
-
-// MgrProgressEvent is one progress event of a report, keyed by ID.
-type MgrProgressEvent struct {
-	ID, Message string
-	Progress    float32
-	AddToStatus bool // ProgressEvent.add_to_ceph_s
-}
+// MgrHealthCheck is one health check of a report, keyed by Code, with its
+// ordered Detail lines. The MON replaces the checks of its MGR stat service
+// with the report's, so a check absent from the next accepted report is
+// cleared. MgrProgressEvent is one progress event, keyed by ID
+// (AddToStatus is ProgressEvent.add_to_ceph_s). Both are the encoder's own
+// types, so a report is bounded before any of its lists is copied.
+type (
+	MgrHealthCheck   = msgr.HealthCheck
+	MgrProgressEvent = msgr.ProgressEvent
+)
 
 // MgrMonReport is the consumer's content of one report. ServiceMap is an
 // encoded ServiceMap or empty: the MON keeps its current ServiceMap for an
@@ -172,20 +163,17 @@ func expired(cause error) error { return fmt.Errorf("%w: %w", ErrMgrMonitorExpir
 // SendReport sends one MMonMgrReport with this daemon's global ID on the
 // handle's MON session. The content is checked and encoded before anything
 // else (ErrMgrReportContent, or ErrLimitExceeded when the frame exceeds
-// MaxFrameSize). Then, under the daemon lock, a handle whose session has
+// MaxFrameSize, which is decided from the content's lengths before any of
+// it is copied). Then, under the daemon lock, a handle whose session has
 // ended is refused with ErrMgrMonitorExpired and a ctx that has ended with
 // an error wrapping ErrNotSent. Otherwise the report waits for the session's
 // ordered writer; see the package-level outcomes above. Nothing is retried,
 // and a report is never sent on another session.
 func (m *MgrMonitorSession) SendReport(ctx context.Context, report MgrMonReport) error {
 	d := m.daemon
-	content := msgr.MonMgrReport{ServiceMap: report.ServiceMap, Digest: report.Digest}
-	for _, c := range report.HealthChecks {
-		content.HealthChecks = append(content.HealthChecks, msgr.HealthCheck{Code: c.Code, Severity: uint8(c.Severity), Summary: c.Summary, Detail: c.Detail, Count: c.Count})
-	}
-	for _, e := range report.ProgressEvents {
-		content.Progress = append(content.Progress, msgr.ProgressEvent{ID: e.ID, Message: e.Message, Progress: e.Progress, AddToStatus: e.AddToStatus})
-	}
+	// The caller's slices are shared, not copied: the encoder bounds the
+	// whole frame first and sorts only its own copies.
+	content := msgr.MonMgrReport{HealthChecks: report.HealthChecks, ServiceMap: report.ServiceMap, Progress: report.ProgressEvents, Digest: report.Digest}
 	d.mu.Lock()
 	content.GlobalID = d.identity.GlobalID
 	d.mu.Unlock()

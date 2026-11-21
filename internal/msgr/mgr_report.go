@@ -88,13 +88,38 @@ type MonMgrReport struct {
 // or a malformed ServiceMap.
 var ErrMgrReportContent = errors.New("ceph messenger: invalid MGR report content")
 
+// MonMgrReportFrameSize is the wire size of the MMonMgrReport frame r
+// encodes to (front, data segment and the 41-byte message header), every
+// entry counted as given. It reads only lengths and counts and allocates
+// nothing, so a caller can bound the report before copying or sorting any
+// of its lists.
+func MonMgrReportFrameSize(r MonMgrReport) uint64 {
+	n := uint64(18) + 6 + 4 // Paxos prefix; health_check_map_t envelope and count
+	for _, c := range r.HealthChecks {
+		n += 4 + uint64(len(c.Code)) + 6 + 1 + 4 + uint64(len(c.Summary)) + 4 + 8
+		for _, d := range c.Detail {
+			n += 4 + uint64(len(d))
+		}
+	}
+	n += 4 + uint64(len(r.ServiceMap)) + 4
+	for _, p := range r.Progress {
+		n += 4 + uint64(len(p.ID)) + 6 + 4 + uint64(len(p.Message)) + 4 + 1
+	}
+	return n + 8 + uint64(len(r.Digest)) + 41
+}
+
 // EncodeMonMgrReport builds MMonMgrReport 3/1. Health checks and progress
 // events are written in ascending key order, as their std::maps are; the
 // digest goes into the data segment unchanged. The whole frame must fit
-// limit (wire.ErrLimit).
+// limit (wire.ErrLimit); that is checked first (MonMgrReportFrameSize),
+// before anything is copied, sorted or read, and again on the encoded
+// frame.
 func EncodeMonMgrReport(r MonMgrReport, limit uint32) (MessageData, error) {
 	refuse := func(format string, args ...any) (MessageData, error) {
 		return MessageData{}, fmt.Errorf("%w: %s", ErrMgrReportContent, fmt.Sprintf(format, args...))
+	}
+	if MonMgrReportFrameSize(r) > uint64(limit) {
+		return MessageData{}, wire.ErrLimit
 	}
 	checks := slices.Clone(r.HealthChecks)
 	slices.SortFunc(checks, func(a, b HealthCheck) int { return strings.Compare(a.Code, b.Code) })
@@ -115,9 +140,6 @@ func EncodeMonMgrReport(r MonMgrReport, limit uint32) (MessageData, error) {
 	}
 	if len(r.Digest) == 0 {
 		return refuse("no PGMapDigest")
-	}
-	if uint64(len(r.Digest))+uint64(len(r.ServiceMap))+41 > uint64(limit) {
-		return MessageData{}, wire.ErrLimit
 	}
 	if _, err := DecodePGMapDigest(r.Digest, limit); err != nil {
 		return refuse("digest: %v", err)

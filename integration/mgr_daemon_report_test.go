@@ -356,7 +356,7 @@ func TestCephMgrDaemonReportIntegration(t *testing.T) {
 	reportA := cephmsgr.MgrMonReport{HealthChecks: []cephmsgr.MgrHealthCheck{checkA}, Digest: digestA.Bytes}
 	reportB := cephmsgr.MgrMonReport{HealthChecks: []cephmsgr.MgrHealthCheck{checkB}, Digest: digestB.Bytes}
 	rendered := func(c cephmsgr.MgrHealthCheck) mgrReportCheck {
-		return mgrReportCheck{Severity: map[cephmsgr.MgrHealthSeverity]string{cephmsgr.MgrHealthWarn: "HEALTH_WARN", cephmsgr.MgrHealthError: "HEALTH_ERR"}[c.Severity], Summary: c.Summary, Count: c.Count, Detail: c.Detail}
+		return mgrReportCheck{Severity: map[uint8]string{cephmsgr.MgrHealthWarn: "HEALTH_WARN", cephmsgr.MgrHealthError: "HEALTH_ERR"}[c.Severity], Summary: c.Summary, Count: c.Count, Detail: c.Detail}
 	}
 	only := func(got map[string]mgrReportCheck, c cephmsgr.MgrHealthCheck) bool {
 		want, ok := got[c.Code]
