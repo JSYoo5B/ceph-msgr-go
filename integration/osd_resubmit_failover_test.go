@@ -140,10 +140,10 @@ func TestCephOSDResubmitFailoverIntegration(t *testing.T) {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+	stopped = true
 	if err = testcluster.ControlDaemon(ctx, dir, "kill", "osd", primary); err != nil {
 		t.Fatal("force primary termination", err)
 	}
-	stopped = true
 	cancel()
 	lost := <-finished
 	var unknown *cephmsgr.OutcomeUnknownError

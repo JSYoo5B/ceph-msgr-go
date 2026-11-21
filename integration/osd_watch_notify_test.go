@@ -100,8 +100,10 @@ func TestCephOSDWatchNotifyIntegration(t *testing.T) {
 	request := osdObjectRequest(route)
 	request.Operations = nil
 	epoch = request.MapEpoch
-	native := watcherOracle(t, ctx, "start")
+	// Recorded first: a start whose wait failed may still run, and
+	// the cleanup stops it after it.
 	watching = true
+	native := watcherOracle(t, ctx, "start")
 	if native.Object != name || native.GlobalID == 0 || len(native.Cookies) != 2 {
 		t.Fatal("native watchers do not own object", native)
 	}

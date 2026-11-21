@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,18 +37,18 @@ import (
 //     the waiters (src/osd/PrimaryLogPG.cc:499-537), and the write runs as any
 //     other.
 //
-// The OSD of the returned shard is paused through the fixture's daemon
-// control while the write waits, so the push of the recovered shard cannot
-// complete and the wait lasts until the test ends the pause. The pause is
-// bounded by degradedWaitPauseBudget, well inside the 20 s default
-// osd_heartbeat_grace, counted from before the pause is requested: every
-// control while it lasts (the in-flight snapshots, the STAT, the primary's
-// kill) runs under the pause's held phase, the resume under its own context,
-// and the run's cleanup recovers a pause whose resume was not acknowledged.
-// The fixture serves its controls in turn, so a control that the test gave
-// up on can still delay the recovery; the test then fails rather than
-// claiming a bounded pause. Each control also requires natively that the
-// paused OSD was never marked down. These consumer helpers are test-only.
+// The OSD of the returned shard is paused under a fixture-owned lease while
+// the write waits, so the push of the recovered shard cannot complete and
+// the wait lasts until the test ends the pause. The lease ends by
+// degradedWaitPauseBudget, well inside the 20 s default
+// osd_heartbeat_grace, from a deadline fixed before the pause is requested,
+// and the fixture itself resumes the OSD at that deadline (heldPause,
+// integration/fixture/daemon_lease.go). Every control while it lasts (the
+// in-flight snapshots, the STAT, the primary's kill) runs under the pause's
+// held phase; one that outlives it fails the test, and the lease still ends
+// by its deadline. The test requires that its own resume ended the lease
+// before the deadline. Each control also requires natively that the paused
+// OSD was never marked down. These consumer helpers are test-only.
 
 // degradedWaitEvent is the delay do_op marks for a write that waits for a
 // degraded object (src/osd/PrimaryLogPG.cc:705-712).
@@ -193,28 +194,17 @@ func (r *ecEpochRun) unsetFlags(d degradedObject) {
 	*d.flagged = false
 }
 
-// pause pauses the OSD under degradedWaitPauseBudget and returns its lease,
-// whose restore the run's cleanup runs with its own 60 s bound. The cleanup is
-// registered before the outcome of the pause request is judged, so that a
-// failed or late request is still recovered.
-func (r *ecEpochRun) pause(id int32) *pauseLease {
+// pause pauses the OSD under a lease that the fixture ends by
+// degradedWaitPauseBudget from now (heldPause), its held phase ending
+// degradedWaitResumeReserve before; the lease's cleanup ends it after a
+// failure.
+func (r *ecEpochRun) pause(id int32) *heldPause {
 	r.t.Helper()
-	p, err := startPauseLease(r.ctx, fixtureRequest, strconv.FormatInt(int64(id), 10), degradedWaitPauseBudget, degradedWaitResumeReserve)
-	r.t.Cleanup(func() {
-		cleanup, stop := context.WithTimeout(context.Background(), 60*time.Second)
-		defer stop()
-		if err := p.restore(cleanup); err != nil {
-			r.t.Error(err)
-		}
-	})
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	return p
+	return startHeldPause(r.t, r.ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd", strconv.FormatInt(int64(id), 10), time.Now().Add(degradedWaitPauseBudget), degradedWaitResumeReserve)
 }
 
 // checkHeld fails the test when step ended past the held phase.
-func (r *ecEpochRun) checkHeld(p *pauseLease, step string) {
+func (r *ecEpochRun) checkHeld(p *heldPause, step string) {
 	r.t.Helper()
 	if err := p.check(step); err != nil {
 		r.t.Fatal(err)
@@ -223,23 +213,19 @@ func (r *ecEpochRun) checkHeld(p *pauseLease, step string) {
 
 // resume ends the pause and fails the test when it did not end within the
 // budget.
-func (r *ecEpochRun) resume(p *pauseLease) {
+func (r *ecEpochRun) resume(p *heldPause) {
 	r.t.Helper()
 	left, err := p.resume()
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	r.t.Logf("osd.%s resumed %v before the end of its %v pause budget", p.name, left.Round(100*time.Millisecond), p.budget)
+	r.t.Logf("%s resumed %v before the end of its %v pause budget", p.daemon(), left.Round(100*time.Millisecond), p.budget)
 }
 
 // waitDegraded takes bounded snapshots of the primary's op tracker, each
 // under the pause's held phase, until one holds the write of client gid
-// under incarnation waiting for the degraded object, and returns that op. A
-// snapshot still outstanding when the held phase ends is abandoned and fails
-// the test; the lease resumes the OSD by its deadline all the same
-// (pauseLease), and the fixture serves that resume beside the outstanding
-// oracle request.
-func (r *ecEpochRun) waitDegraded(d degradedObject, p *pauseLease, call heldCall, gid uint64, incarnation int32) opsInFlightOp {
+// under incarnation waiting for the degraded object, and returns that op.
+func (r *ecEpochRun) waitDegraded(d degradedObject, p *heldPause, call heldCall, gid uint64, incarnation int32) opsInFlightOp {
 	r.t.Helper()
 	err := errors.New("no snapshot taken")
 	for attempt := 1; attempt <= 10 && p.held.Err() == nil; attempt++ {

@@ -169,6 +169,21 @@ func objectBackoffDaemon(t *testing.T, ctx context.Context, action string, id in
 	}
 }
 
+// objectBackoffPause pauses an OSD under a lease that lasts as long as ctx;
+// the lease's cleanup resumes it after a failure, before the test's own
+// cleanup starts the stopped OSDs.
+func objectBackoffPause(t *testing.T, ctx context.Context, id int32) *testcluster.DaemonLease {
+	t.Helper()
+	return pauseDaemon(t, ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd", strconv.Itoa(int(id)), leaseUntil(ctx))
+}
+
+func objectBackoffResume(t *testing.T, ctx context.Context, lease *testcluster.DaemonLease) {
+	t.Helper()
+	if _, err := resumeDaemon(ctx, lease); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // PrimaryLogPG::wait_for_degraded_object marks the op delayed with this
 // reason (OpRequest::mark_delayed); the live dump reports it both as the
 // current flag point and as the latest event.
@@ -230,7 +245,7 @@ func TestCephOSDObjectBackoffFailoverIntegration(t *testing.T) {
 	t.Cleanup(cancel)
 	evidence := objectBackoffEvidence{Profile: os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE"), Objects: map[string]string{}, Placements: map[string]objectBackoffPlacement{},
 		Replies: map[string]cephmsgr.OSDReply{}, Errors: map[string]string{}, Native: map[string]objectBackoffNative{}, Snapshots: map[string]mutationSnapshot{}, TimingsMS: map[string]float64{}}
-	stopped, paused := map[int32]bool{}, map[int32]bool{}
+	stopped := map[int32]bool{}
 	var connections []*cephmsgr.OSDConnection
 	var pendingCancels []context.CancelFunc
 	prepared, scoped := false, false
@@ -259,11 +274,6 @@ func TestCephOSDObjectBackoffFailoverIntegration(t *testing.T) {
 		}
 		for _, o := range connections {
 			_ = o.Close()
-		}
-		for id := range paused {
-			if paused[id] {
-				fail("resume osd."+strconv.Itoa(int(id)), testcluster.ControlDaemon(cleanup, dir, "resume", "osd", strconv.Itoa(int(id))))
-			}
 		}
 		for id := range stopped {
 			if stopped[id] {
@@ -376,8 +386,8 @@ samePGPair:
 	makeDegraded := func(name string, replica int32, data []byte) objectBackoffWait {
 		t.Helper()
 		var w objectBackoffWait
-		objectBackoffDaemon(t, ctx, "stop", replica)
 		stopped[replica] = true
+		objectBackoffDaemon(t, ctx, "stop", replica)
 		objectBackoffMust(t, ctx, "wait-osd", map[string]any{"osd": replica, "up": false, "object": name}, &w)
 		putNative(name, data)
 		objectBackoffDaemon(t, ctx, "start", replica)
@@ -424,8 +434,7 @@ samePGPair:
 	o2 := replicatedPGConnection(t, c2, ctx, route)
 	connections = append(connections, o2)
 
-	objectBackoffDaemon(t, ctx, "pause", stale)
-	paused[stale] = true
+	staleLease := objectBackoffPause(t, ctx, stale)
 	tailGo := []byte{0, 255, 'g', 'o', '-', 'o', 'n', 'c', 'e'}
 	original := replicatedPGRequest(route, cephmsgr.OSDOperation{Code: cephmsgr.OSDAppend, Length: uint64(len(tailGo)), Data: tailGo})
 	original.ClientIncarnation = 81
@@ -591,8 +600,7 @@ samePGPair:
 	default:
 	}
 	resumed := time.Now()
-	objectBackoffDaemon(t, ctx, "resume", stale)
-	paused[stale] = false
+	objectBackoffResume(t, ctx, staleLease)
 	evidence.TimingsMS["block_hold"] = float64(resumed.Sub(blocked).Microseconds()) / 1000
 	releaseCtx, stopRelease := context.WithTimeout(ctx, 30*time.Second)
 	unblock, err := o.NextBackoff(releaseCtx)
@@ -697,8 +705,7 @@ samePGPair:
 	}
 	o3 := replicatedPGConnection(t, c, ctx, route2)
 	connections = append(connections, o3)
-	objectBackoffDaemon(t, ctx, "pause", stale2)
-	paused[stale2] = true
+	stale2Lease := objectBackoffPause(t, ctx, stale2)
 	tailGo2 := []byte("go-failover-once")
 	original2 := replicatedPGRequest(route2, cephmsgr.OSDOperation{Code: cephmsgr.OSDAppend, Length: uint64(len(tailGo2)), Data: tailGo2})
 	original2.ClientIncarnation = 91
@@ -753,10 +760,9 @@ samePGPair:
 		time.Sleep(500 * time.Millisecond)
 	}
 	killed := time.Now()
-	objectBackoffDaemon(t, ctx, "kill", primary2)
 	stopped[primary2] = true
-	objectBackoffDaemon(t, ctx, "resume", stale2)
-	paused[stale2] = false
+	objectBackoffDaemon(t, ctx, "kill", primary2)
+	objectBackoffResume(t, ctx, stale2Lease)
 	var second completion
 	select {
 	case second = <-done2:

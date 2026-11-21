@@ -519,11 +519,11 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 	thawDeadline := frozen.Add(16 * time.Second)
 	workDeadline := thawDeadline.Add(-3 * time.Second)
 	// Native observations run under the held phase: one still outstanding
-	// at its end is abandoned and fails the test, and the lease resumes the
-	// replica by its deadline all the same (pauseLease).
+	// at its end is abandoned and fails the test, and the fixture resumes
+	// the replica at the lease's deadline all the same (freeze).
 	work, stopWork := context.WithDeadline(ctx, workDeadline)
 	defer stopWork()
-	r.recovery.freeze(t, ctx, paused, thawDeadline, thawDeadline.Sub(workDeadline))
+	r.recovery.freeze(t, work, paused, thawDeadline)
 	go func() {
 		reply, err := writer.Request(ctx, write)
 		written <- copyChunkOutcome{reply, err}

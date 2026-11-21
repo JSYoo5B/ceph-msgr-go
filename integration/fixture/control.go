@@ -28,9 +28,21 @@ func publishAck(out, name string) error {
 	return os.Rename(f.Name(), filepath.Join(out, name))
 }
 
+// recordControlFailure records the first failure of the control loop or the
+// lease loop (leaseLoop) as the fixture's failure, in provider.error, which
+// every later request reports (internal/testcluster RequestControl).
+func (c *fixtureCluster) recordControlFailure(out string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.controlErr != nil {
+		return
+	}
+	c.controlErr = err
+	_ = os.WriteFile(filepath.Join(out, "provider.error"), []byte(err.Error()+"\n"), 0600)
+}
+
 func (c *fixtureCluster) controlLoop(ctx context.Context, out string) {
 	defer close(c.done)
-	defer c.waitOwnedPool()
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -42,10 +54,7 @@ func (c *fixtureCluster) controlLoop(ctx context.Context, out string) {
 				if ctx.Err() == nil {
 					err = c.classifyControlFailure(out, err)
 				}
-				c.mu.Lock()
-				c.controlErr = err
-				c.mu.Unlock()
-				_ = os.WriteFile(filepath.Join(out, "provider.error"), []byte(err.Error()+"\n"), 0600)
+				c.recordControlFailure(out, err)
 				return
 			}
 		}
@@ -151,21 +160,10 @@ var controlInputName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*\.json$`)
 // controls polls every declared control once, in controlSequence order. It
 // stops on the first failure; earlier mutations and acknowledgements are not
 // replayed.
-//
-// While an owned-pool oracle request runs (controlOwnedPoolRequest), it
-// polls nothing else but the requests that end a pause (pauseEndingActions):
-// the other requests stay pending until the oracle request was settled, and
-// a pass that starts one skips the controls after it.
 func (c *fixtureCluster) controls(ctx context.Context, out string) error {
-	if c.ownedPoolRunning() {
-		return c.daemonRequests(ctx, out, pauseEndingActions)
-	}
 	for _, control := range controlSequence {
 		if err := control.poll(c, ctx, out); err != nil {
 			return err
-		}
-		if c.ownedPoolRunning() {
-			return c.daemonRequests(ctx, out, pauseEndingActions)
 		}
 	}
 	return nil
@@ -238,8 +236,8 @@ func defineControl(name string, order controlOrder, poll controlPoll) bool {
 
 // defineRequestControl declares a control of the requests named name: each
 // poll claims the oldest pending envelope (request), runs handle with its
-// fields and acknowledges
-// it as "<name>-completed.<request ID>". It is declared like defineControl.
+// fields and acknowledges it as "<name>-completed.<request ID>". It is
+// declared like defineControl.
 func defineRequestControl(name string, order controlOrder, handle func(c *fixtureCluster, ctx context.Context, out string, fields []string) error) bool {
 	if handle == nil {
 		panic("fixture control " + name + " has no request handler")

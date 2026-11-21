@@ -134,7 +134,8 @@ func TestCephOSDReplicaReadBounceIntegration(t *testing.T) {
 	t.Run("object missing on a rejoined replica", func(t *testing.T) {
 		victim := replicas[1]
 		name := strconv.Itoa(int(victim))
-		nativePool(t, ctx, "osdflags", map[string]any{"action": "set"})
+		// Recorded and registered first: a set or kill whose wait failed may
+		// still run, and the restore runs after it.
 		flagsSet, started := true, true
 		defer func() {
 			recover, stop := context.WithTimeout(context.Background(), 200*time.Second)
@@ -147,10 +148,11 @@ func TestCephOSDReplicaReadBounceIntegration(t *testing.T) {
 			}
 			waitOSDFixtureClean(t, recover, base)
 		}()
+		nativePool(t, ctx, "osdflags", map[string]any{"action": "set"})
+		started = false
 		if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
 			t.Fatal(err)
 		}
-		started = false
 		deadline := time.Now().Add(120 * time.Second)
 		for slicesContains(poolPlace(t, ctx, 1, object, "").Acting, victim) {
 			if time.Now().After(deadline) {

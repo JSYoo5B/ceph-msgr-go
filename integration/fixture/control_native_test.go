@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
-	"time"
 )
 
 // oracleModes are the modes the owned-pool oracle of this checkout declares,
@@ -123,103 +121,5 @@ func TestControlOwnedPoolRequestAdmitsOnlyDeclaredModes(t *testing.T) {
 				t.Fatal("a refused mode ran or was acknowledged")
 			}
 		})
-	}
-}
-
-// An owned-pool oracle request that is still running when its test's pause
-// lease ends must not keep the pause: the control loop serves the pause
-// recovery and the resume while the request runs and leaves every other
-// request pending, and the request published after the outstanding one
-// reads only its own input, also when it was written while the outstanding
-// request was running. The fake oracle blocks until the test releases it,
-// so nothing here depends on timing.
-func TestOwnedPoolOracleRunsBesideThePauseEndingControls(t *testing.T) {
-	out := t.TempDir()
-	if err := os.WriteFile(filepath.Join(out, "osd_pool_oracle.py"), []byte("@oracle_mode\ndef mode_observe(rados, cluster, request, out):\n    return {}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	type started struct {
-		input   string
-		release chan error
-	}
-	runs := make(chan started)
-	c := &fixtureCluster{profile: profile{osd: "1"}, runOwnedPool: func(ctx context.Context, out string, args []string, budget time.Duration) error {
-		data, err := os.ReadFile(filepath.Join(out, "osd-pool-input.json"))
-		if err != nil {
-			return err
-		}
-		run := started{string(data), make(chan error)}
-		runs <- run
-		return <-run.release
-	}}
-	publish := func(id, input string) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(out, "osd-pool-input.json."+id), []byte(input), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		writeControlRequest(t, out, "verify-osd-pool", id+" observe\ninput osd-pool-input.json\n")
-	}
-	poll := func() {
-		t.Helper()
-		if err := c.controls(context.Background(), out); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// The pass starts the request in its own goroutine and returns.
-	publish("1", `{"request":1}`)
-	pass := make(chan struct{})
-	go func() { defer close(pass); poll() }()
-	first := <-runs
-	<-pass
-	if first.input != `{"request":1}` {
-		t.Fatal("the first request read", first.input)
-	}
-	// While it runs, the next request is published with its own input.
-	publish("2", `{"request":2}`)
-	writeControlRequest(t, out, "pause-osd", "3 1")
-	poll()
-	if !requestPending(t, out, "verify-osd-pool") || !requestPending(t, out, "pause-osd") || fileExists(filepath.Join(out, "osd-pool-verify.1")) {
-		t.Fatal("a request other than a pause-ending one was served while the oracle request ran")
-	}
-	if err := os.Remove(filepath.Join(out, requestEnvelopeName("pause-osd", "3"))); err != nil {
-		t.Fatal(err)
-	}
-	// The pause recovery is served while the oracle request is outstanding.
-	writeControlRequest(t, out, "recover-paused-osd", "4 1")
-	poll()
-	if !fileExists(filepath.Join(out, "osd-pause-recovered.4")) || requestPending(t, out, "recover-paused-osd") {
-		t.Fatal("the pause recovery waited for the outstanding oracle request")
-	}
-	if !requestPending(t, out, "verify-osd-pool") || fileExists(filepath.Join(out, "osd-pool-verify.1")) {
-		t.Fatal("the next oracle request was claimed before the outstanding one was settled")
-	}
-	first.release <- nil
-	<-c.ownedPool.done
-	pass = make(chan struct{})
-	go func() { defer close(pass); poll() }()
-	second := <-runs
-	<-pass
-	if !fileExists(filepath.Join(out, "osd-pool-verify.1")) || fileExists(filepath.Join(out, "osd-pool-verify.2")) {
-		t.Fatal("the settled request was not acknowledged before the next one ran")
-	}
-	if second.input != `{"request":2}` {
-		t.Fatal("the next request read", second.input)
-	}
-	second.release <- nil
-	<-c.ownedPool.done
-	poll()
-	if !fileExists(filepath.Join(out, "osd-pool-verify.2")) {
-		t.Fatal("the second request was not acknowledged")
-	}
-	// A failed request stops the loop when it is settled.
-	publish("5", `{"request":5}`)
-	pass = make(chan struct{})
-	go func() { defer close(pass); poll() }()
-	third := <-runs
-	<-pass
-	third.release <- errors.New("oracle failed")
-	<-c.ownedPool.done
-	if err := c.controls(context.Background(), out); err == nil || err.Error() != "oracle failed" || fileExists(filepath.Join(out, "osd-pool-verify.5")) {
-		t.Fatal("a failed oracle request was not reported:", err)
 	}
 }

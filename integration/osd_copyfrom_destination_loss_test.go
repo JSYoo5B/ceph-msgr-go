@@ -320,8 +320,11 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	workDeadline := thawDeadline.Add(-4 * time.Second)
 	work, stopWork := context.WithDeadline(ctx, workDeadline)
 	defer stopWork()
+	// Every frozen replica has its own lease, all with one deadline; the
+	// fixture resumes each by it also while a snapshot below is still
+	// outstanding.
 	for _, osd := range frozen {
-		recovery.freeze(t, ctx, osd, thawDeadline, thawDeadline.Sub(workDeadline))
+		recovery.freeze(t, work, osd, thawDeadline)
 	}
 	call, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
@@ -347,9 +350,6 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	var staged opsInFlightOp
 	for {
 		pending("before the barrier")
-		// The snapshots run under the held phase: one still outstanding at
-		// its end is abandoned and fails the test, and the leases resume
-		// the replicas by their deadline all the same (pauseLease).
 		ops := copyOpsInFlight(t, work, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
 		objecter := copyObjecterRequests(t, work, 2, r.dest, nil, pools.ids[1], r.source)
 		if !time.Now().Before(workDeadline) {

@@ -175,19 +175,19 @@ func TestControlInputIsRequestScoped(t *testing.T) {
 }
 
 // Two publications of one control that the fixture has not polled yet keep
-// their own envelopes, whatever their order: the watchdogs of two pause
-// leases that end together both reach the fixture.
+// their own envelopes, whatever their order: two daemons stopped by two
+// goroutines both reach the fixture.
 func TestConcurrentPublicationsOfOneControlKeepTheirEnvelopes(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	finished := make(chan error, 2)
 	for _, name := range []string{"2", "3"} {
-		go func() { finished <- RequestControl(ctx, dir, "recover-paused-osd", "osd-pause-recovered", name) }()
+		go func() { finished <- ControlDaemon(ctx, dir, "stop", "osd", name) }()
 	}
 	var pending map[string]string
 	for len(pending) < 2 {
-		pending = envelopes(t, dir, "recover-paused-osd")
+		pending = envelopes(t, dir, "stop-osd")
 		select {
 		case <-ctx.Done():
 			t.Fatal("pending envelopes", pending, ctx.Err())
@@ -198,7 +198,7 @@ func TestConcurrentPublicationsOfOneControlKeepTheirEnvelopes(t *testing.T) {
 	for id, data := range pending {
 		fields := strings.Fields(data)
 		names[fields[1]] = true
-		if err := os.WriteFile(filepath.Join(dir, "osd-pause-recovered."+id), nil, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "osd-stop."+id), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}

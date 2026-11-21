@@ -105,101 +105,54 @@ func readBoundedFile(path string, limit int64) ([]byte, error) {
 	return data, err
 }
 
-// ownedPoolRun is one claimed owned-pool oracle request that runs in its own
-// goroutine. err is set before done is closed.
-type ownedPoolRun struct {
-	id   string
-	done chan struct{}
-	err  error
-}
-
-// ownedPoolRunning says whether an owned-pool oracle request is still running.
-func (c *fixtureCluster) ownedPoolRunning() bool {
-	if c.ownedPool == nil {
-		return false
-	}
-	select {
-	case <-c.ownedPool.done:
-		return false
-	default:
-		return true
-	}
-}
-
-// controlOwnedPoolRequest settles the owned-pool oracle request that ran,
-// then claims the next one and starts it beside the control loop.
-//
-// The oracle runs in its own goroutine because a test reads native state
-// through it while it holds a daemon paused, and the pause must end at its
-// deadline even while such a read is still outstanding: a native command may
-// take up to its whole budget, and a test that abandoned the read at its
-// lease cannot make the fixture end it. While the request runs, the control
-// loop serves only the requests that end a pause (controls,
-// pauseEndingActions) and leaves every other request pending, so no other
-// control overlaps an oracle request; the next owned-pool request is claimed
-// only after this one was acknowledged, so the requests of this control
-// still run one at a time, each with its own input (request). A failed
-// request stops the loop like any other control failure, when it is settled.
+// controlOwnedPoolRequest runs one owned-pool oracle request to completion,
+// for up to its budget, and the control loop waits for it. A pause lease
+// does not: the leases have their own loop (daemon_lease.go), so a lease
+// ends at its deadline also while a test's observation of the paused
+// cluster is still running here.
 func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string) error {
-	if c.ownedPool != nil {
-		if c.ownedPoolRunning() {
-			return nil
-		}
-		run := c.ownedPool
-		c.ownedPool = nil
-		if run.err != nil {
-			return run.err
-		}
-		if err := publishAck(out, "osd-pool-verify."+run.id); err != nil {
-			return err
-		}
-	}
-	fields, err := c.request(out, "verify-osd-pool")
-	if err != nil || fields == nil {
-		return err
-	}
-	// The modes the staged oracle that runs this request declares.
-	modes, err := ownedPoolOracleModes(out)
+	var fields []string
+	var err error
+	fields, err = c.request(out, "verify-osd-pool")
 	if err != nil {
 		return err
 	}
-	if len(fields) != 2 || !nativePoolModeAllowed(c.profile, modes, fields[1]) {
-		return errors.New("invalid native owned-pool oracle request")
-	}
-	if (fields[1] == "servicemetadata" || fields[1] == "servicecompare" || fields[1] == "mgrstate") && c.profile.mgrService != "1" {
-		return errors.New("native metadata observation requires the exclusive MGR service profile")
-	}
-	args := []string{"python3", "/out/osd_pool_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
-	budget := 80 * time.Second
-	if fields[1] == "servicewatch" {
-		// A bounded 90 s watch may wait through the native 60 s beacon
-		// grace and then require a stable absence interval.
-		budget = 120 * time.Second
-	}
-	if fields[1] == "servicecompare" {
-		budget = 240 * time.Second
-	}
-	runner := c.runOwnedPool
-	if runner == nil {
-		runner = func(ctx context.Context, out string, args []string, budget time.Duration) error {
-			return c.runOracleCommandWithTimeout(ctx, out, args, "osd-pool-command.json", "native owned-pool oracle", budget)
+	if fields != nil {
+		// The modes the staged oracle that runs this request declares.
+		modes, err := ownedPoolOracleModes(out)
+		if err != nil {
+			return err
+		}
+		if len(fields) != 2 || !nativePoolModeAllowed(c.profile, modes, fields[1]) {
+			return errors.New("invalid native owned-pool oracle request")
+		}
+		if (fields[1] == "servicemetadata" || fields[1] == "servicecompare" || fields[1] == "mgrstate") && c.profile.mgrService != "1" {
+			return errors.New("native metadata observation requires the exclusive MGR service profile")
+		}
+		args := []string{"python3", "/out/osd_pool_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
+		budget := 80 * time.Second
+		if fields[1] == "servicewatch" {
+			// A bounded 90 s watch may wait through the native 60 s beacon
+			// grace and then require a stable absence interval.
+			budget = 120 * time.Second
+		}
+		if fields[1] == "servicecompare" {
+			budget = 240 * time.Second
+		}
+		run := c.runOwnedPool
+		if run == nil {
+			run = func(ctx context.Context, out string, args []string, budget time.Duration) error {
+				return c.runOracleCommandWithTimeout(ctx, out, args, "osd-pool-command.json", "native owned-pool oracle", budget)
+			}
+		}
+		if err = run(ctx, out, args, budget); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-pool-verify."+fields[0]); err != nil {
+			return err
 		}
 	}
-	run := &ownedPoolRun{id: fields[0], done: make(chan struct{})}
-	c.ownedPool = run
-	go func() {
-		defer close(run.done)
-		run.err = runner(ctx, out, args, budget)
-	}()
 	return nil
-}
-
-// waitOwnedPool waits for a running owned-pool oracle request, which ends
-// with the loop's context, before the control loop reports it is done.
-func (c *fixtureCluster) waitOwnedPool() {
-	if c.ownedPool != nil {
-		<-c.ownedPool.done
-	}
 }
 
 var _ = defineControl("osd-pool", frozenControlRank(46), (*fixtureCluster).controlOwnedPoolRequest)

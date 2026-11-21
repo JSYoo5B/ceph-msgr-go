@@ -1,15 +1,16 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/cephfs"
-	"github.com/JSYoo5B/ceph-testcontainers-go/fault"
 	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 )
@@ -60,8 +61,8 @@ func (c *fixtureCluster) daemon(ctx context.Context, kind, name string) (testcon
 	return nil, errors.New("fixture daemon not found")
 }
 
-// daemonControlKinds are the daemon kinds a pause, resume, stop, start or
-// kill request may name.
+// daemonControlKinds are the daemon kinds a stop, start or kill request, or
+// a pause lease (daemon_lease.go), may name.
 var daemonControlKinds = []string{"mon", "mgr", "osd", "mds"}
 
 // daemonControlAdmitted is the closed admission of the daemon controls. MON,
@@ -76,152 +77,83 @@ func (p profile) daemonControlAdmitted(kind, action string) bool {
 	return action == "stop" && p.mdsCommands == "1" && p.mdsFresh == "1" && !p.admits(capMDSAppliedCommand)
 }
 
-// daemonActionScope selects the daemon control requests one poll serves.
-type daemonActionScope int
-
-const (
-	// allDaemonActions serves every daemon control request.
-	allDaemonActions daemonActionScope = iota
-	// pauseEndingActions serves only what ends a pause: resume requests and
-	// pause recoveries, with the original pause request a recovery settles.
-	// The control loop serves these while an owned-pool oracle request runs
-	// (controls), so that a lease ends at its deadline even while a native
-	// read of the paused cluster is outstanding.
-	pauseEndingActions
-)
-
+// controlDaemonRequests serves the stop, start and kill requests of the
+// daemons: per kind, every pending request of the three actions, in
+// request-ID order. A pause is a lease and has its own loop
+// (daemon_lease.go).
 func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) error {
-	return c.daemonRequests(ctx, out, allDaemonActions)
-}
-
-// daemonRequests serves the daemon control requests of scope.
-//
-// Every publication has its own envelope (pendingRequests), so a poll
-// serves every pending request of an action in publication order. Pause
-// recovery is per OSD and idempotent: a poll first claims every pending
-// recover-paused-osd, then runs the pending pause and resume requests (the
-// original requests a recovery settles, so none of them is left to freeze
-// the daemon later), and then resumes each recovered OSD that is still
-// paused; a second recovery of one OSD finds it resumed and is only
-// acknowledged. Two leases that ended together are therefore both
-// recovered. In pauseEndingActions scope only resume requests and the
-// pause requests of a recovered OSD run, and every other request stays
-// pending.
-func (c *fixtureCluster) daemonRequests(ctx context.Context, out string, scope daemonActionScope) error {
-	pending, err := pendingRequests(out, "recover-paused-osd")
-	if err != nil {
-		return err
-	}
-	var recoveries [][]string
-	recovered := map[string]bool{}
-	for _, r := range pending {
-		if len(r.fields) != 2 {
-			return errors.New("invalid OSD pause recovery request")
-		}
-		fields, err := claim(out, r)
-		if err != nil {
-			return err
-		}
-		recoveries = append(recoveries, fields)
-		recovered[fields[1]] = true
-	}
 	for _, kind := range daemonControlKinds {
-		for _, action := range []string{"pause", "resume", "stop", "start", "kill"} {
-			if scope == pauseEndingActions && action != "resume" && (action != "pause" || kind != "osd" || len(recovered) == 0) {
-				continue
-			}
-			pending, err := pendingRequests(out, action+"-"+kind)
+		// The pending requests of the three actions of a kind run in
+		// request-ID order, the order of their publication: a start that a
+		// cleanup published after a kill or stop whose wait the test
+		// abandoned runs after it, never before.
+		type pendingAction struct {
+			action string
+			r      pendingRequest
+		}
+		var pending []pendingAction
+		for _, action := range []string{"stop", "start", "kill"} {
+			requests, err := pendingRequests(out, action+"-"+kind)
 			if err != nil {
 				return err
 			}
-			for _, r := range pending {
-				if len(r.fields) != 2 {
-					return errors.New("invalid daemon control request")
-				}
-				if scope == pauseEndingActions && action == "pause" && !recovered[r.fields[1]] {
-					continue
-				}
-				fields, err := claim(out, r)
-				if err != nil {
-					return err
-				}
-				if err := c.daemonAction(ctx, out, kind, action, fields); err != nil {
-					return err
-				}
+			for _, r := range requests {
+				pending = append(pending, pendingAction{action, r})
 			}
 		}
-	}
-	for _, recovery := range recoveries {
-		key := "osd." + recovery[1]
-		if lease := c.pauses[key]; lease != nil {
-			if err := lease.Resume(ctx); err != nil {
+		slices.SortFunc(pending, func(a, b pendingAction) int { return cmp.Compare(a.r.id, b.r.id) })
+		for _, p := range pending {
+			action := p.action
+			fields, err := claim(out, p.r)
+			if err != nil {
 				return err
 			}
-			delete(c.pauses, key)
-		}
-		if err := publishAck(out, "osd-pause-recovered."+recovery[0]); err != nil {
-			return err
+			if len(fields) != 2 {
+				return errors.New("invalid daemon control request")
+			}
+			if !c.profile.daemonControlAdmitted(kind, action) {
+				return errors.New("MDS daemon control is restricted to stopping the owned daemon of the public MDS command acceptance")
+			}
+			name := fields[1]
+			daemon, err := c.daemon(ctx, kind, name)
+			if err != nil {
+				return err
+			}
+			key := kind + "." + name
+			switch action {
+			case "kill":
+				if !c.profile.forcedKillAdmitted(kind) {
+					return errors.New("forced crash is restricted to disposable OSDs and the selected MON forced-kill cells")
+				}
+				// Docker stop sends SIGTERM first even with a zero timeout,
+				// and an OSD with osd_fast_shutdown may then exit 0 before the
+				// SIGKILL; a MON would shut down in order. Send SIGKILL itself
+				// so the 137 receipt holds.
+				var state *container.State
+				state, err = forceKill(ctx, dockerKill(daemon.GetContainerID()), daemon.State, forcedKillTimeout)
+				if err == nil {
+					data, encodeErr := json.Marshal(map[string]any{"daemon": key, "id": daemon.GetContainerID(), "exit_code": state.ExitCode, "oom_killed": state.OOMKilled})
+					if encodeErr != nil {
+						return encodeErr
+					}
+					if err = os.WriteFile(filepath.Join(out, kind+"-crash-state.json"), data, 0644); err != nil {
+						return err
+					}
+				}
+			case "stop":
+				err = daemon.Stop(ctx, nil)
+			case "start":
+				err = daemon.Start(ctx)
+			}
+			if err != nil {
+				return err
+			}
+			if err = publishAck(out, kind+"-"+action+"."+fields[0]); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
-}
-
-// daemonAction runs one claimed daemon control request and acknowledges it.
-func (c *fixtureCluster) daemonAction(ctx context.Context, out, kind, action string, fields []string) error {
-	if !c.profile.daemonControlAdmitted(kind, action) {
-		return errors.New("MDS daemon control is restricted to stopping the owned daemon of the public MDS command acceptance")
-	}
-	name := fields[1]
-	daemon, err := c.daemon(ctx, kind, name)
-	if err != nil {
-		return err
-	}
-	key := kind + "." + name
-	switch action {
-	case "pause":
-		if c.pauses[key] != nil {
-			return errors.New("daemon already paused")
-		}
-		c.pauses[key], err = fault.Pause(ctx, c.cluster, daemon)
-	case "resume":
-		if c.pauses[key] == nil {
-			return errors.New("daemon is not paused")
-		}
-		err = c.pauses[key].Resume(ctx)
-		if err == nil {
-			delete(c.pauses, key)
-		}
-	case "kill":
-		if !c.profile.forcedKillAdmitted(kind) {
-			return errors.New("forced crash is restricted to disposable OSDs and the selected MON forced-kill cells")
-		}
-		// Docker stop sends SIGTERM first even with a zero timeout,
-		// and an OSD with osd_fast_shutdown may then exit 0 before the
-		// SIGKILL; a MON would shut down in order. Send SIGKILL itself
-		// so the 137 receipt holds.
-		var state *container.State
-		state, err = forceKill(ctx, dockerKill(daemon.GetContainerID()), daemon.State, forcedKillTimeout)
-		if err == nil {
-			data, encodeErr := json.Marshal(map[string]any{"daemon": key, "id": daemon.GetContainerID(), "exit_code": state.ExitCode, "oom_killed": state.OOMKilled})
-			if encodeErr != nil {
-				return encodeErr
-			}
-			if err = os.WriteFile(filepath.Join(out, kind+"-crash-state.json"), data, 0644); err != nil {
-				return err
-			}
-		}
-	case "stop":
-		err = daemon.Stop(ctx, nil)
-	case "start":
-		err = daemon.Start(ctx)
-	}
-	if err != nil {
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	return publishAck(out, kind+"-"+action+"."+fields[0])
 }
 
 var _ = defineControl("daemon", frozenControlRank(18), (*fixtureCluster).controlDaemonRequests)

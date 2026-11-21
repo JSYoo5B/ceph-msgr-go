@@ -150,22 +150,14 @@ func (f *erasureFaultClient) disarm() {
 // erasureKillOSD SIGKILLs one OSD and returns its idempotent restoration:
 // restart, wait for clean PGs and republish the fixture object's routing
 // without the legacy-only object restoration (the fixture object was not
-// changed).
+// changed). The restoration is also a cleanup of t, registered before the
+// kill.
 func erasureKillOSD(t *testing.T, ctx context.Context, base osdFixtureOracle, id int32) func() {
 	t.Helper()
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	name := strconv.FormatInt(int64(id), 10)
-	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
-		t.Fatal("kill", id, err)
-	}
-	var state struct {
-		ExitCode *int `json:"exit_code"`
-	}
-	if data, err := os.ReadFile(filepath.Join(dir, "osd-crash-state.json")); err != nil || json.Unmarshal(data, &state) != nil || state.ExitCode == nil || *state.ExitCode != 137 {
-		t.Fatal("expected SIGKILL evidence", err)
-	}
 	var once sync.Once
-	return func() {
+	restore := func() {
 		once.Do(func() {
 			recover, stop := context.WithTimeout(context.Background(), 120*time.Second)
 			defer stop()
@@ -178,6 +170,19 @@ func erasureKillOSD(t *testing.T, ctx context.Context, base osdFixtureOracle, id
 			publishReplicaOSDRouting(t, dir, adoptMutationPlacement(t, base, fresh))
 		})
 	}
+	// Registered before the kill is published: a kill whose wait failed or
+	// was abandoned may still run, and the restart is published after it.
+	t.Cleanup(restore)
+	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
+		t.Fatal("kill", id, err)
+	}
+	var state struct {
+		ExitCode *int `json:"exit_code"`
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "osd-crash-state.json")); err != nil || json.Unmarshal(data, &state) != nil || state.ExitCode == nil || *state.ExitCode != 137 {
+		t.Fatal("expected SIGKILL evidence", err)
+	}
+	return restore
 }
 
 // erasureSettledPrimary waits until the native map names a primary other

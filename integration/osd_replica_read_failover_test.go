@@ -113,20 +113,15 @@ func TestCephOSDReplicaReadPrimaryFailoverIntegration(t *testing.T) {
 	}
 
 	frozen := strconv.Itoa(int(route.ID))
-	if err := testcluster.ControlDaemon(ctx, dir, "pause", "osd", frozen); err != nil {
-		t.Fatal("pause primary", err)
-	}
-	paused := true
+	lease := pauseDaemon(t, ctx, dir, "osd", frozen, leaseUntil(ctx))
 	defer func() {
 		// Resume, SIGKILL and start the frozen daemon (a thawed daemon past its
 		// heartbeat grace did not return to clean PGs in the fixture's wait).
 		restore, stop := context.WithTimeout(context.Background(), 240*time.Second)
 		defer stop()
-		if paused {
-			if err := testcluster.ControlDaemon(restore, dir, "resume", "osd", frozen); err != nil {
-				t.Error("resume", err)
-				return
-			}
+		if err := endDaemonLease(restore, lease); err != nil {
+			t.Error("resume", err)
+			return
 		}
 		for _, action := range []string{"kill", "start"} {
 			if err := testcluster.ControlDaemon(restore, dir, action, "osd", frozen); err != nil {
