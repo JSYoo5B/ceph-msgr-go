@@ -69,6 +69,20 @@ class SubWrites(unittest.TestCase):
             with self.assertRaises(ValueError):
                 subwrites.sub_writes(bad, "3.6", REQID)
 
+    def test_history_retention(self):
+        first = {"description": WRITE, "initiated_at": "2026-11-21T01:02:03.000004+0000"}
+        second = {"description": "osd_op(client.1.0:1 3.6s0 ...)", "initiated_at": "2026-11-21T01:02:03.000005+0000"}
+        found = subwrites.history_retention({"size": 20, "duration": 600, "ops": [first, second]})
+        self.assertEqual((found["size"], found["duration"], len(found["ops"])), (20, 600, 2))
+        self.assertEqual(len(set(found["ops"])), 2)
+        self.assertEqual(found["ops"], subwrites.history_retention({"size": 20, "duration": 600, "ops": [first, second]})["ops"])
+        moved = dict(first, initiated_at="2026-11-21T01:02:03.000006+0000")
+        self.assertNotEqual(subwrites.history_retention({"size": 20, "duration": 600, "ops": [moved]})["ops"][0], found["ops"][0])
+        for bad in ({"ops": []}, {"size": "20", "duration": 600, "ops": []}, {"size": 20, "duration": -1, "ops": []},
+                    {"size": 20, "duration": 600, "ops": [{"description": WRITE}]}, {"size": 20, "duration": 600, "ops": [{"initiated_at": "t"}]}):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                subwrites.history_retention(bad)
+
     def test_mode_is_registered_and_needs_an_explicit_osd(self):
         self.assertIs(osd_pool_oracle.HANDLERS["subwrites"], subwrites.mode_subwrites)
         reqid = {"type": "client", "num": 4171, "inc": 91, "tid": 5}

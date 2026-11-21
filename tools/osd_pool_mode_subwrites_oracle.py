@@ -27,12 +27,20 @@ history after its last reference is dropped, with the terminal event done
 
 The history is bounded (osd_op_history_size, osd_op_history_duration), so a
 sub-write this mode does not report is not shown absent by this mode alone.
-The tests ask while the OSD is quiet: they require the write itself, and
-treat a missing roll-forward as absent only beside that write, which any
-roll-forward follows and would outlive in the history. A matched entry is
-reported only with its whole event list ending in "done"; an over-bound,
-malformed or unterminated list fails the observation. It judges nothing else.
+OpHistory::cleanup drops the ops that arrived more than the duration ago,
+oldest first, and then, while more than size ops are kept, the op of the
+shortest duration, whatever its arrival (src/common/TrackedOp.cc:101-124);
+dump_ops runs that cleanup and then dumps size, duration and the ops in
+arrival order (:126-153). A short roll-forward can therefore be dropped while
+the slower write it follows is kept. So the receipt also carries the history
+itself: its size and duration and one identity per op (the SHA-256 of the
+op's initiated_at and description), and the caller judges from two receipts
+of one OSD whether every op that arrived between them is still kept. A
+matched entry is reported only with its whole event list ending in "done";
+an over-bound, malformed or unterminated list fails the observation. It
+judges nothing else.
 """
+import hashlib
 import re
 
 import osd_mutation_oracle as mutation
@@ -80,6 +88,26 @@ def sub_writes(document, pgid, reqid):
     return found
 
 
+def history_retention(document):
+    """The size, duration and op identities of one `dump_historic_ops`
+    document: each identity is the SHA-256 of the op's initiated_at and
+    description. A document without integer limits or with an op lacking
+    either field raises."""
+    if not isinstance(document, dict) or not isinstance(document.get("ops"), list) or len(document["ops"]) > MAX_OPS:
+        raise ValueError("native op history exceeds its schema or count bound")
+    size, duration = document.get("size"), document.get("duration")
+    if type(size) is not int or type(duration) is not int or size < 0 or duration < 0:
+        raise ValueError("native op history has no integer size and duration")
+    ops = []
+    for op in document["ops"]:
+        initiated = op.get("initiated_at") if isinstance(op, dict) else None
+        description = op.get("description") if isinstance(op, dict) else None
+        if not isinstance(initiated, str) or not isinstance(description, str) or len(description) > MAX_DESCRIPTION:
+            raise ValueError("native op history has an op without initiated_at and description")
+        ops.append(hashlib.sha256((initiated + "\n" + description).encode()).hexdigest())
+    return {"size": size, "duration": duration, "ops": ops}
+
+
 def complete_events(events):
     """The event names of a matched sub-write, only when the list is whole
     and ends with the terminal "done"; anything else raises."""
@@ -121,5 +149,6 @@ def mode_subwrites(rados, cluster, request, out):
     code, raw, status, oversized = rados.osd(cluster, osd, {"prefix": "dump_historic_ops", "format": "json"}, MAX_HISTORY)
     if code != 0 or oversized is not None:
         raise RuntimeError("native dump_historic_ops failed (%d): %s" % (code, status))
+    document = history.strict_document(raw, MAX_HISTORY)
     return {"sub_writes": {"osd": osd, "pgid": placement["pgid"], "epoch": placement["epoch"], "reqid": reqid,
-                           "writes": sub_writes(history.strict_document(raw, MAX_HISTORY), placement["pgid"], reqid)}}
+                           "writes": sub_writes(document, placement["pgid"], reqid), "history": history_retention(document)}}
