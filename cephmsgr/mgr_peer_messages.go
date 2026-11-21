@@ -64,6 +64,7 @@ type (
 	MgrOpaqueEntry     = msgr.MgrOpaqueEntry
 	MgrMetricPayload   = msgr.MgrMetricPayload
 	MgrPGStats         = msgr.PGStats
+	MgrPGStatsEntry    = msgr.PGStatEntry
 	MgrConfigure       = msgr.MgrConfigureData
 )
 
