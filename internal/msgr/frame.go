@@ -24,48 +24,67 @@ const (
 	// target address; exactly one Hello is received, and its entity type
 	// must equal the requested role. Wrong role, extra segments or trailing
 	// bytes are refused.
+	// The MGR acceptor (session.Accept) sends its own Hello with the peer's
+	// socket address and admits only its one peer entity type.
 	Hello Tag = iota + 1
 	// AuthRequest (authentication) is sent once with CephX method 2 and one
 	// requested connection mode, CRC or secure, never both.
+	// The MGR acceptor receives it and refuses another method or a peer
+	// offering none of its modes with AuthBadMethod.
 	AuthRequest
 	// AuthBadMethod (authentication) is received as a typed authentication
 	// error carrying the server method and int32 result code. It is always
 	// terminal: no method downgrade or retry.
+	// The MGR acceptor sends it with -EOPNOTSUPP or -EACCES, allowing CephX
+	// and its one mode.
 	AuthBadMethod
 	// AuthReplyMore (authentication) is received and answered by the CephX
 	// state machine. A malformed payload is a protocol failure; at most 8
 	// rounds are accepted.
+	// The MGR acceptor sends it once, with the CephX authorizer challenge.
 	AuthReplyMore
 	// AuthRequestMore (authentication) is sent in answer to AuthReplyMore.
+	// The MGR acceptor receives exactly one, the challenge response.
 	AuthRequestMore
 	// AuthDone (authentication) is received with the global ID; the selected
 	// mode must equal the requested one and secure mode needs its secret.
 	// A mode mismatch, a missing secret or no AuthDone within 8 rounds is
 	// refused.
+	// The MGR acceptor sends it with the ticket's global ID, its mode and
+	// the authorizer reply.
 	AuthDone
 	// AuthSignature (authentication) is sent and received in both modes: the
 	// client signs its received transcript and verifies the peer's signature
 	// over its sent transcript with the CephX session key before admission.
 	// A mismatch is an authentication failure.
+	// The MGR acceptor signs and verifies in the accepting direction.
 	AuthSignature
 	// ClientIdent (identification) is sent with the role's supported and
 	// required feature masks, session flags and cookie.
+	// The MGR acceptor receives it and checks its addresses, target,
+	// numeric ID and feature masks.
 	ClientIdent
 	// ServerIdent (identification) is received; the target address must be
 	// among the server's addresses, the daemon ID must match where required,
 	// and its features and flags must be acceptable. Otherwise the session
 	// is refused.
+	// The MGR acceptor sends it with its address vector, global ID, a
+	// connection global sequence and its lossy-server masks and flags.
 	ServerIdent
 	// IdentMissingFeatures (identification) is received as ErrFeatures with
 	// the peer's 64-bit missing mask in the error text (no structured
 	// field). It is always terminal; nothing is silently downgraded.
+	// The MGR acceptor sends it for a missing required feature.
 	IdentMissingFeatures
 	// SessionReconnect (resume) is sent only for an explicit stateful resume
 	// (fresh MDS or CephFS) with the next global and connect sequences.
+	// The MGR acceptor receives it and answers a full SessionReset: a
+	// lossy server resumes nothing.
 	SessionReconnect
 	// SessionReset (resume) is received as the terminal ErrSessionReset of a
 	// stateful session; a request whose transmission began keeps an unknown
 	// outcome.
+	// The MGR acceptor sends it, full, in answer to SessionReconnect.
 	SessionReset
 	// SessionRetry (resume) is received; the connect sequence is advanced and
 	// the reconnect resent, at most 8 times. Sequence overflow or a
@@ -100,9 +119,11 @@ const (
 	// CompressionRequest (post-auth) is sent only when the peer banner
 	// supports compression; it offers snappy and zstd on CRC connections and
 	// declines on secure ones.
+	// The MGR acceptor receives it and always declines.
 	CompressionRequest
 	// CompressionDone (post-auth) is received; a selected method must have
 	// been offered and implemented.
+	// The MGR acceptor sends it declined.
 	CompressionDone
 )
 
@@ -156,6 +177,23 @@ func NewWriter(w io.Writer, limit uint32) *Writer {
 		limit = wire.DefaultLimit
 	}
 	return &Writer{output: w, limit: limit}
+}
+
+// SetLimit replaces the frame bound of an idle reader, as an acceptor does
+// when an authenticated session leaves its smaller pre-authentication bound.
+func (r *Reader) SetLimit(limit uint32) {
+	if limit == 0 {
+		limit = wire.DefaultLimit
+	}
+	r.limit = limit
+}
+
+// SetLimit replaces the frame bound of an idle writer.
+func (w *Writer) SetLimit(limit uint32) {
+	if limit == 0 {
+		limit = wire.DefaultLimit
+	}
+	w.limit = limit
 }
 
 // trailingSegments returns the number of segments to transmit, dropping empty

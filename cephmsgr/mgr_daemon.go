@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/cephx"
@@ -27,10 +28,10 @@ import (
 // in them, and holds the principal's rotating MGR service secrets. The
 // consumer decides availability, what the beacon advertises and what work
 // an active or standby daemon does; stock MON stays the authority that
-// selects the active daemon, publishes the map and issues keys. It accepts
-// no connections: the listener and incoming service authorizers are
-// separate work, so the addresses a beacon advertises are caller input and
-// no bound address is reported here.
+// selects the active daemon, publishes the map and issues keys. Listen
+// (mgr_listener.go) accepts stock OSD sessions with those secrets; the
+// addresses a beacon advertises are caller input either way, and the
+// bound listener address is reported by the listener, not here.
 //
 // Native reference (ceph/ceph/blob/v20.2.4/): src/mgr/MgrStandby.cc (want
 // keys MON|OSD|MDS|MGR, mgrmap subscription, messenger name MGR(global ID),
@@ -266,8 +267,8 @@ type MgrDaemonState struct {
 	Role         MgrRole
 	StaleMgrMaps uint64
 	NullMgrMaps  uint64
-	// Advertised is the address vector of the last beacon queued; no bound
-	// listener address exists in this type.
+	// Advertised is the address vector of the last beacon queued; a
+	// listener's bound address is its own state (MgrListener.State).
 	Advertised   []ManagerAddress
 	Tickets      []MgrDaemonTicket
 	Renewals     uint64 // Accepted in-session ticket renewals.
@@ -300,6 +301,9 @@ type mgrDaemonHooks struct {
 	// beforeSessionClosed runs in a MON session's close callback, after the
 	// session made Done observable and before sessionClosed.
 	beforeSessionClosed func(generation uint64)
+	// afterListenerPublished runs in Listen once the daemon published the
+	// listener, before Listen returns.
+	afterListenerPublished func(*MgrListener)
 }
 
 type mgrDaemonHooksKey struct{}
@@ -347,6 +351,9 @@ type MgrDaemon struct {
 	events     []MgrMapEvent
 	digest     *ClusterDigest
 	advertised []ManagerAddress
+
+	listeners map[*MgrListener]struct{}
+	globalSeq atomic.Uint64
 }
 
 // DialMgrDaemon authenticates options.Identity to a MON as the MGR entity
@@ -479,12 +486,60 @@ func (d *MgrDaemon) failLocked(err error) []*session.Session {
 	return all
 }
 
+// stop ends the work of a daemon whose failure is recorded. A listener
+// published before the failure is in d.listeners by then, and publishing a
+// later one is refused (publishListener), so reading the set here, after
+// the record, misses none.
 func (d *MgrDaemon) stop(all []*session.Session, err error) {
+	d.mu.Lock()
+	listeners := d.listenersLocked()
+	d.mu.Unlock()
 	d.cancel()
 	for _, s := range all {
 		s.Fail(err)
 	}
+	for _, l := range listeners {
+		l.shutdown(err)
+	}
 }
+
+func (d *MgrDaemon) listenersLocked() []*MgrListener {
+	out := make([]*MgrListener, 0, len(d.listeners))
+	for l := range d.listeners {
+		out = append(out, l)
+	}
+	return out
+}
+
+// publishListener registers l and starts its accept worker under daemon.mu,
+// the lock Close and fail take to find the daemon's listeners: one that
+// finds l also waits for that worker (MgrListener.Close), and a daemon
+// already closed or failed refuses l.
+func (d *MgrDaemon) publishListener(l *MgrListener) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed || d.failure != nil {
+		return false
+	}
+	if d.listeners == nil {
+		d.listeners = make(map[*MgrListener]struct{})
+	}
+	d.listeners[l] = struct{}{}
+	l.wg.Add(1)
+	go l.serve()
+	return true
+}
+
+func (d *MgrDaemon) removeListener(l *MgrListener) {
+	d.mu.Lock()
+	delete(d.listeners, l)
+	d.mu.Unlock()
+}
+
+// nextGlobalSeq allocates the global sequence of one accepted connection,
+// increasing over every listener of the daemon, as a native messenger's
+// get_global_seq does.
+func (d *MgrDaemon) nextGlobalSeq() uint64 { return d.globalSeq.Add(1) }
 
 func (d *MgrDaemon) targets() []monTarget {
 	d.mu.Lock()
@@ -1212,9 +1267,10 @@ func (d *MgrDaemon) SendBeacon(ctx context.Context, beacon MgrBeacon) error {
 	}
 }
 
-// Close is idempotent: it ends the MON session and worker and waits for them.
-// It sends no unregistering message; stock MON drops the daemon after its
-// beacon grace.
+// Close is idempotent: it ends the MON session, every listener with its
+// sessions (MgrListener.Close) and the worker, and waits for them. It sends
+// no unregistering message; stock MON drops the daemon after its beacon
+// grace. A daemon that fails closes its listeners' sockets too.
 func (d *MgrDaemon) Close() error {
 	d.mu.Lock()
 	if !d.closed {
@@ -1225,10 +1281,14 @@ func (d *MgrDaemon) Close() error {
 	for s := range d.sessions {
 		all = append(all, s)
 	}
+	listeners := d.listenersLocked()
 	d.mu.Unlock()
 	d.cancel()
 	for _, s := range all {
 		s.Fail(ErrClosed)
+	}
+	for _, l := range listeners {
+		l.Close()
 	}
 	d.wg.Wait()
 	return nil

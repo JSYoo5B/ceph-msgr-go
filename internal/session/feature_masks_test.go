@@ -4,6 +4,7 @@ import "testing"
 
 // TestFeatureMasksByRole pins what each session role and opt-in profile
 // advertises (supported) and requires of the peer (required) in ClientIdent,
+// and the MGR acceptor in ServerIdent,
 // against the bit names of Ceph v20.2.4 include/ceph_features.h. A bit is
 // advertised only when the codec or admission rule it promises is
 // implemented; a Messenger feature bit does not establish a release family,
@@ -58,6 +59,11 @@ func TestFeatureMasksByRole(t *testing.T) {
 		{"adds MON HASHPSPOOL", delta(1, MonAuth{ReplicatedPGV8: true}), [2]uint64{0x0000000040000000, 0x0000000040000000}},
 		{"adds MON CACHEPOOL", delta(1, MonAuth{OSDCachePools: true}), [2]uint64{0x0000000800000000, 0x0000000800000000}},
 		{"adds OSD CACHEPOOL", delta(4, ServiceAuth{OSDCachePools: true}), [2]uint64{0x0000000800000000, 0x0000000800000000}},
+		// The MGR acceptor's SERVER_IDENT to an OSD peer: the base plus UID
+		// (0), PGID64 (9) and OSDENC (13), which the stock OSD requires of its
+		// MGR, and SERVER_LUMINOUS (21); required is native DaemonServer's
+		// SERVER_LUMINOUS (bit 21 alone) and MSG_ADDR2.
+		{"MGR acceptor to OSD", [2]uint64{MgrOSDPeerFeatures, MgrOSDPeerRequiredFeatures}, [2]uint64{0x2a00040010a0a237, 0x0800000000200000}},
 	} {
 		if row.got != row.want {
 			t.Errorf("%s: supported/required %#016x/%#016x, want %#016x/%#016x", row.profile, row.got[0], row.got[1], row.want[0], row.want[1])

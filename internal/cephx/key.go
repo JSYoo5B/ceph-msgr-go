@@ -20,7 +20,9 @@
 // secret fails in both modes and CRC never skips verification of extra
 // tickets or of the service's nonce. An authorizer keeps its ticket snapshot
 // across renewal. A parsed ticket is a local receipt: it shows neither
-// permission, service availability nor native key generation.
+// permission, service availability nor native key generation. The service
+// side, ServiceVerifier (service.go), verifies an incoming MGR service
+// authorizer against rotating secrets by exact ID and runs the challenge.
 //
 // Source: ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxClientHandler.cc,
 // ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxServiceHandler.cc and
