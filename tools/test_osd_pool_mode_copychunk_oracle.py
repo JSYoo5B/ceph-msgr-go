@@ -46,8 +46,9 @@ class CopyChunk(unittest.TestCase):
         self.assertTrue(lowered["lowered"], lowered)
         self.assertEqual((lowered["prior"], lowered["value"], rados.value), (8 << 20, chunk.LIMIT, chunk.LIMIT))
         self.assertEqual(self.sets(rados), [{"prefix": "config set", "var": chunk.OPTION, "val": [str(chunk.LIMIT)], "format": "json"}])
-        with self.assertRaises(RuntimeError):
-            self.act(rados, "lower")
+        again = self.act(rados, "lower")
+        self.assertTrue(again["failures"] and not again.get("lowered"), again)
+        self.assertEqual(len(self.sets(rados)), 1)
         self.assertEqual(self.act(rados, "show")["value"], chunk.LIMIT)
         restored = self.act(rados, "restore")
         self.assertTrue(restored["restored"] and restored["set"] and not restored["claimed"], restored)

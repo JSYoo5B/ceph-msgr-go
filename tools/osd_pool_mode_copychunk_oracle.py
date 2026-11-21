@@ -13,7 +13,7 @@ daemon's runtime value; a restarted OSD starts from its configuration again.
 Action lower records the OSD's effective value as it was in
 osd-copy-chunk-claim-<osd>.json in the fixture output directory, refuses
 unless that value is above LIMIT, sets LIMIT once and reads it back. It
-refuses while a claim of that OSD is recorded. Action restore reads the
+sets nothing while a claim of that OSD is recorded. Action restore reads the
 effective value; only when it differs from the recorded one it sets the
 recorded value once, reads it back, and drops the claim when the readback
 matches. Without a claim it changes nothing. Action show only reads. No
@@ -88,7 +88,8 @@ def mode_copychunk(rados, cluster, request, out):
         return {"copy_chunk": receipt}
     if action == "lower":
         if claim is not None:
-            raise RuntimeError("%s of osd.%d is already claimed; restore it first" % (OPTION, osd))
+            receipt["failures"].append("%s of osd.%d is already claimed; restore it first" % (OPTION, osd))
+            return {"copy_chunk": receipt}
         receipt["prior"] = value
         if value <= LIMIT:
             receipt["failures"].append("the effective %s %d is not above %d" % (OPTION, value, LIMIT))
