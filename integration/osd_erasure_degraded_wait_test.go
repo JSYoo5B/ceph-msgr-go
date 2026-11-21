@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
 // A write to an object that a returned shard of an optimized isa k=2,m=2 pool
@@ -38,19 +40,30 @@ import (
 //
 // The OSD of the returned shard is paused through the fixture's daemon
 // control while the write waits, so the push of the recovered shard cannot
-// complete and the wait lasts until the test ends the pause. The pause stays
-// below degradedWaitPauseBudget, well inside the 20 s default
-// osd_heartbeat_grace, and each control requires the PG's interval not to
-// have changed while it was paused. These consumer helpers are test-only.
+// complete and the wait lasts until the test ends the pause. The pause is
+// bounded by degradedWaitPauseBudget, well inside the 20 s default
+// osd_heartbeat_grace, counted from before the pause is requested: every
+// control while it lasts (the in-flight snapshots, the STAT, the primary's
+// kill) runs under the pause's held phase, the resume under its own context,
+// and the run's cleanup recovers a pause whose resume was not acknowledged.
+// The fixture serves its controls in turn, so a control that the test gave
+// up on can still delay the recovery; the test then fails rather than
+// claiming a bounded pause. Each control also requires natively that the
+// paused OSD was never marked down. These consumer helpers are test-only.
 
 // degradedWaitEvent is the delay do_op marks for a write that waits for a
 // degraded object (src/osd/PrimaryLogPG.cc:705-712).
 const degradedWaitEvent = "waiting for degraded object"
 
 // degradedWaitPauseBudget bounds how long the returned shard's OSD stays
-// paused: below the 20 s default osd_heartbeat_grace, so that its peers
-// cannot report it before the pause ends.
+// paused, counted from before the pause is requested until the resume is
+// acknowledged: below the 20 s default osd_heartbeat_grace, so that its
+// peers cannot report it before the pause ends.
 const degradedWaitPauseBudget = 15 * time.Second
+
+// degradedWaitResumeReserve is the part of the pause budget left to the
+// resume: every control of the held phase must end before it.
+const degradedWaitResumeReserve = 3 * time.Second
 
 // checkDegradedWait judges one snapshot of the primary's op tracker,
 // independently of the oracle's parse: a complete receipt between identical
@@ -182,59 +195,137 @@ func (r *ecEpochRun) unsetFlags(d degradedObject) {
 	*d.flagged = false
 }
 
-// osdPause is one owned pause of an OSD through the fixture's daemon
-// control.
-type osdPause struct {
-	r        *ecEpochRun
-	osd      int32
+// pauseLease is one owned pause of an OSD through the fixture's daemon
+// control, bounded from before the pause was requested. The fixture may
+// freeze the daemon at any moment after the request is published, also while
+// the acknowledgement is still on its way, so the budget starts before that
+// publication. Every control of the held phase runs under held, which ends
+// a reserve before the deadline so that the resume still has its own time;
+// the resume runs under its own context ending at the deadline, independent
+// of the run's.
+type pauseLease struct {
+	// request runs one fixture control request (request, response, name);
+	// fixtureRequest outside the cluster-free tests.
+	request  func(ctx context.Context, request, response, name string) error
+	name     string
+	budget   time.Duration
 	deadline time.Time
-	paused   bool
+	// held ends reserve before deadline.
+	held     context.Context
+	stopHeld context.CancelFunc
+	resumed  bool
 }
 
-// pause pauses the OSD and returns its lease, which the run's cleanup
-// resumes if the test did not. The lease is recorded before the pause is
-// requested, because a control error cannot prove that the daemon runs.
-func (r *ecEpochRun) pause(id int32) *osdPause {
+// fixtureRequest runs one control request through the native fixture's
+// control directory.
+func fixtureRequest(ctx context.Context, request, response, name string) error {
+	return testcluster.RequestControl(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), request, response, name)
+}
+
+// startPauseLease starts the budget, then requests the pause of osd name
+// under held. It returns the lease also on an error, since a pause request
+// that failed or was abandoned may still take effect: the caller's restore
+// owes its recovery either way.
+func startPauseLease(parent context.Context, request func(context.Context, string, string, string) error, name string, budget, reserve time.Duration) (*pauseLease, error) {
+	p := &pauseLease{request: request, name: name, budget: budget, deadline: time.Now().Add(budget)}
+	p.held, p.stopHeld = context.WithDeadline(parent, p.deadline.Add(-reserve))
+	if err := request(p.held, "pause-osd", "osd-pause", name); err != nil {
+		return p, fmt.Errorf("pause osd.%s: %w", name, err)
+	}
+	return p, p.check("the pause request")
+}
+
+// check requires step to have ended within the held phase.
+func (p *pauseLease) check(step string) error {
+	if err := p.held.Err(); err != nil {
+		return fmt.Errorf("%s ended past the held phase of osd.%s's %v pause budget: %w", step, p.name, p.budget, err)
+	}
+	return nil
+}
+
+// resume ends the pause under a context that ends at the deadline, and
+// requires the acknowledgement before it. The lease is resumed only when
+// the fixture acknowledged the resume; otherwise restore recovers it.
+func (p *pauseLease) resume() (left time.Duration, err error) {
+	p.stopHeld()
+	resume, stop := context.WithDeadline(context.Background(), p.deadline)
+	defer stop()
+	if err := p.request(resume, "resume-osd", "osd-resume", p.name); err != nil {
+		return 0, fmt.Errorf("resume osd.%s within its %v pause budget: %w", p.name, p.budget, err)
+	}
+	p.resumed = true
+	if left = time.Until(p.deadline); left <= 0 {
+		return left, fmt.Errorf("osd.%s stayed paused %v past its %v budget", p.name, -left, p.budget)
+	}
+	return left, nil
+}
+
+// restore is the lease's independent recovery: unless resume was
+// acknowledged, it asks the fixture to settle the original pause and resume
+// requests, even when they are still pending or were abandoned, and to
+// resume the daemon if it is still paused (recover-paused-osd,
+// integration/fixture/control_daemon.go). A plain resume would fail the
+// fixture when the daemon is not paused.
+func (p *pauseLease) restore(ctx context.Context) error {
+	p.stopHeld()
+	if p.resumed {
+		return nil
+	}
+	if err := p.request(ctx, "recover-paused-osd", "osd-pause-recovered", p.name); err != nil {
+		return fmt.Errorf("recover the pause of osd.%s: %w", p.name, err)
+	}
+	p.resumed = true
+	return nil
+}
+
+// pause pauses the OSD under degradedWaitPauseBudget and returns its lease,
+// whose restore the run's cleanup runs with its own 60 s bound. The cleanup is
+// registered before the outcome of the pause request is judged, so that a
+// failed or late request is still recovered.
+func (r *ecEpochRun) pause(id int32) *pauseLease {
 	r.t.Helper()
-	p := &osdPause{r: r, osd: id, paused: true}
+	p, err := startPauseLease(r.ctx, fixtureRequest, strconv.FormatInt(int64(id), 10), degradedWaitPauseBudget, degradedWaitResumeReserve)
 	r.t.Cleanup(func() {
-		if !p.paused {
-			return
-		}
 		cleanup, stop := context.WithTimeout(context.Background(), 60*time.Second)
 		defer stop()
-		if err := r.control(cleanup, "resume", "osd", strconv.FormatInt(int64(id), 10)); err != nil {
-			r.t.Error("resume the paused osd", id, err)
+		if err := p.restore(cleanup); err != nil {
+			r.t.Error(err)
 		}
 	})
-	if err := r.control(r.ctx, "pause", "osd", strconv.FormatInt(int64(id), 10)); err != nil {
-		r.t.Fatal("pause", id, err)
+	if err != nil {
+		r.t.Fatal(err)
 	}
-	p.deadline = time.Now().Add(degradedWaitPauseBudget)
 	return p
 }
 
-// resume ends the pause and requires it to have ended within its budget.
-func (p *osdPause) resume() {
-	p.r.t.Helper()
-	if err := p.r.control(p.r.ctx, "resume", "osd", strconv.FormatInt(int64(p.osd), 10)); err != nil {
-		p.r.t.Fatal("resume", p.osd, err)
+// checkHeld fails the test when step ended past the held phase.
+func (r *ecEpochRun) checkHeld(p *pauseLease, step string) {
+	r.t.Helper()
+	if err := p.check(step); err != nil {
+		r.t.Fatal(err)
 	}
-	p.paused = false
-	if late := time.Since(p.deadline); late > 0 {
-		p.r.t.Fatalf("osd.%d stayed paused %v past its %v budget", p.osd, late, degradedWaitPauseBudget)
-	}
-	p.r.t.Logf("osd.%d resumed %v before the end of its pause budget", p.osd, time.Until(p.deadline).Round(100*time.Millisecond))
 }
 
-// waitDegraded takes bounded snapshots of the primary's op tracker until one
-// holds the write of client gid under incarnation waiting for the degraded
-// object, before the pause's deadline, and returns that op.
-func (r *ecEpochRun) waitDegraded(d degradedObject, p *osdPause, call heldCall, gid uint64, incarnation int32) opsInFlightOp {
+// resume ends the pause and fails the test when it did not end within the
+// budget.
+func (r *ecEpochRun) resume(p *pauseLease) {
+	r.t.Helper()
+	left, err := p.resume()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.t.Logf("osd.%s resumed %v before the end of its %v pause budget", p.name, left.Round(100*time.Millisecond), p.budget)
+}
+
+// waitDegraded takes bounded snapshots of the primary's op tracker, each
+// under the pause's held phase, until one holds the write of client gid
+// under incarnation waiting for the degraded object, and returns that op.
+func (r *ecEpochRun) waitDegraded(d degradedObject, p *pauseLease, call heldCall, gid uint64, incarnation int32) opsInFlightOp {
 	r.t.Helper()
 	err := errors.New("no snapshot taken")
-	for attempt := 1; attempt <= 10 && time.Now().Before(p.deadline); attempt++ {
-		s := primaryOpsInFlight(r.t, r.ctx, 1, d.object, gid, incarnation)
+	for attempt := 1; attempt <= 10 && p.held.Err() == nil; attempt++ {
+		s := primaryOpsInFlight(r.t, p.held, 1, d.object, gid, incarnation)
+		r.checkHeld(p, fmt.Sprintf("in-flight snapshot %d", attempt))
 		var op opsInFlightOp
 		if op, err = checkDegradedWait(s, d.now, gid, incarnation); err == nil {
 			r.t.Logf("held at osd.%d (snapshot %d, %d ops in flight): %s, flag point %s, events %q", s.OSD, attempt, s.NumOps, op.Description, op.FlagPoint, op.Events)
@@ -246,9 +337,12 @@ func (r *ecEpochRun) waitDegraded(d degradedObject, p *osdPause, call heldCall, 
 			return op
 		}
 		r.t.Logf("snapshot %d: %v", attempt, err)
-		time.Sleep(300 * time.Millisecond)
+		select {
+		case <-p.held.Done():
+		case <-time.After(300 * time.Millisecond):
+		}
 	}
-	r.t.Fatal("the primary did not hold the write for the degraded object within the pause budget:", err)
+	r.t.Fatal("the primary did not hold the write for the degraded object within the held phase of the pause:", err)
 	return opsInFlightOp{}
 }
 
@@ -267,6 +361,58 @@ func (r *ecEpochRun) cleanInInterval(object string, route osdFixtureOracle, sinc
 		}
 		return nil
 	})
+}
+
+// osdMapState is one OSD's entry of one native osd dump (oracle mode
+// osdstate, tools/osd_pool_mode_osdstate_oracle.py).
+type osdMapState struct {
+	Epoch  uint32 `json:"epoch"`
+	OSD    int32  `json:"osd"`
+	Up     bool   `json:"up"`
+	In     bool   `json:"in"`
+	UpFrom uint32 `json:"up_from"`
+	UpThru uint32 `json:"up_thru"`
+	DownAt uint32 `json:"down_at"`
+}
+
+// osdState reads osd id's entry of the native OSD map.
+func (r *ecEpochRun) osdState(id int32) osdMapState {
+	r.t.Helper()
+	var result struct {
+		State *osdMapState `json:"osd_state"`
+	}
+	nativePoolResult(r.t, r.ctx, "osdstate", map[string]any{"osd": id}, &result)
+	if result.State == nil || result.State.OSD != id {
+		r.t.Fatal("no native OSD map entry of osd", id, result.State)
+	}
+	return *result.State
+}
+
+// checkStayedUp requires two entries of one OSD, before and after a window
+// that lasts at least until epoch through, to show it up in both with the
+// same up_from and down_at: the pinned OSDMap::apply_incremental sets
+// down_at when a map marks an up OSD down and up_from when one marks it up
+// (src/osd/OSDMap.cc:2484-2521), so no map in between marked it down.
+func checkStayedUp(before, after osdMapState, through uint32) error {
+	if before.OSD != after.OSD || after.Epoch < through || after.Epoch < before.Epoch {
+		return fmt.Errorf("the entries of osd.%d at epoch %d and osd.%d at epoch %d do not span the window through epoch %d", before.OSD, before.Epoch, after.OSD, after.Epoch, through)
+	}
+	if !before.Up || !after.Up || before.UpFrom != after.UpFrom || before.DownAt != after.DownAt {
+		return fmt.Errorf("osd.%d did not stay up from epoch %d to %d: up %v -> %v, up_from %d -> %d, down_at %d -> %d",
+			before.OSD, before.Epoch, after.Epoch, before.Up, after.Up, before.UpFrom, after.UpFrom, before.DownAt, after.DownAt)
+	}
+	return nil
+}
+
+// stayedUp reads the OSD's entry again and requires it to have stayed up
+// since before (checkStayedUp).
+func (r *ecEpochRun) stayedUp(before osdMapState, through uint32) {
+	r.t.Helper()
+	after := r.osdState(before.OSD)
+	if err := checkStayedUp(before, after, through); err != nil {
+		r.t.Fatal(err)
+	}
+	r.t.Logf("osd.%d stayed up from epoch %d to %d: up_from %d, up_thru %d -> %d, down_at %d", after.OSD, before.Epoch, after.Epoch, after.UpFrom, before.UpThru, after.UpThru, after.DownAt)
 }
 
 // degradedWaitOps is the held write: an APPEND of tail and a SETXATTR.
@@ -329,9 +475,8 @@ func TestCephOSDErasureOptimizedK2M2DegradedWriteWaitIntegration(t *testing.T) {
 	op := r.waitDegraded(d, p, call, gid, heldIncarnation)
 	stat := r.request(d.other, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat})
 	stat.ClientIncarnation = heldIncarnation + 1
-	statCtx, stopStat := context.WithDeadline(r.ctx, p.deadline)
-	statReply, err := o.Request(statCtx, stat)
-	stopStat()
+	statReply, err := o.Request(p.held, stat)
+	r.checkHeld(p, "the STAT of another object of the PG")
 	if err != nil || statReply.Code != 0 || len(statReply.Operations) != 1 {
 		t.Fatal("STAT of another object of the PG while the write waits", err, statReply.Code)
 	}
@@ -340,7 +485,7 @@ func TestCephOSDErasureOptimizedK2M2DegradedWriteWaitIntegration(t *testing.T) {
 		t.Fatal("the held write ended while the returned OSD was paused", early.reply.Code, early.err)
 	default:
 	}
-	p.resume()
+	r.resume(p)
 
 	var done heldResult
 	select {
@@ -385,7 +530,10 @@ func versionAfter(a, b cephmsgr.OSDVersion) bool {
 // returned OSD is paused, so the Go APPEND+SETXATTR waits for the degraded
 // object, shown by a bracketed dump_ops_in_flight. The primary's OSD is then
 // killed through the fixture's forced kill while the returned OSD is still
-// paused, and the pause ends. The call must end with an OutcomeUnknownError
+// paused, and the pause ends. The native OSD map must show the returned OSD
+// up with the up_from and down_at it had before the pause, once the map shows
+// the primary gone and again after the primary's return, so the pause did not
+// add a second outage. The call must end with an OutcomeUnknownError
 // that keeps its original identity, and the client must open no further OSD
 // connection. The flags are unset; after the primary's restart and clean
 // PGs the native object must be unchanged, and the returned primary's PG log
@@ -431,11 +579,13 @@ func TestCephOSDErasureOptimizedK2M2DegradedWaitAtDyingPrimaryIntegration(t *tes
 	held.ClientIncarnation = heldIncarnation
 	held.ModificationTime = cephmsgr.OSDTime{Seconds: mutated}
 
+	returned := r.osdState(d.returned)
 	p := r.pause(d.returned)
 	call := startHeldCall(r.ctx, o, held)
 	op := r.waitDegraded(d, p, call, gid, heldIncarnation)
-	primary := r.kill(d.now.ID)
-	p.resume()
+	primary := r.killWithin(p.held, d.now.ID)
+	r.checkHeld(p, "the kill of the primary's OSD")
+	r.resume(p)
 
 	// The killed daemon's socket closes, so the session ends the call; the
 	// caller's context stays live.
@@ -466,10 +616,12 @@ func TestCephOSDErasureOptimizedK2M2DegradedWaitAtDyingPrimaryIntegration(t *tes
 	if away.Epoch <= d.now.Epoch || slices.Contains(away.Acting, d.now.ID) {
 		t.Fatal("the placement does not reflect the killed primary within 30 s", away)
 	}
+	r.stayedUp(returned, away.Epoch)
 
 	r.unsetFlags(d)
 	back, _ := r.primaryBack(object, d.now, primary, d.nowSince)
 	t.Logf("restored: epoch %d primary osd.%d shard %d acting %v at %s (was %s)", back.Epoch, back.ID, back.Shard, back.Acting, back.Address, d.now.Address)
+	r.stayedUp(returned, back.Epoch)
 	n := poolObserve(t, r.ctx, 1, object, "", "")
 	if n.Code != 0 || n.Version != d.pre.Version || !bytes.Equal(n.Data, d.data) || n.Seconds != d.pre.Seconds || n.Nanos != d.pre.Nanos || !maps.Equal(xattrInventory(n), xattrInventory(d.pre)) {
 		t.Fatal("native state after the return differs from the pre-state", n.Version, d.pre.Version, len(n.Data), n.Seconds)
@@ -631,6 +783,171 @@ func TestVersionAfter(t *testing.T) {
 	} {
 		if got := versionAfter(c.a, c.b); got != c.want {
 			t.Errorf("versionAfter(%+v, %+v) = %v", c.a, c.b, got)
+		}
+	}
+}
+
+// fakePauseControl answers the pause lease's control requests in place of
+// the fixture: each request waits delays[request] (or until its context
+// ends) and is recorded with the time it was published. No daemon is
+// involved.
+type fakePauseControl struct {
+	delays    map[string]time.Duration
+	fail      map[string]error
+	requests  []string
+	published map[string]time.Time
+}
+
+func (f *fakePauseControl) request(ctx context.Context, request, response, name string) error {
+	if f.published == nil {
+		f.published = map[string]time.Time{}
+	}
+	f.requests = append(f.requests, request+" "+name)
+	f.published[request] = time.Now()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(f.delays[request]):
+	}
+	return f.fail[request]
+}
+
+func TestPauseLease(t *testing.T) {
+	const budget, reserve = time.Second, 300 * time.Millisecond
+	restore := func(t *testing.T, p *pauseLease) {
+		t.Helper()
+		ctx, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		if err := p.restore(ctx); err != nil {
+			t.Fatal("restore:", err)
+		}
+	}
+	t.Run("in time", func(t *testing.T) {
+		f := &fakePauseControl{}
+		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
+		if err != nil || p.check("a step") != nil {
+			t.Fatal("pause refused:", err)
+		}
+		if _, err := p.resume(); err != nil {
+			t.Fatal("resume refused:", err)
+		}
+		restore(t, p)
+		if !slices.Equal(f.requests, []string{"pause-osd 3", "resume-osd 3"}) {
+			t.Fatal("requests", f.requests)
+		}
+	})
+	t.Run("a slow pause acknowledgement uses the budget", func(t *testing.T) {
+		// The fixture may freeze the daemon before it acknowledges, so
+		// the budget is counted from before the request was published.
+		f := &fakePauseControl{delays: map[string]time.Duration{"pause-osd": 200 * time.Millisecond}}
+		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
+		if err != nil {
+			t.Fatal("pause refused:", err)
+		}
+		if p.deadline.After(f.published["pause-osd"].Add(budget)) {
+			t.Fatalf("the deadline %v is later than the budget from the pause request %v", p.deadline, f.published["pause-osd"].Add(budget))
+		}
+		select {
+		case <-p.held.Done():
+		case <-time.After(budget):
+			t.Fatal("the held phase outlasted the budget")
+		}
+		if p.check("a step after the slow acknowledgement") == nil {
+			t.Fatal("a step past the held phase accepted")
+		}
+		restore(t, p)
+		if !slices.Equal(f.requests, []string{"pause-osd 3", "recover-paused-osd 3"}) {
+			t.Fatal("the late step was not recovered", f.requests)
+		}
+	})
+	t.Run("a pause acknowledged after the held phase", func(t *testing.T) {
+		f := &fakePauseControl{delays: map[string]time.Duration{"pause-osd": 2 * budget}}
+		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("a pause without an acknowledgement in the held phase accepted:", err)
+		}
+		restore(t, p)
+		if !slices.Equal(f.requests, []string{"pause-osd 3", "recover-paused-osd 3"}) {
+			t.Fatal("the uncertain pause was not recovered", f.requests)
+		}
+	})
+	t.Run("a held control bounded by the held phase", func(t *testing.T) {
+		f := &fakePauseControl{}
+		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if end, ok := p.held.Deadline(); !ok || !end.Equal(p.deadline.Add(-reserve)) {
+			t.Fatalf("the held phase ends at %v (%v); want the reserve %v before the deadline %v", end, ok, reserve, p.deadline)
+		}
+		restore(t, p)
+	})
+	t.Run("a late resume", func(t *testing.T) {
+		f := &fakePauseControl{delays: map[string]time.Duration{"resume-osd": 2 * budget}}
+		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.resume(); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("a resume past the deadline accepted:", err)
+		}
+		restore(t, p)
+		if !slices.Equal(f.requests, []string{"pause-osd 3", "resume-osd 3", "recover-paused-osd 3"}) {
+			t.Fatal("the uncertain resume was not recovered", f.requests)
+		}
+	})
+	t.Run("a failed resume", func(t *testing.T) {
+		f := &fakePauseControl{fail: map[string]error{"resume-osd": errors.New("refused")}}
+		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.resume(); err == nil {
+			t.Fatal("a failed resume accepted")
+		}
+		restore(t, p)
+		if !slices.Equal(f.requests, []string{"pause-osd 3", "resume-osd 3", "recover-paused-osd 3"}) {
+			t.Fatal("the failed resume was not recovered", f.requests)
+		}
+	})
+	t.Run("the resume is independent of the parent context", func(t *testing.T) {
+		f := &fakePauseControl{}
+		parent, cancel := context.WithCancel(context.Background())
+		p, err := startPauseLease(parent, f.request, "3", budget, reserve)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+		if p.check("a step after the run ended") == nil {
+			t.Fatal("a held phase outliving its parent accepted")
+		}
+		if _, err := p.resume(); err != nil {
+			t.Fatal("resume after the run's context ended:", err)
+		}
+	})
+}
+
+func TestCheckStayedUp(t *testing.T) {
+	before := osdMapState{Epoch: 35, OSD: 3, Up: true, In: true, UpFrom: 31, UpThru: 33, DownAt: 28}
+	after := before
+	after.Epoch, after.UpThru = 41, 39
+	if err := checkStayedUp(before, after, 40); err != nil {
+		t.Fatal("an OSD that stayed up refused:", err)
+	}
+	for name, edit := range map[string]func(b, a *osdMapState){
+		"marked down":              func(b, a *osdMapState) { a.Up, a.DownAt = false, 38 },
+		"marked down and up again": func(b, a *osdMapState) { a.UpFrom, a.DownAt = 39, 38 },
+		"up again only":            func(b, a *osdMapState) { a.UpFrom = 39 },
+		"down mark only":           func(b, a *osdMapState) { a.DownAt = 38 },
+		"down before the window":   func(b, a *osdMapState) { b.Up = false },
+		"another OSD":              func(b, a *osdMapState) { a.OSD = 2 },
+		"before the fault epoch":   func(b, a *osdMapState) { a.Epoch = 39 },
+		"an older dump after":      func(b, a *osdMapState) { b.Epoch, a.Epoch = 42, 41 },
+	} {
+		b, a := before, after
+		edit(&b, &a)
+		if err := checkStayedUp(b, a, 40); err == nil {
+			t.Error("accepted:", name)
 		}
 	}
 }
