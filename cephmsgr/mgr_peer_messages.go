@@ -19,9 +19,13 @@ import (
 // are read against the declarations of the same connection
 // (msgr.MgrCounterSchema): a new session, also of the same stock daemon
 // after it reconnects, starts with no declarations, as the stock sender
-// does. Nothing is interpreted beyond the wire: a non-service OSD's open,
-// the metric payloads, the PG statistics, a close and a command mean what
-// the consumer decides.
+// does. Those declarations are retained for the connection's life within
+// msgr.MaxMgrCounterSchemaTypes paths and msgr.MaxMgrCounterSchemaPathBytes
+// path bytes; a report that would pass either ends the session with an
+// error wrapping ErrLimitExceeded, its declarations uncommitted (native
+// keeps them without a bound). Nothing is interpreted beyond the wire: a
+// non-service OSD's open, the metric payloads, the PG statistics, a close
+// and a command mean what the consumer decides.
 //
 // Outbound, only three things are sent, each when the consumer asks:
 // Configure, the acknowledgement of a received close
@@ -167,7 +171,7 @@ func (p *MgrPeer) decode(m msgr.MessageData, in *MgrInboundMessage) (bool, error
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("ceph: MGR peer %s sent a malformed message type %#x: %w", p.identity.Entity, m.Type, err)
+		return false, fmt.Errorf("ceph: MGR peer %s message type %#x refused: %w", p.identity.Entity, m.Type, err)
 	}
 	return true, nil
 }

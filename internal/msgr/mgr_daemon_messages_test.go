@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
@@ -280,5 +283,68 @@ func TestMgrConfigureEncodingValidatesOpaqueEntries(t *testing.T) {
 	}
 	if _, err := EncodeMgrConfigure(MgrConfigureData{}, 0, 8); !errors.Is(err, wire.ErrLimit) {
 		t.Fatal("oversized configure", err)
+	}
+}
+
+// TestMgrCounterSchemaBoundsRetainedTypes fills one connection's schema to
+// MaxMgrCounterSchemaTypes and MaxMgrCounterSchemaPathBytes: a report whose
+// new paths would pass a bound is refused with ErrMgrCounterSchemaLimit
+// (and wire.ErrLimit) and leaves the schema as it was; redeclaring a known
+// path adds nothing and keeps its first type; a withdrawn path still
+// counts, because its type stays retained.
+func TestMgrCounterSchemaBoundsRetainedTypes(t *testing.T) {
+	declare := func(paths ...string) []MgrPerfCounterType {
+		out := make([]MgrPerfCounterType, 0, len(paths))
+		for _, p := range paths {
+			out = append(out, MgrPerfCounterType{Path: p, Type: 0x02})
+		}
+		return out
+	}
+	zeros := func(n int) []byte { return packed(make([]uint64, n)...) }
+	refused := func(err error) bool {
+		return errors.Is(err, ErrMgrCounterSchemaLimit) && errors.Is(err, wire.ErrLimit) && !errors.Is(err, ErrMgrCounterSchema)
+	}
+	var schema MgrCounterSchema
+	paths := make([]string, MaxMgrCounterSchemaTypes-1)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("p%05d", i)
+	}
+	if _, err := schema.Apply(MgrDaemonReport{Declare: declare(paths...), Packed: zeros(len(paths))}); err != nil {
+		t.Fatal("filling below the bound", err)
+	}
+	if _, err := schema.Apply(MgrDaemonReport{Declare: declare("q0", "q1"), Packed: zeros(len(paths) + 2)}); !refused(err) {
+		t.Fatal("two new paths past the type bound", err)
+	}
+	if got := schema.Declared(); len(got) != len(paths) || len(schema.types) != len(paths) || slices.Contains(got, "q0") {
+		t.Fatal("a refused report changed the schema", len(got), len(schema.types))
+	}
+	// Exactly at the bound; p00000 redeclared as LONGRUNAVG keeps its
+	// first (scalar) type, so it still packs one u64.
+	redeclared := append(declare("q0"), MgrPerfCounterType{Path: "p00000", Type: MgrPerfCounterLongRunAvg})
+	values, err := schema.Apply(MgrDaemonReport{Declare: redeclared, Packed: zeros(len(paths) + 1)})
+	if err != nil || len(values) != MaxMgrCounterSchemaTypes || values[0].Type != 0x02 {
+		t.Fatal("a report exactly at the bound", len(values), err)
+	}
+	if _, err := schema.Apply(MgrDaemonReport{Packed: zeros(len(paths)), Undeclare: []string{"q0"}}); err != nil {
+		t.Fatal("withdrawal", err)
+	}
+	if _, err := schema.Apply(MgrDaemonReport{Declare: declare("q1"), Packed: zeros(len(paths) + 1)}); !refused(err) {
+		t.Fatal("a withdrawn path must still count toward the bound", err)
+	}
+	if _, err := schema.Apply(MgrDaemonReport{Packed: zeros(len(paths))}); err != nil || slices.Contains(schema.Declared(), "q1") {
+		t.Fatal("the schema after the refusals", err)
+	}
+
+	var bytesSchema MgrCounterSchema
+	half := MaxMgrCounterSchemaPathBytes / 2
+	a, b := strings.Repeat("a", half), strings.Repeat("b", half)
+	if _, err := bytesSchema.Apply(MgrDaemonReport{Declare: declare(a, b), Packed: zeros(2)}); err != nil {
+		t.Fatal("path bytes exactly at the bound", err)
+	}
+	if _, err := bytesSchema.Apply(MgrDaemonReport{Declare: declare("c"), Packed: zeros(3)}); !refused(err) {
+		t.Fatal("one path byte past the bound", err)
+	}
+	if got := bytesSchema.Declared(); len(got) != 2 || bytesSchema.pathBytes != MaxMgrCounterSchemaPathBytes {
+		t.Fatal("a refused report changed the byte count", len(got), bytesSchema.pathBytes)
 	}
 }

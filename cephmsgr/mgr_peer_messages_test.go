@@ -9,6 +9,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -138,6 +140,45 @@ func TestMgrPeerReportWithoutItsDeclarationsEndsTheSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := p.Next(ctx); !errors.Is(err, msgr.ErrMgrCounterSchema) {
+		t.Fatal("cause", err)
+	}
+	if err := p.Configure(context.Background(), MgrConfigure{StatsPeriod: 1}); !errors.Is(err, ErrNotSent) {
+		t.Fatal("Configure after the terminal cause", err)
+	}
+}
+
+// TestMgrPeerCounterDeclarationsPastTheBoundEndTheSession sends reports
+// that each declare and withdraw one long counter path: withdrawn types stay
+// retained, so the ninth report would take the connection's path bytes past
+// msgr.MaxMgrCounterSchemaPathBytes. The eight before it are delivered; the
+// ninth ends the session with ErrLimitExceeded, and nothing is sent after.
+func TestMgrPeerCounterDeclarationsPastTheBoundEndTheSession(t *testing.T) {
+	f := newListenerFixture(t, MgrListenerOptions{Authorize: allowAll})
+	o, p := acceptPeer(t, f, testOSDConfig{osd: 2})
+	str := func(v string) []byte { return append(binary.LittleEndian.AppendUint32(nil, uint32(len(v))), v...) }
+	one := binary.LittleEndian.AppendUint32(nil, 1)
+	const length = 512<<10 - 4<<10
+	report := func(seq uint64, letter string) msgr.MessageData {
+		path := strings.Repeat(letter, length)
+		body := slices.Concat(str(path), str("d"), str("n"), []byte{2, 5, 0})
+		declaration := append(binary.LittleEndian.AppendUint32([]byte{3, 1}, uint32(len(body))), body...)
+		front := slices.Concat(str("0"), one, declaration, str(string([]byte{1, 1, 0, 0, 0, 0})), one, str(path),
+			str(""), []byte{0}, make([]byte, 12), []byte{0, 0})
+		return msgr.MessageData{Sequence: seq, Type: msgr.MgrReportMessage, Version: 9, CompatVersion: 1, Front: front}
+	}
+	if 8*length > msgr.MaxMgrCounterSchemaPathBytes || 9*length <= msgr.MaxMgrCounterSchemaPathBytes {
+		t.Fatal("the path length does not straddle the bound")
+	}
+	for i, letter := range strings.Split("abcdefgh", "") {
+		o.message(t, report(uint64(i+1), letter))
+		if m := nextMessage(t, p); m.Report == nil || len(m.Report.Counters) != 0 {
+			t.Fatalf("report %d within the bound %+v", i, m.Report)
+		}
+	}
+	o.message(t, report(9, "i"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := p.Next(ctx); !errors.Is(err, ErrLimitExceeded) || !errors.Is(err, msgr.ErrMgrCounterSchemaLimit) {
 		t.Fatal("cause", err)
 	}
 	if err := p.Configure(context.Background(), MgrConfigure{StatsPeriod: 1}); !errors.Is(err, ErrNotSent) {

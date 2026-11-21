@@ -222,7 +222,8 @@ and wire subset (`go doc github.com/JSYoo5B/ceph-msgr-go/cephmsgr`).
   authenticated peer it admits (no `Authorize` hook admits none) and what an
   active daemon does, and sends every beacon itself. A peer's messages are
   decoded but never interpreted; its report counters are read against that
-  connection's own declarations. A close or command is answered at most
+  connection's own declarations, which are retained within a fixed bound
+  (exceeding it ends the session). A close or command is answered at most
   once, through a handle bound to the connection that received it; an
   answer after that connection ended is refused, and nothing is resent on a
   replacement connection. MON and MDS peers are refused, and no report is

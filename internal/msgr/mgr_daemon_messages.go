@@ -36,6 +36,17 @@ import (
 // declarations of their connection.
 var ErrMgrCounterSchema = errors.New("ceph messenger: MGR report counters do not match their declarations")
 
+// ErrMgrCounterSchemaLimit refuses a report whose new declarations would
+// take one connection's retained counter types past MaxMgrCounterSchemaTypes
+// or MaxMgrCounterSchemaPathBytes. It wraps wire.ErrLimit.
+var ErrMgrCounterSchemaLimit = errors.New("ceph messenger: MGR counter declarations exceed the connection's bound")
+
+// The retained counter-type bounds of one connection (MgrCounterSchema).
+const (
+	MaxMgrCounterSchemaTypes     = 1 << 16
+	MaxMgrCounterSchemaPathBytes = 4 << 20
+)
+
 // MgrDaemonOpen is a received MMgrOpen (header versions 1 to 3).
 // Metadata and Status are present only for a service daemon; nil means
 // absent. Config and ConfigDefaults are the raw config_bl and
@@ -422,9 +433,27 @@ type MgrCounterValue struct {
 // packed 1/1 envelope must be consumed exactly (native skips a tail; a tail
 // here means the declarations disagree). A report that fails leaves the
 // schema unchanged; the connection cannot be read further.
+//
+// Retained state is bounded for the connection's life, stricter than
+// native: only each path and its type byte are kept (not the description,
+// nick, priority or unit), and the retained paths, withdrawn ones
+// included, may not exceed MaxMgrCounterSchemaTypes entries or
+// MaxMgrCounterSchemaPathBytes path bytes. A report whose new paths would
+// pass either bound is refused with ErrMgrCounterSchemaLimit before any of
+// its declarations are committed, so the previous schema stays intact; as
+// for any failed report, the connection then ends. Within the bound a
+// known path keeps its first type. Native keeps every type ever declared
+// in a table shared by all daemons for the MGR's life with no bound of its
+// own (ceph/ceph/blob/v20.2.4/src/mgr/DaemonState.cc
+// DaemonPerfCounters::update inserts into types and never erases;
+// ceph/ceph/blob/v20.2.4/src/mgr/DaemonState.h DaemonStateIndex::types),
+// relying on stock senders, whose counter sets are fixed by their code and
+// lie far below these bounds; a single report is bounded only by the
+// messenger's frame limits there, as by MaxFrameSize here.
 type MgrCounterSchema struct {
-	types    map[string]MgrPerfCounterType
-	declared map[string]struct{}
+	types     map[string]uint8
+	pathBytes int
+	declared  map[string]struct{}
 }
 
 // Declared returns the connection's current counter paths in packed order.
@@ -441,23 +470,31 @@ func (s *MgrCounterSchema) Declared() []string {
 // declarations and withdrawals.
 func (s *MgrCounterSchema) Apply(r MgrDaemonReport) ([]MgrCounterValue, error) {
 	types := s.types
-	declared := make(map[string]struct{}, len(s.declared)+len(r.Declare))
-	for p := range s.declared {
-		declared[p] = struct{}{}
-	}
-	var added map[string]MgrPerfCounterType
+	var added map[string]uint8
+	addedBytes := 0
 	for _, t := range r.Declare {
 		if _, ok := types[t.Path]; !ok {
 			if _, ok := added[t.Path]; !ok {
 				if added == nil {
-					added = make(map[string]MgrPerfCounterType)
+					added = make(map[string]uint8)
 				}
-				added[t.Path] = t
+				added[t.Path] = t.Type
+				addedBytes += len(t.Path)
 			}
 		}
+	}
+	if len(types)+len(added) > MaxMgrCounterSchemaTypes || s.pathBytes+addedBytes > MaxMgrCounterSchemaPathBytes {
+		return nil, fmt.Errorf("%w: %d retained and %d new counter types, %d and %d path bytes: %w",
+			ErrMgrCounterSchemaLimit, len(types), len(added), s.pathBytes, addedBytes, wire.ErrLimit)
+	}
+	declared := make(map[string]struct{}, len(s.declared)+len(r.Declare))
+	for p := range s.declared {
+		declared[p] = struct{}{}
+	}
+	for _, t := range r.Declare {
 		declared[t.Path] = struct{}{}
 	}
-	typeOf := func(path string) MgrPerfCounterType {
+	typeOf := func(path string) uint8 {
 		if t, ok := types[path]; ok {
 			return t
 		}
@@ -476,8 +513,8 @@ func (s *MgrCounterSchema) Apply(r MgrDaemonReport) ([]MgrCounterValue, error) {
 	values := make([]MgrCounterValue, 0, len(paths))
 	for _, p := range paths {
 		t := typeOf(p)
-		v := MgrCounterValue{Path: p, Type: t.Type, Value: packed.U64()}
-		if t.Type&MgrPerfCounterLongRunAvg != 0 {
+		v := MgrCounterValue{Path: p, Type: t, Value: packed.U64()}
+		if t&MgrPerfCounterLongRunAvg != 0 {
 			v.AvgCount, v.AvgCount2 = packed.U64(), packed.U64()
 		}
 		values = append(values, v)
@@ -495,11 +532,12 @@ func (s *MgrCounterSchema) Apply(r MgrDaemonReport) ([]MgrCounterValue, error) {
 	}
 	if len(added) != 0 {
 		if s.types == nil {
-			s.types = make(map[string]MgrPerfCounterType, len(added))
+			s.types = make(map[string]uint8, len(added))
 		}
 		for p, t := range added {
 			s.types[p] = t
 		}
+		s.pathBytes += addedBytes
 	}
 	s.declared = declared
 	return values, nil
