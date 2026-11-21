@@ -69,7 +69,9 @@ func TestDeliverReportsWrittenNotSentAndUnknown(t *testing.T) {
 	}
 	// A fourth write starts, then the transport fails mid-frame.
 	fourth := make(chan error, 1)
-	go func() { fourth <- s.Deliver(context.Background(), msgr.MessageData{Type: 98, Front: bytes.Repeat([]byte{1}, 4096)}) }()
+	go func() {
+		fourth <- s.Deliver(context.Background(), msgr.MessageData{Type: 98, Front: bytes.Repeat([]byte{1}, 4096)})
+	}()
 	if _, err := io.ReadFull(peer, make([]byte, 16)); err != nil {
 		t.Fatal(err)
 	}

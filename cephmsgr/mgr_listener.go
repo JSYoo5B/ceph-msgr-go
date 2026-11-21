@@ -199,7 +199,7 @@ const maxRecentRefusals = 32
 // entityTypeClient is CEPH_ENTITY_TYPE_CLIENT.
 const entityTypeClient = 0x08
 
-// MgrListener accepts OSD sessions for one MgrDaemon. Its methods are safe
+// MgrListener accepts OSD and client sessions for one MgrDaemon. Its methods are safe
 // for concurrent use.
 type MgrListener struct {
 	daemon   *MgrDaemon
@@ -225,7 +225,8 @@ type MgrListener struct {
 	last       MgrPeerIdentity
 }
 
-// Listen starts accepting OSD sessions on options.Listener as this daemon.
+// Listen starts accepting OSD and client sessions on options.Listener as
+// this daemon.
 // The daemon's rotating MGR secrets verify each authorizer, so a peer can
 // be admitted only once WaitRotatingKeys has returned a set holding its
 // ticket's secret ID. Closing the daemon closes the listener and waits for
@@ -305,11 +306,11 @@ func (d *MgrDaemon) Listen(options MgrListenerOptions) (*MgrListener, error) {
 	gid := d.Identity().GlobalID
 	l.policy = session.AcceptPolicy{
 		Self: uint8(cephx.ServiceMgr), ServerID: gid, Addresses: wireAddresses(options.Addresses),
-		Peers: map[uint8]uint64{
-			uint8(cephx.ServiceOSD): session.MgrOSDPeerRequiredFeatures,
-			entityTypeClient:        session.MgrClientPeerRequiredFeatures,
+		Peers: map[uint8]session.AcceptPeerFeatures{
+			uint8(cephx.ServiceOSD): {Supported: session.MgrOSDPeerFeatures, Required: session.MgrOSDPeerRequiredFeatures},
+			entityTypeClient:        {Supported: session.MgrClientPeerFeatures, Required: session.MgrClientPeerRequiredFeatures},
 		},
-		Mode: mode, Supported: session.MgrOSDPeerFeatures,
+		Mode:    mode,
 		Service: cephx.ServiceMgr, Keys: d.rotatingKey,
 		HandshakeLimit: min(64<<10, options.MaxFrameSize), MessageLimit: options.MaxFrameSize,
 		GlobalSeq: d.nextGlobalSeq,
@@ -600,7 +601,7 @@ func (l *MgrListener) Close() error {
 	return nil
 }
 
-// MgrPeer is one published OSD session. Its methods are safe for
+// MgrPeer is one published OSD or client session. Its methods are safe for
 // concurrent use.
 type MgrPeer struct {
 	listener *MgrListener

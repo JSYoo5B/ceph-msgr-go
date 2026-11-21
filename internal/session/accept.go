@@ -25,7 +25,9 @@ import (
 // handle_compression_request, handle_client_ident, handle_reconnect and
 // send_server_ident) for the one policy implemented: a stateless (lossy)
 // server, as src/mgr/DaemonServer.cc gives OSD peers of a MGR
-// (Policy::stateless_server(CEPH_FEATURE_SERVER_LUMINOUS)).
+// (Policy::stateless_server(CEPH_FEATURE_SERVER_LUMINOUS)) and, by default,
+// its clients (Policy::stateless_server(0)); each admitted peer type has its
+// own required mask.
 //
 // Frame order on the accepting side: banner out, peer banner in, HELLO out
 // (this entity type and the peer's socket address, type msgr2, nonce 0),
@@ -53,9 +55,10 @@ import (
 // always declines, which is also the stock daemon default.
 //
 // Stricter than native, for identity binding: the peer's HELLO entity type
-// must be the admitted peer type, the authenticated ticket must name that
+// must be an admitted peer type, the authenticated ticket must name that
 // entity type, an OSD's ticket ID must be the decimal of its CLIENT_IDENT
-// numeric ID, and a CLIENT_IDENT requiring a feature this acceptor does not
+// numeric ID and a client's CLIENT_IDENT numeric ID must be its ticket's
+// global ID, and a CLIENT_IDENT requiring a feature this acceptor does not
 // support is refused without a frame (native ignores the peer's required
 // mask). The caller's authorization runs last, before SERVER_IDENT; a denial
 // ends the handshake without a frame. No transport is published before
@@ -69,12 +72,11 @@ type AcceptPolicy struct {
 	Self      uint8
 	ServerID  uint64
 	Addresses []msgr.Address
-	// Peers maps each admitted peer entity type to the SERVER_IDENT
-	// required mask of its policy; every mask must include MSG_ADDR2 and lie
-	// within Supported, the SERVER_IDENT supported mask.
-	Peers     map[uint8]uint64
-	Mode      ConnectionMode
-	Supported uint64
+	// Peers maps each admitted peer entity type to the SERVER_IDENT feature
+	// masks of its policy; every required mask must include MSG_ADDR2 and
+	// lie within its supported mask.
+	Peers map[uint8]AcceptPeerFeatures
+	Mode  ConnectionMode
 	// Service and Keys verify the authorizer: the accepting service and its
 	// exact-ID rotating secret lookup.
 	Service uint32
@@ -99,6 +101,10 @@ type serviceVerifier interface {
 	SessionKey() cephx.Key
 	ConnectionSecret() []byte
 }
+
+// AcceptPeerFeatures are the SERVER_IDENT supported and required masks sent
+// to one admitted peer type.
+type AcceptPeerFeatures struct{ Supported, Required uint64 }
 
 // AcceptedPeer is what an accepted handshake established about its peer.
 type AcceptedPeer struct {
@@ -200,8 +206,8 @@ func Accept(ctx context.Context, conn net.Conn, policy AcceptPolicy, timeout tim
 	if policy.Mode != SecureMode && policy.Mode != CRCMode {
 		return nil, AcceptedPeer{}, errors.New("ceph messenger: invalid connection mode")
 	}
-	for _, required := range policy.Peers {
-		if required&RequiredFeatures != RequiredFeatures || required&^policy.Supported != 0 {
+	for _, masks := range policy.Peers {
+		if masks.Required&RequiredFeatures != RequiredFeatures || masks.Required&^masks.Supported != 0 {
 			return nil, AcceptedPeer{}, errors.New("ceph messenger: invalid accept policy feature mask")
 		}
 	}
@@ -240,7 +246,7 @@ func Accept(ctx context.Context, conn net.Conn, policy AcceptPolicy, timeout tim
 
 type acceptor struct {
 	policy     AcceptPolicy
-	required   uint64 // the admitted peer type's required mask
+	masks      AcceptPeerFeatures // the admitted peer type's
 	rx         *recordingReader
 	tx         *recordingWriter
 	r          *msgr.Reader
@@ -302,12 +308,12 @@ func (a *acceptor) run(ctx context.Context, stage *AcceptStage, refused *bool) e
 	if err := d.Done(); err != nil {
 		return fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 	}
-	required, admitted := a.policy.Peers[a.peer.PeerType]
+	masks, admitted := a.policy.Peers[a.peer.PeerType]
 	if !admitted {
 		*refused = true
 		return fmt.Errorf("%w: peer entity type %d is not admitted", ErrPeerIdentity, a.peer.PeerType)
 	}
-	a.required = required
+	a.masks = masks
 	*stage = AcceptAuthentication
 	if err := a.authenticate(refused); err != nil {
 		return err
@@ -352,8 +358,8 @@ func (a *acceptor) serverIdentPayload() []byte {
 	msgr.EncodeAddresses(&e, a.policy.Addresses)
 	e.U64(a.policy.ServerID)
 	e.U64(a.peer.ServerGlobalSeq)
-	e.U64(a.policy.Supported)
-	e.U64(a.required)
+	e.U64(a.masks.Supported)
+	e.U64(a.masks.Required)
 	e.U64(sessionFlagLossy)
 	e.U64(0) // a lossy server keeps no session cookie
 	return e.Data
@@ -576,7 +582,7 @@ func (a *acceptor) identify(refused *bool) error {
 			*refused = true
 			return fmt.Errorf("%w: client identification targets %v, not this endpoint", ErrPeerIdentity, p.Target.Endpoint)
 		}
-		if missing := a.required &^ p.PeerSupported; missing != 0 {
+		if missing := a.masks.Required &^ p.PeerSupported; missing != 0 {
 			*refused = true
 			refusal = fmt.Errorf("%w: peer lacks 0x%016x", msgr.ErrFeatures, missing)
 			if err := a.write(msgr.IdentMissingFeatures, identMissingFeaturesPayload(missing)); err != nil {
@@ -584,7 +590,7 @@ func (a *acceptor) identify(refused *bool) error {
 			}
 			continue
 		}
-		if unsupported := p.PeerRequired &^ a.policy.Supported; unsupported != 0 {
+		if unsupported := p.PeerRequired &^ a.masks.Supported; unsupported != 0 {
 			*refused = true
 			return fmt.Errorf("%w: peer requires unsupported 0x%016x", msgr.ErrFeatures, unsupported)
 		}
@@ -592,7 +598,7 @@ func (a *acceptor) identify(refused *bool) error {
 			*refused = true
 			return err
 		}
-		p.Features = p.PeerSupported & a.policy.Supported
+		p.Features = p.PeerSupported & a.masks.Supported
 		return nil
 	}
 	if refusal != nil {
@@ -634,8 +640,8 @@ const entityClient = 0x08
 // and the three bits a stock OSD requires of its MGR (src/ceph_osd.cc
 // osd_required: UID 0, PGID64 9, OSDENC 13). OSDENC and PGID64 make the OSD
 // encode its MGR messages in their current form, the only form a decoder of
-// this repository reads; UID carries no field of its own. The acceptor
-// delivers the messages raw and decodes none of them itself. Native MGR
+// this repository reads (internal/msgr pgstats.go); UID carries no field of
+// its own. Native MGR
 // advertises CEPH_FEATURES_ALL; promising every daemon encoding is not done
 // here.
 const MgrOSDPeerFeatures uint64 = Features | 1<<0 | 1<<9 | 1<<13 | 1<<21
@@ -646,10 +652,17 @@ const MgrOSDPeerFeatures uint64 = Features | 1<<0 | 1<<9 | 1<<13 | 1<<21
 // msgr2_required MSG_ADDR2 (bit 59), 0x0800000000200000.
 const MgrOSDPeerRequiredFeatures uint64 = 1<<21 | RequiredFeatures
 
+// MgrClientPeerFeatures is what a MGR acceptor advertises to a client
+// peer: the OSD peer's mask plus OSDREPLYMUX (12), which librados requires
+// of every server it talks to (src/librados/RadosClient.cc,
+// lossy_client(CEPH_FEATURE_OSDREPLYMUX)). The bit only selects how an
+// OSD's MOSDOpReply carries per-operation data, which a MGR never sends;
+// advertising it to a client is admission only. The MGR messages a client
+// sends (MMgrOpen, MMgrReport, MMgrClose, the two command families) and the
+// replies sent to it have no feature-dependent encoding.
+const MgrClientPeerFeatures uint64 = MgrOSDPeerFeatures | 1<<12
+
 // MgrClientPeerRequiredFeatures is the native required mask DaemonServer
 // sends a client: its default Policy::stateless_server(0) requires nothing
-// beyond ProtocolV2's MSG_ADDR2. A client gets the same supported mask as
-// an OSD (MgrOSDPeerFeatures); the MGR messages a client sends (MMgrOpen,
-// MMgrReport, MMgrClose, the two command families) have no
-// feature-dependent encoding.
+// beyond ProtocolV2's MSG_ADDR2.
 const MgrClientPeerRequiredFeatures uint64 = RequiredFeatures
