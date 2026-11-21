@@ -32,10 +32,7 @@ func soakPlace(ctx context.Context, object string) (osdFixtureOracle, error) {
 	if err != nil {
 		return osdFixtureOracle{}, err
 	}
-	if err = os.WriteFile(filepath.Join(dir, "osd-mutation-input.json"), data, 0600); err != nil {
-		return osdFixtureOracle{}, err
-	}
-	if err = testcluster.ControlDaemon(ctx, dir, "verify", "osd-mutation", "compare"); err != nil {
+	if err = testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-mutation", "compare", testcluster.ControlInput{Name: "osd-mutation-input.json", Data: data, Private: true}); err != nil {
 		return osdFixtureOracle{}, err
 	}
 	if data, err = os.ReadFile(filepath.Join(dir, "osd-mutation-result.json")); err != nil {

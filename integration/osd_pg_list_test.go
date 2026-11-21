@@ -32,10 +32,7 @@ func pgListOracle(t *testing.T, ctx context.Context, pg uint32, namespace string
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "osd-pg-list-input.json"), data); err != nil {
-		t.Fatal(err)
-	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-pg-list", "observe"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-pg-list", "observe", testcluster.ControlInput{Name: "osd-pg-list-input.json", Data: data}); err != nil {
 		t.Fatal(err)
 	}
 	data, err = os.ReadFile(filepath.Join(dir, "osd-pg-list-result.json"))

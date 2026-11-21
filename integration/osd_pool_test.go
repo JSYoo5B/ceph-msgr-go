@@ -156,13 +156,10 @@ func nativePoolResult(t *testing.T, ctx context.Context, mode string, input, res
 	if err != nil || len(raw) > 1<<20 {
 		t.Fatal("bounded pool oracle input", err)
 	}
-	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "osd-pool-input.json"), raw); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(filepath.Join(dir, "osd-pool-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-pool", mode); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-pool", mode, testcluster.ControlInput{Name: "osd-pool-input.json", Data: raw}); err != nil {
 		t.Fatal("native owned-pool oracle "+mode, err)
 	}
 	f, err := os.Open(filepath.Join(dir, "osd-pool-result.json"))

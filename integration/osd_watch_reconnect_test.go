@@ -37,12 +37,14 @@ type nativeReconnectNotify struct {
 // This uses only the existing owned native list/notifier controls. Returning
 // errors lets cleanup attempt UNWATCH and close both connections even when the
 // notifier's completion cannot be confirmed.
-func watchReconnectControl(ctx context.Context, kind, action, resultName string, result any) error {
+// watchReconnectControl runs one oracle action with its request-scoped
+// inputs (testcluster.ControlInput) and decodes its bounded result.
+func watchReconnectControl(ctx context.Context, kind, action, resultName string, result any, inputs ...testcluster.ControlInput) error {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if err := os.Remove(filepath.Join(dir, resultName)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", kind, action); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", kind, action, inputs...); err != nil {
 		return err
 	}
 	file, err := os.Open(filepath.Join(dir, resultName))
@@ -69,9 +71,9 @@ func watchReconnectList(ctx context.Context, name string) (nativeReconnectWatchL
 	return result, err
 }
 
-func watchReconnectNotify(ctx context.Context, action, name string) (nativeReconnectNotify, error) {
+func watchReconnectNotify(ctx context.Context, action, name string, inputs ...testcluster.ControlInput) (nativeReconnectNotify, error) {
 	var result nativeReconnectNotify
-	err := watchReconnectControl(ctx, "osd-watch-notify", action, "osd-watch-notify-result.json", &result)
+	err := watchReconnectControl(ctx, "osd-watch-notify", action, "osd-watch-notify-result.json", &result, inputs...)
 	if err == nil && (result.Source != watchReconnectSource || result.Object != name || len(result.Token) != 32 || result.GlobalID == 0) {
 		err = errors.New("native reconnect notifier provenance or ownership differs")
 	}
@@ -248,10 +250,7 @@ func TestCephOSDWatchReconnectIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := testcluster.WritePublicEvidence(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-watch-notify-input.json"), input); err != nil {
-			t.Fatal(err)
-		}
-		started, err := watchReconnectNotify(ctx, "start", name)
+		started, err := watchReconnectNotify(ctx, "start", name, testcluster.ControlInput{Name: "osd-watch-notify-input.json", Data: input})
 		notifications = append(notifications, started)
 		notifying = true
 		if err != nil || started.Done || started.GlobalID == globalID {
