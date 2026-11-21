@@ -68,8 +68,11 @@ var ClientFeatures = []byte{0xff, 0x05, 0, 0, 0, 0, 0, 0}
 // HAS_OWNER_UIDGID (20: owner UID/GID in the v3 request head). Lazy wanted
 // caps, metrics, notify-session-state, getvxattr, client auth-cap checks,
 // charmap and blockdiff stay withheld, so the MDS refuses a session on a
-// filesystem that requires one of them. Not claimed: multi-rank or failover reclaim, use or
-// release of delegated inodes, and asynchronous directory operations.
+// filesystem that requires one of them. A directory charmap still arrives in
+// InodeStat optional metadata (InodeStat.DecodeOptionalMetadata), and the MDS
+// answers -EPERM when this profile creates an entry in such a directory.
+// Not claimed: multi-rank or failover reclaim, use or release of delegated
+// inodes, and asynchronous directory operations.
 var CephFSClientFeatures = []byte{0xff, 0xb7, 0x1c, 0, 0, 0, 0, 0}
 
 // NoOldestClientTID is the native MClientSession default. The MDS ignores it
