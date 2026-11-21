@@ -22,14 +22,15 @@ and MDS daemons that already exist. The one daemon-role protocol so far
 (stage 3 of [SPEC.md](SPEC.md) "Protocol stages") is opt-in and separate:
 `DialMgrDaemon` authenticates a `mgr.<id>` principal to MON as the MGR entity
 and carries that daemon's MON control channel (beacons, MgrMap role, ticket
-renewal, rotating MGR secrets); `MgrDaemon.Listen` then accepts stock OSD
+renewal, rotating MGR secrets, and the consumer's MGR reports to MON);
+`MgrDaemon.Listen` then accepts stock OSD
 and client sessions as that MGR on a listener the consumer bound, verifying
 each peer's CephX MGR service authorizer, decoding the MGR daemon messages
 it sends (open, update, reports, PG statistics, close, commands) and
 sending only what the consumer asks for (configure, the close
 acknowledgement, command replies). No other role accepts connections, and
 none of the other daemon-to-daemon messages (quorum, heartbeat, peering,
-replication, recovery, metadata migration, MGR reports to MON) is sent. The
+replication, recovery, metadata migration) is sent. The
 consumer that uses `DialMgrDaemon` supplies the daemon's decisions, beacon
 content, peer admission, configuration and command results.
 
@@ -141,7 +142,7 @@ service rows are refused unless their option was set at `Dial`.
 | Send a raw MDS command | `OpenMDS`, then `MDSConnection.Command` | `EnableMDS` |
 | Open a CephFS session and send metadata requests | `MDSConnection.OpenSession`, `MDSSession.Submit` | `EnableMDS`, `EnableCephFS` for metadata and capabilities |
 | Register a service daemon with the active MGR | `OpenMgrService` | `EnableMgrService` |
-| Act as a MGR daemon toward MON | `DialMgrDaemon`, then `SendBeacon`, `NextMgrMap`, `WaitRotatingKeys` | its own `MgrDaemonOptions` |
+| Act as a MGR daemon toward MON | `DialMgrDaemon`, then `SendBeacon`, `NextMgrMap`, `WaitRotatingKeys`, `Monitor` and `MgrMonitorSession.SendReport` | its own `MgrDaemonOptions` |
 | Accept OSD and client sessions as that MGR | `MgrDaemon.Listen`, then `MgrListener.Accept`, `MgrPeer.Next`, `MgrPeer.Configure`, `MgrPeerCommand.Reply`, `MgrPeerClose.Acknowledge` | its own `MgrListenerOptions` with an `Authorize` hook |
 
 The Go documentation of each name states its exact inputs, bounds, outcomes
@@ -226,8 +227,12 @@ and wire subset (`go doc github.com/JSYoo5B/ceph-msgr-go/cephmsgr`).
   (exceeding it ends the session). A close or command is answered at most
   once, through a handle bound to the connection that received it; an
   answer after that connection ended is refused, and nothing is resent on a
-  replacement connection. MON and MDS peers are refused, and no report is
-  sent to MON yet.
+  replacement connection. MON and MDS peers are refused. A report to MON
+  carries the consumer's health checks, ServiceMap, progress events and
+  pre-encoded PGMapDigest; the library computes none of them. It goes
+  through a handle bound to one MON session, which expires with that
+  session, so a report is never moved to a replacement session. MON
+  acknowledges nothing and drops a report from a daemon that is not active.
 
 ## Lifetime and recovery
 
