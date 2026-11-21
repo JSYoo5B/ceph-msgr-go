@@ -24,8 +24,9 @@ import (
 // A MgrDaemon is the MON side of a manager implementation above this
 // library: it authenticates a named mgr.<id> principal to stock MON as the
 // MGR entity type, keeps the MON-assigned global ID, subscribes to mgrmap,
-// carries the consumer's beacons, delivers MgrMaps with this daemon's role
-// in them, and holds the principal's rotating MGR service secrets. The
+// carries the consumer's beacons and reports (mgr_report.go), delivers
+// MgrMaps with this daemon's role in them, and holds the principal's
+// rotating MGR service secrets. The
 // consumer decides availability, what the beacon advertises and what work
 // an active or standby daemon does; stock MON stays the authority that
 // selects the active daemon, publishes the map and issues keys. Listen
@@ -304,6 +305,9 @@ type mgrDaemonHooks struct {
 	// afterListenerPublished runs in Listen once the daemon published the
 	// listener, before Listen returns.
 	afterListenerPublished func(*MgrListener)
+	// closeRecorded runs in Close once the closed state is recorded, before
+	// any session is failed.
+	closeRecorded func()
 }
 
 type mgrDaemonHooksKey struct{}
@@ -354,6 +358,10 @@ type MgrDaemon struct {
 
 	listeners map[*MgrListener]struct{}
 	globalSeq atomic.Uint64
+
+	// sends are the reports in flight (mgr_report.go), each withdrawn under
+	// this lock when its session's end is recorded.
+	sends map[*mgrMonitorSend]struct{}
 }
 
 // DialMgrDaemon authenticates options.Identity to a MON as the MGR entity
@@ -435,7 +443,7 @@ func DialMgrDaemon(ctx context.Context, options MgrDaemonOptions) (*MgrDaemon, e
 		return nil, err
 	}
 	base, cancel := context.WithCancel(context.Background())
-	d := &MgrDaemon{options: options, ctx: base, cancel: cancel, wake: make(chan struct{}, 1), changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{})}
+	d := &MgrDaemon{options: options, ctx: base, cancel: cancel, wake: make(chan struct{}, 1), changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{}), sends: make(map[*mgrMonitorSend]struct{})}
 	d.hooks, _ = ctx.Value(mgrDaemonHooksKey{}).(*mgrDaemonHooks)
 	d.identity = MgrDaemonIdentity{Entity: auth.Name, Name: auth.ID()}
 	if options.ExpectedFSID != "" {
@@ -478,6 +486,7 @@ func (d *MgrDaemon) failLocked(err error) []*session.Session {
 	if d.failure == nil {
 		d.failure = err
 	}
+	d.expireSendsLocked(nil, d.failure)
 	all := make([]*session.Session, 0, len(d.sessions))
 	for s := range d.sessions {
 		all = append(all, s)
@@ -644,6 +653,7 @@ func (d *MgrDaemon) attempt(ctx context.Context, target monTarget) error {
 	handler.session, handler.generation = s, generation
 	old := d.mon
 	d.mon, d.monReady, d.monEndpoint, d.pending = s, false, target.endpoint, nil
+	d.expireSendsLocked(s, errors.New("ceph: MGR daemon MON session replaced"))
 	d.sessions[s] = struct{}{}
 	s.Start()
 	d.wg.Add(1)
@@ -733,6 +743,7 @@ func (d *MgrDaemon) settleLocked(s *session.Session, cause error) ([]*session.Se
 	}
 	d.monReady = false
 	d.pending = nil
+	d.expireSendsLocked(nil, cause)
 	d.signal()
 	if d.failure != nil || d.closed || !mgrDaemonFatal(cause) {
 		return nil, false
@@ -1222,6 +1233,12 @@ func (d *MgrDaemon) NextDigest(ctx context.Context) (ClusterDigest, error) {
 // acceptance: MON never acknowledges a beacon, and an unchanged beacon need
 // not change the map. A frame-size violation is ErrLimitExceeded.
 func (d *MgrDaemon) SendBeacon(ctx context.Context, beacon MgrBeacon) error {
+	d.mu.Lock()
+	nameBytes := len(d.identity.Name)
+	d.mu.Unlock()
+	if mgrBeaconLowerBound(beacon, nameBytes)+41 > uint64(d.options.MaxFrameSize) {
+		return fmt.Errorf("ceph: MGR beacon exceeds frame limit: %w", wire.ErrLimit)
+	}
 	content := maps.MgrBeacon{
 		Available: beacon.Available, ServerAddresses: wireAddresses(beacon.Addresses), Features: beacon.Features,
 		Metadata: beacon.Metadata, Services: beacon.Services,
@@ -1245,8 +1262,8 @@ func (d *MgrDaemon) SendBeacon(ctx context.Context, beacon MgrBeacon) error {
 			return err
 		}
 		if s != nil && ready && s.Err() == nil {
-			message := maps.EncodeMgrBeacon(content)
-			if uint64(len(message.Front))+41 > uint64(d.options.MaxFrameSize) {
+			message, err := maps.EncodeMgrBeacon(content, d.options.MaxFrameSize)
+			if err != nil || uint64(len(message.Front))+41 > uint64(d.options.MaxFrameSize) {
 				return fmt.Errorf("ceph: MGR beacon exceeds frame limit: %w", wire.ErrLimit)
 			}
 			// A beacon's caller commonly cancels its context on return; an
@@ -1267,6 +1284,103 @@ func (d *MgrDaemon) SendBeacon(ctx context.Context, beacon MgrBeacon) error {
 	}
 }
 
+// managerAddressSize is the encoded size of one entity_addr_t
+// (msgr.Address.Encode): marker, 1/1 envelope, type, nonce and the sockaddr
+// bufferlist, empty for an address without an endpoint, 16 bytes for IPv4
+// and 28 for IPv6. Its minimum is 19 bytes.
+func managerAddressSize(a ManagerAddress) uint64 {
+	switch {
+	case !a.Endpoint.IsValid():
+		return 19
+	case a.Endpoint.Addr().Is4():
+		return 19 + 16
+	}
+	return 19 + 28
+}
+
+// managerAddressesSize is an encoded address vector: marker, count and
+// each address.
+func managerAddressesSize(addresses []ManagerAddress) uint64 {
+	n := uint64(1 + 4)
+	for _, a := range addresses {
+		n += managerAddressSize(a)
+	}
+	return n
+}
+
+// mgrBeaconLowerBound is at most the front size of the MMgrBeacon b encodes
+// to (maps.EncodeMgrBeacon) for a daemon name of nameBytes. It walks the
+// encoder's whole field list and reads only lengths and counts, so
+// SendBeacon refuses an oversized beacon before it converts, copies or
+// sorts anything. Every element of every collection is counted with at
+// least its constant encoded minimum, and exactly unless noted:
+//
+//   - fixed: Paxos prefix 18, gid 8, available 1, fsid 16, features 8,
+//     name 4 + nameBytes;
+//   - Addresses: 5 + each address (managerAddressSize, at least 19);
+//   - Commands: 4 + each 42 + its four strings (1/1 envelope, five strings,
+//     flags);
+//   - Metadata, Services: 4 + each entry 8 + key and value;
+//   - Modules: 4 + each 19 + name and error string, and its Options map:
+//     4 + each entry 52 + key, name, default, min, max, the two
+//     descriptions, and its three sets;
+//   - the module-name set and each option set (EnumAllowed, Tags,
+//     SeeAlso): 4 + the longest entry's 4 + length when not empty. A set's
+//     repeats encode to nothing, so a set cannot be counted exactly without
+//     deduplicating it; the encoder charges the distinct entries of every
+//     set against the frame limit as it indexes them (maps.EncodeMgrBeacon),
+//     so a set's scratch never exceeds the bytes that can fit;
+//   - Clients: two counts 4 + 4, and each client 4 + name and its address
+//     vector (5 + each address).
+//
+// The encoded front is checked exactly afterwards.
+func mgrBeaconLowerBound(b MgrBeacon, nameBytes int) uint64 {
+	str := func(v string) uint64 { return 4 + uint64(len(v)) }
+	set := func(values []string) uint64 {
+		if len(values) == 0 {
+			return 4
+		}
+		longest := 0
+		for _, v := range values {
+			longest = max(longest, len(v))
+		}
+		return 4 + 4 + uint64(longest)
+	}
+	pairs := func(m map[string]string) uint64 {
+		n := uint64(4)
+		for k, v := range m {
+			n += str(k) + str(v)
+		}
+		return n
+	}
+	n := uint64(18) + 8 + 1 + 4 + uint64(nameBytes) + 16 + 8
+	n += managerAddressesSize(b.Addresses)
+	n += 4
+	for _, c := range b.Commands {
+		n += 6 + str(c.Command) + str(c.Help) + str(c.Module) + str(c.Permissions) + str("cli,rest") + 8
+	}
+	n += pairs(b.Metadata) + pairs(b.Services)
+	n += 4
+	longest := 0
+	for _, m := range b.Modules {
+		longest = max(longest, len(m.Name))
+		n += 6 + str(m.Name) + 1 + str(m.ErrorString) + 4
+		for key, o := range m.Options {
+			n += str(key) + 6 + str(o.Name) + 1 + 1 + 4 + str(o.DefaultValue) + str(o.Min) + str(o.Max) +
+				set(o.EnumAllowed) + str(o.Description) + str(o.LongDescription) + set(o.Tags) + set(o.SeeAlso)
+		}
+	}
+	n += 4 // module-name set count
+	if len(b.Modules) > 0 {
+		n += 4 + uint64(longest)
+	}
+	n += 4 + 4
+	for _, c := range b.Clients {
+		n += str(c.Name) + managerAddressesSize(c.Addresses)
+	}
+	return n
+}
+
 // Close is idempotent: it ends the MON session, every listener with its
 // sessions (MgrListener.Close) and the worker, and waits for them. It sends
 // no unregistering message; stock MON drops the daemon after its beacon
@@ -1277,12 +1391,16 @@ func (d *MgrDaemon) Close() error {
 		d.closed = true
 		d.signal()
 	}
+	d.expireSendsLocked(nil, ErrClosed)
 	all := make([]*session.Session, 0, len(d.sessions))
 	for s := range d.sessions {
 		all = append(all, s)
 	}
 	listeners := d.listenersLocked()
 	d.mu.Unlock()
+	if d.hooks != nil && d.hooks.closeRecorded != nil {
+		d.hooks.closeRecorded()
+	}
 	d.cancel()
 	for _, s := range all {
 		s.Fail(ErrClosed)
@@ -1316,12 +1434,15 @@ func managerAddresses(addresses []msgr.Address) []ManagerAddress {
 	return out
 }
 
+// wireModule converts one beacon module. Its option sets are shared, not
+// copied: the beacon encoder only reads them and deduplicates into its own
+// bounded index, so repeats are never copied.
 func wireModule(module ManagerModule) maps.ModuleInfo {
 	info := maps.ModuleInfo{Name: module.Name, CanRun: module.CanRun, ErrorString: module.ErrorString}
 	if len(module.Options) != 0 {
 		info.Options = make(map[string]maps.ModuleOption, len(module.Options))
 		for key, o := range module.Options {
-			info.Options[key] = maps.ModuleOption{Name: o.Name, Type: o.Type, Level: o.Level, Flags: o.Flags, DefaultValue: o.DefaultValue, Min: o.Min, Max: o.Max, EnumAllowed: slices.Clone(o.EnumAllowed), Description: o.Description, LongDescription: o.LongDescription, Tags: slices.Clone(o.Tags), SeeAlso: slices.Clone(o.SeeAlso)}
+			info.Options[key] = maps.ModuleOption{Name: o.Name, Type: o.Type, Level: o.Level, Flags: o.Flags, DefaultValue: o.DefaultValue, Min: o.Min, Max: o.Max, EnumAllowed: o.EnumAllowed, Description: o.Description, LongDescription: o.LongDescription, Tags: o.Tags, SeeAlso: o.SeeAlso}
 		}
 	}
 	return info

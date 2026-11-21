@@ -44,6 +44,10 @@ type fakeMgrMon struct {
 	// monMap overrides the minimum release and FSID of the MonMap sent on
 	// the index-th connection (from 0); nil sends release 20 and fsid.
 	monMap func(index int) (release uint8, fsid [16]byte)
+	// reports are the MMonMgrReports received; wrap, when set, wraps the
+	// MON side of each connection.
+	reports []msgr.MessageData
+	wrap    func(net.Conn) net.Conn
 }
 
 type fakeMgrMonConn struct {
@@ -119,6 +123,9 @@ func authReplyMessage(gid uint64, code int32, result []byte) msgr.MessageData {
 func (f *fakeMgrMon) serve(conn net.Conn) {
 	defer conn.Close()
 	f.mu.Lock()
+	if f.wrap != nil {
+		conn = f.wrap(conn)
+	}
 	index := len(f.conns)
 	gid := f.gids[min(index, len(f.gids)-1)]
 	authTTL, authEpoch := f.authTTL, f.authEpoch
@@ -178,6 +185,10 @@ func (f *fakeMgrMon) serve(conn net.Conn) {
 			}
 			f.mu.Lock()
 			f.beacons = append(f.beacons, beacon)
+			f.mu.Unlock()
+		case msgr.MonMgrReportMessage:
+			f.mu.Lock()
+			f.reports = append(f.reports, m)
 			f.mu.Unlock()
 		case msgr.AuthMessage:
 			d := wire.NewDecoder(m.Front)
