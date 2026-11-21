@@ -33,8 +33,9 @@ observed runtime, and the size and SHA-256 of each payload file), tests.json
 and runtime.json (inspected image ID and architecture, native daemon version,
 provider version, fixture-reported profile). Every field is required and
 unknown fields are refused. Collection requires the pinned SOURCE and IMAGE,
-and the provider release that the tested revision pins in
-integration/fixture/go.mod (--provider-pin), which must be one of
+and the provider release that the tested commit pins in
+integration/fixture/go.mod (`pin` reads it from the commit object before the
+tested code runs; collect takes it as --provider-pin), which must be one of
 COLLECTABLE_PROVIDER_VERSIONS; verification also admits the provider releases
 of bundles recorded earlier. verify requires an expected run request (--request, or the
 workflow's EXECUTION_SOURCE, TESTED_SHA, CONTROLLER_SHA, RUN_ID, RUN_ATTEMPT
@@ -51,12 +52,14 @@ PASS with failed collection or upload stays test_result=passed with
 evidence_result=incomplete and a fixed public failure code; the final
 evidence step then fails the job. Missing required-test evidence is unknown,
 never PASS, and no retry replaces the first attempt. The collector uses only
-Python's standard library, executes nothing it reads, and its daemon-free
+Python's standard library, executes nothing it reads (`pin` runs only the
+trusted git and Go toolchain, which read the tested go.mod as data), and its daemon-free
 tests are tools/test_native_*evidence*.py.
 
+    native_evidence.py pin --repo TESTED_CHECKOUT --commit TESTED_SHA
     native_evidence.py collect --request REQUEST --receipts METADATA \
         --tests native-tests.json --output BUNDLE --status STATUS \
-        --provider-pin TESTED_CHECKOUT/integration/fixture/go.mod
+        --provider-pin RELEASE
     native_evidence.py verify --request REQUEST --bundle BUNDLE
 """
 import argparse
@@ -68,7 +71,9 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import subprocess
 import sys
+import tempfile
 
 SCHEMA_VERSION = 1
 SOURCE = "7f793731f1b39eb4f465e960113d2363c311b964"
@@ -187,41 +192,67 @@ def document(path, limit=INPUT_LIMIT):
     return decode(read(path, limit))
 
 
-def pinned_provider(path):
-    """The provider release a tested go.mod pins, if it is collectable.
+FIXTURE_GO_MOD = "integration/fixture/go.mod"
+# The Go listings this tool runs: (subcommands that run Go, or None for every
+# invocation; the module directories Go loads). tools/test_workflow_toolchains.py
+# reads this declaration to require a Go that can list those modules.
+# Here: pin parses the tested fixture module's go.mod with `go mod edit -json`.
+GO_LISTING = (("pin",), ("integration/fixture",))
 
-    The go.mod is read as data and never executed. Exactly one requirement
-    line must name PROVIDER with a release, and no replace directive may name
-    it, so the receipt's build information can only report that release.
+
+def pinned_provider_text(data):
+    """The collectable provider release one go.mod pins.
+
+    The file is parsed by the Go toolchain's own module parser (`go mod edit
+    -json`, which reads the file and changes nothing), so quoted paths and
+    versions, comments and blocks mean what they mean to the build. Exactly
+    one requirement must name PROVIDER, its release must be collectable, and
+    no replace directive may name PROVIDER on its old side.
     """
-    try:
-        text = read(path, PIN_LIMIT).decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise EvidenceError("provider-pin") from error
-    found, replaced, block = [], False, None
-    for raw in text.splitlines():
-        line = raw.split("//", 1)[0].strip()
-        if block and line == ")":
-            block = None
-            continue
-        words = line.split()
-        if not words:
-            continue
-        if block is None and words[0] in ("require", "replace") and words[1:] == ["("]:
-            block = words[0]
-            continue
-        directive = block
-        if block is None and words[0] in ("require", "replace"):
-            directive, words = words[0], words[1:]
-        if not words or words[0] != PROVIDER:
-            continue
-        if directive == "replace":
-            replaced = True
-        elif directive == "require":
-            found.append(words[1:])
-    need(not replaced and len(found) == 1 and len(found[0]) == 1, "provider-pin")
-    need(found[0][0] in COLLECTABLE_PROVIDER_VERSIONS, "provider-pin")
-    return found[0][0]
+    need(isinstance(data, bytes) and len(data) <= PIN_LIMIT, "provider-pin")
+    with tempfile.TemporaryDirectory() as root:
+        path = Path(root) / "go.mod"
+        path.write_bytes(data)
+        try:
+            result = subprocess.run(["go", "mod", "edit", "-json", str(path)], capture_output=True, timeout=60,
+                                    env=dict(os.environ, GOWORK="off", GOFLAGS="", GOTOOLCHAIN="local"), check=False)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise EvidenceError("provider-pin") from error
+    need(result.returncode == 0 and len(result.stdout) <= INPUT_LIMIT, "provider-pin")
+    module = decode(result.stdout)
+    need(isinstance(module, dict), "provider-pin")
+    requires = module.get("Require") or []
+    replaces = module.get("Replace") or []
+    need(isinstance(requires, list) and isinstance(replaces, list), "provider-pin")
+    found = [item.get("Version") for item in requires if isinstance(item, dict) and item.get("Path") == PROVIDER]
+    need(not any(isinstance(item, dict) and isinstance(item.get("Old"), dict) and item["Old"].get("Path") == PROVIDER
+                 for item in replaces), "provider-pin")
+    need(len(found) == 1 and found[0] in COLLECTABLE_PROVIDER_VERSIONS, "provider-pin")
+    return found[0]
+
+
+def pinned_provider(repo, commit):
+    """The collectable provider release the tested commit pins.
+
+    The go.mod comes from the commit's object, not the working tree, so a
+    file the tested run edits cannot change the expected release. A commit
+    that tracks any go.work is refused: the build runs with GOWORK=off, and a
+    workspace would select modules this check does not read.
+    """
+    need(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) is not None, "provider-pin")
+
+    def git(*arguments):
+        try:
+            result = subprocess.run(["git", "-C", str(repo), *arguments], capture_output=True, timeout=60, check=False)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise EvidenceError("provider-pin") from error
+        need(result.returncode == 0, "provider-pin")
+        return result.stdout
+
+    need(git("cat-file", "-t", commit).strip() == b"commit", "provider-pin")
+    names = git("ls-tree", "-r", "-z", "--name-only", commit).split(b"\0")
+    need(not any(name == b"go.work" or name.endswith(b"/go.work") for name in names), "provider-pin")
+    return pinned_provider_text(git("cat-file", "blob", "%s:%s" % (commit, FIXTURE_GO_MOD)))
 
 
 def encoded(value):
@@ -443,7 +474,7 @@ def verify(bundle, expected):
 
 
 def collect(request, receipts, tests, output, provider_pin):
-    """Collect one bundle; provider_pin is the release pinned_provider read."""
+    """Collect one bundle; provider_pin is the release `pin` read from the tested commit."""
     ctx = context(request)
     need(provider_pin in COLLECTABLE_PROVIDER_VERSIONS, "provider-pin")
     receipts, output = Path(receipts), Path(output)
@@ -502,12 +533,22 @@ def main(argv=None):
     capture.add_argument("--tests", required=True)
     capture.add_argument("--output", required=True)
     capture.add_argument("--status", required=True)
-    capture.add_argument("--provider-pin", required=True, help="the tested revision's integration/fixture/go.mod")
+    capture.add_argument("--provider-pin", required=True, help="the release `pin` printed for the tested commit")
+    pin = sub.add_parser("pin", help="print the GitHub step output naming the provider release the tested commit pins")
+    pin.add_argument("--repo", required=True)
+    pin.add_argument("--commit", required=True)
     check = sub.add_parser("verify")
     check.add_argument("--bundle", required=True)
     for command in (capture, check):
         command.add_argument("--request", help="run request JSON; omitted reads trusted workflow environment")
     args = parser.parse_args(argv)
+    if args.command == "pin":
+        try:
+            print("provider_pin=%s" % pinned_provider(args.repo, args.commit))
+            return 0
+        except EvidenceError as error:
+            print(str(error), file=sys.stderr)
+            return 1
     if args.command == "family":
         try:
             print(family_output())
@@ -535,7 +576,7 @@ def main(argv=None):
         if failure:
             raise failure
         if args.command == "collect":
-            collect(request, args.receipts, args.tests, args.output, pinned_provider(args.provider_pin))
+            collect(request, args.receipts, args.tests, args.output, args.provider_pin)
         else:
             verify(args.bundle, context(request))
         status["test_result"] = "passed"

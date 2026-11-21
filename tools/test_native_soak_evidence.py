@@ -20,7 +20,7 @@ import scenario_plan
 
 DURATION = family.DURATION_NS
 TESTED = "a" * 40
-PIN = evidence.pinned_provider(Path(__file__).resolve().parents[1] / "integration" / "fixture" / "go.mod")
+PIN = evidence.pinned_provider_text((Path(__file__).resolve().parents[1] / "integration" / "fixture" / "go.mod").read_bytes())
 CONTROLLER = "b" * 40
 PRIVATE_MARKER = "private-host.example.invalid"
 
@@ -496,7 +496,7 @@ class NativeSoakEvidenceTests(unittest.TestCase):
         # closed in the collector instead of silently skipping retention.
         # The collector's family decision gates the evidence steps; every
         # matrix with an osd_soak value claims the soak family.
-        self.assertEqual(text.count("steps.evidence_family.outputs.family != ''"), 3)
+        self.assertEqual(text.count("steps.evidence_family.outputs.family != ''"), 4)
         for value in ("4m", "8h", "30s"):
             self.assertEqual(evidence.claimed_family({"osd_soak": value}), "soak")
         self.assertIn('--receipts "$RUNNER_TEMP/ceph-diagnostics"', text)
@@ -510,7 +510,7 @@ class NativeSoakEvidenceTests(unittest.TestCase):
     def collect_cli(self, request, status):
         return self.run_main("collect", "--request", str(request), "--receipts", str(self.receipts), "--tests", str(self.tests),
                              "--output", str(self.output), "--status", str(status),
-                             "--provider-pin", str(Path(__file__).resolve().parents[1] / "integration" / "fixture" / "go.mod"))
+                             "--provider-pin", PIN)
 
     def test_native_pass_with_failed_collection_is_incomplete_not_failed_or_complete(self):
         request, status = self.root / "request.json", self.root / "status.json"
