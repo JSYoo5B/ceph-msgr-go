@@ -64,15 +64,22 @@ type testOSDConfig struct {
 	target   msgr.Address
 	// stopAfter ends the handshake early: "hello" stops before HELLO.
 	stopAfter string
+	// client makes the peer client.test (entity type CLIENT) whose
+	// CLIENT_IDENT numeric name is its global ID; identWrongID sends another.
+	client, identWrongID bool
 }
 
 func osdTicketInfo(t *testing.T, ringKey, session cephx.Key, sessionBytes []byte, osd, globalID uint64) []byte {
+	return peerTicketInfo(t, ringKey, sessionBytes, cephx.ServiceOSD, fmt.Sprint(osd), globalID)
+}
+
+func peerTicketInfo(t *testing.T, ringKey cephx.Key, sessionBytes []byte, entityType uint32, entityID string, globalID uint64) []byte {
 	t.Helper()
 	e := wire.Encoder{}
 	e.U8(1)
 	e.U8(2)
-	e.U32(cephx.ServiceOSD)
-	e.String(fmt.Sprint(osd))
+	e.U32(entityType)
+	e.String(entityID)
 	e.U64(globalID)
 	e.U64(^uint64(0))
 	e.U64(0)
@@ -115,7 +122,11 @@ func dialTestOSD(t *testing.T, address string, c testOSDConfig) (*testOSD, error
 	r, w := msgr.NewReader(conn, 1<<20), msgr.NewWriter(conn, 1<<20)
 	write := func(tag msgr.Tag, p []byte) error { return w.Write(msgr.Frame{Tag: tag, Segments: [][]byte{p}}) }
 	hello := wire.Encoder{}
-	hello.U8(4)
+	if c.client {
+		hello.U8(entityTypeClient)
+	} else {
+		hello.U8(4)
+	}
 	c.target.Encode(&hello)
 	if err := write(msgr.Hello, hello.Data); err != nil {
 		return fail(err)
@@ -130,7 +141,11 @@ func dialTestOSD(t *testing.T, address string, c testOSDConfig) (*testOSD, error
 		return fail(err)
 	}
 	client.GlobalID = c.globalID
-	client.Tickets[cephx.ServiceMgr] = cephx.Ticket{Key: session.value, SecretID: c.secretID, Blob: osdTicketInfo(t, c.ringKey, session.value, sessionBytes, c.osd, c.globalID), Expires: time.Now().Add(time.Hour)}
+	blob := osdTicketInfo(t, c.ringKey, session.value, sessionBytes, c.osd, c.globalID)
+	if c.client {
+		blob = peerTicketInfo(t, c.ringKey, sessionBytes, entityTypeClient, "test", c.globalID)
+	}
+	client.Tickets[cephx.ServiceMgr] = cephx.Ticket{Key: session.value, SecretID: c.secretID, Blob: blob, Expires: time.Now().Add(time.Hour)}
 	authorizer, err := client.Authorizer(cephx.ServiceMgr)
 	if err != nil {
 		return fail(err)
@@ -191,7 +206,14 @@ func dialTestOSD(t *testing.T, address string, c testOSDConfig) (*testOSD, error
 	ident := wire.Encoder{}
 	msgr.EncodeAddresses(&ident, []msgr.Address{{Type: 2, Nonce: 9, Endpoint: netip.MustParseAddrPort("192.0.2.30:6802")}})
 	c.target.Encode(&ident)
-	ident.U64(c.osd)
+	switch {
+	case c.client && c.identWrongID:
+		ident.U64(c.globalID + 1)
+	case c.client:
+		ident.U64(c.globalID)
+	default:
+		ident.U64(c.osd)
+	}
 	ident.U64(1)
 	ident.U64(^uint64(0) >> 2)
 	ident.U64(1<<0 | 1<<9 | 1<<13 | 1<<59)
@@ -334,10 +356,10 @@ func TestMgrListenerPublishesIdentifiedPeersAndDeliversOwnedMessages(t *testing.
 			t.Fatal("authorize input", seen)
 		}
 		mu.Unlock()
-		front := []byte("MMgrOpen")
-		osd.send(t, 1, 0x700, front)
+		front := []byte("raw only")
+		osd.send(t, 1, rawOnlyType, front)
 		m, err := peer.Next(ctx)
-		if err != nil || m.Type != 0x700 || m.Sequence != 1 || string(m.Front) != "MMgrOpen" {
+		if err != nil || m.Type != rawOnlyType || m.Sequence != 1 || string(m.Front) != "raw only" || m.Open != nil {
 			t.Fatal("inbound message", m, err)
 		}
 		m.Front[0] = 'x'
@@ -482,7 +504,7 @@ func TestMgrPeerOverflowFailsAfterDraining(t *testing.T) {
 		t.Fatal(err)
 	}
 	for seq := uint64(1); seq <= 3; seq++ {
-		osd.send(t, seq, 0x700, []byte{byte(seq)})
+		osd.send(t, seq, rawOnlyType, []byte{byte(seq)})
 	}
 	<-peer.Done()
 	for want := byte(1); want <= 2; want++ {
@@ -716,13 +738,17 @@ func TestMgrListenerWorkerIsAccountedWhenPublished(t *testing.T) {
 	}
 }
 
+// rawOnlyType is a message type the peer delivers raw only (no MGR daemon
+// message has it).
+const rawOnlyType = 0x7f0
+
 // TestMgrListenerCanceledWaitsConsumeNothing calls Accept with a peer
 // queued and Next with a message queued, each with a canceled context.
 func TestMgrListenerCanceledWaitsConsumeNothing(t *testing.T) {
 	l := &MgrListener{changed: make(chan struct{}), options: MgrListenerOptions{MaxBufferedMessages: 4, MaxBufferedBytes: 1 << 20}}
 	p := &MgrPeer{listener: l, changed: make(chan struct{})}
 	l.pending = []*MgrPeer{p}
-	if err := p.enqueue(msgr.MessageData{Type: 0x700, Front: []byte{1}}); err != nil {
+	if err := p.enqueue(msgr.MessageData{Type: rawOnlyType, Front: []byte{1}}); err != nil {
 		t.Fatal(err)
 	}
 	canceled, cancel := context.WithCancel(context.Background())
@@ -736,7 +762,7 @@ func TestMgrListenerCanceledWaitsConsumeNothing(t *testing.T) {
 	if got, err := l.Accept(context.Background()); err != nil || got != p {
 		t.Fatal("the queued peer was consumed", got, err)
 	}
-	if m, err := p.Next(context.Background()); err != nil || m.Type != 0x700 {
+	if m, err := p.Next(context.Background()); err != nil || m.Type != rawOnlyType {
 		t.Fatal("the queued message was consumed", m, err)
 	}
 }
@@ -753,7 +779,7 @@ func TestMgrPeerQueuesNothingAfterItsTerminalCause(t *testing.T) {
 	if _, err := p.Next(context.Background()); !errors.Is(err, cause) {
 		t.Fatal("Next before the late message", err)
 	}
-	if err := p.enqueue(msgr.MessageData{Type: 0x700, Front: []byte{1}}); !errors.Is(err, cause) {
+	if err := p.enqueue(msgr.MessageData{Type: rawOnlyType, Front: []byte{1}}); !errors.Is(err, cause) {
 		t.Fatal("a message was queued after the terminal cause", err)
 	}
 	if _, err := p.Next(context.Background()); !errors.Is(err, cause) {
@@ -783,7 +809,8 @@ func TestMgrListenerCanceledContendedWaitsConsumeNothing(t *testing.T) {
 		_, err := p.Next(ctx)
 		return err
 	}, func() {
-		p.queue = append(p.queue, MgrInboundMessage{Type: 0x700, Front: []byte{1}})
+		p.queue = append(p.queue, MgrInboundMessage{Type: rawOnlyType, Front: []byte{1}})
+		p.sizes = append(p.sizes, 1+64)
 		p.bytes += 1 + 64
 		p.signal()
 	})
