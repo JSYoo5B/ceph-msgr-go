@@ -112,15 +112,15 @@ func TestCephOSDCommandCrashIntegration(t *testing.T) {
 		unaware[form].hold.holdNow()
 	}
 	name := strconv.FormatInt(int64(base.ID), 10)
-	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
-		t.Fatal(err)
-	}
 	restarted := false
 	defer func() {
 		if !restarted {
 			recoverMutationFixture(t, c, base, original, name, true)
 		}
 	}()
+	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-ended.hold.closed:
 	case <-ctx.Done():

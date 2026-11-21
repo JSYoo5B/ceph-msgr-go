@@ -48,10 +48,10 @@ func TestCephOSDMutationCrashIntegration(t *testing.T) {
 		t.Fatal("ONDISK write before forced termination", err)
 	}
 	checkOSDMetadata(t, reply, oracle)
+	stopped = true
 	if err = testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
 		t.Fatal("force OSD termination", err)
 	}
-	stopped = true
 	if err = o.Close(); err != nil {
 		t.Fatal("close pre-crash OSD session", err)
 	}

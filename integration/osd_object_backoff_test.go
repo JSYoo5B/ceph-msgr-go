@@ -386,8 +386,8 @@ samePGPair:
 	makeDegraded := func(name string, replica int32, data []byte) objectBackoffWait {
 		t.Helper()
 		var w objectBackoffWait
-		objectBackoffDaemon(t, ctx, "stop", replica)
 		stopped[replica] = true
+		objectBackoffDaemon(t, ctx, "stop", replica)
 		objectBackoffMust(t, ctx, "wait-osd", map[string]any{"osd": replica, "up": false, "object": name}, &w)
 		putNative(name, data)
 		objectBackoffDaemon(t, ctx, "start", replica)
@@ -760,8 +760,8 @@ samePGPair:
 		time.Sleep(500 * time.Millisecond)
 	}
 	killed := time.Now()
-	objectBackoffDaemon(t, ctx, "kill", primary2)
 	stopped[primary2] = true
+	objectBackoffDaemon(t, ctx, "kill", primary2)
 	objectBackoffResume(t, ctx, stale2Lease)
 	var second completion
 	select {

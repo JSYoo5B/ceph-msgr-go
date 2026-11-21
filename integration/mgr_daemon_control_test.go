@@ -612,9 +612,6 @@ func TestCephMgrDaemonControlIntegration(t *testing.T) {
 	if monName == "" {
 		t.Fatal("held MON endpoint is not in the MonMap", before.Monitor.Endpoint)
 	}
-	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", monName); err != nil {
-		t.Fatal("stop MON", monName, err)
-	}
 	monStopped := true
 	defer func() {
 		if monStopped {
@@ -625,6 +622,9 @@ func TestCephMgrDaemonControlIntegration(t *testing.T) {
 			}
 		}
 	}()
+	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", monName); err != nil {
+		t.Fatal("stop MON", monName, err)
+	}
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
 		s := daemon.State()

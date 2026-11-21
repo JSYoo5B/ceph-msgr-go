@@ -205,10 +205,10 @@ func TestCephOSDCopyFromDestinationCrashIntegration(t *testing.T) {
 		t.Fatal("the copy finished while its source primary was frozen", result.reply.Code, result.err)
 	case <-time.After(3 * time.Second):
 	}
+	down = true
 	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", killed); err != nil {
 		t.Fatal("kill destination primary", err)
 	}
-	down = true
 	var crash struct {
 		ExitCode *int `json:"exit_code"`
 	}

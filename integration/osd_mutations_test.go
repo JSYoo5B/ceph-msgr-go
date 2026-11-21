@@ -305,10 +305,10 @@ func TestCephOSDMutationRestartIntegration(t *testing.T) {
 		t.Fatal("ONDISK write before restart", err)
 	}
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	stopped = true
 	if err = testcluster.ControlDaemon(ctx, dir, "stop", "osd", name); err != nil {
 		t.Fatal(err)
 	}
-	stopped = true
 	if err = o.Close(); err != nil {
 		t.Fatal("close orderly stopped OSD connection", err)
 	}

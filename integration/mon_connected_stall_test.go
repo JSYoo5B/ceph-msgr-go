@@ -273,10 +273,10 @@ func TestCephMonPoolOpConnectedStopIntegration(t *testing.T) {
 	default:
 	}
 	stopping := time.Now()
+	stopped = true
 	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", peon); err != nil {
 		t.Fatal("stop connected MON", err)
 	}
-	stopped = true
 	for range 3 {
 		r := <-results
 		var unknown *cephmsgr.OutcomeUnknownError

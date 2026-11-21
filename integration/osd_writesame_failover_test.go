@@ -91,10 +91,10 @@ func TestCephOSDWriteSameFailoverIntegration(t *testing.T) {
 	if before.Code != 0 || !bytes.Equal(before.Data, want) || before.Version != reply.UserVersion || before.Seconds != int64(req.ModificationTime.Seconds) || before.Nanos != int64(req.ModificationTime.Nanoseconds) {
 		t.Fatalf("native bytes/version/mtime before termination differ: %x version=%d", before.Data, before.Version)
 	}
+	stopped = true
 	if err = testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
 		t.Fatal("force primary termination", err)
 	}
-	stopped = true
 	if err = o.Close(); err != nil {
 		t.Fatal("close killed primary connection", err)
 	}
