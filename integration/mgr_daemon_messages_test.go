@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -170,24 +171,60 @@ func (l *mgrClientLog) serveClient(ctx context.Context, p *cephmsgr.MgrPeer, noe
 	}
 }
 
-// mgrWaitReceipt is one Next wait on a client peer: when it was entered
-// and released, the error that released it, how many messages it returned
-// before that and the session's terminal cause at release (nil: live).
-type mgrWaitReceipt struct {
-	Entered, Released time.Time
-	Err, PeerErr      error
-	Messages          int
+// parkedContext is the wait-entry barrier of one MgrPeer.Next or
+// MgrListener.Accept call: Parked is closed when the call takes ctx.Done()
+// for the second time. Both calls take it once before their lock and again
+// in the select that blocks on the peer's (listener's) change signal and
+// ctx (cephmsgr/mgr_listener.go), so for a call that dequeues nothing the
+// second Done is that select: the call is parked from then on and returns
+// only through it. A Next or Accept that took Done differently would leave
+// Parked open, and the bounded wait for it fails; it cannot report a call
+// as parked earlier than its select. Each parkedContext serves one call.
+type parkedContext struct {
+	context.Context
+	Parked chan struct{}
+
+	mu    sync.Mutex
+	calls int
+	at    time.Time
 }
 
-func waitReleased(ctx context.Context, p *cephmsgr.MgrPeer) mgrWaitReceipt {
-	r := mgrWaitReceipt{Entered: time.Now()}
-	for {
-		if _, err := p.Next(ctx); err != nil {
-			r.Released, r.Err, r.PeerErr = time.Now(), err, p.Err()
-			return r
-		}
-		r.Messages++
+func newParkedContext(ctx context.Context) *parkedContext {
+	return &parkedContext{Context: ctx, Parked: make(chan struct{})}
+}
+
+func (c *parkedContext) Done() <-chan struct{} {
+	c.mu.Lock()
+	c.calls++
+	if c.calls == 2 {
+		c.at = time.Now()
+		close(c.Parked)
 	}
+	c.mu.Unlock()
+	return c.Context.Done()
+}
+
+// ParkedAt is when the call reached its select; zero if it never did.
+func (c *parkedContext) ParkedAt() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+// mgrWaitReceipt is one Next call on a client peer: when it parked (the
+// barrier) and when it returned, the error it returned (nil: it returned a
+// message, which no peer of this step may send) and the session's terminal
+// cause then (nil: live). Returned is recorded by the calling goroutine
+// after Next returns, so it is bounded after the event that released the
+// call, never ordered before that event's own return.
+type mgrWaitReceipt struct {
+	Parked, Returned time.Time
+	Err, PeerErr     error
+}
+
+func waitReleased(ctx *parkedContext, p *cephmsgr.MgrPeer) mgrWaitReceipt {
+	_, err := p.Next(ctx)
+	return mgrWaitReceipt{Returned: time.Now(), Parked: ctx.ParkedAt(), Err: err, PeerErr: p.Err()}
 }
 
 // mgrIsolation is the consumer side of the isolation step: one native
@@ -196,14 +233,15 @@ func waitReleased(ctx context.Context, p *cephmsgr.MgrPeer) mgrWaitReceipt {
 // client's command is answered once the first one is held.
 type mgrIsolation struct {
 	stalled  chan struct{} // closed when the held command arrived
-	answered chan struct{} // closed after the answer was written
-	armed    chan struct{} // closed just before the held peer's second wait
+	answered chan struct{} // closed after the answer was written and replyWait set
+	armed    chan struct{} // closed once heldWait is set, before its call
 
 	mu  sync.Mutex
 	rec mgrIsolationRecord
 }
 
 // mgrIsolationRecord is what the isolation step's consumer recorded.
+// heldWait and replyWait are the barriers of the two waits left for Close.
 type mgrIsolationRecord struct {
 	held, reply         *cephmsgr.MgrPeerCommand
 	heldPeer, replyPeer cephmsgr.MgrPeerIdentity
@@ -211,6 +249,7 @@ type mgrIsolationRecord struct {
 	canceledAt          time.Time
 	canceled, heldClose mgrWaitReceipt
 	replyClose          mgrWaitReceipt
+	heldWait, replyWait *parkedContext
 	heldDone, replyDone bool
 }
 
@@ -218,10 +257,10 @@ func newMgrIsolation() *mgrIsolation {
 	return &mgrIsolation{stalled: make(chan struct{}), answered: make(chan struct{}), armed: make(chan struct{})}
 }
 
-// hold keeps c unanswered. Its first wait is bounded by a per-call context
-// canceled once the other peer's answer was written; its second wait ends
-// only with the session (the concurrent listener Close). The reply to c
-// after that is recorded.
+// hold keeps c unanswered. Its first wait is a per-call context canceled
+// once that call has parked and the other peer's answer was written; its
+// second wait ends only with the session (the concurrent listener Close).
+// The reply to c after that is recorded.
 func (s *mgrIsolation) hold(ctx context.Context, p *cephmsgr.MgrPeer, c *cephmsgr.MgrPeerCommand, l *mgrClientLog) {
 	s.mu.Lock()
 	if s.rec.held != nil {
@@ -233,20 +272,27 @@ func (s *mgrIsolation) hold(ctx context.Context, p *cephmsgr.MgrPeer, c *cephmsg
 	s.mu.Unlock()
 	close(s.stalled)
 	call, cancel := context.WithCancel(ctx)
+	first := newParkedContext(call)
 	go func() {
-		select {
-		case <-s.answered:
-		case <-ctx.Done():
+		for _, barrier := range []<-chan struct{}{s.answered, first.Parked} {
+			select {
+			case <-barrier:
+			case <-ctx.Done():
+			}
 		}
 		s.mu.Lock()
 		s.rec.canceledAt = time.Now()
 		s.mu.Unlock()
 		cancel()
 	}()
-	canceled := waitReleased(call, p)
+	canceled := waitReleased(first, p)
 	cancel()
+	second := newParkedContext(ctx)
+	s.mu.Lock()
+	s.rec.heldWait = second
+	s.mu.Unlock()
 	close(s.armed)
-	closed := waitReleased(ctx, p)
+	closed := waitReleased(second, p)
 	expired := c.Reply(ctx, 0, "too late", nil)
 	s.mu.Lock()
 	s.rec.canceled, s.rec.heldClose, s.rec.expired, s.rec.heldDone = canceled, closed, expired, true
@@ -267,19 +313,43 @@ func (s *mgrIsolation) answer(ctx context.Context, p *cephmsgr.MgrPeer, c *cephm
 	}
 	id := p.Identity()
 	err := c.Reply(ctx, -95, fmt.Sprintf("answer tid %d gid %d", c.Transaction, id.GlobalID), reversed(c.Input))
+	wait := newParkedContext(ctx)
 	s.mu.Lock()
 	if s.rec.reply != nil {
 		s.mu.Unlock()
 		l.fail("a second answered command, tid %d", c.Transaction)
 		return
 	}
-	s.rec.reply, s.rec.replyPeer, s.rec.replyErr = c, id, err
+	s.rec.reply, s.rec.replyPeer, s.rec.replyErr, s.rec.replyWait = c, id, err, wait
 	s.mu.Unlock()
 	close(s.answered)
-	closed := waitReleased(ctx, p)
+	closed := waitReleased(wait, p)
 	s.mu.Lock()
 	s.rec.replyClose, s.rec.replyDone = closed, true
 	s.mu.Unlock()
+}
+
+// listenerWorkers counts goroutines running the listener's own workers
+// (its accept loop and handshakes, including each published session's
+// monitor, which runs that session's Wait). Application calls into the
+// listener (Accept, Next, Reply) are not counted.
+func listenerWorkers() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	count := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "cephmsgr.(*MgrListener).serve") || strings.Contains(g, "cephmsgr.(*MgrListener).handshake") {
+			count++
+		}
+	}
+	return count
 }
 
 // listenerSockets counts this process's TCP sockets whose local port is
@@ -380,17 +450,25 @@ func fsidString(f [16]byte) string {
 // The completed reply's receipt: the MMgrCommand family and binary input on
 // the Go side, and on the native side the code, a status naming the Go
 // TID and the global ID of the session that answered (the native client's
-// own instance ID) and the reversed binary input. Waits on both client
-// sessions and the accept loop's Accept, each entered before Close, are
-// then released with ErrClosed by two concurrent MgrListener.Close calls,
-// which both return; the reply to the held handle afterwards is refused as
-// ErrMgrReplyExpired (known not sent), and the native tell returns
-// ETIMEDOUT at its own rados_mon_op_timeout with no output, never a reply
-// (positive 110: RadosClient::mgr_command returns C_SaferCond::wait_for's
-// timeout value unnegated, ceph/ceph/blob/v20.2.4/src/common/Cond.h).
-// After Close the listener reports no handshake, peer or pending session,
-// this process holds no socket on the listener's port (/proc/self/fd
-// against /proc/net/tcp), the port refuses a connection, the unfinished
+// own instance ID) and the reversed binary input. Every wait asserted
+// here passes a wait-entry barrier (parkedContext) before the event that
+// releases it is started: the per-call wait is canceled only after it
+// parked, and Close starts only after waits on both client sessions and
+// the accept loop's current Accept parked with no peer pending. Each call
+// must then return its cause (context.Canceled; ErrClosed) within 10 s of
+// that event's start; a caller's own record is not ordered against Close
+// returning, since Close joins the listener's workers, not its callers.
+// The two concurrent MgrListener.Close calls both return; the reply to the
+// held handle afterwards is refused as ErrMgrReplyExpired (known not
+// sent), and the native tell returns ETIMEDOUT at its own
+// rados_mon_op_timeout with no output, never a reply (positive 110:
+// RadosClient::mgr_command returns C_SaferCond::wait_for's timeout value
+// unnegated, ceph/ceph/blob/v20.2.4/src/common/Cond.h). When Close has
+// returned no goroutine runs the listener's accept loop, a handshake or a
+// session monitor (which waits for its session's workers), the listener
+// reports no handshake, peer or pending session, this process holds no
+// socket on the listener's port (/proc/self/fd against /proc/net/tcp),
+// and the port refuses a connection. The unfinished
 // handshake ended at its banner stage with the native socket seeing EOF,
 // and the native network namespace has no established connection to the
 // MGR's address left.
@@ -512,14 +590,22 @@ func TestCephMgrDaemonMessagesIntegration(t *testing.T) {
 	serving, stopServing := context.WithCancel(ctx)
 	var served sync.WaitGroup
 	defer func() { stopServing(); listener.Close(); served.Wait() }()
-	var acceptErr error // the accept loop's terminal error; read after served.Wait
+	// The accept loop's current call (its barrier) and terminal receipt;
+	// the receipt is read after served.Wait.
+	var acceptMu sync.Mutex
+	var acceptCall *parkedContext
+	var acceptEnd mgrWaitReceipt
 	served.Add(1)
 	go func() {
 		defer served.Done()
 		for {
-			p, err := listener.Accept(serving)
+			call := newParkedContext(serving)
+			acceptMu.Lock()
+			acceptCall = call
+			acceptMu.Unlock()
+			p, err := listener.Accept(call)
 			if err != nil {
-				acceptErr = err
+				acceptEnd = mgrWaitReceipt{Returned: time.Now(), Parked: call.ParkedAt(), Err: err}
 				return
 			}
 			if p.Identity().Entity == "osd.0" {
@@ -882,27 +968,55 @@ func TestCephMgrDaemonMessagesIntegration(t *testing.T) {
 		ready                bool
 		before, after        cephmsgr.MgrListenerState
 		socketsBefore        int
+		workersBefore        int
 		started, returned    time.Time
 		errs                 [2]error
 		socketsAfter         int
+		workersAfter         int
 		socketsErr, redialed error
 	}
 	var shut closeReceipt
 	closer := make(chan struct{})
 	go func() {
 		defer close(closer)
-		select {
-		case <-iso.armed:
+		// Close only once every call it must release has parked: the held
+		// and answered peers' waits and the accept loop's current Accept
+		// with no peer pending (a peer published meanwhile starts a new
+		// Accept call, which is then awaited).
+		limit, stop := context.WithTimeout(context.Background(), 60*time.Second)
+		defer stop()
+		deadline := limit.Done()
+		ready := func(barrier <-chan struct{}) bool {
 			select {
-			case <-iso.answered:
-				shut.ready = true
-			case <-time.After(60 * time.Second):
+			case <-barrier:
+				return true
+			case <-deadline:
+				return false
 			}
-			// Let both client waits park; that each was entered before
-			// Close started is checked below, not assumed.
-			time.Sleep(2 * time.Second)
-		case <-time.After(60 * time.Second):
 		}
+		parked := ready(iso.armed) && ready(iso.answered)
+		if parked {
+			iso.mu.Lock()
+			held, reply := iso.rec.heldWait, iso.rec.replyWait
+			iso.mu.Unlock()
+			parked = ready(held.Parked) && ready(reply.Parked)
+		}
+		for parked {
+			acceptMu.Lock()
+			call := acceptCall
+			acceptMu.Unlock()
+			if parked = ready(call.Parked); !parked {
+				break
+			}
+			acceptMu.Lock()
+			current := acceptCall == call
+			acceptMu.Unlock()
+			if current && listener.State().Pending == 0 {
+				shut.ready = true
+				break
+			}
+		}
+		shut.workersBefore = listenerWorkers()
 		shut.before = listener.State()
 		shut.socketsBefore, shut.socketsErr = listenerSockets(port)
 		shut.started = time.Now()
@@ -914,6 +1028,7 @@ func TestCephMgrDaemonMessagesIntegration(t *testing.T) {
 		closing.Wait()
 		shut.returned = time.Now()
 		shut.after = listener.State()
+		shut.workersAfter = listenerWorkers()
 		if n, err := listenerSockets(port); err != nil {
 			shut.socketsErr = errors.Join(shut.socketsErr, err)
 		} else {
@@ -1000,28 +1115,33 @@ func TestCephMgrDaemonMessagesIntegration(t *testing.T) {
 		stalledReply.Code != 110 || stalledReply.Status != "" || len(stalledReply.Output) != 0 {
 		t.Fatalf("held %+v, native stalled outcome %+v", h.held, native.Stalled)
 	}
-	if !errors.Is(h.canceled.Err, context.Canceled) || h.canceled.PeerErr != nil || h.canceled.Messages != 0 ||
-		h.canceled.Released.Before(h.canceledAt) {
+	// A released call's own record (Returned) is taken by its goroutine
+	// after the call returns, so it is only bounded after the releasing
+	// event (cancel, Close) began, never ordered against that event's end.
+	const releaseBound = 10 * time.Second
+	released := func(w mgrWaitReceipt, after time.Time) bool {
+		return !w.Parked.IsZero() && w.Parked.Before(after) && !w.Returned.Before(after) && w.Returned.Sub(after) <= releaseBound
+	}
+	if !errors.Is(h.canceled.Err, context.Canceled) || h.canceled.PeerErr != nil || !released(h.canceled, h.canceledAt) {
 		t.Fatalf("per-call wait %+v, canceled at %v", h.canceled, h.canceledAt)
 	}
-	for label, w := range map[string]mgrWaitReceipt{"held": h.heldClose, "answered": h.replyClose} {
-		if !errors.Is(w.Err, cephmsgr.ErrClosed) || !errors.Is(w.PeerErr, cephmsgr.ErrClosed) || w.Messages != 0 ||
-			!w.Entered.Before(shut.started) || w.Released.Before(shut.started) || w.Released.After(shut.returned) {
-			t.Fatalf("%s peer's wait across Close %+v (Close %v to %v)", label, w, shut.started, shut.returned)
+	for label, w := range map[string]mgrWaitReceipt{"held": h.heldClose, "answered": h.replyClose, "accept": acceptEnd} {
+		if !errors.Is(w.Err, cephmsgr.ErrClosed) || label != "accept" && !errors.Is(w.PeerErr, cephmsgr.ErrClosed) || !released(w, shut.started) {
+			t.Fatalf("%s call across Close %+v (Close started %v)", label, w, shut.started)
 		}
 	}
 	if !errors.Is(h.expired, cephmsgr.ErrMgrReplyExpired) || !errors.Is(h.expired, cephmsgr.ErrNotSent) {
 		t.Fatal("reply to the held command after Close", h.expired)
 	}
-	if !errors.Is(acceptErr, cephmsgr.ErrClosed) {
-		t.Fatal("pending Accept across Close", acceptErr)
-	}
-	// Close joined every worker: nothing remains on either side.
+	// Close joined the listener's own workers (accept loop, handshakes and
+	// the session monitors that wait for each session's workers), observed
+	// when Close returned: nothing of the listener remains on either side.
 	if shut.errs != [2]error{} || shut.socketsErr != nil || shut.before.Handshakes < 1 || shut.before.Peers < 3 || shut.socketsBefore < 4 ||
+		shut.workersBefore < 2 || shut.workersAfter != 0 ||
 		!shut.after.Closed || shut.after.Handshakes != 0 || shut.after.Peers != 0 || shut.after.Pending != 0 || shut.socketsAfter != 0 || shut.redialed == nil {
-		t.Fatalf("Close %v (sockets %v): before %d handshakes %d peers %d sockets; after closed %v, %d handshakes %d peers %d pending %d sockets; redial error %v",
-			shut.errs, shut.socketsErr, shut.before.Handshakes, shut.before.Peers, shut.socketsBefore, shut.after.Closed, shut.after.Handshakes,
-			shut.after.Peers, shut.after.Pending, shut.socketsAfter, shut.redialed)
+		t.Fatalf("Close %v (sockets %v): before %d handshakes %d peers %d sockets %d workers; after closed %v, %d handshakes %d peers %d pending %d sockets %d workers; redial error %v",
+			shut.errs, shut.socketsErr, shut.before.Handshakes, shut.before.Peers, shut.socketsBefore, shut.workersBefore, shut.after.Closed, shut.after.Handshakes,
+			shut.after.Peers, shut.after.Pending, shut.socketsAfter, shut.workersAfter, shut.redialed)
 	}
 	stage := ""
 	for _, r := range shut.after.Recent {
@@ -1033,10 +1153,13 @@ func TestCephMgrDaemonMessagesIntegration(t *testing.T) {
 		t.Fatalf("unfinished handshake: banner %q, EOF %v after %d more bytes, listener record %q; %d native connections remain",
 			native.Handshake.Banner, native.Handshake.EOF, native.Handshake.Extra, stage, native.Established)
 	}
-	t.Logf("released waits receipt: per-call wait on gid %d canceled %s after the answer, session live, no message; waits on both client sessions and Accept released by Close with %v; held tid %d answered after Close: %v; native held command returned %d after %.3f s",
-		h.heldPeer.GlobalID, h.canceled.Released.Sub(h.canceledAt), h.heldClose.Err, h.held.Transaction, h.expired, stalledReply.Code, stalledReply.Seconds)
-	t.Logf("close receipt: two concurrent Closes returned in %s; before %d handshakes, %d peers, %d sockets on port %d; after none, port refuses (%v); the unfinished handshake ended at stage banner (%s) and its native socket saw EOF %.3f s after the answer; no native connection remains",
-		shut.returned.Sub(shut.started), shut.before.Handshakes, shut.before.Peers, shut.socketsBefore, port, shut.redialed, stage, native.Handshake.Seconds)
+	t.Logf("released waits receipt: per-call wait on gid %d parked %s before its cancel, returned %s after it, session live, no message; parked waits on both client sessions (%s, %s before Close) and Accept (%s before) returned %s, %s and %s after Close started with %v; held tid %d answered after Close: %v; native held command returned %d after %.3f s",
+		h.heldPeer.GlobalID, h.canceledAt.Sub(h.canceled.Parked), h.canceled.Returned.Sub(h.canceledAt),
+		shut.started.Sub(h.heldClose.Parked), shut.started.Sub(h.replyClose.Parked), shut.started.Sub(acceptEnd.Parked),
+		h.heldClose.Returned.Sub(shut.started), h.replyClose.Returned.Sub(shut.started), acceptEnd.Returned.Sub(shut.started), h.heldClose.Err,
+		h.held.Transaction, h.expired, stalledReply.Code, stalledReply.Seconds)
+	t.Logf("close receipt: two concurrent Closes returned in %s; before %d handshakes, %d peers, %d sockets on port %d, %d listener workers; after none, port refuses (%v); the unfinished handshake ended at stage banner (%s) and its native socket saw EOF %.3f s after the answer; no native connection remains",
+		shut.returned.Sub(shut.started), shut.before.Handshakes, shut.before.Peers, shut.socketsBefore, port, shut.workersBefore, shut.redialed, stage, native.Handshake.Seconds)
 
 	// Restore a stock active MGR.
 	stopServing()
