@@ -77,6 +77,7 @@ type mgrClientLog struct {
 	expired  error // the reply to the command held over its connection's end
 	held     *cephmsgr.MgrPeerCommand
 	failures []string
+	iso      *mgrIsolation
 }
 
 func (l *mgrClientLog) fail(format string, args ...any) {
@@ -92,10 +93,12 @@ func reversed(b []byte) []byte {
 }
 
 // serveClient is the test's consumer for one client peer: it configures a
-// registered service daemon, acknowledges every close except noecho's, and
-// answers the three test commands. The replace command is held, its
-// connection closed, and the reply to that handle recorded; the client's
-// resend on its new connection is answered.
+// registered service daemon (and no other client, which then sends no
+// report), acknowledges every close except noecho's, and answers the three
+// test commands. The replace command is held, its connection closed, and
+// the reply to that handle recorded; the client's resend on its new
+// connection is answered. The stall and answer commands hand their peer to
+// the isolation step (mgrIsolation).
 func (l *mgrClientLog) serveClient(ctx context.Context, p *cephmsgr.MgrPeer, noecho string) {
 	for {
 		m, err := p.Next(ctx)
@@ -104,10 +107,11 @@ func (l *mgrClientLog) serveClient(ctx context.Context, p *cephmsgr.MgrPeer, noe
 		}
 		switch {
 		case m.Open != nil:
-			l.mu.Lock()
-			if m.Open.ServiceDaemon {
-				l.opens[m.Open.DaemonName] = *m.Open
+			if !m.Open.ServiceDaemon {
+				continue
 			}
+			l.mu.Lock()
+			l.opens[m.Open.DaemonName] = *m.Open
 			l.mu.Unlock()
 			if err := p.Configure(ctx, cephmsgr.MgrConfigure{StatsPeriod: 1}); err != nil {
 				l.fail("configure %s: %v", m.Open.DaemonName, err)
@@ -126,6 +130,12 @@ func (l *mgrClientLog) serveClient(ctx context.Context, p *cephmsgr.MgrPeer, noe
 			l.mu.Lock()
 			l.closes[m.Close.DaemonName] = err
 			l.mu.Unlock()
+		case m.Command != nil && strings.Contains(strings.Join(m.Command.Command, " "), "gotest stall"):
+			l.iso.hold(ctx, p, m.Command, l)
+			return
+		case m.Command != nil && strings.Contains(strings.Join(m.Command.Command, " "), "gotest answer"):
+			l.iso.answer(ctx, p, m.Command, l)
+			return
 		case m.Command != nil:
 			c := m.Command
 			l.mu.Lock()
@@ -158,6 +168,153 @@ func (l *mgrClientLog) serveClient(ctx context.Context, p *cephmsgr.MgrPeer, noe
 			}
 		}
 	}
+}
+
+// mgrWaitReceipt is one Next wait on a client peer: when it was entered
+// and released, the error that released it, how many messages it returned
+// before that and the session's terminal cause at release (nil: live).
+type mgrWaitReceipt struct {
+	Entered, Released time.Time
+	Err, PeerErr      error
+	Messages          int
+}
+
+func waitReleased(ctx context.Context, p *cephmsgr.MgrPeer) mgrWaitReceipt {
+	r := mgrWaitReceipt{Entered: time.Now()}
+	for {
+		if _, err := p.Next(ctx); err != nil {
+			r.Released, r.Err, r.PeerErr = time.Now(), err, p.Err()
+			return r
+		}
+		r.Messages++
+	}
+}
+
+// mgrIsolation is the consumer side of the isolation step: one native
+// client's command is held unanswered while a per-call wait on its session
+// is canceled and a second wait is left for Close; the other native
+// client's command is answered once the first one is held.
+type mgrIsolation struct {
+	stalled  chan struct{} // closed when the held command arrived
+	answered chan struct{} // closed after the answer was written
+	armed    chan struct{} // closed just before the held peer's second wait
+
+	mu  sync.Mutex
+	rec mgrIsolationRecord
+}
+
+// mgrIsolationRecord is what the isolation step's consumer recorded.
+type mgrIsolationRecord struct {
+	held, reply         *cephmsgr.MgrPeerCommand
+	heldPeer, replyPeer cephmsgr.MgrPeerIdentity
+	replyErr, expired   error
+	canceledAt          time.Time
+	canceled, heldClose mgrWaitReceipt
+	replyClose          mgrWaitReceipt
+	heldDone, replyDone bool
+}
+
+func newMgrIsolation() *mgrIsolation {
+	return &mgrIsolation{stalled: make(chan struct{}), answered: make(chan struct{}), armed: make(chan struct{})}
+}
+
+// hold keeps c unanswered. Its first wait is bounded by a per-call context
+// canceled once the other peer's answer was written; its second wait ends
+// only with the session (the concurrent listener Close). The reply to c
+// after that is recorded.
+func (s *mgrIsolation) hold(ctx context.Context, p *cephmsgr.MgrPeer, c *cephmsgr.MgrPeerCommand, l *mgrClientLog) {
+	s.mu.Lock()
+	if s.rec.held != nil {
+		s.mu.Unlock()
+		l.fail("a second stalled command, tid %d", c.Transaction)
+		return
+	}
+	s.rec.held, s.rec.heldPeer = c, p.Identity()
+	s.mu.Unlock()
+	close(s.stalled)
+	call, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-s.answered:
+		case <-ctx.Done():
+		}
+		s.mu.Lock()
+		s.rec.canceledAt = time.Now()
+		s.mu.Unlock()
+		cancel()
+	}()
+	canceled := waitReleased(call, p)
+	cancel()
+	close(s.armed)
+	closed := waitReleased(ctx, p)
+	expired := c.Reply(ctx, 0, "too late", nil)
+	s.mu.Lock()
+	s.rec.canceled, s.rec.heldClose, s.rec.expired, s.rec.heldDone = canceled, closed, expired, true
+	s.mu.Unlock()
+}
+
+// answer replies to c once the other command is held, with a status naming
+// the TID and the global ID this session authenticated, then waits on the
+// session until Close.
+func (s *mgrIsolation) answer(ctx context.Context, p *cephmsgr.MgrPeer, c *cephmsgr.MgrPeerCommand, l *mgrClientLog) {
+	select {
+	case <-s.stalled:
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+		l.fail("the stalled command never arrived before tid %d", c.Transaction)
+		return
+	}
+	id := p.Identity()
+	err := c.Reply(ctx, -95, fmt.Sprintf("answer tid %d gid %d", c.Transaction, id.GlobalID), reversed(c.Input))
+	s.mu.Lock()
+	if s.rec.reply != nil {
+		s.mu.Unlock()
+		l.fail("a second answered command, tid %d", c.Transaction)
+		return
+	}
+	s.rec.reply, s.rec.replyPeer, s.rec.replyErr = c, id, err
+	s.mu.Unlock()
+	close(s.answered)
+	closed := waitReleased(ctx, p)
+	s.mu.Lock()
+	s.rec.replyClose, s.rec.replyDone = closed, true
+	s.mu.Unlock()
+}
+
+// listenerSockets counts this process's TCP sockets whose local port is
+// port, matched by inode between /proc/self/fd and /proc/net/tcp{,6}
+// (Linux). A socket the process closed has no descriptor here, also while
+// the kernel keeps it in TIME_WAIT.
+func listenerSockets(port int) (int, error) {
+	inodes := map[string]bool{}
+	suffix := fmt.Sprintf(":%04X", port)
+	for _, name := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		data, err := os.ReadFile(name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return 0, err
+		}
+		for _, line := range strings.Split(string(data), "\n")[1:] {
+			fields := strings.Fields(line)
+			if len(fields) > 9 && strings.HasSuffix(fields[1], suffix) && fields[9] != "0" {
+				inodes[fields[9]] = true
+			}
+		}
+	}
+	fds, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, fd := range fds {
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", fd.Name()))
+		if err == nil && strings.HasPrefix(target, "socket:[") && inodes[strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")] {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func fsidString(f [16]byte) string {
@@ -212,15 +369,45 @@ func fsidString(f [16]byte) string {
 // (known not sent); the native client resends it with the same TID on its
 // new connection, and that new handle's reply completes it.
 //
+// Peer isolation and shutdown (mgrpeers): the native side opens a TCP
+// connection that reads the listener's msgr2 banner and sends four bytes of
+// its own, so its handshake stays unfinished, and two librados handles,
+// identified by their instance IDs, which must equal the global IDs their
+// Go sessions authenticated. The first sends a tell that the consumer
+// holds unanswered; a per-call wait on that session is canceled once the
+// second handle's MMgrCommand was answered, and it returns
+// context.Canceled with no message consumed and the session still live.
+// The completed reply's receipt: the MMgrCommand family and binary input on
+// the Go side, and on the native side the code, a status naming the Go
+// TID and the global ID of the session that answered (the native client's
+// own instance ID) and the reversed binary input. Waits on both client
+// sessions and the accept loop's Accept, each entered before Close, are
+// then released with ErrClosed by two concurrent MgrListener.Close calls,
+// which both return; the reply to the held handle afterwards is refused as
+// ErrMgrReplyExpired (known not sent), and the native tell returns
+// ETIMEDOUT at its own rados_mon_op_timeout with no output, never a reply
+// (positive 110: RadosClient::mgr_command returns C_SaferCond::wait_for's
+// timeout value unnegated, ceph/ceph/blob/v20.2.4/src/common/Cond.h).
+// After Close the listener reports no handshake, peer or pending session,
+// this process holds no socket on the listener's port (/proc/self/fd
+// against /proc/net/tcp), the port refuses a connection, the unfinished
+// handshake ended at its banner stage with the native socket seeing EOF,
+// and the native network namespace has no established connection to the
+// MGR's address left.
+//
 // Not verified here: MMgrUpdate (only a stock MON sends it, after its own
 // version changes; native vectors and synthetic tests cover it), MDS
 // peers, OSD perf-metric queries and metric payloads on a live session,
-// and the unsent or uncertain reply outcomes (synthetic tests).
+// MgrDaemon.Close racing pending peer waits (the listener's Close is the
+// one raced here), a stock peer that stops reading a published session,
+// and the unsent or uncertain reply outcomes, including induced partial
+// writes (synthetic tests).
 //
 // Pinned sources: ceph/ceph/blob/v20.2.4/src/mgr/MgrClient.cc,
 // ceph/ceph/blob/v20.2.4/src/mgr/DaemonServer.cc,
 // ceph/ceph/blob/v20.2.4/src/osd/OSD.cc (collect_pg_stats),
-// ceph/ceph/blob/v20.2.4/src/messages/MPGStats.h.
+// ceph/ceph/blob/v20.2.4/src/messages/MPGStats.h,
+// ceph/ceph/blob/v20.2.4/src/librados/RadosClient.cc (mgr_command).
 //
 //scenario:row mgr-messages.aes256k.ip4.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrdaemonmessages key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 capabilities=mgr-daemon-control
 //scenario:covers Daemon-to-daemon
@@ -306,7 +493,7 @@ func TestCephMgrDaemonMessagesIntegration(t *testing.T) {
 	}
 	advertised := []cephmsgr.ManagerAddress{{Type: 2, Nonce: binary.LittleEndian.Uint32(nonce[:])&0x7fffffff | 1, Endpoint: netip.AddrPortFrom(host, uint16(bound.Addr().(*net.TCPAddr).Port))}}
 	listener, err := daemon.Listen(cephmsgr.MgrListenerOptions{
-		Listener: bound, Addresses: advertised, ConnectionMode: options.ConnectionMode, HandshakeTimeout: 5 * time.Second,
+		Listener: bound, Addresses: advertised, ConnectionMode: options.ConnectionMode, HandshakeTimeout: 90 * time.Second,
 		Authorize: func(_ context.Context, id cephmsgr.MgrPeerIdentity) error {
 			if id.Entity != "osd.0" && id.Entity != "client.test" {
 				return errors.New("only osd.0 and the fixture's client.test are expected")
@@ -320,17 +507,19 @@ func TestCephMgrDaemonMessagesIntegration(t *testing.T) {
 	defer listener.Close()
 
 	const noecho = "gomgr-noecho"
-	clients := &mgrClientLog{opens: map[string]cephmsgr.MgrDaemonOpen{}, statuses: map[string]map[string]string{}, closes: map[string]error{}}
+	clients := &mgrClientLog{opens: map[string]cephmsgr.MgrDaemonOpen{}, statuses: map[string]map[string]string{}, closes: map[string]error{}, iso: newMgrIsolation()}
 	osdPeers := make(chan *cephmsgr.MgrPeer, 8)
 	serving, stopServing := context.WithCancel(ctx)
 	var served sync.WaitGroup
 	defer func() { stopServing(); listener.Close(); served.Wait() }()
+	var acceptErr error // the accept loop's terminal error; read after served.Wait
 	served.Add(1)
 	go func() {
 		defer served.Done()
 		for {
 			p, err := listener.Accept(serving)
 			if err != nil {
+				acceptErr = err
 				return
 			}
 			if p.Identity().Entity == "osd.0" {
@@ -683,6 +872,171 @@ func TestCephMgrDaemonMessagesIntegration(t *testing.T) {
 	t.Logf("native commands: MMgrCommand tid %d -> %d %q with %d reversed bytes; MCommand tid %d (cluster FSID) -> %d %q; held tid %d on generation %d refused as %v after its connection closed, resent with the same tid on generation %d -> %d (%.3f s)",
 		echo.Transaction, peer.Commands[0].Code, peer.Commands[0].Status, len(peer.Commands[0].Output), tell.Transaction, peer.Commands[1].Code, peer.Commands[1].Status,
 		held.Transaction, held.Generation, seen.expired, resent.Generation, peer.Commands[2].Code, peer.Commands[2].Seconds)
+
+	// 7. Peer isolation, a canceled wait and a concurrent Close: an
+	// unfinished handshake, a native client whose tell is held and one
+	// whose command is answered; then two concurrent listener Closes.
+	iso := clients.iso
+	port := bound.Addr().(*net.TCPAddr).Port
+	type closeReceipt struct {
+		ready                bool
+		before, after        cephmsgr.MgrListenerState
+		socketsBefore        int
+		started, returned    time.Time
+		errs                 [2]error
+		socketsAfter         int
+		socketsErr, redialed error
+	}
+	var shut closeReceipt
+	closer := make(chan struct{})
+	go func() {
+		defer close(closer)
+		select {
+		case <-iso.armed:
+			select {
+			case <-iso.answered:
+				shut.ready = true
+			case <-time.After(60 * time.Second):
+			}
+			// Let both client waits park; that each was entered before
+			// Close started is checked below, not assumed.
+			time.Sleep(2 * time.Second)
+		case <-time.After(60 * time.Second):
+		}
+		shut.before = listener.State()
+		shut.socketsBefore, shut.socketsErr = listenerSockets(port)
+		shut.started = time.Now()
+		var closing sync.WaitGroup
+		for i := range shut.errs {
+			closing.Add(1)
+			go func() { defer closing.Done(); shut.errs[i] = listener.Close() }()
+		}
+		closing.Wait()
+		shut.returned = time.Now()
+		shut.after = listener.State()
+		if n, err := listenerSockets(port); err != nil {
+			shut.socketsErr = errors.Join(shut.socketsErr, err)
+		} else {
+			shut.socketsAfter = n
+		}
+		if c, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second); err == nil {
+			c.Close()
+		} else {
+			shut.redialed = err
+		}
+	}()
+	stallInput, answerInput := []byte{0xde, 0xad, 0, 0xbe, 0xef}, make([]byte, 300)
+	for i := range answerInput {
+		answerInput[i] = byte(i * 7)
+	}
+	var isolated struct {
+		Peers struct {
+			Handshake struct {
+				Banner  []byte  `json:"banner"`
+				EOF     bool    `json:"eof"`
+				Extra   int     `json:"bytes_after_banner"`
+				Seconds float64 `json:"eof_seconds"`
+			} `json:"handshake"`
+			Stalled, Answered struct {
+				InstanceID uint64 `json:"instance_id"`
+				Reply      struct {
+					Code    int32   `json:"code"`
+					Status  string  `json:"status"`
+					Output  []byte  `json:"output"`
+					Seconds float64 `json:"seconds"`
+				} `json:"reply"`
+				Error string `json:"error"`
+			}
+			Established int `json:"established_after_close"`
+		} `json:"mgr_peers"`
+	}
+	nativePoolResult(t, ctx, "mgrpeers", map[string]any{
+		"mgr_name": name, "address": advertised[0].Endpoint.String(), "stall_timeout": 30, "close_wait": 30,
+		"stalled":  map[string]any{"tell": true, "command": `{"prefix":"gotest stall"}`, "input": base64.StdEncoding.EncodeToString(stallInput)},
+		"answered": map[string]any{"tell": false, "command": `{"prefix":"gotest answer"}`, "input": base64.StdEncoding.EncodeToString(answerInput)},
+	}, &isolated)
+	select {
+	case <-closer:
+	case <-time.After(90 * time.Second):
+		t.Fatal("the concurrent listener Closes did not return")
+	}
+	served.Wait()
+	native := isolated.Peers
+	raw, _ := json.Marshal(native)
+	t.Logf("native mgrpeers receipt %s", raw)
+	iso.mu.Lock()
+	h := iso.rec
+	iso.mu.Unlock()
+	clients.mu.Lock()
+	failures := slices.Clone(clients.failures)
+	clients.mu.Unlock()
+	if len(failures) != 0 {
+		t.Fatal("consumer failures", failures)
+	}
+	if !shut.ready || h.held == nil || h.reply == nil || !h.heldDone || !h.replyDone {
+		t.Fatalf("isolation step incomplete: close ready %v, held %v, answered %v, waits released %v %v", shut.ready, h.held != nil, h.reply != nil, h.heldDone, h.replyDone)
+	}
+	// Two independently identified native clients.
+	if native.Stalled.InstanceID == 0 || native.Stalled.InstanceID == native.Answered.InstanceID ||
+		h.heldPeer.GlobalID != native.Stalled.InstanceID || h.replyPeer.GlobalID != native.Answered.InstanceID ||
+		h.heldPeer.Entity != "client.test" || h.replyPeer.Entity != "client.test" || h.heldPeer.Generation == h.replyPeer.Generation {
+		t.Fatalf("held peer %s gid %d generation %d, answered peer %s gid %d generation %d; native instances %d and %d",
+			h.heldPeer.Entity, h.heldPeer.GlobalID, h.heldPeer.Generation, h.replyPeer.Entity, h.replyPeer.GlobalID, h.replyPeer.Generation,
+			native.Stalled.InstanceID, native.Answered.InstanceID)
+	}
+	// The completed reply: family, TID and binary data, as the native
+	// client received them on its own session.
+	answered := native.Answered.Reply
+	if h.replyErr != nil || h.reply.Family != cephmsgr.MgrCommandFamily || !bytes.Equal(h.reply.Input, answerInput) ||
+		answered.Code != -95 || answered.Status != fmt.Sprintf("answer tid %d gid %d", h.reply.Transaction, native.Answered.InstanceID) ||
+		!bytes.Equal(answered.Output, reversed(answerInput)) {
+		t.Fatalf("answered %+v (reply error %v), native reply %+v", h.reply, h.replyErr, answered)
+	}
+	t.Logf("completed reply receipt: MMgrCommand tid %d on generation %d from client.test gid %d -> native %d %q with %d reversed bytes (%.3f s), while tid %d (MCommand) of gid %d was held",
+		h.reply.Transaction, h.replyPeer.Generation, h.replyPeer.GlobalID, answered.Code, answered.Status, len(answered.Output), answered.Seconds, h.held.Transaction, h.heldPeer.GlobalID)
+	// The released waits.
+	stalledReply := native.Stalled.Reply
+	if h.held.Family != cephmsgr.TellCommandFamily || !bytes.Equal(h.held.Input, stallInput) || native.Stalled.Error != "" ||
+		stalledReply.Code != 110 || stalledReply.Status != "" || len(stalledReply.Output) != 0 {
+		t.Fatalf("held %+v, native stalled outcome %+v", h.held, native.Stalled)
+	}
+	if !errors.Is(h.canceled.Err, context.Canceled) || h.canceled.PeerErr != nil || h.canceled.Messages != 0 ||
+		h.canceled.Released.Before(h.canceledAt) {
+		t.Fatalf("per-call wait %+v, canceled at %v", h.canceled, h.canceledAt)
+	}
+	for label, w := range map[string]mgrWaitReceipt{"held": h.heldClose, "answered": h.replyClose} {
+		if !errors.Is(w.Err, cephmsgr.ErrClosed) || !errors.Is(w.PeerErr, cephmsgr.ErrClosed) || w.Messages != 0 ||
+			!w.Entered.Before(shut.started) || w.Released.Before(shut.started) || w.Released.After(shut.returned) {
+			t.Fatalf("%s peer's wait across Close %+v (Close %v to %v)", label, w, shut.started, shut.returned)
+		}
+	}
+	if !errors.Is(h.expired, cephmsgr.ErrMgrReplyExpired) || !errors.Is(h.expired, cephmsgr.ErrNotSent) {
+		t.Fatal("reply to the held command after Close", h.expired)
+	}
+	if !errors.Is(acceptErr, cephmsgr.ErrClosed) {
+		t.Fatal("pending Accept across Close", acceptErr)
+	}
+	// Close joined every worker: nothing remains on either side.
+	if shut.errs != [2]error{} || shut.socketsErr != nil || shut.before.Handshakes < 1 || shut.before.Peers < 3 || shut.socketsBefore < 4 ||
+		!shut.after.Closed || shut.after.Handshakes != 0 || shut.after.Peers != 0 || shut.after.Pending != 0 || shut.socketsAfter != 0 || shut.redialed == nil {
+		t.Fatalf("Close %v (sockets %v): before %d handshakes %d peers %d sockets; after closed %v, %d handshakes %d peers %d pending %d sockets; redial error %v",
+			shut.errs, shut.socketsErr, shut.before.Handshakes, shut.before.Peers, shut.socketsBefore, shut.after.Closed, shut.after.Handshakes,
+			shut.after.Peers, shut.after.Pending, shut.socketsAfter, shut.redialed)
+	}
+	stage := ""
+	for _, r := range shut.after.Recent {
+		if r.Entity == "" && !r.Time.Before(shut.started) && r.Stage == "banner" {
+			stage = r.Reason
+		}
+	}
+	if !bytes.HasPrefix(native.Handshake.Banner, []byte("ceph v2\n")) || len(native.Handshake.Banner) <= 10 || !native.Handshake.EOF || native.Handshake.Extra != 0 || stage == "" || native.Established != 0 {
+		t.Fatalf("unfinished handshake: banner %q, EOF %v after %d more bytes, listener record %q; %d native connections remain",
+			native.Handshake.Banner, native.Handshake.EOF, native.Handshake.Extra, stage, native.Established)
+	}
+	t.Logf("released waits receipt: per-call wait on gid %d canceled %s after the answer, session live, no message; waits on both client sessions and Accept released by Close with %v; held tid %d answered after Close: %v; native held command returned %d after %.3f s",
+		h.heldPeer.GlobalID, h.canceled.Released.Sub(h.canceledAt), h.heldClose.Err, h.held.Transaction, h.expired, stalledReply.Code, stalledReply.Seconds)
+	t.Logf("close receipt: two concurrent Closes returned in %s; before %d handshakes, %d peers, %d sockets on port %d; after none, port refuses (%v); the unfinished handshake ended at stage banner (%s) and its native socket saw EOF %.3f s after the answer; no native connection remains",
+		shut.returned.Sub(shut.started), shut.before.Handshakes, shut.before.Peers, shut.socketsBefore, port, shut.redialed, stage, native.Handshake.Seconds)
 
 	// Restore a stock active MGR.
 	stopServing()
