@@ -51,10 +51,7 @@ func nativeU64Xattr(t *testing.T, ctx context.Context, input u64XattrNativeInput
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "osd-u64-xattr-input.json"), data); err != nil {
-		t.Fatal(err)
-	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-u64-xattr", "compare"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-u64-xattr", "compare", testcluster.ControlInput{Name: "osd-u64-xattr-input.json", Data: data}); err != nil {
 		t.Fatal(err)
 	}
 	data, err = os.ReadFile(filepath.Join(dir, "osd-u64-xattr-result.json"))

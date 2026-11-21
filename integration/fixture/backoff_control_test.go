@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -21,7 +20,7 @@ func TestBackoffControlRefusesUnownedOrUnboundedRecipe(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			out := t.TempDir()
-			if err := os.WriteFile(filepath.Join(out, "verify-osd-backoff"), []byte(test.input), 0o600); err != nil {
+			if err := writeRequestFile(out, "verify-osd-backoff", test.input); err != nil {
 				t.Fatal(err)
 			}
 			// No cluster or container is supplied: admission must reject before

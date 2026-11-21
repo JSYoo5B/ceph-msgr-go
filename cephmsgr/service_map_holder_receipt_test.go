@@ -31,8 +31,13 @@ func TestObserveNativeServiceHolderRejectsOpenRequestsBeforePublishing(t *testin
 func serviceHolderController(t *testing.T, control string, receipt func(id, token, phase string) string) {
 	t.Helper()
 	go func() {
-		request := filepath.Join(control, "observe-service-holder")
 		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			// The request's own envelope (testcluster.RequestEnvelope).
+			envelopes, _ := filepath.Glob(filepath.Join(control, "observe-service-holder.*.request"))
+			if len(envelopes) != 1 {
+				continue
+			}
+			request := envelopes[0]
 			data, err := os.ReadFile(request)
 			if err != nil {
 				continue

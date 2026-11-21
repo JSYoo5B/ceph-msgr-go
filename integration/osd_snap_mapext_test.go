@@ -42,13 +42,10 @@ func mapExtRangeOracle(t *testing.T, ctx context.Context, object string, offset,
 		fields["snap"] = snap
 	}
 	data, err := json.Marshal(fields)
-	if err == nil {
-		err = testcluster.WritePublicEvidence(filepath.Join(dir, "osd-mapext-range-input.json"), data)
-	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-mapext-range", "observe"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-mapext-range", "observe", testcluster.ControlInput{Name: "osd-mapext-range-input.json", Data: data}); err != nil {
 		t.Fatal(err)
 	}
 	data, err = os.ReadFile(filepath.Join(dir, "osd-mapext-range-result.json"))

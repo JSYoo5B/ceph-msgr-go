@@ -90,20 +90,20 @@ type nativeSplitScope struct {
 	Error                 string              `json:"error"`
 }
 
-func splitControl(ctx context.Context, action, name string) (nativeSplitScope, error) {
+// splitControl runs one action of the split oracle; inputs are the action's
+// further request-scoped inputs beside the object (testcluster.ControlInput),
+// such as observe's stale-parent identity.
+func splitControl(ctx context.Context, action, name string, inputs ...testcluster.ControlInput) (nativeSplitScope, error) {
 	var result nativeSplitScope
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	data, err := json.Marshal(map[string]string{"object": name})
 	if err != nil {
 		return result, err
 	}
-	if err = testcluster.WritePublicEvidence(filepath.Join(dir, "osd-split-input.json"), data); err != nil {
-		return result, err
-	}
 	if err = os.Remove(filepath.Join(dir, "osd-split-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return result, err
 	}
-	if err = testcluster.ControlDaemon(ctx, dir, "verify", "osd-split", action); err != nil {
+	if err = testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-split", action, append([]testcluster.ControlInput{{Name: "osd-split-input.json", Data: data}}, inputs...)...); err != nil {
 		return result, err
 	}
 	file, err := os.Open(filepath.Join(dir, "osd-split-result.json"))
@@ -403,10 +403,7 @@ func TestCephOSDSplitIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = testcluster.WritePublicEvidence(staleInput, input); err != nil {
-		t.Fatal(err)
-	}
-	observed, err = splitControl(ctx, "observe", name)
+	observed, err = splitControl(ctx, "observe", name, testcluster.ControlInput{Name: filepath.Base(staleInput), Data: input})
 	if err != nil {
 		t.Fatal("independent native stale-parent envelope receipt", err)
 	}

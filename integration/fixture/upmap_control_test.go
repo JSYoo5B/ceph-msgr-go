@@ -56,7 +56,7 @@ func TestUpmapControlRejectsUnownedOrUnboundedRecipe(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := t.TempDir()
-			if err := os.WriteFile(filepath.Join(out, "verify-osd-upmap"), []byte(tc.input), 0600); err != nil {
+			if err := writeRequestFile(out, "verify-osd-upmap", tc.input); err != nil {
 				t.Fatal(err)
 			}
 			c := &fixtureCluster{profile: tc.profile}

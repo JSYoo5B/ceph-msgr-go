@@ -34,13 +34,10 @@ func nativeChecksum(t *testing.T, ctx context.Context, object string, offset, le
 		fields["snap"] = snap
 	}
 	input, err := json.Marshal(fields)
-	if err == nil {
-		err = testcluster.WritePublicEvidence(filepath.Join(dir, "osd-checksum-input.json"), input)
-	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-checksum", "compare"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-checksum", "compare", testcluster.ControlInput{Name: "osd-checksum-input.json", Data: input}); err != nil {
 		t.Fatal(err)
 	}
 	output, err := os.ReadFile(filepath.Join(dir, "osd-checksum-result.json"))

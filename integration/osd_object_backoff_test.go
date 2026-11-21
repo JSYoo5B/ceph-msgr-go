@@ -122,13 +122,10 @@ func objectBackoffControl(ctx context.Context, action string, input, result any)
 	if err != nil {
 		return err
 	}
-	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "osd-object-backoff-input.json"), data); err != nil {
-		return err
-	}
 	if err := os.Remove(filepath.Join(dir, "osd-object-backoff-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-object-backoff", action); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-object-backoff", action, testcluster.ControlInput{Name: "osd-object-backoff-input.json", Data: data}); err != nil {
 		return fmt.Errorf("native object backoff %s: %w", action, err)
 	}
 	file, err := os.Open(filepath.Join(dir, "osd-object-backoff-result.json"))

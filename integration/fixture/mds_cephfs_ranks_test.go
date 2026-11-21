@@ -358,7 +358,7 @@ func TestMDSCephFSRanksNativeOutputShapes(t *testing.T) {
 func TestMDSCephFSRanksControlRejectsBeforeNativeWork(t *testing.T) {
 	for _, enabled := range []string{"0", "1"} {
 		out := t.TempDir()
-		if err := os.WriteFile(filepath.Join(out, "mds-cephfs-ranks"), []byte("1 "+strings.Repeat("a1", 16)+" takeover-fire\n"), 0600); err != nil {
+		if err := writeRequestFile(out, "mds-cephfs-ranks", "1 "+strings.Repeat("a1", 16)+" takeover-fire\n"); err != nil {
 			t.Fatal(err)
 		}
 		c := &fixtureCluster{profile: profile{mdsFresh: enabled, mdsCephFSRanks: enabled}}

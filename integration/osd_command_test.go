@@ -51,13 +51,10 @@ func nativeOSDCommand(t *testing.T, ctx context.Context, input osdCommandNativeI
 	if err != nil || len(data) > 4<<20 {
 		t.Fatal("bounded native OSD command input", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "osd-command-input.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(filepath.Join(dir, "osd-command-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-command", "run"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-command", "run", testcluster.ControlInput{Name: "osd-command-input.json", Data: data, Private: true}); err != nil {
 		t.Fatal("native OSD command oracle", err)
 	}
 	f, err := os.Open(filepath.Join(dir, "osd-command-result.json"))

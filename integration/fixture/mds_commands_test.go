@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -96,7 +95,7 @@ func TestMDSCommandsNativeControlIsClosedAndScoped(t *testing.T) {
 	}
 	for _, enabled := range []string{"0", "1"} {
 		out := t.TempDir()
-		if err := os.WriteFile(filepath.Join(out, "mds-commands-native"), []byte("10 "+token+" version\n"), 0600); err != nil {
+		if err := writeRequestFile(out, "mds-commands-native", "10 "+token+" version\n"); err != nil {
 			t.Fatal(err)
 		}
 		c := &fixtureCluster{profile: profile{mdsCommands: enabled}}

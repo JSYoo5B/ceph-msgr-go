@@ -63,6 +63,12 @@ type fixtureCluster struct {
 	// its control loop started; startStateErr explains a missing snapshot.
 	startState    *startStateSnapshot
 	startStateErr error
+	// ownedPool is the owned-pool oracle request that runs beside the
+	// control loop (controlOwnedPoolRequest); nil when none runs.
+	ownedPool *ownedPoolRun
+	// runOwnedPool runs one owned-pool oracle command; nil runs it in the
+	// cluster's control container (runOracleCommandWithTimeout).
+	runOwnedPool func(ctx context.Context, out string, args []string, budget time.Duration) error
 }
 
 func (c *fixtureCluster) NetworkName() string { return clusterNetworkName(c.cluster) }

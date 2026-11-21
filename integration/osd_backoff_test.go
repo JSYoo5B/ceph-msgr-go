@@ -56,20 +56,20 @@ type nativeBackoffScope struct {
 	AckReceipt              nativeLateAckReceipt `json:"ack_receipt"`
 }
 
-func backoffControl(ctx context.Context, action, name string) (nativeBackoffScope, error) {
+// backoffControl runs one action of the backoff oracle; inputs are the
+// action's further request-scoped inputs beside the object
+// (testcluster.ControlInput), such as observe's ACK input.
+func backoffControl(ctx context.Context, action, name string, inputs ...testcluster.ControlInput) (nativeBackoffScope, error) {
 	var result nativeBackoffScope
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	data, err := json.Marshal(map[string]string{"object": name})
 	if err != nil {
 		return result, err
 	}
-	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "osd-backoff-input.json"), data); err != nil {
-		return result, err
-	}
 	if err := os.Remove(filepath.Join(dir, "osd-backoff-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return result, err
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-backoff", action); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-backoff", action, append([]testcluster.ControlInput{{Name: "osd-backoff-input.json", Data: data}}, inputs...)...); err != nil {
 		return result, err
 	}
 	file, err := os.Open(filepath.Join(dir, "osd-backoff-result.json"))
@@ -250,10 +250,7 @@ func TestCephOSDBackoffIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := testcluster.WritePublicEvidence(ackInputPath, ackInput); err != nil {
-		t.Fatal(err)
-	}
-	observed, err = backoffControl(ctx, "observe", name)
+	observed, err = backoffControl(ctx, "observe", name, testcluster.ControlInput{Name: filepath.Base(ackInputPath), Data: ackInput})
 	if err != nil || observed.Token != start.Token || !observed.Ready || observed.Done {
 		t.Fatal("native inactive scope lost while ACKing", observed, err)
 	}
