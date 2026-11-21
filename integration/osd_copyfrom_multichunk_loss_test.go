@@ -518,6 +518,10 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 	// the 16 s read lease, as in the destination-loss test.
 	thawDeadline := frozen.Add(16 * time.Second)
 	workDeadline := thawDeadline.Add(-3 * time.Second)
+	// Native observations use the test's context and are judged against
+	// the budget after they return: an observation abandoned at a deadline
+	// would leave its request to the fixture's oracle, which then reads the
+	// next request's input.
 	work, stopWork := context.WithDeadline(ctx, workDeadline)
 	defer stopWork()
 	r.recovery.freeze(t, work, paused)
@@ -527,7 +531,7 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 	}()
 	var writeOp opsInFlightOp
 	for {
-		ops := copyOpsInFlight(t, work, 1, r.source, nil, r.gid, copyPrimaryWriteIncarnation)
+		ops := copyOpsInFlight(t, ctx, 1, r.source, nil, r.gid, copyPrimaryWriteIncarnation)
 		var err error
 		if writeOp, err = checkSourceWriteHeld(ops, source, r.gid, copyPrimaryWriteIncarnation); err == nil {
 			break
@@ -546,7 +550,7 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 	}()
 	for {
 		h.pending(t, "before its first copy-get was sent")
-		objecter := copyObjecterRequests(t, work, 2, r.dest, nil, r.pools.ids[1], r.source)
+		objecter := copyObjecterRequests(t, ctx, 2, r.dest, nil, r.pools.ids[1], r.source)
 		var err error
 		if h.first, err = checkFirstChunkSent(objecter, route, source.ID, false); err == nil {
 			break
@@ -556,11 +560,11 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 		time.Sleep(100 * time.Millisecond)
 	}
 	r.recovery.pauserd = true
-	if err := copyMonCommand(work, r.client, `{"prefix":"osd set","key":"pause"}`); err != nil {
+	if err := copyMonCommand(ctx, r.client, `{"prefix":"osd set","key":"pause"}`); err != nil {
 		t.Fatal("osd set pause", err)
 	}
 	for {
-		objecter := copyObjecterRequests(t, work, 2, r.dest, nil, r.pools.ids[1], r.source)
+		objecter := copyObjecterRequests(t, ctx, 2, r.dest, nil, r.pools.ids[1], r.source)
 		got, err := checkFirstChunkSent(objecter, route, source.ID, true)
 		if err == nil && got.TID == h.first.TID {
 			break
