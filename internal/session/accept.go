@@ -69,12 +69,12 @@ type AcceptPolicy struct {
 	Self      uint8
 	ServerID  uint64
 	Addresses []msgr.Address
-	// PeerType is the one admitted peer entity type.
-	PeerType uint8
-	Mode     ConnectionMode
-	// Supported and Required are the SERVER_IDENT feature masks; Required
-	// must include MSG_ADDR2.
-	Supported, Required uint64
+	// Peers maps each admitted peer entity type to the SERVER_IDENT
+	// required mask of its policy; every mask must include MSG_ADDR2 and lie
+	// within Supported, the SERVER_IDENT supported mask.
+	Peers     map[uint8]uint64
+	Mode      ConnectionMode
+	Supported uint64
 	// Service and Keys verify the authorizer: the accepting service and its
 	// exact-ID rotating secret lookup.
 	Service uint32
@@ -200,8 +200,12 @@ func Accept(ctx context.Context, conn net.Conn, policy AcceptPolicy, timeout tim
 	if policy.Mode != SecureMode && policy.Mode != CRCMode {
 		return nil, AcceptedPeer{}, errors.New("ceph messenger: invalid connection mode")
 	}
-	if policy.Required&RequiredFeatures != RequiredFeatures || policy.Required&^policy.Supported != 0 ||
-		len(policy.Addresses) == 0 || policy.Keys == nil || policy.GlobalSeq == nil || policy.Authorize == nil {
+	for _, required := range policy.Peers {
+		if required&RequiredFeatures != RequiredFeatures || required&^policy.Supported != 0 {
+			return nil, AcceptedPeer{}, errors.New("ceph messenger: invalid accept policy feature mask")
+		}
+	}
+	if len(policy.Peers) == 0 || len(policy.Addresses) == 0 || policy.Keys == nil || policy.GlobalSeq == nil || policy.Authorize == nil {
 		return nil, AcceptedPeer{}, errors.New("ceph messenger: incomplete accept policy")
 	}
 	deadline := time.Now().Add(timeout)
@@ -236,6 +240,7 @@ func Accept(ctx context.Context, conn net.Conn, policy AcceptPolicy, timeout tim
 
 type acceptor struct {
 	policy     AcceptPolicy
+	required   uint64 // the admitted peer type's required mask
 	rx         *recordingReader
 	tx         *recordingWriter
 	r          *msgr.Reader
@@ -297,10 +302,12 @@ func (a *acceptor) run(ctx context.Context, stage *AcceptStage, refused *bool) e
 	if err := d.Done(); err != nil {
 		return fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 	}
-	if a.peer.PeerType != a.policy.PeerType {
+	required, admitted := a.policy.Peers[a.peer.PeerType]
+	if !admitted {
 		*refused = true
 		return fmt.Errorf("%w: peer entity type %d is not admitted", ErrPeerIdentity, a.peer.PeerType)
 	}
+	a.required = required
 	*stage = AcceptAuthentication
 	if err := a.authenticate(refused); err != nil {
 		return err
@@ -346,7 +353,7 @@ func (a *acceptor) serverIdentPayload() []byte {
 	e.U64(a.policy.ServerID)
 	e.U64(a.peer.ServerGlobalSeq)
 	e.U64(a.policy.Supported)
-	e.U64(a.policy.Required)
+	e.U64(a.required)
 	e.U64(sessionFlagLossy)
 	e.U64(0) // a lossy server keeps no session cookie
 	return e.Data
@@ -569,7 +576,7 @@ func (a *acceptor) identify(refused *bool) error {
 			*refused = true
 			return fmt.Errorf("%w: client identification targets %v, not this endpoint", ErrPeerIdentity, p.Target.Endpoint)
 		}
-		if missing := a.policy.Required &^ p.PeerSupported; missing != 0 {
+		if missing := a.required &^ p.PeerSupported; missing != 0 {
 			*refused = true
 			refusal = fmt.Errorf("%w: peer lacks 0x%016x", msgr.ErrFeatures, missing)
 			if err := a.write(msgr.IdentMissingFeatures, identMissingFeaturesPayload(missing)); err != nil {
@@ -594,21 +601,33 @@ func (a *acceptor) identify(refused *bool) error {
 	return fmt.Errorf("%w: identification did not complete", msgr.ErrFrame)
 }
 
-// checkIdentity binds the HELLO entity type, the authenticated ticket and,
-// for an OSD, the CLIENT_IDENT numeric ID to one entity.
+// checkIdentity binds the HELLO entity type, the authenticated ticket and
+// the CLIENT_IDENT numeric name to one entity: an OSD's numeric name is its
+// ID (the ticket's osd.<id>), a client's its global ID (a native client
+// names itself client.<global ID> once authenticated).
 func (a *acceptor) checkIdentity() error {
 	p := &a.peer
 	if p.Ticket.EntityType != uint32(p.PeerType) {
 		return fmt.Errorf("%w: ticket entity type %d, HELLO %d", ErrPeerIdentity, p.Ticket.EntityType, p.PeerType)
 	}
-	if p.PeerType == uint8(cephx.ServiceOSD) {
+	switch p.PeerType {
+	case uint8(cephx.ServiceOSD):
 		id, err := strconv.ParseUint(p.Ticket.EntityID, 10, 32)
 		if err != nil || strconv.FormatUint(id, 10) != p.Ticket.EntityID || id != p.PeerID {
 			return fmt.Errorf("%w: ticket osd.%s, identification %d", ErrPeerIdentity, p.Ticket.EntityID, p.PeerID)
 		}
+	case entityClient:
+		if p.PeerID != p.Ticket.GlobalID {
+			return fmt.Errorf("%w: ticket global ID %d, identification %d", ErrPeerIdentity, p.Ticket.GlobalID, p.PeerID)
+		}
+	default:
+		return fmt.Errorf("%w: entity type %d has no identity binding", ErrPeerIdentity, p.PeerType)
 	}
 	return nil
 }
+
+// entityClient is CEPH_ENTITY_TYPE_CLIENT.
+const entityClient = 0x08
 
 // MgrOSDPeerFeatures is what a MGR acceptor advertises to an OSD peer in
 // SERVER_IDENT: the base Features, SERVER_LUMINOUS (21), which it requires,
@@ -626,3 +645,11 @@ const MgrOSDPeerFeatures uint64 = Features | 1<<0 | 1<<9 | 1<<13 | 1<<21
 // FEATURE macro, not FEATUREMASK, so bit 57 is not added) plus ProtocolV2's
 // msgr2_required MSG_ADDR2 (bit 59), 0x0800000000200000.
 const MgrOSDPeerRequiredFeatures uint64 = 1<<21 | RequiredFeatures
+
+// MgrClientPeerRequiredFeatures is the native required mask DaemonServer
+// sends a client: its default Policy::stateless_server(0) requires nothing
+// beyond ProtocolV2's MSG_ADDR2. A client gets the same supported mask as
+// an OSD (MgrOSDPeerFeatures); the MGR messages a client sends (MMgrOpen,
+// MMgrReport, MMgrClose, the two command families) have no
+// feature-dependent encoding.
+const MgrClientPeerRequiredFeatures uint64 = RequiredFeatures

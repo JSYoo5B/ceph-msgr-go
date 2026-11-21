@@ -30,10 +30,11 @@ func TestAcceptFramesMatchNativeAssembly(t *testing.T) {
 		t.Fatal("native frames", err)
 	}
 	a := &acceptor{
-		policy: AcceptPolicy{Self: 0x10, ServerID: 9001, Mode: SecureMode, Supported: MgrOSDPeerFeatures, Required: MgrOSDPeerRequiredFeatures,
+		policy: AcceptPolicy{Self: 0x10, ServerID: 9001, Mode: SecureMode, Supported: MgrOSDPeerFeatures, Peers: map[uint8]uint64{4: MgrOSDPeerRequiredFeatures},
 			Addresses: []msgr.Address{{Type: 2, Nonce: 77, Endpoint: netip.MustParseAddrPort("192.0.2.10:6800")}}},
 		socketPeer: msgr.Address{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.20:51234")},
 		peer:       AcceptedPeer{ServerGlobalSeq: 1},
+		required:   MgrOSDPeerRequiredFeatures,
 	}
 	payload := []byte{1, 2, 3}
 	for name, frame := range map[string]msgr.Frame{
