@@ -38,7 +38,8 @@ jobs:
     if: fromJSON(inputs.matrix).include[0] != null
     name: ${{ matrix.rgw_native == '1' && format('RGW-native-fixture {0} (Ceph 20.2.4 pinned image, {1}/{2}, secure, IPv{3}, container, fixed checkpoint cluster MON=1, MGR=1, OSD=1 BlueStore, gateway=1)', matrix.scenario, matrix.key, matrix.service, matrix.family) || format('{0}{1}{2}Ceph {3} ({4}/{5}, {6}, IPv{7}, MGR={8}, {9}, expiry={10}, idle={11}, auth-epoch={12}, short-tickets={13}, mode-rejection={14}, mapped={15}, OSD={16}, profile={17}, store={18}, replicas={19}, native-mgr-preparation={20}, race={21}{22}){23}{24}', matrix.mon_ping == '1' && 'MON-ping ' || '', matrix.osd_cache_pools == '1' && 'OSD-cache-pools ' || '', matrix.mgr_service == '1' && 'MGR-service ' || '', matrix.release || '20.2.4', matrix.key, matrix.service, matrix.mode || 'secure', matrix.family, matrix.managers || '2', matrix.runtime || 'container', matrix.expiry || '0', matrix.idle || '0', matrix.auth_epoch || '0', matrix.short_tickets || '0', matrix.mode_rejection || 'none', matrix.mapped || '0', matrix.osd || '0', matrix.osd_profile || 'legacy-v6', matrix.osd_store || 'memstore', matrix.osd_replicas || '1', matrix.native_mgr_preparation || '0', matrix.race || '0', matrix.osd_soak && format(', soak={0}', matrix.osd_soak) || '', matrix.rbd == '1' && ' RBD-base' || (matrix.mds_cephfs_ranks_replay == '1' && ' MDS-cephfs-ranks-replay' || (matrix.mds_cephfs_ranks == '1' && ' MDS-cephfs-ranks' || (matrix.mds_cephfs_completion == '1' && ' MDS-cephfs-completion' || (matrix.mds_cephfs_data == '1' && ' MDS-cephfs-data' || (matrix.mds_cephfs == '1' && ' MDS-cephfs' || (matrix.mds_sessions == '1' && ' MDS-sessions' || (matrix.mds_commands == '1' && ' MDS-commands' || (matrix.mds_fresh == '1' && ' MDS-fresh' || '')))))))), matrix.test_sequence && format(' sequence of {0} rows', matrix.sequence_rows) || '') }}
     runs-on: ubuntu-latest
-    # A fixture sequence runs up to eight rows' tests on one fixture.
+    # A fixture sequence runs up to eight rows' tests on one fixture. The run
+    # step's JOB_BUDGET_MINUTES repeats this expression (tools/test_native_job_budget.py).
     timeout-minutes: ${{ matrix.test_sequence && 120 || 45 }}
     env:
       GOPROXY: 'https://proxy.golang.org|direct'
@@ -51,6 +52,11 @@ jobs:
       matrix:
         include: ${{ fromJSON(inputs.matrix).include }}
     steps:
+      # The job's budget counts from here; the run step derives the fixture
+      # runner's deadline from it.
+      - name: Start the job budget clock
+        id: job_clock
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
       # Keep verdict code from the calling workflow revision. A PR supplies
       # tests and catalog data, not the implementation of the result gate.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -199,6 +205,12 @@ jobs:
           python3 "$RUNNER_TEMP/native_test_results.py" snapshot "${sequence[@]}" \
             --selector "$TEST_SELECTOR" --output "$RUNNER_TEMP/expected-tests.json"
           result=0
+          # The runner must exit, with every verdict printed and failure
+          # diagnostics saved, before the job's timeout; the steps after this
+          # one keep POST_RUN_RESERVE seconds. The runner derives its suites'
+          # -test.timeout from this deadline (integration/fixture/job_budget.go).
+          POST_RUN_RESERVE=180
+          export CEPH_MSGR_JOB_DEADLINE=$((JOB_STARTED + JOB_BUDGET_MINUTES * 60 - POST_RUN_RESERVE))
           # Only the runner receives the row's fixture inputs: the trusted
           # helper forwards each matrix parameter p as CEPH_MSGR_TEST_<P>
           # (tools/native_env.py), so a new input adds no line here.
@@ -215,6 +227,9 @@ jobs:
         env:
           TESTED_SHA: ${{ inputs.ref || github.sha }}
           MATRIX_JSON: ${{ toJSON(matrix) }}
+          # The job's timeout-minutes, verbatim, and the start of its clock.
+          JOB_BUDGET_MINUTES: ${{ matrix.test_sequence && 120 || 45 }}
+          JOB_STARTED: ${{ steps.job_clock.outputs.started }}
           # The result gate's own inputs: the selector, a fixture sequence
           # (tools/scenario_plan.py plan, integration/fixture/sequence.go) and
           # the route of a row with rgw_native=1 to one RGW checkpoint of the
