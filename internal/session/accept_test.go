@@ -92,8 +92,7 @@ func newAcceptFixture(t *testing.T, kind uint16, mode ConnectionMode) *acceptFix
 	f := &acceptFixture{t: t, kind: kind, service: acceptTestKey(kind, 0x31), session: acceptTestKey(kind, 0x52), secretID: 7, osdID: "3", globalID: 4242}
 	f.address = msgr.Address{Type: 2, Nonce: 77, Endpoint: netip.MustParseAddrPort("192.0.2.10:6800")}
 	f.policy = AcceptPolicy{
-		Self: 0x10, ServerID: 9001, Addresses: []msgr.Address{f.address}, PeerType: 4, Mode: mode,
-		Supported: MgrOSDPeerFeatures, Required: MgrOSDPeerRequiredFeatures,
+		Self: 0x10, ServerID: 9001, Addresses: []msgr.Address{f.address}, Peers: map[uint8]AcceptPeerFeatures{4: {MgrOSDPeerFeatures, MgrOSDPeerRequiredFeatures}}, Mode: mode,
 		Service: cephx.ServiceMgr, Keys: f.lookup, HandshakeLimit: 64 << 10, MessageLimit: 1 << 20,
 		GlobalSeq: func() uint64 { f.mu.Lock(); defer f.mu.Unlock(); f.seq++; return f.seq },
 		Authorize: func(context.Context, AcceptedPeer) error { return nil },
@@ -499,8 +498,11 @@ func TestAcceptPolicyIsComplete(t *testing.T) {
 		"addresses": func(p *AcceptPolicy) { p.Addresses = nil },
 		"keys":      func(p *AcceptPolicy) { p.Keys = nil },
 		"authorize": func(p *AcceptPolicy) { p.Authorize = nil },
-		"required":  func(p *AcceptPolicy) { p.Required = 1 << 21 },
-		"supported": func(p *AcceptPolicy) { p.Supported = Features },
+		"required":  func(p *AcceptPolicy) { p.Peers = map[uint8]AcceptPeerFeatures{4: {MgrOSDPeerFeatures, 1 << 21}} },
+		"peers":     func(p *AcceptPolicy) { p.Peers = nil },
+		"supported": func(p *AcceptPolicy) {
+			p.Peers = map[uint8]AcceptPeerFeatures{4: {Features, MgrOSDPeerRequiredFeatures}}
+		},
 	} {
 		policy := f.policy
 		change(&policy)

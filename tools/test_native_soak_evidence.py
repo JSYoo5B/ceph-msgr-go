@@ -20,6 +20,7 @@ import scenario_plan
 
 DURATION = family.DURATION_NS
 TESTED = "a" * 40
+PIN = evidence.pinned_provider_text((Path(__file__).resolve().parents[1] / "integration" / "fixture" / "go.mod").read_bytes())
 CONTROLLER = "b" * 40
 PRIVATE_MARKER = "private-host.example.invalid"
 
@@ -60,7 +61,7 @@ class NativeSoakEvidenceTests(unittest.TestCase):
                     "mds_fresh": False, "mds_cephfs_data": False, "rbd_base": False, "image": evidence.IMAGE,
                     "image_id": "sha256:" + "c" * 64, "architecture": "amd64",
                     "daemon_version": "ceph version 20.2.4 (%s) tentacle (stable)" % evidence.SOURCE,
-                    "provider": evidence.PROVIDER, "provider_version": evidence.PROVIDER_VERSION}
+                    "provider": evidence.PROVIDER, "provider_version": PIN}
         self.put(self.receipts / "fixture-manifest.json", manifest)
         digest = hashlib.sha256((self.receipts / "fixture-manifest.json").read_bytes()).hexdigest()
         self.put(self.receipts / "osd-soak-v1-fixture-termination.json", {
@@ -106,7 +107,7 @@ class NativeSoakEvidenceTests(unittest.TestCase):
         self.put(path, value)
 
     def collect(self, request=None):
-        return evidence.collect(request or self.request, self.receipts, self.tests, self.output)
+        return evidence.collect(request or self.request, self.receipts, self.tests, self.output, PIN)
 
     def context(self, request=None):
         return evidence.context(request or self.request)
@@ -411,7 +412,7 @@ class NativeSoakEvidenceTests(unittest.TestCase):
         link = self.root / "linked"
         link.symlink_to(self.receipts)
         with self.assertRaisesRegex(evidence.EvidenceError, "unsafe-receipt-directory"):
-            evidence.collect(self.request, link, self.tests, self.output)
+            evidence.collect(self.request, link, self.tests, self.output, PIN)
 
     def test_duplicate_json_fields_and_invalid_json_are_refused(self):
         path = self.receipts / "osd-soak-v1-steady-workload.json"
@@ -495,7 +496,7 @@ class NativeSoakEvidenceTests(unittest.TestCase):
         # closed in the collector instead of silently skipping retention.
         # The collector's family decision gates the evidence steps; every
         # matrix with an osd_soak value claims the soak family.
-        self.assertEqual(text.count("steps.evidence_family.outputs.family != ''"), 3)
+        self.assertEqual(text.count("steps.evidence_family.outputs.family != ''"), 4)
         for value in ("4m", "8h", "30s"):
             self.assertEqual(evidence.claimed_family({"osd_soak": value}), "soak")
         self.assertIn('--receipts "$RUNNER_TEMP/ceph-diagnostics"', text)
@@ -508,7 +509,8 @@ class NativeSoakEvidenceTests(unittest.TestCase):
 
     def collect_cli(self, request, status):
         return self.run_main("collect", "--request", str(request), "--receipts", str(self.receipts), "--tests", str(self.tests),
-                             "--output", str(self.output), "--status", str(status))
+                             "--output", str(self.output), "--status", str(status),
+                             "--provider-pin", PIN)
 
     def test_native_pass_with_failed_collection_is_incomplete_not_failed_or_complete(self):
         request, status = self.root / "request.json", self.root / "status.json"
