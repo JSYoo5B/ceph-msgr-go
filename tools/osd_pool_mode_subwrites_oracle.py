@@ -32,10 +32,14 @@ oldest first, and then, while more than size ops are kept, the op of the
 shortest duration, whatever its arrival (src/common/TrackedOp.cc:101-124);
 dump_ops runs that cleanup and then dumps size, duration and the ops in
 arrival order (:126-153). A short roll-forward can therefore be dropped while
-the slower write it follows is kept. So the receipt also carries the history
-itself: its size and duration and one identity per op (the SHA-256 of the
-op's initiated_at and description), and the caller judges from two receipts
-of one OSD whether every op that arrived between them is still kept. A
+the slower write it follows is kept, and an op in flight at one read can
+enter the history later and expire by its old initiation time, so two
+snapshots do not bound what was inserted and dropped between them. The
+receipt carries the history itself (its size and duration and one identity
+per op, the SHA-256 of the op's initiated_at and description) so that the
+caller can refuse inconsistent reads and report what it saw; it does not
+make a missing entry evidence (integration/osd_erasure_subwrite_hold_test.go
+opHistoryWitness). A
 matched entry is reported only with its whole event list ending in "done";
 an over-bound, malformed or unterminated list fails the observation. It
 judges nothing else.

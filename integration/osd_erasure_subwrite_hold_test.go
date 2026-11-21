@@ -58,10 +58,10 @@ import (
 // observation and the STAT run under the lease's held phase; one still
 // outstanding at its end is abandoned and fails the test, and the lease
 // resumes the OSD by its deadline all the same (pauseLease). The op history
-// is bounded, so a roll-forward it does not show is evidence of absence only
-// where historyRetained proves that it kept every op since a first read;
-// otherwise the absence is reported unverified, and the committed write
-// stays evidence. These consumer helpers are test-only.
+// is bounded and no count bounds what entered it in a window
+// (opHistoryWitness), so a roll-forward it does not show, and the exact count
+// of the ones it shows, are reported unverified; a roll-forward it shows,
+// and the committed write, stay evidence. These consumer helpers are test-only.
 
 // subWriteHoldEvent is the event and flag point do_op marks before it
 // executes a write (src/osd/PrimaryLogPG.cc:2541, src/osd/OpRequest.h).
@@ -118,39 +118,43 @@ type subWriteHistoryRead struct {
 	sent, read time.Time
 }
 
-// historyRetained says whether the op history of after still keeps every op
-// that arrived on its OSD since before was read. The pinned
-// OpHistory::cleanup drops the ops that arrived more than duration seconds
-// ago, oldest first, then the shortest ops while more than size are kept
-// (src/common/TrackedOp.cc:101-124, run by every dump, :126-129). If every
-// op before kept is still kept, no op that arrived meanwhile was old enough
-// for the first rule (the window is shorter than half the duration) and no
-// earlier op was dropped by it; and if fewer than size ops are kept, the
-// second rule never dropped one since: after such a drop the history keeps
-// exactly size ops until the first rule drops one. Otherwise an op of the
-// window, a short roll-forward for one, may be gone, and its absence or
-// count is not evidence.
-func historyRetained(before, after subWriteHistoryRead) error {
+// errOpHistoryInsertionsUnbounded is opHistoryWitness's answer once its
+// readable terms are consistent: nothing bounds the ops that entered the
+// history in the window, so its absences and counts stay unverified.
+var errOpHistoryInsertionsUnbounded = errors.New("no independent count bounds the ops that entered the op history in the window")
+
+// opHistoryWitness says whether the op history of after can show that no op
+// that entered osd's history since before was read was dropped again. The
+// pinned OpHistory drops, on every insert and dump, the ops initiated more
+// than duration seconds ago, oldest first, and then the shortest ops while
+// more than size are kept (src/common/TrackedOp.cc:86-124, :126-129). An
+// op enters the history with its initiation time when it completes, through
+// a queue the history thread drains later (OpHistoryServiceThread, :45-71;
+// TrackedOp::put, src/common/TrackedOp.h:355-380). So two snapshots do not
+// bound what was inserted and dropped in between: an op in flight at the
+// first read can complete in the window, push a short roll-forward out by
+// size, and then expire by its old initiation time, leaving a second
+// snapshot below size that keeps every op of the first.
+//
+// A sound witness needs every insertion of the window bounded below size:
+// the ops kept at before, every op in flight or completed and queued at
+// before, and every op started on the OSD in the window, by a count read
+// at both ends; and the duration checked against the earliest initiation
+// any of them carries. The subwrites mode reads only the history, and the
+// pinned OSD exposes no count of tracked ops: OpTracker's sequence number
+// is not dumped (:290-297), and its perf counters count slow ops only
+// (src/common/TrackedOp.h:75-106). Every missing term leaves the window
+// unbounded, so the witness never holds against this daemon. It still
+// refuses inconsistent reads first.
+func opHistoryWitness(before, after subWriteHistoryRead) error {
 	b, a := before.History, after.History
 	if before.OSD != after.OSD || b.Size != a.Size || b.Duration != a.Duration || a.Size <= 0 {
 		return fmt.Errorf("the op histories of osd.%d (size %d, duration %d) and osd.%d (size %d, duration %d) are not one bounded history", before.OSD, b.Size, b.Duration, after.OSD, a.Size, a.Duration)
 	}
-	if window := after.read.Sub(before.sent); window <= 0 || window >= time.Duration(a.Duration)*time.Second/2 {
-		return fmt.Errorf("the window of %v between the reads of osd.%d is not within half its %d s op history duration", window, after.OSD, a.Duration)
+	if after.read.Before(before.sent) {
+		return fmt.Errorf("the reads of osd.%d are out of order", after.OSD)
 	}
-	kept := map[string]bool{}
-	for _, op := range a.Ops {
-		kept[op] = true
-	}
-	for _, op := range b.Ops {
-		if !kept[op] {
-			return fmt.Errorf("osd.%d dropped an op of its history since the first read", after.OSD)
-		}
-	}
-	if len(a.Ops) >= a.Size {
-		return fmt.Errorf("osd.%d keeps %d ops, its whole history of %d: a short op of the window may have been dropped", after.OSD, len(a.Ops), a.Size)
-	}
-	return nil
+	return fmt.Errorf("osd.%d: %w (%d ops kept before, %d after, of %d)", after.OSD, errOpHistoryInsertionsUnbounded, len(b.Ops), len(a.Ops), a.Size)
 }
 
 // errRollForwardUnproven is judgeRollForward's answer when a receipt shows
@@ -160,7 +164,7 @@ var errRollForwardUnproven = errors.New("the roll-forward coverage is unproven")
 // judgeRollForward judges the roll-forwards of write in one receipt.
 // Present ones are evidence whatever the history kept: more than one, or
 // one to another version, is refused, and one to the write's version is
-// accepted, with exact true only when retained (historyRetained's verdict)
+// accepted, with exact true only when retained (opHistoryWitness's verdict)
 // is nil, so that no second one can have been dropped. None is evidence of
 // absence only when retained is nil; otherwise the answer wraps
 // errRollForwardUnproven and the write's own commit stays evidence.
@@ -173,14 +177,14 @@ func judgeRollForward(write subWriteRecord, rolls []subWriteRecord, retained err
 	case len(rolls) == 1:
 		return retained == nil, nil
 	case retained == nil:
-		return true, fmt.Errorf("no roll-forward of the write at %s in a history that kept every op since the first read", write.AtVersion)
+		return true, fmt.Errorf("no roll-forward of the write at %s in a history whose window is bounded", write.AtVersion)
 	}
 	return false, fmt.Errorf("%w: no roll-forward of the write at %s is kept, and %v", errRollForwardUnproven, write.AtVersion, retained)
 }
 
 // judgeNoRollForward judges a receipt that must hold no roll-forward of its
 // write: a present one is refused whatever the history kept, and none is
-// proven absent only when retained (historyRetained's verdict) is nil.
+// proven absent only when retained (opHistoryWitness's verdict) is nil.
 func judgeNoRollForward(rolls []subWriteRecord, retained error) (proven bool, err error) {
 	if len(rolls) != 0 {
 		return false, fmt.Errorf("%d roll-forwards of the write: %+v", len(rolls), rolls)
@@ -311,7 +315,7 @@ type subWriteRun struct {
 	// shard.
 	last int
 	// baseline is every remote shard OSD's op history read before the
-	// pause, the first read of historyRetained.
+	// pause, the first read of opHistoryWitness.
 	baseline map[int32]subWriteHistoryRead
 }
 
@@ -383,7 +387,7 @@ func (r *subWriteRun) seedKey() pgHistoryTarget {
 }
 
 // pauseAndHold reads the op history of every remote shard's OSD as the
-// baseline of historyRetained, pauses the OSD of the last parity shard,
+// baseline of opHistoryWitness, pauses the OSD of the last parity shard,
 // sends the held write and returns the lease, the call, the held op of the
 // primary's op tracker and the committed sub-write of every other shard: the
 // shards that are neither the primary's nor the paused one.
@@ -443,7 +447,7 @@ func (r *subWriteRun) waitSubWriteHold(p *pauseLease, call heldCall) opsInFlight
 // waitSubWriteCommitted reads osd's op history, each read under the held
 // phase, until it holds the committed sub-write of key for shard. A
 // roll-forward of it fails the test; its absence is proven only when the
-// history kept every op since the baseline (historyRetained) and is logged
+// history's window is bounded (opHistoryWitness), and is logged
 // as unverified otherwise.
 func (r *subWriteRun) waitSubWriteCommitted(p *pauseLease, osd int32, shard int, key pgHistoryTarget) subWriteRecord {
 	r.t.Helper()
@@ -454,14 +458,14 @@ func (r *subWriteRun) waitSubWriteCommitted(p *pauseLease, osd int32, shard int,
 		var w subWriteRecord
 		var rolls []subWriteRecord
 		if w, rolls, err = checkSubWriteCommitted(s.subWriteReceipt, r.route, osd, shard, key); err == nil {
-			retained := historyRetained(r.baseline[osd], s)
+			retained := opHistoryWitness(r.baseline[osd], s)
 			proven, err := judgeNoRollForward(rolls, retained)
 			if err != nil {
 				r.t.Fatalf("osd.%d of shard %d holds a roll-forward of %s while a shard cannot commit: %v", osd, shard, key, err)
 			}
 			r.t.Logf("shard %d (osd.%d) committed the sub-write: tid %d at %s, epoch %d/%d, events %q", shard, osd, w.TID, w.AtVersion, w.MapEpoch, w.MinEpoch, w.Events)
 			if proven {
-				r.t.Logf("shard %d (osd.%d) held no roll-forward: its history kept every op since the baseline", shard, osd)
+				r.t.Logf("shard %d (osd.%d) held no roll-forward: its history's window is bounded", shard, osd)
 			} else {
 				r.t.Logf("shard %d (osd.%d): the absence of a roll-forward during the hold is unverified: %v", shard, osd, retained)
 			}
@@ -481,10 +485,10 @@ func (r *subWriteRun) waitSubWriteCommitted(p *pauseLease, osd int32, shard int,
 // a bounded number of reads, until it holds the committed write of key for
 // shard and the roll-forward to its version that the primary sends once
 // every shard committed it (judgeRollForward), and returns the write and
-// whether the count of one is exact. When the history may have dropped ops
-// since the baseline and no roll-forward is kept, it returns the write with
-// coverage unproven (errRollForwardUnproven) instead of failing; a history
-// that kept every op and shows none fails the test.
+// whether the count of one is exact. When no roll-forward is kept and the
+// history's window is not bounded (opHistoryWitness), it returns the write
+// with coverage unproven (errRollForwardUnproven) instead of failing; a
+// bounded history that shows none fails the test.
 func (r *subWriteRun) waitRolledForward(osd int32, shard int, key pgHistoryTarget) (subWriteRecord, bool, error) {
 	r.t.Helper()
 	err := errors.New("no history read")
@@ -494,7 +498,7 @@ func (r *subWriteRun) waitRolledForward(osd int32, shard int, key pgHistoryTarge
 		var rolls []subWriteRecord
 		if w, rolls, err = checkSubWriteCommitted(s.subWriteReceipt, r.route, osd, shard, key); err == nil {
 			var exact bool
-			if exact, err = judgeRollForward(w, rolls, historyRetained(r.baseline[osd], s)); err == nil {
+			if exact, err = judgeRollForward(w, rolls, opHistoryWitness(r.baseline[osd], s)); err == nil {
 				r.t.Logf("shard %d (osd.%d) holds the write (tid %d at %s) and its roll-forward (tid %d, pg_committed_to %s); count exact: %v", shard, osd, w.TID, w.AtVersion, rolls[0].TID, rolls[0].PGCommittedTo, exact)
 				return w, exact, nil
 			}
@@ -580,11 +584,12 @@ func heldOnce(locations []pgHistoryLocation, route osdFixtureOracle, version str
 // original transaction at the version the shards committed, and the history
 // of every remote shard, the paused one's included, must then hold the write
 // and the roll-forward the primary sends once every shard committed it
-// (pg_committed_to at that version), exactly one where the history kept
-// every op since the reads before the pause (historyRetained). Where it may
-// have dropped ops, the absence of a roll-forward during the hold, a missing
-// roll-forward after it and its exact count are logged as unverified, and
-// the write's commit stays evidence. The native bytes, xattr, user version and mtime must show one
+// (pg_committed_to at that version). The op history may drop ops a window
+// inserted, and nothing on the pinned daemon bounds those insertions
+// (opHistoryWitness), so the absence of a roll-forward during the hold, a
+// missing roll-forward after it and the exact count are logged as
+// unverified, and the write's commit and any roll-forward shown stay
+// evidence. The native bytes, xattr, user version and mtime must show one
 // application, the paused OSD must have stayed up in the native map, and
 // every PG must be clean in the same interval.
 //
@@ -1069,25 +1074,42 @@ func historyReads() (subWriteHistoryRead, subWriteHistoryRead) {
 	return before, after
 }
 
-func TestHistoryRetained(t *testing.T) {
-	before, after := historyReads()
-	if err := historyRetained(before, after); err != nil {
-		t.Fatal("a history that kept every op refused:", err)
+func TestOpHistoryWitness(t *testing.T) {
+	// The review's counterexample: size 3, duration 60 s. At t=100 the
+	// baseline keeps only B while O, initiated at t=42, is in flight. O
+	// completes at t=101, then the write W and its short roll-forward R;
+	// inserting R makes four ops, and the shortest, R, is dropped. At t=103
+	// O expires by its initiation time. The second read keeps B and W, below
+	// size, with every baseline op kept: the snapshot-only rule accepted
+	// these reads, and no witness may.
+	start := time.Unix(1700000100, 0)
+	before := subWriteHistoryRead{subWriteReceipt{OSD: 1, History: opHistoryRecord{Size: 3, Duration: 60, Ops: []string{"B"}}}, start, start}
+	after := subWriteHistoryRead{subWriteReceipt{OSD: 1, History: opHistoryRecord{Size: 3, Duration: 60, Ops: []string{"B", "W"}}, Writes: []subWriteRecord{{TID: 12, AtVersion: "25'3"}}}, start.Add(3 * time.Second), start.Add(3 * time.Second)}
+	retained := opHistoryWitness(before, after)
+	if !errors.Is(retained, errOpHistoryInsertionsUnbounded) {
+		t.Fatal("the review's counterexample was not left unbounded:", retained)
+	}
+	if proven, err := judgeNoRollForward(nil, retained); err != nil || proven {
+		t.Fatal("the counterexample proved an absence:", proven, err)
+	}
+	if exact, err := judgeRollForward(after.Writes[0], nil, retained); !errors.Is(err, errRollForwardUnproven) || exact {
+		t.Fatal("the counterexample's missing roll-forward was not left unproven:", exact, err)
+	}
+	// Consistent reads that keep every op below size are still unbounded.
+	if b, a := historyReads(); !errors.Is(opHistoryWitness(b, a), errOpHistoryInsertionsUnbounded) {
+		t.Error("consistent reads were taken as a bounded window")
 	}
 	for name, edit := range map[string]func(b, a *subWriteHistoryRead){
-		"another OSD":              func(b, a *subWriteHistoryRead) { a.OSD = 2 },
-		"another size":             func(b, a *subWriteHistoryRead) { a.History.Size = 30 },
-		"another duration":         func(b, a *subWriteHistoryRead) { a.History.Duration = 300 },
-		"no size":                  func(b, a *subWriteHistoryRead) { b.History.Size, a.History.Size = 0, 0 },
-		"an earlier op dropped":    func(b, a *subWriteHistoryRead) { a.History.Ops = []string{"b", "c", "d"} },
-		"a full history":           func(b, a *subWriteHistoryRead) { a.History.Size, b.History.Size = 4, 4 },
-		"a window of half the age": func(b, a *subWriteHistoryRead) { a.read = b.sent.Add(300 * time.Second) },
-		"reads out of order":       func(b, a *subWriteHistoryRead) { a.read = b.sent.Add(-time.Second) },
+		"another OSD":        func(b, a *subWriteHistoryRead) { a.OSD = 2 },
+		"another size":       func(b, a *subWriteHistoryRead) { a.History.Size = 30 },
+		"another duration":   func(b, a *subWriteHistoryRead) { a.History.Duration = 300 },
+		"no size":            func(b, a *subWriteHistoryRead) { b.History.Size, a.History.Size = 0, 0 },
+		"reads out of order": func(b, a *subWriteHistoryRead) { a.read = b.sent.Add(-time.Second) },
 	} {
 		b, a := historyReads()
 		edit(&b, &a)
-		if historyRetained(b, a) == nil {
-			t.Error("retention accepted:", name)
+		if err := opHistoryWitness(b, a); err == nil || errors.Is(err, errOpHistoryInsertionsUnbounded) {
+			t.Error("inconsistent reads were not refused first:", name, err)
 		}
 	}
 }
