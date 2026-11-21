@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
 // A write held inside the EC backend of an optimized isa k=2,m=2 pool while
 // it waits for its sub-write commits, and what an epoch change does to it.
 // The OSD of the last parity shard is paused through the fixture's daemon
-// control (the pause lease of osd_erasure_degraded_wait_test.go) before one
+// control (pauseLease, pause_lease_test.go) before one
 // Go APPEND of a full stripe plus SETXATTR is sent, so every shard is in the
 // write plan. The pinned source (Ceph v20.2.4) gives the expected native
 // behaviour:
@@ -54,9 +55,13 @@ import (
 // The paused OSD is SIGKILLed while still frozen in two of the controls: a
 // fatal signal ends a frozen task without returning to user space, so the
 // shard never reads the sub-write that waits in its socket. Every held-phase
-// observation runs under the run's context and is judged against the pause
-// lease only after it returns (observeInHeldPhase), so no oracle request is
-// abandoned in the fixture. These consumer helpers are test-only.
+// observation and the STAT run under the lease's held phase; one still
+// outstanding at its end is abandoned and fails the test, and the lease
+// resumes the OSD by its deadline all the same (pauseLease). The op history
+// is bounded, so a roll-forward it does not show is evidence of absence only
+// where historyRetained proves that it kept every op since a first read;
+// otherwise the absence is reported unverified, and the committed write
+// stays evidence. These consumer helpers are test-only.
 
 // subWriteHoldEvent is the event and flag point do_op marks before it
 // executes a write (src/osd/PrimaryLogPG.cc:2541, src/osd/OpRequest.h).
@@ -70,17 +75,6 @@ var subWriteLocalCommit = []string{"sub_op_started", "sub_op_committed"}
 // subWriteStripe is one full stripe of the pool's two 4 KiB data chunks: an
 // APPEND of that length at a stripe boundary writes every shard.
 const subWriteStripe = 8192
-
-// observeInHeldPhase runs one native observation of a pause's held phase
-// under ctx, the run's own context, and only then judges whether the held
-// phase is over. An oracle request that a budget deadline abandoned would
-// stay queued in the fixture and later read the next request's input.
-// This is the pattern of budgetedObservation (integration/pause_budget_test.go
-// in a pending change), kept local until that helper is on main.
-func observeInHeldPhase(ctx context.Context, held func() error, observe func(context.Context)) error {
-	observe(ctx)
-	return held()
-}
 
 // subWriteRecord is one MOSDECSubOpWrite of the request in one OSD's op
 // history (oracle mode subwrites, tools/osd_pool_mode_subwrites_oracle.py).
@@ -101,25 +95,112 @@ type subWriteRecord struct {
 }
 
 type subWriteReceipt struct {
-	OSD    int32            `json:"osd"`
-	PGID   string           `json:"pgid"`
-	Epoch  uint32           `json:"epoch"`
-	Reqid  string           `json:"reqid"`
-	Writes []subWriteRecord `json:"writes"`
+	OSD     int32            `json:"osd"`
+	PGID    string           `json:"pgid"`
+	Epoch   uint32           `json:"epoch"`
+	Reqid   string           `json:"reqid"`
+	Writes  []subWriteRecord `json:"writes"`
+	History opHistoryRecord  `json:"history"`
+}
+
+// opHistoryRecord is the op history a subwrites receipt read: its size and
+// duration limits and one identity per kept op, in arrival order.
+type opHistoryRecord struct {
+	Size     int      `json:"size"`
+	Duration int      `json:"duration"`
+	Ops      []string `json:"ops"`
+}
+
+// subWriteHistoryRead is one subwrites receipt with the test's clock around
+// the request that read it.
+type subWriteHistoryRead struct {
+	subWriteReceipt
+	sent, read time.Time
+}
+
+// historyRetained says whether the op history of after still keeps every op
+// that arrived on its OSD since before was read. The pinned
+// OpHistory::cleanup drops the ops that arrived more than duration seconds
+// ago, oldest first, then the shortest ops while more than size are kept
+// (src/common/TrackedOp.cc:101-124, run by every dump, :126-129). If every
+// op before kept is still kept, no op that arrived meanwhile was old enough
+// for the first rule (the window is shorter than half the duration) and no
+// earlier op was dropped by it; and if fewer than size ops are kept, the
+// second rule never dropped one since: after such a drop the history keeps
+// exactly size ops until the first rule drops one. Otherwise an op of the
+// window, a short roll-forward for one, may be gone, and its absence or
+// count is not evidence.
+func historyRetained(before, after subWriteHistoryRead) error {
+	b, a := before.History, after.History
+	if before.OSD != after.OSD || b.Size != a.Size || b.Duration != a.Duration || a.Size <= 0 {
+		return fmt.Errorf("the op histories of osd.%d (size %d, duration %d) and osd.%d (size %d, duration %d) are not one bounded history", before.OSD, b.Size, b.Duration, after.OSD, a.Size, a.Duration)
+	}
+	if window := after.read.Sub(before.sent); window <= 0 || window >= time.Duration(a.Duration)*time.Second/2 {
+		return fmt.Errorf("the window of %v between the reads of osd.%d is not within half its %d s op history duration", window, after.OSD, a.Duration)
+	}
+	kept := map[string]bool{}
+	for _, op := range a.Ops {
+		kept[op] = true
+	}
+	for _, op := range b.Ops {
+		if !kept[op] {
+			return fmt.Errorf("osd.%d dropped an op of its history since the first read", after.OSD)
+		}
+	}
+	if len(a.Ops) >= a.Size {
+		return fmt.Errorf("osd.%d keeps %d ops, its whole history of %d: a short op of the window may have been dropped", after.OSD, len(a.Ops), a.Size)
+	}
+	return nil
+}
+
+// errRollForwardUnproven is judgeRollForward's answer when a receipt shows
+// no roll-forward of the write and the history may have dropped one.
+var errRollForwardUnproven = errors.New("the roll-forward coverage is unproven")
+
+// judgeRollForward judges the roll-forwards of write in one receipt.
+// Present ones are evidence whatever the history kept: more than one, or
+// one to another version, is refused, and one to the write's version is
+// accepted, with exact true only when retained (historyRetained's verdict)
+// is nil, so that no second one can have been dropped. None is evidence of
+// absence only when retained is nil; otherwise the answer wraps
+// errRollForwardUnproven and the write's own commit stays evidence.
+func judgeRollForward(write subWriteRecord, rolls []subWriteRecord, retained error) (exact bool, err error) {
+	switch {
+	case len(rolls) > 1:
+		return false, fmt.Errorf("%d roll-forwards of the write at %s: %+v", len(rolls), write.AtVersion, rolls)
+	case len(rolls) == 1 && rolls[0].PGCommittedTo != write.AtVersion:
+		return false, fmt.Errorf("the roll-forward %+v is not to the write's %s", rolls[0], write.AtVersion)
+	case len(rolls) == 1:
+		return retained == nil, nil
+	case retained == nil:
+		return true, fmt.Errorf("no roll-forward of the write at %s in a history that kept every op since the first read", write.AtVersion)
+	}
+	return false, fmt.Errorf("%w: no roll-forward of the write at %s is kept, and %v", errRollForwardUnproven, write.AtVersion, retained)
+}
+
+// judgeNoRollForward judges a receipt that must hold no roll-forward of its
+// write: a present one is refused whatever the history kept, and none is
+// proven absent only when retained (historyRetained's verdict) is nil.
+func judgeNoRollForward(rolls []subWriteRecord, retained error) (proven bool, err error) {
+	if len(rolls) != 0 {
+		return false, fmt.Errorf("%d roll-forwards of the write: %+v", len(rolls), rolls)
+	}
+	return retained == nil, nil
 }
 
 // shardSubWrites reads osd's op history for the sub-writes of key to the
-// object's PG.
-func (r *ecEpochRun) shardSubWrites(ctx context.Context, object string, osd int32, key pgHistoryTarget) subWriteReceipt {
+// object's PG, with the test's clock around the request.
+func (r *ecEpochRun) shardSubWrites(ctx context.Context, object string, osd int32, key pgHistoryTarget) subWriteHistoryRead {
 	r.t.Helper()
 	var result struct {
 		SubWrites *subWriteReceipt `json:"sub_writes"`
 	}
+	sent := time.Now()
 	nativePoolResult(r.t, ctx, "subwrites", map[string]any{"slot": 1, "object": object, "osd": osd, "reqid": key}, &result)
 	if result.SubWrites == nil {
 		r.t.Fatal("the subwrites receipt is missing")
 	}
-	return *result.SubWrites
+	return subWriteHistoryRead{*result.SubWrites, sent, time.Now()}
 }
 
 // checkSubWriteHold judges one snapshot of the primary's op tracker,
@@ -204,15 +285,6 @@ func checkSubWriteCommitted(s subWriteReceipt, route osdFixtureOracle, osd int32
 	return writes[0], rolls, nil
 }
 
-// checkRolledForward requires exactly one roll-forward of write, to its
-// version.
-func checkRolledForward(write subWriteRecord, rolls []subWriteRecord) error {
-	if len(rolls) != 1 || rolls[0].PGCommittedTo != write.AtVersion {
-		return fmt.Errorf("roll-forwards %+v of the write at %s; want one to %s", rolls, write.AtVersion, write.AtVersion)
-	}
-	return nil
-}
-
 // subWriteRun is one control's object and held write.
 type subWriteRun struct {
 	*ecEpochRun
@@ -238,6 +310,9 @@ type subWriteRun struct {
 	// last is the acting position of the paused shard, the last parity
 	// shard.
 	last int
+	// baseline is every remote shard OSD's op history read before the
+	// pause, the first read of historyRetained.
+	baseline map[int32]subWriteHistoryRead
 }
 
 // startSubWriteRun seeds object with one full stripe and another object of
@@ -307,13 +382,20 @@ func (r *subWriteRun) seedKey() pgHistoryTarget {
 	return pgHistoryTarget{Type: "client", Num: s.GlobalID, Inc: int32(s.ClientIncarnation), TID: s.Transaction}
 }
 
-// pauseAndHold pauses the OSD of the last parity shard, sends the held write
-// and returns the lease, the call, the held op of the primary's op tracker
-// and the committed sub-write of every other shard: the shards that are
-// neither the primary's nor the paused one.
+// pauseAndHold reads the op history of every remote shard's OSD as the
+// baseline of historyRetained, pauses the OSD of the last parity shard,
+// sends the held write and returns the lease, the call, the held op of the
+// primary's op tracker and the committed sub-write of every other shard: the
+// shards that are neither the primary's nor the paused one.
 func (r *subWriteRun) pauseAndHold() (*pauseLease, heldCall, opsInFlightOp, map[int]subWriteRecord) {
 	t := r.t
 	t.Helper()
+	r.baseline = map[int32]subWriteHistoryRead{}
+	for shard, osd := range r.route.Acting {
+		if shard != int(r.route.Shard) {
+			r.baseline[osd] = r.shardSubWrites(r.ctx, r.object, osd, r.seedKey())
+		}
+	}
 	p := r.pause(r.route.Acting[r.last])
 	call := startHeldCall(r.ctx, r.o, r.held)
 	op := r.waitSubWriteHold(p, call)
@@ -333,19 +415,14 @@ func (r *subWriteRun) pauseAndHold() (*pauseLease, heldCall, opsInFlightOp, map[
 }
 
 // waitSubWriteHold takes bounded snapshots of the primary's op tracker, each
-// judged against the held phase once it returns, until one holds the write
-// waiting for its sub-write commits.
+// under the held phase, until one holds the write waiting for its sub-write
+// commits.
 func (r *subWriteRun) waitSubWriteHold(p *pauseLease, call heldCall) opsInFlightOp {
 	r.t.Helper()
 	err := errors.New("no snapshot taken")
 	for attempt := 1; attempt <= 10 && p.held.Err() == nil; attempt++ {
-		var s opsInFlightSnapshot
-		step := fmt.Sprintf("in-flight snapshot %d", attempt)
-		if err := observeInHeldPhase(r.ctx, func() error { return p.check(step) }, func(ctx context.Context) {
-			s = primaryOpsInFlight(r.t, ctx, 1, r.object, r.gid, r.incarnation)
-		}); err != nil {
-			r.t.Fatal(err)
-		}
+		s := primaryOpsInFlight(r.t, p.held, 1, r.object, r.gid, r.incarnation)
+		r.checkHeld(p, fmt.Sprintf("in-flight snapshot %d", attempt))
 		var op opsInFlightOp
 		if op, err = checkSubWriteHold(s, r.route, r.gid, r.incarnation); err == nil {
 			r.t.Logf("held at osd.%d (snapshot %d, %d ops in flight): %s, flag point %s, events %q", s.OSD, attempt, s.NumOps, op.Description, op.FlagPoint, op.Events)
@@ -363,26 +440,31 @@ func (r *subWriteRun) waitSubWriteHold(p *pauseLease, call heldCall) opsInFlight
 	return opsInFlightOp{}
 }
 
-// waitSubWriteCommitted reads osd's op history, each read judged against
-// the held phase once it returns, until it holds the committed sub-write of
-// key for shard.
+// waitSubWriteCommitted reads osd's op history, each read under the held
+// phase, until it holds the committed sub-write of key for shard. A
+// roll-forward of it fails the test; its absence is proven only when the
+// history kept every op since the baseline (historyRetained) and is logged
+// as unverified otherwise.
 func (r *subWriteRun) waitSubWriteCommitted(p *pauseLease, osd int32, shard int, key pgHistoryTarget) subWriteRecord {
 	r.t.Helper()
 	err := errors.New("no history read")
 	for attempt := 1; attempt <= 5 && p.held.Err() == nil; attempt++ {
-		var s subWriteReceipt
-		step := fmt.Sprintf("op history %d of osd.%d", attempt, osd)
-		if err := observeInHeldPhase(r.ctx, func() error { return p.check(step) }, func(ctx context.Context) {
-			s = r.shardSubWrites(ctx, r.object, osd, key)
-		}); err != nil {
-			r.t.Fatal(err)
-		}
+		s := r.shardSubWrites(p.held, r.object, osd, key)
+		r.checkHeld(p, fmt.Sprintf("op history %d of osd.%d", attempt, osd))
 		var w subWriteRecord
 		var rolls []subWriteRecord
-		if w, rolls, err = checkSubWriteCommitted(s, r.route, osd, shard, key); err == nil && len(rolls) != 0 {
-			r.t.Fatalf("osd.%d of shard %d holds a roll-forward of %s while a shard cannot commit: %+v", osd, shard, key, rolls)
-		} else if err == nil {
+		if w, rolls, err = checkSubWriteCommitted(s.subWriteReceipt, r.route, osd, shard, key); err == nil {
+			retained := historyRetained(r.baseline[osd], s)
+			proven, err := judgeNoRollForward(rolls, retained)
+			if err != nil {
+				r.t.Fatalf("osd.%d of shard %d holds a roll-forward of %s while a shard cannot commit: %v", osd, shard, key, err)
+			}
 			r.t.Logf("shard %d (osd.%d) committed the sub-write: tid %d at %s, epoch %d/%d, events %q", shard, osd, w.TID, w.AtVersion, w.MapEpoch, w.MinEpoch, w.Events)
+			if proven {
+				r.t.Logf("shard %d (osd.%d) held no roll-forward: its history kept every op since the baseline", shard, osd)
+			} else {
+				r.t.Logf("shard %d (osd.%d): the absence of a roll-forward during the hold is unverified: %v", shard, osd, retained)
+			}
 			return w
 		}
 		r.t.Logf("history %d of osd.%d: %v", attempt, osd, err)
@@ -397,24 +479,33 @@ func (r *subWriteRun) waitSubWriteCommitted(p *pauseLease, osd int32, shard int,
 
 // waitRolledForward reads osd's op history, after the held phase, within
 // a bounded number of reads, until it holds the committed write of key for
-// shard and the one roll-forward to its version that the primary sends once
-// every shard committed it, and returns the write.
-func (r *subWriteRun) waitRolledForward(osd int32, shard int, key pgHistoryTarget) subWriteRecord {
+// shard and the roll-forward to its version that the primary sends once
+// every shard committed it (judgeRollForward), and returns the write and
+// whether the count of one is exact. When the history may have dropped ops
+// since the baseline and no roll-forward is kept, it returns the write with
+// coverage unproven (errRollForwardUnproven) instead of failing; a history
+// that kept every op and shows none fails the test.
+func (r *subWriteRun) waitRolledForward(osd int32, shard int, key pgHistoryTarget) (subWriteRecord, bool, error) {
 	r.t.Helper()
 	err := errors.New("no history read")
 	for attempt := 1; attempt <= 10; attempt++ {
+		s := r.shardSubWrites(r.ctx, r.object, osd, key)
 		var w subWriteRecord
 		var rolls []subWriteRecord
-		if w, rolls, err = checkSubWriteCommitted(r.shardSubWrites(r.ctx, r.object, osd, key), r.route, osd, shard, key); err == nil {
-			if err = checkRolledForward(w, rolls); err == nil {
-				r.t.Logf("shard %d (osd.%d) holds the write (tid %d at %s) and its roll-forward (tid %d, pg_committed_to %s)", shard, osd, w.TID, w.AtVersion, rolls[0].TID, rolls[0].PGCommittedTo)
-				return w
+		if w, rolls, err = checkSubWriteCommitted(s.subWriteReceipt, r.route, osd, shard, key); err == nil {
+			var exact bool
+			if exact, err = judgeRollForward(w, rolls, historyRetained(r.baseline[osd], s)); err == nil {
+				r.t.Logf("shard %d (osd.%d) holds the write (tid %d at %s) and its roll-forward (tid %d, pg_committed_to %s); count exact: %v", shard, osd, w.TID, w.AtVersion, rolls[0].TID, rolls[0].PGCommittedTo, exact)
+				return w, exact, nil
+			}
+			if errors.Is(err, errRollForwardUnproven) && attempt == 10 {
+				return w, false, err
 			}
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
 	r.t.Fatalf("osd.%d of shard %d did not show the write of %s rolled forward: %v", osd, shard, key, err)
-	return subWriteRecord{}
+	return subWriteRecord{}, false, nil
 }
 
 // sameAtVersion requires every committed sub-write to carry version.
@@ -488,8 +579,12 @@ func heldOnce(locations []pgHistoryLocation, route osdFixtureOracle, version str
 // After the pause ends, the write must complete once with ONDISK under its
 // original transaction at the version the shards committed, and the history
 // of every remote shard, the paused one's included, must then hold the write
-// and the one roll-forward the primary sends once every shard committed it
-// (pg_committed_to at that version). The native bytes, xattr, user version and mtime must show one
+// and the roll-forward the primary sends once every shard committed it
+// (pg_committed_to at that version), exactly one where the history kept
+// every op since the reads before the pause (historyRetained). Where it may
+// have dropped ops, the absence of a roll-forward during the hold, a missing
+// roll-forward after it and its exact count are logged as unverified, and
+// the write's commit stays evidence. The native bytes, xattr, user version and mtime must show one
 // application, the paused OSD must have stayed up in the native map, and
 // every PG must be clean in the same interval.
 //
@@ -508,13 +603,11 @@ func TestCephOSDErasureOptimizedK2M2SubWriteHoldIntegration(t *testing.T) {
 
 	stat := r.request(r.other, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat})
 	stat.ClientIncarnation = uint32(r.incarnation) + 1
-	var statReply cephmsgr.OSDReply
-	var statErr error
-	if err := observeInHeldPhase(r.ctx, func() error { return p.check("the STAT of another object of the PG") }, func(ctx context.Context) {
-		statReply, statErr = r.o.Request(ctx, stat)
-	}); err != nil {
-		t.Fatal(err)
-	}
+	// The STAT reads no oracle input, so it is bounded by the held phase
+	// directly; the lease resumes the OSD by its deadline even while it is
+	// outstanding.
+	statReply, statErr := r.o.Request(p.held, stat)
+	r.checkHeld(p, "the STAT of another object of the PG")
 	if statErr != nil || statReply.Code != 0 || len(statReply.Operations) != 1 {
 		t.Fatal("STAT of another object of the PG while the write is held", statErr, statReply.Code)
 	}
@@ -542,10 +635,16 @@ func TestCephOSDErasureOptimizedK2M2SubWriteHoldIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	committed[r.last] = subWriteRecord{}
-	for shard := range committed {
-		w := r.waitRolledForward(r.route.Acting[shard], shard, r.key(op.TID))
+	for _, shard := range slices.Sorted(maps.Keys(committed)) {
+		w, exact, unproven := r.waitRolledForward(r.route.Acting[shard], shard, r.key(op.TID))
 		if w.AtVersion != replayVersion(reply) {
 			t.Fatalf("shard %d committed the write at %s, not at the reply's %s", shard, w.AtVersion, replayVersion(reply))
+		}
+		switch {
+		case unproven != nil:
+			t.Logf("shard %d (osd.%d): the roll-forward is unverified, the commit of the write stands: %v", shard, r.route.Acting[shard], unproven)
+		case !exact:
+			t.Logf("shard %d (osd.%d): one roll-forward is kept; that no second one was sent is unverified, since the history may have dropped ops", shard, r.route.Acting[shard])
 		}
 		committed[shard] = w
 	}
@@ -888,19 +987,8 @@ func TestCheckSubWriteCommitted(t *testing.T) {
 	roll.TID, roll.AtVersion, roll.PGCommittedTo = 13, subWriteRollForward, "25'3"
 	rolled.Writes = append(rolled.Writes, roll)
 	w, rolls, err := checkSubWriteCommitted(rolled, route, 1, 2, key)
-	if err != nil || w.TID != 12 || checkRolledForward(w, rolls) != nil {
-		t.Fatal("a write and its roll-forward refused:", w, rolls, err)
-	}
-	if checkRolledForward(w, nil) == nil {
-		t.Error("a write without a roll-forward accepted as rolled forward")
-	}
-	early := slices.Clone(rolls)
-	early[0].PGCommittedTo = "25'2"
-	if checkRolledForward(w, early) == nil {
-		t.Error("a roll-forward to an older version accepted")
-	}
-	if checkRolledForward(w, append(slices.Clone(rolls), rolls[0])) == nil {
-		t.Error("two roll-forwards accepted")
+	if _, judged := judgeRollForward(w, rolls, nil); err != nil || w.TID != 12 || judged != nil {
+		t.Fatal("a write and its roll-forward refused:", w, rolls, err, judged)
 	}
 	before := slices.Clone(rolled.Writes)
 	before[1].TID = 11
@@ -971,28 +1059,135 @@ func TestSameAtVersionAndHeldOnce(t *testing.T) {
 	}
 }
 
-func TestObserveInHeldPhase(t *testing.T) {
-	ctx := context.Background()
-	held, stop := context.WithCancel(ctx)
-	stop()
-	over := errors.New("held phase over")
-	ran := false
-	err := observeInHeldPhase(ctx, func() error { return held.Err() }, func(observe context.Context) {
-		ran = true
-		if observe.Err() != nil {
-			t.Error("the observation ran under the ended held phase")
-		}
-		if _, ok := observe.Deadline(); ok {
-			t.Error("the observation ran under a deadline")
-		}
-	})
-	if !ran || !errors.Is(err, context.Canceled) {
-		t.Fatal("an observation past the held phase was not run to completion and refused:", ran, err)
+// historyReads is a baseline and a later read of osd.1's op history, one
+// second apart in a history of size 20 and duration 600 s, the later one
+// keeping every earlier op and two more. No daemon produced them.
+func historyReads() (subWriteHistoryRead, subWriteHistoryRead) {
+	start := time.Unix(1700014000, 0)
+	before := subWriteHistoryRead{subWriteReceipt{OSD: 1, History: opHistoryRecord{Size: 20, Duration: 600, Ops: []string{"a", "b"}}}, start, start.Add(100 * time.Millisecond)}
+	after := subWriteHistoryRead{subWriteReceipt{OSD: 1, History: opHistoryRecord{Size: 20, Duration: 600, Ops: []string{"a", "b", "c", "d"}}}, start.Add(time.Second), start.Add(1100 * time.Millisecond)}
+	return before, after
+}
+
+func TestHistoryRetained(t *testing.T) {
+	before, after := historyReads()
+	if err := historyRetained(before, after); err != nil {
+		t.Fatal("a history that kept every op refused:", err)
 	}
-	if err := observeInHeldPhase(ctx, func() error { return nil }, func(context.Context) {}); err != nil {
-		t.Error("an observation within the held phase refused:", err)
+	for name, edit := range map[string]func(b, a *subWriteHistoryRead){
+		"another OSD":              func(b, a *subWriteHistoryRead) { a.OSD = 2 },
+		"another size":             func(b, a *subWriteHistoryRead) { a.History.Size = 30 },
+		"another duration":         func(b, a *subWriteHistoryRead) { a.History.Duration = 300 },
+		"no size":                  func(b, a *subWriteHistoryRead) { b.History.Size, a.History.Size = 0, 0 },
+		"an earlier op dropped":    func(b, a *subWriteHistoryRead) { a.History.Ops = []string{"b", "c", "d"} },
+		"a full history":           func(b, a *subWriteHistoryRead) { a.History.Size, b.History.Size = 4, 4 },
+		"a window of half the age": func(b, a *subWriteHistoryRead) { a.read = b.sent.Add(300 * time.Second) },
+		"reads out of order":       func(b, a *subWriteHistoryRead) { a.read = b.sent.Add(-time.Second) },
+	} {
+		b, a := historyReads()
+		edit(&b, &a)
+		if historyRetained(b, a) == nil {
+			t.Error("retention accepted:", name)
+		}
 	}
-	if err := observeInHeldPhase(ctx, func() error { return over }, func(context.Context) {}); !errors.Is(err, over) {
-		t.Error("the held phase's end was not reported:", err)
+}
+
+func TestJudgeRollForward(t *testing.T) {
+	write := subWriteRecord{TID: 12, AtVersion: "25'3"}
+	roll := subWriteRecord{TID: 13, AtVersion: subWriteRollForward, PGCommittedTo: "25'3"}
+	lost := errors.New("osd.1 dropped an op of its history since the first read")
+	if exact, err := judgeRollForward(write, []subWriteRecord{roll}, nil); err != nil || !exact {
+		t.Fatal("one roll-forward in a kept history refused or not exact:", exact, err)
+	}
+	if exact, err := judgeRollForward(write, []subWriteRecord{roll}, lost); err != nil || exact {
+		t.Fatal("one kept roll-forward in a history that may have dropped one claimed exact:", exact, err)
+	}
+	for name, rolls := range map[string][]subWriteRecord{
+		"two":             {roll, roll},
+		"another version": {{TID: 13, AtVersion: subWriteRollForward, PGCommittedTo: "25'2"}},
+	} {
+		for _, retained := range []error{nil, lost} {
+			if _, err := judgeRollForward(write, rolls, retained); err == nil || errors.Is(err, errRollForwardUnproven) {
+				t.Error("present roll-forwards accepted or left unproven:", name, retained, err)
+			}
+		}
+	}
+	if _, err := judgeRollForward(write, nil, nil); err == nil || errors.Is(err, errRollForwardUnproven) {
+		t.Error("a roll-forward missing from a kept history was not refused:", err)
+	}
+	// The write is present, and the history may have dropped its
+	// roll-forward: the coverage is unproven, not refused and not absent.
+	s, route, key := subWriteReceiptSample()
+	w, rolls, err := checkSubWriteCommitted(s, route, 1, 2, key)
+	if err != nil || len(rolls) != 0 {
+		t.Fatal("the committed write refused:", err)
+	}
+	if exact, err := judgeRollForward(w, rolls, lost); !errors.Is(err, errRollForwardUnproven) || exact {
+		t.Error("a missing roll-forward in a history that may have dropped it was not left unproven:", exact, err)
+	}
+}
+
+func TestJudgeNoRollForward(t *testing.T) {
+	lost := errors.New("osd.1 keeps 20 ops, its whole history of 20")
+	if proven, err := judgeNoRollForward(nil, nil); err != nil || !proven {
+		t.Fatal("an absence in a kept history not proven:", proven, err)
+	}
+	if proven, err := judgeNoRollForward(nil, lost); err != nil || proven {
+		t.Fatal("an absence in a history that may have dropped ops claimed proven:", proven, err)
+	}
+	roll := subWriteRecord{TID: 13, AtVersion: subWriteRollForward, PGCommittedTo: "25'3"}
+	for _, retained := range []error{nil, lost} {
+		if _, err := judgeNoRollForward([]subWriteRecord{roll}, retained); err == nil {
+			t.Error("a roll-forward during the hold accepted:", retained)
+		}
+	}
+}
+
+// A stalled held-phase read must not keep the paused shard frozen: the
+// lease's watchdog ends the pause by its deadline while the read has not
+// returned. The stalled observation is a real owned-pool subwrites request
+// into a control directory that no fixture serves; the stalled STAT is a
+// send that ignores its context until the test releases it, the worst case
+// of a STAT under the held phase. Nothing waits on a clock.
+func TestSubWriteHeldPhaseStallsEndThePauseByItsDeadline(t *testing.T) {
+	for _, stall := range []string{"observation", "STAT"} {
+		t.Run(stall, func(t *testing.T) {
+			dir := t.TempDir()
+			f := &fakePauseControl{arrived: make(chan string, 4)}
+			parent, deadline := context.WithCancel(context.Background())
+			p, err := startPauseLease(parent, f.request, "3", time.Minute, 10*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-f.arrived
+			release := make(chan struct{})
+			returned := make(chan error, 1)
+			go func() {
+				if stall == "observation" {
+					returned <- testcluster.ControlDaemonInput(p.held, dir, "verify", "osd-pool", "subwrites", testcluster.ControlInput{Name: "osd-pool-input.json", Data: []byte(`{"osd":3}`)})
+					return
+				}
+				<-release
+				returned <- p.check("the STAT of another object of the PG")
+			}()
+			// The held phase ends (here through its parent; its deadline
+			// does the same) with the read outstanding.
+			deadline()
+			if got := <-f.arrived; got != "recover-paused-osd" {
+				t.Fatal("the watchdog sent", got)
+			}
+			if !f.deadlines["recover-paused-osd"].Equal(p.deadline) {
+				t.Fatal("the pause did not end by the lease deadline", f.deadlines["recover-paused-osd"], p.deadline)
+			}
+			close(release)
+			if err := <-returned; err == nil {
+				t.Fatal("a read that outlived the held phase was accepted")
+			}
+			restore, stop := context.WithTimeout(context.Background(), time.Minute)
+			defer stop()
+			if err := p.restore(restore); err != nil || !slices.Equal(f.sent(), []string{"pause-osd 3", "recover-paused-osd 3"}) {
+				t.Fatal("the pause was not ended once", err, f.sent())
+			}
+		})
 	}
 }
