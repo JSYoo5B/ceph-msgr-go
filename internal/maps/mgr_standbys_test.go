@@ -15,7 +15,7 @@ func TestMgrStandbysNativeLayout(t *testing.T) {
 	// than using a Go StandbyInfo encoder to generate the decoder's input.
 	// StandbyInfo v4/compat1 begins with gid and name. The first record's
 	// module metadata is deliberately nonempty, followed by opaque features;
-	// the second record proves that skipping the child tail preserves alignment.
+	// the second record proves that the child envelope keeps alignment.
 	const twoStandbys = "02000000" + // std::map count
 		"6500000000000000" + // map key 101
 		"040140000000" + // StandbyInfo v4/compat1, 64-byte body
@@ -35,7 +35,7 @@ func TestMgrStandbysNativeLayout(t *testing.T) {
 		want []Standby
 	}{
 		{name: "empty", tail: "00000000"},
-		{name: "two with module tail", tail: twoStandbys, want: []Standby{{Name: "a", GlobalID: 101}, {Name: "b", GlobalID: 202}}},
+		{name: "two with module tail", tail: twoStandbys, want: []Standby{{Name: "a", GlobalID: 101, Modules: []ModuleInfo{{Name: "opaque", CanRun: true}}, Features: 0x0123456789abcdef}, {Name: "b", GlobalID: 202, Features: 0x0102030405060708}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tail, err := hex.DecodeString(test.tail)

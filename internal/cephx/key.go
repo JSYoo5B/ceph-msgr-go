@@ -1,8 +1,13 @@
 // Package cephx implements Tentacle credential and ticket cryptography.
 //
 // The exchanges ride Messenger AuthRequest/ReplyMore/RequestMore/Done frames
-// (the session's MonAuth and ServiceAuth adapters), not message types 17/18.
-// Only CLIENT identities are accepted. AUTH and MGR tickets are always
+// (the session's MonAuth and ServiceAuth adapters). A client.* identity's
+// tickets are renewed by a new handshake. The one daemon identity, a
+// NewMgrDaemon mgr.<id> principal, names the MGR entity type, requests the
+// fixed native MgrStandby mask (MON, OSD, MDS, MGR and AUTH), and renews in
+// session through MAuth/MAuthReply (types 17/18) with RenewalRequest and
+// FinishRenewal; it fetches its rotating MGR secrets the same way
+// (rotating.go). For a client.*, AUTH and MGR tickets are always
 // requested and OSD and MDS only when enabled; unsupported or incomplete
 // service masks and unrequested service authorizers are refused before any
 // proof is produced, and all services travel with the AUTH request (no
