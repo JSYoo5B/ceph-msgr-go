@@ -101,7 +101,7 @@ func TestRBDMirrorSelectionRequiresItsFixtureShape(t *testing.T) {
 func TestRBDMirrorControlRequiresExclusiveSelector(t *testing.T) {
 	for _, p := range []profile{{}, {osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", ipFamily: "4", testRun: ".*"}} {
 		out := t.TempDir()
-		if err := os.WriteFile(filepath.Join(out, "rbd-mirror"), []byte("1 start\n"), 0o600); err != nil {
+		if err := writeRequestFile(out, "rbd-mirror", "1 start\n"); err != nil {
 			t.Fatal(err)
 		}
 		c := &fixtureCluster{profile: p}
@@ -130,7 +130,7 @@ func TestRBDMirrorControlEnforcesPhaseOrder(t *testing.T) {
 		{&rbdMirrorScope{receipt: rbdMirrorFixtureReceipt{Phase: "start"}}, "replay"},
 	} {
 		out := t.TempDir()
-		if err := os.WriteFile(filepath.Join(out, "rbd-mirror"), []byte("7 "+tc.action+"\n"), 0o600); err != nil {
+		if err := writeRequestFile(out, "rbd-mirror", "7 "+tc.action+"\n"); err != nil {
 			t.Fatal(err)
 		}
 		c := &fixtureCluster{profile: p, rbdMirror: tc.scope}

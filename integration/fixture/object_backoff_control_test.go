@@ -27,7 +27,7 @@ func TestObjectBackoffControlRefusesUnownedOrUnboundedRecipe(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			out := t.TempDir()
-			if err := os.WriteFile(filepath.Join(out, "verify-osd-object-backoff"), []byte(test.input), 0o600); err != nil {
+			if err := writeRequestFile(out, "verify-osd-object-backoff", test.input); err != nil {
 				t.Fatal(err)
 			}
 			// No cluster or container is supplied: admission must reject before

@@ -54,9 +54,21 @@ func nextRequestID() int64 {
 	return id
 }
 
-// RequestControl publishes non-secret control metadata atomically. The private
-// fixture directory bounds access, while 0644 lets a non-root Linux host read
-// files produced by the root container test process. Keys remain separate.
+// RequestEnvelope is the file name of one publication of request: the
+// request name, the request ID and ".request". Each publication has its own
+// envelope, so two publishers of one control, such as the watchdogs of two
+// pause leases that end together, never replace each other's request; the
+// fixture claims a control's pending envelopes in request-ID order, each
+// atomically (integration/fixture/control.go pendingRequests, and
+// integration/cluster.sh pending for the requests its loop serves).
+func RequestEnvelope(request string, id int64) string {
+	return fmt.Sprintf("%s.%d.request", request, id)
+}
+
+// RequestControl publishes non-secret control metadata atomically, in its own
+// envelope (RequestEnvelope). The private fixture directory bounds access,
+// while 0644 lets a non-root Linux host read files produced by the root
+// container test process. Keys remain separate.
 func RequestControl(ctx context.Context, control, request, response string, args ...string) error {
 	return requestControl(ctx, control, request, response, nil, args)
 }
@@ -122,7 +134,7 @@ func requestControl(ctx context.Context, control, request, response string, inpu
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(file.Name(), filepath.Join(control, request)); err != nil {
+	if err := os.Rename(file.Name(), filepath.Join(control, RequestEnvelope(request, id))); err != nil {
 		return err
 	}
 	ack := filepath.Join(control, fmt.Sprintf("%s.%d", response, id))

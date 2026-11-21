@@ -178,19 +178,19 @@ func TestOwnedPoolOracleRunsBesideThePauseEndingControls(t *testing.T) {
 	publish("2", `{"request":2}`)
 	writeControlRequest(t, out, "pause-osd", "3 1")
 	poll()
-	if !fileExists(filepath.Join(out, "verify-osd-pool")) || !fileExists(filepath.Join(out, "pause-osd")) || fileExists(filepath.Join(out, "osd-pool-verify.1")) {
+	if !requestPending(t, out, "verify-osd-pool") || !requestPending(t, out, "pause-osd") || fileExists(filepath.Join(out, "osd-pool-verify.1")) {
 		t.Fatal("a request other than a pause-ending one was served while the oracle request ran")
 	}
-	if err := os.Remove(filepath.Join(out, "pause-osd")); err != nil {
+	if err := os.Remove(filepath.Join(out, requestEnvelopeName("pause-osd", "3"))); err != nil {
 		t.Fatal(err)
 	}
 	// The pause recovery is served while the oracle request is outstanding.
 	writeControlRequest(t, out, "recover-paused-osd", "4 1")
 	poll()
-	if !fileExists(filepath.Join(out, "osd-pause-recovered.4")) || fileExists(filepath.Join(out, "recover-paused-osd")) {
+	if !fileExists(filepath.Join(out, "osd-pause-recovered.4")) || requestPending(t, out, "recover-paused-osd") {
 		t.Fatal("the pause recovery waited for the outstanding oracle request")
 	}
-	if !fileExists(filepath.Join(out, "verify-osd-pool")) || fileExists(filepath.Join(out, "osd-pool-verify.1")) {
+	if !requestPending(t, out, "verify-osd-pool") || fileExists(filepath.Join(out, "osd-pool-verify.1")) {
 		t.Fatal("the next oracle request was claimed before the outstanding one was settled")
 	}
 	first.release <- nil

@@ -1,12 +1,15 @@
 package integration_test
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -86,7 +89,9 @@ func startPauseLeaseUntil(parent context.Context, request func(context.Context, 
 // would fail the fixture when the daemon is not paused, as after a pause
 // request that was never served; the recovery settles the original pause
 // and resume requests and resumes the daemon only if it is paused
-// (recover-paused-osd, integration/fixture/control_daemon.go).
+// (recover-paused-osd, integration/fixture/control_daemon.go). The
+// recovery is per OSD and has its own envelope (testcluster.RequestEnvelope),
+// so the watchdogs of several leases that end together are all served.
 func (p *pauseLease) watch() {
 	ctx, stop := context.WithDeadline(context.Background(), p.deadline)
 	defer stop()
@@ -375,5 +380,119 @@ func TestPauseLeaseEndsWhileAnObservationIsOutstanding(t *testing.T) {
 	defer stopRestore()
 	if err := p.restore(restore); err != nil || !slices.Equal(f.sent(), []string{"pause-osd 3", "recover-paused-osd 3"}) {
 		t.Fatal("the pause was not ended once", err, f.sent())
+	}
+}
+
+// controlEnvelope is one pending publication of a control request in a
+// control directory (testcluster.RequestEnvelope), as a test that stands in
+// for the fixture reads it.
+type controlEnvelope struct {
+	path, id string
+	fields   []string
+}
+
+// controlEnvelopes returns the pending envelopes of request in dir in
+// request-ID order.
+func controlEnvelopes(dir, request string) ([]controlEnvelope, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, request+".*.request"))
+	if err != nil {
+		return nil, err
+	}
+	var pending []controlEnvelope
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		first, _, _ := strings.Cut(string(data), "\n")
+		e := controlEnvelope{path: path, id: strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), request+"."), ".request"), fields: strings.Fields(first)}
+		if len(e.fields) == 0 || e.fields[0] != e.id {
+			return nil, fmt.Errorf("envelope %s holds %q", filepath.Base(path), data)
+		}
+		pending = append(pending, e)
+	}
+	slices.SortFunc(pending, func(a, b controlEnvelope) int {
+		x, _ := strconv.ParseInt(a.id, 10, 64)
+		y, _ := strconv.ParseInt(b.id, 10, 64)
+		return cmp.Compare(x, y)
+	})
+	return pending, nil
+}
+
+// Two pause leases of one window that end together, before the fixture
+// polls, must both be recovered: their watchdogs publish two recoveries,
+// each in its own envelope, and each lease is settled by its own
+// acknowledgement. The test acknowledges the pauses and recoveries in place
+// of the fixture, through a real control directory.
+func TestPauseLeasesEndingTogetherAreBothRecovered(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	request := func(ctx context.Context, request, response, name string) error {
+		return testcluster.RequestControl(ctx, dir, request, response, name)
+	}
+	wait := func(action string, count int) []controlEnvelope {
+		t.Helper()
+		for {
+			pending, err := controlEnvelopes(dir, action)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(pending) >= count {
+				return pending
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatalf("%d of %d %s requests published: %v", len(pending), count, action, ctx.Err())
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}
+	ack := func(e controlEnvelope, response string) {
+		t.Helper()
+		if err := os.Remove(e.path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, response+"."+e.id), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parent, end := context.WithCancel(ctx)
+	deadline := time.Now().Add(time.Minute)
+	var leases []*pauseLease
+	for _, osd := range []string{"2", "3"} {
+		started := make(chan *pauseLease, 1)
+		go func() {
+			p, _ := startPauseLeaseUntil(parent, request, osd, deadline, 10*time.Second)
+			started <- p
+		}()
+		ack(wait("pause-osd", 1)[0], "osd-pause")
+		p := <-started
+		if err := p.check("the pause"); err != nil {
+			t.Fatal(err)
+		}
+		leases = append(leases, p)
+	}
+	// Both held phases end at once; no fixture polls until both watchdogs
+	// have published.
+	end()
+	recoveries := wait("recover-paused-osd", 2)
+	names := map[string]bool{}
+	for _, e := range recoveries {
+		names[e.fields[1]] = true
+	}
+	if len(recoveries) != 2 || !names["2"] || !names["3"] {
+		t.Fatal("the recoveries do not name both paused OSDs", recoveries)
+	}
+	for _, e := range recoveries {
+		ack(e, "osd-pause-recovered")
+	}
+	for _, p := range leases {
+		restore, stop := context.WithTimeout(ctx, time.Minute)
+		err := p.restore(restore)
+		stop()
+		if err != nil || !p.resumed || p.ended != "recover-paused-osd" {
+			t.Fatal("a lease was not recovered by its own watchdog", p.name, err, p.ended)
+		}
 	}
 }

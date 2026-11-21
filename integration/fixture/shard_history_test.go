@@ -290,14 +290,14 @@ func TestShardHistoryCaptureAdmission(t *testing.T) {
 	}
 	// The control refuses before it reads anything when it is not selected.
 	out := t.TempDir()
-	if err := os.WriteFile(filepath.Join(out, "capture-osd-shard-history"), []byte("7 \n"), 0644); err != nil {
+	if err := writeRequestFile(out, "capture-osd-shard-history", "7 \n"); err != nil {
 		t.Fatal(err)
 	}
 	c := &fixtureCluster{profile: profile{osd: "1", osdStore: "bluestore", osdReplicas: "4", testRun: "^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$", capabilities: "osd-erasure-width"}}
 	if err := c.controlOSDShardHistoryRequest(context.Background(), out); err == nil || !strings.Contains(err.Error(), "exclusive four-BlueStore selector") {
 		t.Fatal("unselected capture request:", err)
 	}
-	if err := os.WriteFile(filepath.Join(out, "capture-osd-shard-history"), []byte("7 4.2\n"), 0644); err != nil {
+	if err := writeRequestFile(out, "capture-osd-shard-history", "7 4.2\n"); err != nil {
 		t.Fatal(err)
 	}
 	for selector, capabilities := range shardHistoryRows(t) {
