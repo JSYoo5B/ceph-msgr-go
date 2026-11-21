@@ -177,3 +177,42 @@ func TestDeliverCanceledDuringBeforeWriteIsNeverStarted(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestDeliverCanceledWhileWriterWaitsForLockIsNeverStarted holds the
+// session lock once the writer has passed every check outside it and is
+// about to take the lock for the start decision, cancels the ctx, and only
+// then releases the lock. No waiter can withdraw the request (it is queued
+// directly), so only the writer's decision under the lock stands between
+// the ended ctx and the wire: the request is known not sent and the next
+// message takes the first sequence.
+func TestDeliverCanceledWhileWriterWaitsForLockIsNeverStarted(t *testing.T) {
+	s, peer := pipeSession(t)
+	reached, held := make(chan struct{}), make(chan struct{})
+	s.beforeStartLock = func() {
+		reached <- struct{}{}
+		<-held
+		s.beforeStartLock = nil // the writer alone reads it, after this
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r, err := s.queueDelivery(ctx, msgr.MessageData{Type: 98, Front: []byte("canceled")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-reached
+	s.mu.Lock()
+	close(held)
+	cancel()
+	s.mu.Unlock()
+	if err := <-r.delivered; !errors.Is(err, ErrNotSent) || !errors.Is(err, context.Canceled) {
+		t.Fatal("a request canceled while the writer waited for the lock must be known not sent", err)
+	}
+	next := make(chan error, 1)
+	go func() { next <- s.Deliver(context.Background(), msgr.MessageData{Type: 98, Front: []byte("next")}) }()
+	if m := readRequest(t, msgr.NewReader(peer, 0)); string(m.Front) != "next" || m.Sequence != 1 {
+		t.Fatal("the canceled request was written, or consumed a sequence", m)
+	}
+	if err := <-next; err != nil {
+		t.Fatal(err)
+	}
+}

@@ -142,6 +142,10 @@ type Session struct {
 	unacked     []msgr.MessageData
 	resumeState ResumeState
 	resumes     atomic.Uint64
+	// beforeStartLock, when set (tests only), runs on the writer after it
+	// has taken a queued request's Done channel and before it takes mu for
+	// the start decision.
+	beforeStartLock func()
 }
 
 func New(t *Transport, config Config, onMessage func(msgr.MessageData) error, onClose func(error)) *Session {
@@ -415,11 +419,11 @@ func notSent(cause error) error { return fmt.Errorf("%w: %w", ErrNotSent, cause)
 // session failed first) and is known not to have been sent. An
 // OutcomeUnknownError means the write started and then the transport
 // failed, or ctx ended after the start: the peer may have received it.
-// ctx stays with the queued message: the writer checks it last immediately
-// before the session-lock critical section that marks the write started,
+// ctx stays with the queued message: the writer observes its Done channel
+// inside the session-lock critical section that marks the write started,
 // and the caller's withdrawal takes that lock too, so a message whose ctx
-// ended before the writer's last check is never written, whether the
-// writer or the waiting caller sees the end first.
+// ended before that section is never written, whether the writer or the
+// waiting caller sees the end first.
 func (s *Session) Deliver(ctx context.Context, m msgr.MessageData) error {
 	r, err := s.queueDelivery(ctx, m)
 	if err != nil {
@@ -563,17 +567,28 @@ func (s *Session) writeLoop(t *Transport, epoch uint64, stop <-chan struct{}, lo
 			if s.config.BeforeWrite != nil {
 				admissionErr = s.config.BeforeWrite(m)
 			}
-			// The caller's ctx gets its last look here, immediately
-			// before the critical section that marks the start (ctx.Err
-			// runs outside mu: a context may inspect the session). An end
-			// this check sees is never started; one after it finds the
-			// request started, or withdrawn by its waiting caller under
-			// mu first.
-			ended := ctx.Err()
+			// Cancellation is decided in the same critical section that
+			// marks the start: the Done channel is taken outside mu (a
+			// context method may inspect the session) and received from,
+			// without blocking, under mu; the cause is read after unlock.
+			// A ctx that ended before this section, even while the writer
+			// waited for mu, is never started; one that ends after it
+			// finds the request started, or withdrawn by its waiting
+			// caller under mu first.
+			done := ctx.Done()
+			if s.beforeStartLock != nil {
+				s.beforeStartLock()
+			}
 			s.mu.Lock()
 			valid = s.err == nil && (r.result == nil || s.pending[id] == r) && !r.abandoned
 			cause = s.err
-			if valid && ended != nil {
+			ended := false
+			select {
+			case <-done:
+				ended = true
+			default:
+			}
+			if valid && ended {
 				s.mu.Unlock()
 				r.unsent(nil, ctx)
 				continue
