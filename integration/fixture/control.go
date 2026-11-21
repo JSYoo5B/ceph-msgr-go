@@ -52,51 +52,96 @@ func (c *fixtureCluster) controlLoop(ctx context.Context, out string) {
 	}
 }
 
-// request claims the pending request named name and returns the fields of
-// its first line: "<request ID> <arguments>". A request that carries input
-// files has one more line "input <file name>" per input, each name once
-// (internal/testcluster RequestControlInput): the test wrote each input as
-// "<file name>.<request ID>", and the claim renames it to the file name the
-// handler and its oracle read. The test never writes the plain file name,
-// so a request the test abandoned and that is claimed later reads its own
-// input, not the input of the request published after it; the fixture runs
-// the requests of one control one at a time, so no later claim replaces the
-// file while a handler reads it. A missing input fails the fixture, since
-// the test writes it before it publishes the request.
-func (c *fixtureCluster) request(out, name string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Join(out, name))
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
+// pendingRequest is one published, unclaimed request envelope of a control:
+// "<name>.<request ID>.request" (internal/testcluster RequestEnvelope).
+type pendingRequest struct {
+	path   string
+	id     int64
+	fields []string
+	inputs []string
+}
+
+// requestEnvelope is the shape of an envelope name after its control's name.
+var requestEnvelope = regexp.MustCompile(`^\.([1-9][0-9]{0,18})\.request$`)
+
+// pendingRequests returns the pending envelopes of the control name in
+// request-ID order, the order of their publication. Each publication has
+// its own envelope, so two publishers of one control never replace each
+// other's request. An envelope's first line is "<request ID> <arguments>",
+// with the ID of its file name; a request that carries input files has one
+// more line "input <file name>" per input, each name once (internal/
+// testcluster RequestControlInput). A malformed envelope fails the fixture.
+func pendingRequests(out, name string) ([]pendingRequest, error) {
+	entries, err := os.ReadDir(out)
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
-	fields := strings.Fields(lines[0])
-	if len(fields) == 0 {
-		return nil, errors.New("empty fixture request")
-	}
-	id, err := strconv.ParseInt(fields[0], 10, 64)
-	if err != nil || id <= 0 {
-		return nil, errors.New("invalid fixture request identity")
-	}
-	var inputs []string
-	for _, line := range lines[1:] {
-		words := strings.Fields(line)
-		if len(words) != 2 || words[0] != "input" || !controlInputName.MatchString(words[1]) || slices.Contains(inputs, words[1]) {
-			return nil, errors.New("invalid fixture request input line")
+	var pending []pendingRequest
+	for _, entry := range entries {
+		rest, ok := strings.CutPrefix(entry.Name(), name)
+		match := requestEnvelope.FindStringSubmatch(rest)
+		if !ok || match == nil {
+			continue
 		}
-		inputs = append(inputs, words[1])
+		id, err := strconv.ParseInt(match[1], 10, 64)
+		if err != nil {
+			return nil, errors.New("invalid fixture request envelope")
+		}
+		path := filepath.Join(out, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+		fields := strings.Fields(lines[0])
+		if len(fields) == 0 {
+			return nil, errors.New("empty fixture request")
+		}
+		if fields[0] != match[1] {
+			return nil, errors.New("invalid fixture request identity")
+		}
+		r := pendingRequest{path: path, id: id, fields: fields}
+		for _, line := range lines[1:] {
+			words := strings.Fields(line)
+			if len(words) != 2 || words[0] != "input" || !controlInputName.MatchString(words[1]) || slices.Contains(r.inputs, words[1]) {
+				return nil, errors.New("invalid fixture request input line")
+			}
+			r.inputs = append(r.inputs, words[1])
+		}
+		pending = append(pending, r)
 	}
-	if err = os.Remove(filepath.Join(out, name)); err != nil {
+	slices.SortFunc(pending, func(a, b pendingRequest) int { return cmp.Compare(a.id, b.id) })
+	return pending, nil
+}
+
+// claim removes one pending envelope, which only the fixture does, and
+// renames each of its inputs from "<file name>.<request ID>" to the file
+// name the handler and its oracle read. The test never writes the plain
+// file name, so a request the test abandoned and that is claimed later
+// reads its own input, not the input of a request published after it; the
+// fixture runs the requests of one control one at a time, so no later claim
+// replaces the file while a handler reads it. A missing input fails the
+// fixture, since the test writes it before it publishes the request.
+func claim(out string, r pendingRequest) ([]string, error) {
+	if err := os.Remove(r.path); err != nil {
 		return nil, err
 	}
-	for _, input := range inputs {
-		if err = os.Rename(filepath.Join(out, input+"."+fields[0]), filepath.Join(out, input)); err != nil {
-			return nil, fmt.Errorf("claim the input of fixture request %s: %w", name, err)
+	for _, input := range r.inputs {
+		if err := os.Rename(filepath.Join(out, input+"."+r.fields[0]), filepath.Join(out, input)); err != nil {
+			return nil, fmt.Errorf("claim the input of fixture request %s: %w", filepath.Base(r.path), err)
 		}
 	}
-	return fields, nil
+	return r.fields, nil
+}
+
+// request claims the oldest pending request of the control name and
+// returns its fields, or nil when none is pending.
+func (c *fixtureCluster) request(out, name string) ([]string, error) {
+	pending, err := pendingRequests(out, name)
+	if err != nil || len(pending) == 0 {
+		return nil, err
+	}
+	return claim(out, pending[0])
 }
 
 // controlInputName is the closed shape of a request's input file name
@@ -191,8 +236,9 @@ func defineControl(name string, order controlOrder, poll controlPoll) bool {
 	return true
 }
 
-// defineRequestControl declares a control of one request file named name:
-// the poll consumes the request, runs handle with its fields and acknowledges
+// defineRequestControl declares a control of the requests named name: each
+// poll claims the oldest pending envelope (request), runs handle with its
+// fields and acknowledges
 // it as "<name>-completed.<request ID>". It is declared like defineControl.
 func defineRequestControl(name string, order controlOrder, handle func(c *fixtureCluster, ctx context.Context, out string, fields []string) error) bool {
 	if handle == nil {

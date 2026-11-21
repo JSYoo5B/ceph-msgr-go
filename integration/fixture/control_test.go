@@ -40,7 +40,7 @@ func TestControllerRejectsMalformedRequestBeforeDaemonAction(t *testing.T) {
 		out := t.TempDir()
 		d := &controlledDaemon{}
 		c := &fixtureCluster{cluster: &ceph.Container{Container: d}}
-		if err := os.WriteFile(filepath.Join(out, "stop-mon"), []byte(request), 0600); err != nil {
+		if err := writeRequestFile(out, "stop-mon", request); err != nil {
 			t.Fatal(err)
 		}
 		if err := c.controls(context.Background(), out); err == nil || d.stops != 0 {
@@ -63,7 +63,7 @@ func TestRequestClaimsItsOwnInputs(t *testing.T) {
 	write("a-input.json.7", "seven")
 	write("b-input.json.7", "b seven")
 	write("a-input.json.8", "eight")
-	write("verify-x", "7 mode\ninput a-input.json\ninput b-input.json\n")
+	writeControlRequest(t, out, "verify-x", "7 mode\ninput a-input.json\ninput b-input.json\n")
 	fields, err := c.request(out, "verify-x")
 	if err != nil || !slices.Equal(fields, []string{"7", "mode"}) {
 		t.Fatal(fields, err)
@@ -73,7 +73,7 @@ func TestRequestClaimsItsOwnInputs(t *testing.T) {
 			t.Fatal("claimed input", name, string(data), err)
 		}
 	}
-	if fileExists(filepath.Join(out, "a-input.json.7")) || fileExists(filepath.Join(out, "verify-x")) {
+	if fileExists(filepath.Join(out, "a-input.json.7")) || requestPending(t, out, "verify-x") {
 		t.Fatal("the claim left the request or its scoped input")
 	}
 	for _, content := range []string{
@@ -83,10 +83,10 @@ func TestRequestClaimsItsOwnInputs(t *testing.T) {
 		"9 mode\nother a-input.json\n",         // not an input line
 		"9 mode\ninput x.json\ninput x.json\n", // named twice
 	} {
-		write("verify-x", content)
+		writeControlRequest(t, out, "verify-x", content)
 		if _, err := c.request(out, "verify-x"); err == nil {
 			t.Fatalf("claimed %q", content)
 		}
-		os.Remove(filepath.Join(out, "verify-x"))
+		os.Remove(filepath.Join(out, requestEnvelopeName("verify-x", "9")))
 	}
 }

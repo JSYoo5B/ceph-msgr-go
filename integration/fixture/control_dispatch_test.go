@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,11 +14,38 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
+// writeControlRequest publishes value as one request of the control name, in
+// the envelope of the request ID that value starts with
+// (internal/testcluster RequestEnvelope).
 func writeControlRequest(t *testing.T, out, name, value string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(out, name), []byte(value), 0600); err != nil {
+	if err := writeRequestFile(out, name, value); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// writeRequestFile writes value as one request envelope of the control name
+// in dir. Its envelope carries the request ID value starts with, or 1 when
+// value does not start with one, so a malformed value is still published.
+func writeRequestFile(dir, name, value string) error {
+	id, _, _ := strings.Cut(strings.TrimSpace(value), " ")
+	if n, err := strconv.ParseInt(id, 10, 64); err != nil || n <= 0 {
+		id = "1"
+	}
+	return os.WriteFile(filepath.Join(dir, requestEnvelopeName(name, id)), []byte(value), 0600)
+}
+
+// requestEnvelopeName is the envelope of request ID id of the control name.
+func requestEnvelopeName(name, id string) string { return name + "." + id + ".request" }
+
+// requestPending says whether a request of the control name is pending.
+func requestPending(t *testing.T, out, name string) bool {
+	t.Helper()
+	pending, err := pendingRequests(out, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(pending) != 0
 }
 
 func TestControllerPreservesEarlierRoleAndFailureGateOrder(t *testing.T) {
@@ -32,17 +60,19 @@ func TestControllerPreservesEarlierRoleAndFailureGateOrder(t *testing.T) {
 			writeControlRequest(t, out, "stop-mon", "2 a")
 			wanted := "invalid owned MDS sessions control scope"
 			if workerFailed {
-				writeControlRequest(t, out, "native-oracles.error", "synthetic failure")
+				if err := os.WriteFile(filepath.Join(out, "native-oracles.error"), []byte("synthetic failure"), 0600); err != nil {
+					t.Fatal(err)
+				}
 				wanted = "native oracle worker failed"
 			}
 			err := c.controls(context.Background(), out)
 			if err == nil || !strings.Contains(err.Error(), wanted) || d.stops != 0 {
 				t.Fatal("later action ran before an earlier failure", err, d.stops)
 			}
-			if !fileExists(filepath.Join(out, "stop-mon")) || fileExists(filepath.Join(out, "mon-stop.2")) {
+			if !requestPending(t, out, "stop-mon") || fileExists(filepath.Join(out, "mon-stop.2")) {
 				t.Fatal("a request after the first failure was consumed or acknowledged")
 			}
-			if fileExists(filepath.Join(out, "mds-sessions")) != workerFailed {
+			if requestPending(t, out, "mds-sessions") != workerFailed {
 				t.Fatal("the worker failure checkpoint moved relative to the MDS request")
 			}
 		})
@@ -62,7 +92,7 @@ func TestControllerRetainsEarlierMutationAndAckAfterLaterRoleRefusal(t *testing.
 	if !fileExists(filepath.Join(out, "mon-stop.1")) || fileExists(filepath.Join(out, "mgr-keyring-verify.2")) {
 		t.Fatal("earlier acknowledgement was lost or a refused action was acknowledged")
 	}
-	if fileExists(filepath.Join(out, "stop-mon")) || fileExists(filepath.Join(out, "verify-mgr-keyring")) {
+	if requestPending(t, out, "stop-mon") || requestPending(t, out, "verify-mgr-keyring") {
 		t.Fatal("consumed requests were retained after partial polling progress")
 	}
 	if err := c.controls(context.Background(), out); err != nil || d.stops != 1 {
@@ -91,7 +121,7 @@ func TestControllerDoesNotReplayConsumedUncertainMutation(t *testing.T) {
 	if err := c.controls(context.Background(), out); err != uncertain || d.stops != 1 {
 		t.Fatal("failed mutation lost its first error or was retried", err, d.stops)
 	}
-	if fileExists(filepath.Join(out, "stop-mon")) || fileExists(filepath.Join(out, "mon-stop.1")) || !fileExists(filepath.Join(out, "verify-mgr-keyring")) {
+	if requestPending(t, out, "stop-mon") || fileExists(filepath.Join(out, "mon-stop.1")) || !requestPending(t, out, "verify-mgr-keyring") {
 		t.Fatal("uncertain action was acknowledged or its later request was consumed")
 	}
 	if err := c.controls(context.Background(), out); err == nil || !strings.Contains(err.Error(), "native MGR keyring gate") || d.stops != 1 {
