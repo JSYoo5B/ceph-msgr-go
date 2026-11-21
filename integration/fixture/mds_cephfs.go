@@ -258,7 +258,7 @@ func parseMDSCephFSRequest(fields []string, token string, previousID int64) (int
 			return 0, mdsCephFSAction{}, errors.New("MDS CephFS push stat target is not admitted")
 		}
 		action.target = arg
-	case "push-rename", "push-snapshot-create", "push-snapshot-remove", "push-quota-set", "push-quota-clear", "push-recall-on", "push-recall-max-off", "push-recall-off", "push-cache-drop":
+	case "push-rename", "push-snapshot-create", "push-snapshot-remove", "push-quota-set", "push-quota-clear", "push-charmap-set", "push-recall-on", "push-recall-max-off", "push-recall-off", "push-cache-drop":
 		if arg != "" {
 			return 0, mdsCephFSAction{}, errors.New("MDS CephFS push actions take no caller argument")
 		}
@@ -515,6 +515,16 @@ type mdsCephFSNative struct {
 	Statfs         *mdsCephFSStatfs     `json:"statfs,omitempty"`
 	Flock          *mdsCephFSFlockProbe `json:"flock,omitempty"`
 	Fcntl          *mdsCephFSFcntlState `json:"fcntl,omitempty"`
+	Charmap        *mdsCephFSCharmap    `json:"charmap,omitempty"`
+}
+
+// mdsCephFSCharmap is the native getxattr readback of a directory charmap:
+// the raw ceph.dir.casesensitive, ceph.dir.normalization and ceph.dir.encoding
+// texts the MDS answers (Server::handle_client_getvxattr).
+type mdsCephFSCharmap struct {
+	CaseSensitive string `json:"casesensitive"`
+	Normalization string `json:"normalization"`
+	Encoding      string `json:"encoding"`
 }
 
 // Native statx version and second-resolution mtime are independent of the
@@ -638,6 +648,9 @@ func decodeMDSCephFSNativeOutput(action, path string, data []byte) (mdsCephFSNat
 	}
 	if result.Fcntl != nil && action != "fcntl-probe" {
 		return mdsCephFSNative{}, errors.New("native fcntl output belongs to a different action")
+	}
+	if result.Charmap != nil && action != "setcharmap" {
+		return mdsCephFSNative{}, errors.New("native charmap output belongs to a different action")
 	}
 	return result, nil
 }
