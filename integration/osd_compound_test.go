@@ -21,10 +21,7 @@ func nativeCompoundSnapshot(t *testing.T, ctx context.Context, label string) mut
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "osd-compound-input.json"), input, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-compound", "snapshot"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-compound", "snapshot", testcluster.ControlInput{Name: "osd-compound-input.json", Data: input, Private: true}); err != nil {
 		t.Fatal("native compound observation", err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "osd-compound-result.json"))

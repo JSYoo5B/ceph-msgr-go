@@ -103,16 +103,13 @@ func upmapControl(ctx context.Context, action string) (upmapControlEvidence, err
 		return result, errors.New("unsupported upmap control action")
 	}
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
-	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "osd-upmap-input.json"), []byte("{}")); err != nil {
-		return result, err
-	}
 	path := filepath.Join(dir, "osd-upmap-result.json")
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return result, err
 	}
 	call, stop := context.WithTimeout(ctx, 160*time.Second)
 	defer stop()
-	controlErr := testcluster.ControlDaemon(call, dir, "verify", "osd-upmap", action)
+	controlErr := testcluster.ControlDaemonInput(call, dir, "verify", "osd-upmap", action, testcluster.ControlInput{Name: "osd-upmap-input.json", Data: []byte("{}")})
 	file, err := os.Open(path)
 	if err == nil {
 		result.Raw, err = io.ReadAll(io.LimitReader(file, (512<<10)+1))

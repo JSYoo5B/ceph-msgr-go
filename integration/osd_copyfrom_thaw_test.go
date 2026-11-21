@@ -17,16 +17,9 @@ func TestCopyFromThawAcknowledgementDeadline(t *testing.T) {
 	for _, stage := range []string{"resume pending", "late acknowledgement", "lost acknowledgement"} {
 		t.Run(stage, func(t *testing.T) {
 			dir := t.TempDir()
-			r := copyPrimaryRecovery{dir: dir, frozen: map[int32]bool{2: true}, killed: map[int32]bool{}}
+			r := copyPrimaryRecovery{dir: dir, frozen: map[int32]bool{}, killed: map[int32]bool{}}
 			parent, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			deadline := time.Now().Add(80 * time.Millisecond)
-			err := r.thaw(parent, 2, deadline)
-			if !errors.Is(err, context.DeadlineExceeded) || time.Now().Before(deadline) ||
-				time.Since(deadline) > time.Second || parent.Err() != nil || !r.frozen[2] {
-				t.Fatalf("resume wait: err=%v parent=%v time since cutoff=%v frozen=%v", err, parent.Err(), time.Since(deadline), r.frozen)
-			}
-
 			request := func(action string) string {
 				t.Helper()
 				path := filepath.Join(dir, action)
@@ -50,6 +43,30 @@ func TestCopyFromThawAcknowledgementDeadline(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(dir, name), nil, 0600); err != nil {
 					t.Fatal(err)
 				}
+			}
+			deadline := time.Now().Add(300 * time.Millisecond)
+			// The pause is acknowledged once published; freeze waits for it.
+			pauseID := make(chan string, 1)
+			go func() {
+				for parent.Err() == nil {
+					if data, err := os.ReadFile(filepath.Join(dir, "pause-osd")); err == nil {
+						if fields := strings.Fields(string(data)); len(fields) == 2 && os.WriteFile(filepath.Join(dir, "osd-pause."+fields[0]), nil, 0600) == nil {
+							pauseID <- fields[0]
+							return
+						}
+					}
+					time.Sleep(time.Millisecond)
+				}
+				close(pauseID)
+			}()
+			r.freeze(t, parent, 2, deadline, 0)
+			if id, ok := <-pauseID; !ok || id == "" {
+				t.Fatal("the pause was not published")
+			}
+			err := r.thaw(2)
+			if !errors.Is(err, context.DeadlineExceeded) || time.Now().Before(deadline) ||
+				time.Since(deadline) > time.Second || parent.Err() != nil || !r.frozen[2] {
+				t.Fatalf("resume wait: err=%v parent=%v time since cutoff=%v frozen=%v", err, parent.Err(), time.Since(deadline), r.frozen)
 			}
 			resumeID := request("resume-osd")
 			if stage != "resume pending" {

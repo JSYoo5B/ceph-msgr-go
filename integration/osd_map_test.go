@@ -161,11 +161,9 @@ func TestCephOSDMapDeliveryIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Non-secret fixture evidence must also be readable by the host runner
-	// when this test binary runs as root inside its disposable container.
-	if err := os.WriteFile(filepath.Join(directory, "osd-map-manifest.json"), manifest, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := testcluster.ControlDaemon(ctx, directory, "verify", "osd-maps", "received"); err != nil {
+	// when this test binary runs as root inside its disposable container
+	// (a public request-scoped input, testcluster.ControlInput).
+	if err := testcluster.ControlDaemonInput(ctx, directory, "verify", "osd-maps", "received", testcluster.ControlInput{Name: "osd-map-manifest.json", Data: manifest}); err != nil {
 		t.Fatal("independent native map decoder and negotiated-feature encoding", err)
 	}
 	t.Logf("received full/incremental native OSD maps (%d blobs), matched native decoder/encoder; explicit epoch reads preserved object bytes", len(blobs))

@@ -119,10 +119,7 @@ func TestCephOSDEnforceSnapContextIntegration(t *testing.T) {
 	native := func(t *testing.T, action, name string) enforceSnapNative {
 		t.Helper()
 		input, _ := json.Marshal(map[string]any{"object": name, "pool_id": pools.ids[1], "snap_id": snap})
-		if err := testcluster.WritePublicEvidence(filepath.Join(directory, "osd-enforce-snap-context-input.json"), input); err != nil {
-			t.Fatal(err)
-		}
-		if err := testcluster.ControlDaemon(ctx, directory, "verify", "osd-enforce-snap-context", action); err != nil {
+		if err := testcluster.ControlDaemonInput(ctx, directory, "verify", "osd-enforce-snap-context", action, testcluster.ControlInput{Name: "osd-enforce-snap-context-input.json", Data: input}); err != nil {
 			t.Fatal("native snapshot observation", err)
 		}
 		raw, err := os.ReadFile(filepath.Join(directory, "osd-enforce-snap-context-result.json"))

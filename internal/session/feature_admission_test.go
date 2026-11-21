@@ -187,11 +187,11 @@ var tentacleFeatureBits = [64]featureBit{
 	6:  {"RECONNECT_SEQ", 1, ""},
 	7:  {"DIRLAYOUTHASH", 1, "CephFS directory layout metadata; hash and rank selection stay with the caller"},
 	8:  {"OBJECTLOCATOR", 1, "OSD locator pool, namespace, key and hash encoding; the caller supplies placement"},
-	9:  {"PGID64", 1, "MON and OSD 64-bit pool and PG; map acquisition applies no inner map and computes no placement; an OSD peer of the MGR acceptor encodes PG IDs it sends in this form, delivered raw"},
+	9:  {"PGID64", 1, "MON and OSD 64-bit pool and PG; map acquisition applies no inner map and computes no placement; an OSD peer of the MGR acceptor encodes the PG IDs of its MPGStats in this form, which is the form decoded"},
 	10: {"INCSUBOSDMAP", 1, ""},
 	11: {"PGPOOL3", 1, ""},
-	12: {"OSDREPLYMUX", 1, ""},
-	13: {"OSDENC", 1, "MGR acceptor only, to OSD peers: current OSD type encodings in the messages it delivers raw; the acceptor decodes none of them"},
+	12: {"OSDREPLYMUX", 1, "MGR acceptor only, to client peers: librados requires it of every server; it only shapes MOSDOpReply data, which a MGR never sends"},
+	13: {"OSDENC", 1, "MGR acceptor only, to OSD and client peers: current OSD type encodings, the only form of osd_stat_t, pg_stat_t and pg_t in MPGStats the acceptor decodes"},
 	14: {"SERVER_KRAKEN", 2, ""},
 	15: {"MONENC", 1, "base current MON map and address forms; envelope parsing does not prove older-release support"},
 	16: {"SERVER_OCTOPUS, OSD_REPOP_MLCOD", 3, ""},
@@ -272,7 +272,8 @@ func TestFeatureBitTableMatchesTheAdvertisedProfiles(t *testing.T) {
 	// mask is the native one, bit 21 without the bit-57 marker (accept.go),
 	// so only its supported mask is held to the marker rule.
 	acceptor := featureAdmissionProfile{name: "mgr-acceptor-osd-peer", supported: MgrOSDPeerFeatures}
-	for _, profile := range append(featureAdmissionProfiles(), acceptor) {
+	clients := featureAdmissionProfile{name: "mgr-acceptor-client-peer", supported: MgrClientPeerFeatures}
+	for _, profile := range append(featureAdmissionProfiles(), acceptor, clients) {
 		advertised |= profile.supported
 		for _, mask := range []uint64{profile.supported, profile.required} {
 			for bit, feature := range tentacleFeatureBits {

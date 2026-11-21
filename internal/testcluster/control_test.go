@@ -77,3 +77,71 @@ func TestControllerFailureRecordedBeforeRequestIsMarkedCascading(t *testing.T) {
 		t.Fatal("a request that cannot run was published", entries)
 	}
 }
+
+// Each request writes its input under its own request ID and names it after
+// its first line; an abandoned request leaves its input for the fixture,
+// which may already have claimed it, and the next request's input never
+// replaces it.
+func TestControlInputIsRequestScoped(t *testing.T) {
+	dir := t.TempDir()
+	abandoned, stop := context.WithCancel(context.Background())
+	stop()
+	first := ControlInput{Name: "osd-example-input.json", Data: []byte("first")}
+	if err := ControlDaemonInput(abandoned, dir, "verify", "osd-example", "observe", first); err == nil {
+		t.Fatal("an abandoned request reported its acknowledgement")
+	}
+	request := func() (string, string) {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(dir, "verify-osd-example"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, rest, _ := strings.Cut(string(data), "\n")
+		return strings.Fields(first)[0], rest
+	}
+	firstID, rest := request()
+	if rest != "input osd-example-input.json\n" {
+		t.Fatalf("request input lines %q", rest)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() {
+		finished <- ControlDaemonInput(ctx, dir, "verify", "osd-example", "observe", ControlInput{Name: "osd-example-input.json", Data: []byte("second"), Private: true})
+	}()
+	var secondID string
+	for {
+		if id, _ := request(); id != firstID {
+			secondID = id
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	for id, want := range map[string]string{firstID: "first", secondID: "second"} {
+		data, err := os.ReadFile(filepath.Join(dir, "osd-example-input.json."+id))
+		if err != nil || string(data) != want {
+			t.Fatal("request", id, "input", string(data), err)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(dir, "osd-example-input.json."+secondID)); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+		t.Fatal("private input mode", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "osd-example-input.json")); err == nil {
+		t.Fatal("a request wrote the plain input name the fixture claims")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "osd-example-verify."+secondID), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range [][]ControlInput{{{Name: "../x-input.json"}}, {{Name: "x-input.json"}, {Name: "x-input.json"}}} {
+		if err := RequestControlInput(ctx, dir, "verify-bad", "bad-verify", bad, "x"); err == nil {
+			t.Fatal("accepted inputs", bad)
+		}
+	}
+}

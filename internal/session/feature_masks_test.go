@@ -64,6 +64,10 @@ func TestFeatureMasksByRole(t *testing.T) {
 		// MGR, and SERVER_LUMINOUS (21); required is native DaemonServer's
 		// SERVER_LUMINOUS (bit 21 alone) and MSG_ADDR2.
 		{"MGR acceptor to OSD", [2]uint64{MgrOSDPeerFeatures, MgrOSDPeerRequiredFeatures}, [2]uint64{0x2a00040010a0a237, 0x0800000000200000}},
+		// To a client peer it adds OSDREPLYMUX (12), which librados requires
+		// of every server (admission only), and requires MSG_ADDR2 alone,
+		// as native stateless_server(0) does.
+		{"MGR acceptor to client", [2]uint64{MgrClientPeerFeatures, MgrClientPeerRequiredFeatures}, [2]uint64{0x2a00040010a0b237, 0x0800000000000000}},
 	} {
 		if row.got != row.want {
 			t.Errorf("%s: supported/required %#016x/%#016x, want %#016x/%#016x", row.profile, row.got[0], row.got[1], row.want[0], row.want[1])

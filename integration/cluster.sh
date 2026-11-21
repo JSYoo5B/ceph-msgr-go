@@ -165,7 +165,13 @@ while true; do
         read -r request_id label extra < /out/verify-osd-maps
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 && test "$label" = received && test -z "$extra" || exit 2
+        # The manifest is request-scoped (testcluster.RequestControlInput):
+        # the second line names it and the claim moves the test's
+        # osd-map-manifest.json.<request ID> to the name the oracle reads.
+        test "$(sed -n 2p /out/verify-osd-maps)" = "input osd-map-manifest.json" || exit 2
+        test -z "$(sed -n '3,$p' /out/verify-osd-maps)" || exit 2
         rm /out/verify-osd-maps
+        mv "/out/osd-map-manifest.json.$request_id" /out/osd-map-manifest.json
         fixture_phase=verify-osd-map-oracle
         timeout 30 python3 /out/osd_map_oracle.py /out "$root" 2>> /out/osd-map-control.log
         sh /out/publish-ack.sh "/out/osd-maps-verify.$request_id"

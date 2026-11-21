@@ -213,9 +213,6 @@ func TestCephOSDBackoffLateAckIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := testcluster.WritePublicEvidence(ackInputPath, ackInput); err != nil {
-		t.Fatal(err)
-	}
 
 	sendCtx, stopSend := context.WithTimeout(ctx, 3*time.Second)
 	defer stopSend()
@@ -243,7 +240,7 @@ func TestCephOSDBackoffLateAckIntegration(t *testing.T) {
 	if len(readReply.Operations) != 2 || !bytes.Equal(readReply.Operations[1].Data, want) || readReply.UserVersion != afterAppend.Version || !reflect.DeepEqual(afterAppend, afterRead) {
 		t.Fatal("late-ACK follow-up read changed native bytes/version or replayed an append", readReply, afterRead)
 	}
-	ackObserved, err := backoffControl(ctx, "observe", name)
+	ackObserved, err := backoffControl(ctx, "observe", name, testcluster.ControlInput{Name: filepath.Base(ackInputPath), Data: ackInput})
 	if err != nil || ackObserved.Token != start.Token || !ackObserved.Restored || !ackObserved.Done {
 		t.Fatal("native delayed ACK reception observation", ackObserved, err)
 	}

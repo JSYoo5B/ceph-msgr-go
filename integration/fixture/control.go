@@ -30,6 +30,7 @@ func publishAck(out, name string) error {
 
 func (c *fixtureCluster) controlLoop(ctx context.Context, out string) {
 	defer close(c.done)
+	defer c.waitOwnedPool()
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -51,6 +52,17 @@ func (c *fixtureCluster) controlLoop(ctx context.Context, out string) {
 	}
 }
 
+// request claims the pending request named name and returns the fields of
+// its first line: "<request ID> <arguments>". A request that carries input
+// files has one more line "input <file name>" per input, each name once
+// (internal/testcluster RequestControlInput): the test wrote each input as
+// "<file name>.<request ID>", and the claim renames it to the file name the
+// handler and its oracle read. The test never writes the plain file name,
+// so a request the test abandoned and that is claimed later reads its own
+// input, not the input of the request published after it; the fixture runs
+// the requests of one control one at a time, so no later claim replaces the
+// file while a handler reads it. A missing input fails the fixture, since
+// the test writes it before it publishes the request.
 func (c *fixtureCluster) request(out, name string) ([]string, error) {
 	data, err := os.ReadFile(filepath.Join(out, name))
 	if os.IsNotExist(err) {
@@ -59,7 +71,8 @@ func (c *fixtureCluster) request(out, name string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	fields := strings.Fields(string(data))
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	fields := strings.Fields(lines[0])
 	if len(fields) == 0 {
 		return nil, errors.New("empty fixture request")
 	}
@@ -67,19 +80,47 @@ func (c *fixtureCluster) request(out, name string) ([]string, error) {
 	if err != nil || id <= 0 {
 		return nil, errors.New("invalid fixture request identity")
 	}
+	var inputs []string
+	for _, line := range lines[1:] {
+		words := strings.Fields(line)
+		if len(words) != 2 || words[0] != "input" || !controlInputName.MatchString(words[1]) || slices.Contains(inputs, words[1]) {
+			return nil, errors.New("invalid fixture request input line")
+		}
+		inputs = append(inputs, words[1])
+	}
 	if err = os.Remove(filepath.Join(out, name)); err != nil {
 		return nil, err
+	}
+	for _, input := range inputs {
+		if err = os.Rename(filepath.Join(out, input+"."+fields[0]), filepath.Join(out, input)); err != nil {
+			return nil, fmt.Errorf("claim the input of fixture request %s: %w", name, err)
+		}
 	}
 	return fields, nil
 }
 
+// controlInputName is the closed shape of a request's input file name
+// (internal/testcluster controlInputName).
+var controlInputName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*\.json$`)
+
 // controls polls every declared control once, in controlSequence order. It
 // stops on the first failure; earlier mutations and acknowledgements are not
 // replayed.
+//
+// While an owned-pool oracle request runs (controlOwnedPoolRequest), it
+// polls nothing else but the requests that end a pause (pauseEndingActions):
+// the other requests stay pending until the oracle request was settled, and
+// a pass that starts one skips the controls after it.
 func (c *fixtureCluster) controls(ctx context.Context, out string) error {
+	if c.ownedPoolRunning() {
+		return c.daemonRequests(ctx, out, pauseEndingActions)
+	}
 	for _, control := range controlSequence {
 		if err := control.poll(c, ctx, out); err != nil {
 			return err
+		}
+		if c.ownedPoolRunning() {
+			return c.daemonRequests(ctx, out, pauseEndingActions)
 		}
 	}
 	return nil

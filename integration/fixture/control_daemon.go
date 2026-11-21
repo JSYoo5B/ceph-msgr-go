@@ -76,7 +76,26 @@ func (p profile) daemonControlAdmitted(kind, action string) bool {
 	return action == "stop" && p.mdsCommands == "1" && p.mdsFresh == "1" && !p.admits(capMDSAppliedCommand)
 }
 
+// daemonActionScope selects the daemon control requests one poll serves.
+type daemonActionScope int
+
+const (
+	// allDaemonActions serves every daemon control request.
+	allDaemonActions daemonActionScope = iota
+	// pauseEndingActions serves only what ends a pause: resume requests and
+	// pause recoveries, with the original pause request a recovery settles.
+	// The control loop serves these while an owned-pool oracle request runs
+	// (controls), so that a lease ends at its deadline even while a native
+	// read of the paused cluster is outstanding.
+	pauseEndingActions
+)
+
 func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) error {
+	return c.daemonRequests(ctx, out, allDaemonActions)
+}
+
+// daemonRequests serves the daemon control requests of scope.
+func (c *fixtureCluster) daemonRequests(ctx context.Context, out string, scope daemonActionScope) error {
 	// Cleanup publishes this separate request after abandoning a timed-out
 	// pause or resume. Claim it before reading those original requests,
 	// then reconcile the lease after the ordinary actions have run.
@@ -89,6 +108,9 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 	}
 	for _, kind := range daemonControlKinds {
 		for _, action := range []string{"pause", "resume", "stop", "start", "kill"} {
+			if scope == pauseEndingActions && action != "resume" && (action != "pause" || kind != "osd" || recovery == nil) {
+				continue
+			}
 			fields, err := c.request(out, action+"-"+kind)
 			if err != nil {
 				return err
