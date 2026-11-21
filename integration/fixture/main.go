@@ -139,6 +139,10 @@ func command(ctx context.Context, args []string) (result error) {
 	if err != nil {
 		return err
 	}
+	budget, err := loadJobBudget(os.Getenv)
+	if err != nil {
+		return err
+	}
 	if *diagnostics != "" {
 		p.diagnostics = *diagnostics
 	}
@@ -196,10 +200,10 @@ func command(ctx context.Context, args []string) (result error) {
 	if err := buildTests(ctx, root, out, arch, p); err != nil {
 		return err
 	}
-	return run(ctx, root, out, p)
+	return run(ctx, root, out, p, budget)
 }
 
-func run(ctx context.Context, project, out string, p profile) (result error) {
+func run(ctx context.Context, project, out string, p profile, budget jobBudget) (result error) {
 	if err := stageAssets(project, out, p); err != nil {
 		return err
 	}
@@ -242,7 +246,7 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 		return err
 	}
 	if p.sequence != "" {
-		if err := runSequence(ctx, p, sequenceRunner(c, out, proxy, p)); err != nil {
+		if err := runSequence(ctx, p, sequenceRunner(c, out, proxy, p, budget)); err != nil {
 			return err
 		}
 	} else {
@@ -252,8 +256,12 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 			if err := c.checkControl(); err != nil {
 				return err
 			}
+			timeout, err := budget.suiteTimeout(p, time.Now(), false)
+			if err != nil {
+				return fmt.Errorf("%s native suite: %w", name, err)
+			}
 			fmt.Printf("Running Ceph test suite: %s\n", name)
-			if err := c.runSuite(ctx, out, proxy, p, name, []string{"-test.run", p.testRun, "-test.v", "-test.timeout", p.testTimeout}, os.Stdout); err != nil {
+			if err := c.runSuite(ctx, out, proxy, p, name, []string{"-test.run", p.testRun, "-test.v", "-test.timeout", timeout}, os.Stdout); err != nil {
 				return err
 			}
 		}

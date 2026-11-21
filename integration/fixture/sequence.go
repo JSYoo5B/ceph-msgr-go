@@ -229,7 +229,7 @@ func runSequence(ctx context.Context, p profile, steps sequenceSteps) (result er
 }
 
 // sequenceRunner binds a sequence to the started fixture.
-func sequenceRunner(c *fixtureCluster, out, proxy string, p profile) sequenceSteps {
+func sequenceRunner(c *fixtureCluster, out, proxy string, p profile, budget jobBudget) sequenceSteps {
 	return sequenceSteps{
 		alive: c.checkControl,
 		list: func(ctx context.Context, suite, selector string) (string, error) {
@@ -238,7 +238,11 @@ func sequenceRunner(c *fixtureCluster, out, proxy string, p profile) sequenceSte
 			return listing.String(), err
 		},
 		run: func(ctx context.Context, suite, test string) error {
-			return c.runSuite(ctx, out, proxy, p, suite, []string{"-test.run", "^" + test + "$", "-test.v", "-test.timeout", p.testTimeout}, os.Stdout)
+			timeout, err := budget.suiteTimeout(p, time.Now(), true)
+			if err != nil {
+				return fmt.Errorf("not started: %w", err)
+			}
+			return c.runSuite(ctx, out, proxy, p, suite, []string{"-test.run", "^" + test + "$", "-test.v", "-test.timeout", timeout}, os.Stdout)
 		},
 		check: func(ctx context.Context) (startStateReport, error) {
 			return c.verifyStartState(ctx, out, sequenceStartStateBudget)
