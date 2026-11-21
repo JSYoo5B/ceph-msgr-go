@@ -8,18 +8,26 @@ import (
 
 // SparseReadCompound identifies the multi-operation SPARSE_READ subset: the
 // native librbd object read (librbd/io/ObjectRequest.cc:238-246) composes
-// SPARSE_READ and READ extents in one vector. Standalone SPARSE_READ and every
-// other vector retain their own policy.
+// SPARSE_READ and READ extents in one vector, at the image's read snap
+// (get_read_snap() at :227, the head or a snapshot). Standalone SPARSE_READ
+// and every other vector retain their own policy.
 //
 // Pinned Ceph 20.2.4 7f793731f1b39eb4f465e960113d2363c311b964,
 // PrimaryLogPG.cc:5835-6024: both handlers read ctx->new_obs.oi, which equals
 // the committed object state while no operation in the vector stages a write.
+// At a read snap that is the object find_object_context resolved (:12067-12264):
+// the first clone at or above the snap id that names it, the head when the snap
+// id exceeds the snapset seq, and -ENOENT before any operation runs otherwise.
 // LGPL-2.1; independently translated, no source copied.
 //
-// The subset admits SPARSE_READ and READ with fadvise hints only, head-only on
-// the replicated primary, with no FAILOK, truncate fields, snapshot, replica
-// read, IgnoreCache, EnforceSnapContext, resubmission or EC shard; a vector
-// with CHECKSUM keeps the checksum subset. Each output budget and, separately,
+// The subset admits SPARSE_READ and READ with fadvise hints only, at the head
+// or a read snap from 1 through MaxSnap, on the replicated primary, with no
+// FAILOK, truncate fields, SnapContext, replica read, IgnoreCache,
+// EnforceSnapContext, resubmission or EC shard; a vector with CHECKSUM keeps
+// the checksum subset. MAPEXT, ISDIRTY and UNDIRTY stay standalone: no native
+// client composes them (librados IoCtxImpl::mapext sends MAPEXT in its own
+// request; librados is_dirty/undirty users and ceph_test_rados send each
+// alone), so they are refused beside SPARSE_READ like any other opcode. Each output budget and, separately,
 // the logical extent lengths must sum within the frame limit. Tentacle stops
 // at the first negative operation (PrimaryLogPG.cc:8205-8213): the aggregate
 // must equal it, earlier operations are successes, a failed SPARSE_READ keeps
@@ -85,9 +93,11 @@ func validateSparseReadCompoundWork(ops []Operation, limit uint32) error {
 	return nil
 }
 
-// ValidateSparseReadCompoundRequest checks only the request's head/primary
-// scope. Existing ordering, lock and redirect validators still run; this does
-// not broaden them or infer remote object state.
+// ValidateSparseReadCompoundRequest checks only the request's snapshot and
+// primary scope: the head (ReadSnap zero or NoSnap) or a read snap from 1
+// through MaxSnap, never SnapDir, a SnapContext or a replica read. Existing
+// ordering, lock and redirect validators still run; this does not broaden them
+// or infer remote object state, such as which clone a snap id resolves to.
 func ValidateSparseReadCompoundRequest(r Request) error {
 	if !SparseReadCompound(r.Operations) {
 		return nil
@@ -95,7 +105,7 @@ func ValidateSparseReadCompoundRequest(r Request) error {
 	if err := validateSparseReadCompoundShape(r.Operations); err != nil {
 		return err
 	}
-	if r.ReadSnap != 0 && r.ReadSnap != NoSnap || r.BalanceReads || r.LocalizeReads || r.RetryAttempt != 0 {
+	if r.ReadSnap > MaxSnap && r.ReadSnap != NoSnap || r.SnapSeq != 0 || len(r.Snaps) != 0 || r.OrderSnap || r.EnforceSnapContext || r.BalanceReads || r.LocalizeReads || r.RetryAttempt != 0 {
 		return ErrRequest
 	}
 	return nil

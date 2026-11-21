@@ -198,9 +198,9 @@ func (o *OSDConnection) validateEnforceSnapContext(request OSDRequest) error {
 	return osd.ValidateEnforceSnapContext(input, o.client.options.MaxFrameSize)
 }
 
-// The compound checksum and sparse-read subsets are head-only and
-// caller-targeted at a replicated primary. This projection adds no policy to
-// other vectors.
+// The compound checksum subset is head-only; the sparse-read subset reads the
+// head or a read snapshot, without a SnapContext. Both are caller-targeted at
+// a replicated primary. This projection adds no policy to other vectors.
 func (o *OSDConnection) validateChecksumCompound(request OSDRequest) error {
 	if len(request.Operations) < 2 {
 		return nil
@@ -219,8 +219,9 @@ func (o *OSDConnection) validateChecksumCompound(request OSDRequest) error {
 	if request.Resubmit != nil || request.Placement != nil && request.Placement.Erasure {
 		return osd.ErrRequest
 	}
-	input := osd.Request{ReadSnap: request.ReadSnapshot, BalanceReads: request.BalanceReads,
-		LocalizeReads: request.LocalizeReads, RetryAttempt: request.RetryAttempt,
+	input := osd.Request{ReadSnap: request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots,
+		OrderSnap: request.OrderSnapshots, EnforceSnapContext: request.EnforceSnapContext,
+		BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads, RetryAttempt: request.RetryAttempt,
 		Operations: make([]osd.Operation, len(request.Operations))}
 	for i, op := range request.Operations {
 		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence}
