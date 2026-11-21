@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
-	"github.com/JSYoo5B/ceph-testcontainers-go/fault"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
@@ -28,13 +27,19 @@ import (
 // oracle/test client and the IPC directory. No daemon entrypoint is replaced.
 type fixtureCluster struct {
 	testcontainers.Container
-	cluster          *ceph.Container
-	profile          profile
-	cancel           context.CancelFunc
-	done             chan struct{}
-	mu               sync.Mutex
-	controlErr       error
-	pauses           map[string]*fault.PauseLease
+	cluster    *ceph.Container
+	profile    profile
+	cancel     context.CancelFunc
+	done       chan struct{}
+	mu         sync.Mutex
+	controlErr error
+	// leases are the daemon pause leases (daemon_lease.go), served by
+	// leaseLoop, which closes leaseDone when it stops.
+	leases    *daemonLeases
+	leaseDone chan struct{}
+	// runOwnedPool runs one owned-pool oracle command; nil runs it in the
+	// cluster's control container (runOracleCommandWithTimeout).
+	runOwnedPool     func(ctx context.Context, out string, args []string, budget time.Duration) error
 	xattrLimits      *xattrLimitsScope
 	copyFromError    *copyFromErrorScope
 	copyFromErrorOut string
@@ -148,13 +153,14 @@ func (c *fixtureCluster) Terminate(ctx context.Context, opts ...testcontainers.T
 	if c.cancel != nil {
 		c.cancel()
 		<-c.done
+		<-c.leaseDone
 	}
 	var errs []error
 	errs = append(errs, c.restoreMgrServiceConfig(ctx))
 	errs = append(errs, c.finishMDSFresh(ctx), c.finishRBDBase(ctx), c.finishOSDCachePools(ctx))
 	// Restore paused containers before requesting their orderly cleanup.
-	for _, pause := range c.pauses {
-		errs = append(errs, pause.Resume(ctx))
+	if c.leases != nil {
+		errs = append(errs, c.leases.resumeAll(ctx))
 	}
 	if c.copyFromError != nil {
 		errs = append(errs, c.copyFromError.Restore(ctx), c.copyFromError.save(c.copyFromErrorOut))
@@ -346,7 +352,7 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 	if cluster == nil {
 		return nil, err
 	}
-	c := &fixtureCluster{cluster: cluster, profile: p, pauses: make(map[string]*fault.PauseLease)}
+	c := &fixtureCluster{cluster: cluster, profile: p}
 	if err != nil {
 		return c, err
 	}
@@ -565,7 +571,14 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 	controlCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	c.done = make(chan struct{})
+	c.leaseDone = make(chan struct{})
+	c.leases = c.fixtureDaemonLeases()
 	go c.controlLoop(controlCtx, out)
+	leaseTick := time.NewTicker(100 * time.Millisecond)
+	go func() {
+		defer leaseTick.Stop()
+		c.leaseLoop(controlCtx, out, c.leases, leaseTick.C)
+	}()
 	return c, nil
 }
 func (c *fixtureCluster) exec(ctx context.Context, args ...string) error {

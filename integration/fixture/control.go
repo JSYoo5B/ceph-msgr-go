@@ -28,6 +28,19 @@ func publishAck(out, name string) error {
 	return os.Rename(f.Name(), filepath.Join(out, name))
 }
 
+// recordControlFailure records the first failure of the control loop or the
+// lease loop (leaseLoop) as the fixture's failure, in provider.error, which
+// every later request reports (internal/testcluster RequestControl).
+func (c *fixtureCluster) recordControlFailure(out string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.controlErr != nil {
+		return
+	}
+	c.controlErr = err
+	_ = os.WriteFile(filepath.Join(out, "provider.error"), []byte(err.Error()+"\n"), 0600)
+}
+
 func (c *fixtureCluster) controlLoop(ctx context.Context, out string) {
 	defer close(c.done)
 	tick := time.NewTicker(100 * time.Millisecond)
@@ -41,10 +54,7 @@ func (c *fixtureCluster) controlLoop(ctx context.Context, out string) {
 				if ctx.Err() == nil {
 					err = c.classifyControlFailure(out, err)
 				}
-				c.mu.Lock()
-				c.controlErr = err
-				c.mu.Unlock()
-				_ = os.WriteFile(filepath.Join(out, "provider.error"), []byte(err.Error()+"\n"), 0600)
+				c.recordControlFailure(out, err)
 				return
 			}
 		}

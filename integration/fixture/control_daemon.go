@@ -9,7 +9,6 @@ import (
 	"strconv"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/cephfs"
-	"github.com/JSYoo5B/ceph-testcontainers-go/fault"
 	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 )
@@ -60,8 +59,8 @@ func (c *fixtureCluster) daemon(ctx context.Context, kind, name string) (testcon
 	return nil, errors.New("fixture daemon not found")
 }
 
-// daemonControlKinds are the daemon kinds a pause, resume, stop, start or
-// kill request may name.
+// daemonControlKinds are the daemon kinds a stop, start or kill request, or
+// a pause lease (daemon_lease.go), may name.
 var daemonControlKinds = []string{"mon", "mgr", "osd", "mds"}
 
 // daemonControlAdmitted is the closed admission of the daemon controls. MON,
@@ -76,19 +75,12 @@ func (p profile) daemonControlAdmitted(kind, action string) bool {
 	return action == "stop" && p.mdsCommands == "1" && p.mdsFresh == "1" && !p.admits(capMDSAppliedCommand)
 }
 
+// controlDaemonRequests serves the stop, start and kill requests of the
+// daemons: per kind and action, the oldest pending request of each poll. A
+// pause is a lease and has its own loop (daemon_lease.go).
 func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) error {
-	// Cleanup publishes this separate request after abandoning a timed-out
-	// pause or resume. Claim it before reading those original requests,
-	// then reconcile the lease after the ordinary actions have run.
-	recovery, err := c.request(out, "recover-paused-osd")
-	if err != nil {
-		return err
-	}
-	if recovery != nil && len(recovery) != 2 {
-		return errors.New("invalid OSD pause recovery request")
-	}
 	for _, kind := range daemonControlKinds {
-		for _, action := range []string{"pause", "resume", "stop", "start", "kill"} {
+		for _, action := range []string{"stop", "start", "kill"} {
 			fields, err := c.request(out, action+"-"+kind)
 			if err != nil {
 				return err
@@ -109,19 +101,6 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 			}
 			key := kind + "." + name
 			switch action {
-			case "pause":
-				if c.pauses[key] != nil {
-					return errors.New("daemon already paused")
-				}
-				c.pauses[key], err = fault.Pause(ctx, c.cluster, daemon)
-			case "resume":
-				if c.pauses[key] == nil {
-					return errors.New("daemon is not paused")
-				}
-				err = c.pauses[key].Resume(ctx)
-				if err == nil {
-					delete(c.pauses, key)
-				}
 			case "kill":
 				if !c.profile.forcedKillAdmitted(kind) {
 					return errors.New("forced crash is restricted to disposable OSDs and the selected MON forced-kill cells")
@@ -153,16 +132,6 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 				return err
 			}
 		}
-	}
-	if recovery != nil {
-		key := "osd." + recovery[1]
-		if lease := c.pauses[key]; lease != nil {
-			if err := lease.Resume(ctx); err != nil {
-				return err
-			}
-			delete(c.pauses, key)
-		}
-		return publishAck(out, "osd-pause-recovered."+recovery[0])
 	}
 	return nil
 }

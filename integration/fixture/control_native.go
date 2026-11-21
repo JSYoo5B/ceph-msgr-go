@@ -105,6 +105,11 @@ func readBoundedFile(path string, limit int64) ([]byte, error) {
 	return data, err
 }
 
+// controlOwnedPoolRequest runs one owned-pool oracle request to completion,
+// for up to its budget, and the control loop waits for it. A pause lease
+// does not: the leases have their own loop (daemon_lease.go), so a lease
+// ends at its deadline also while a test's observation of the paused
+// cluster is still running here.
 func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string) error {
 	var fields []string
 	var err error
@@ -134,7 +139,13 @@ func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string
 		if fields[1] == "servicecompare" {
 			budget = 240 * time.Second
 		}
-		if err = c.runOracleCommandWithTimeout(ctx, out, args, "osd-pool-command.json", "native owned-pool oracle", budget); err != nil {
+		run := c.runOwnedPool
+		if run == nil {
+			run = func(ctx context.Context, out string, args []string, budget time.Duration) error {
+				return c.runOracleCommandWithTimeout(ctx, out, args, "osd-pool-command.json", "native owned-pool oracle", budget)
+			}
+		}
+		if err = run(ctx, out, args, budget); err != nil {
 			return err
 		}
 		if err = publishAck(out, "osd-pool-verify."+fields[0]); err != nil {
