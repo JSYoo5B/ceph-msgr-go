@@ -178,7 +178,7 @@ type featureBit struct {
 // operation results are separate evidence; the checks below cannot prove an
 // obligation's statement correct.
 var tentacleFeatureBits = [64]featureBit{
-	0:  {"UID", 1, ""},
+	0:  {"UID", 1, "MGR acceptor only, to OSD peers: the stock OSD requires it of its MGR; it carries no field of its own"},
 	1:  {"NOSRCADDR", 1, "base header2 has no legacy source-entity field; the authenticated connection identifies the peer"},
 	2:  {"SERVER_NAUTILUS", 3, "base current-encoding marker with 28+57; no support for older families or daemon roles"},
 	3:  {"FLOCK", 1, "CephFS flock and reconnect wire fields; the consumer owns lock state, waits and interrupts"},
@@ -187,11 +187,11 @@ var tentacleFeatureBits = [64]featureBit{
 	6:  {"RECONNECT_SEQ", 1, ""},
 	7:  {"DIRLAYOUTHASH", 1, "CephFS directory layout metadata; hash and rank selection stay with the caller"},
 	8:  {"OBJECTLOCATOR", 1, "OSD locator pool, namespace, key and hash encoding; the caller supplies placement"},
-	9:  {"PGID64", 1, "MON and OSD 64-bit pool and PG; map acquisition applies no inner map and computes no placement"},
+	9:  {"PGID64", 1, "MON and OSD 64-bit pool and PG; map acquisition applies no inner map and computes no placement; an OSD peer of the MGR acceptor encodes PG IDs it sends in this form, delivered raw"},
 	10: {"INCSUBOSDMAP", 1, ""},
 	11: {"PGPOOL3", 1, ""},
 	12: {"OSDREPLYMUX", 1, ""},
-	13: {"OSDENC", 1, ""},
+	13: {"OSDENC", 1, "MGR acceptor only, to OSD peers: current OSD type encodings in the messages it delivers raw; the acceptor decodes none of them"},
 	14: {"SERVER_KRAKEN", 2, ""},
 	15: {"MONENC", 1, "base current MON map and address forms; envelope parsing does not prove older-release support"},
 	16: {"SERVER_OCTOPUS, OSD_REPOP_MLCOD", 3, ""},
@@ -199,7 +199,7 @@ var tentacleFeatureBits = [64]featureBit{
 	18: {"CRUSH_TUNABLES", 1, "MON-only admission; never placement capability on another role"},
 	19: {"OSD_PGLOG_HARDLIMIT", 2, ""},
 	20: {"SERVER_PACIFIC", 3, ""},
-	21: {"SERVER_LUMINOUS, RESEND_ON_SPLIT, RADOS_BACKOFF, OSDMAP_PG_UPMAP, CRUSH_CHOOSE_ARGS", 2, "modern OSD profiles with actual-PG framing and bounded backoff; upmap changes and broader CRUSH semantics are unverified"},
+	21: {"SERVER_LUMINOUS, RESEND_ON_SPLIT, RADOS_BACKOFF, OSDMAP_PG_UPMAP, CRUSH_CHOOSE_ARGS", 2, "modern OSD profiles with actual-PG framing and bounded backoff; upmap changes and broader CRUSH semantics are unverified; the MGR acceptor requires it of OSD peers as native DaemonServer does, claiming nothing about its aliases"},
 	22: {"OSD_FIXED_COLLECTION_LIST", 2, ""},
 	23: {"MSG_AUTH", 1, "base msgr2 transcript verification and CRC/secure framing; no msgr1 transport or per-message signature"},
 	24: {"RECOVERY_RESERVATION_2", 2, ""},
@@ -268,7 +268,11 @@ func TestFeatureBitTableMatchesTheAdvertisedProfiles(t *testing.T) {
 			stated |= uint64(1) << bit
 		}
 	}
-	for _, profile := range featureAdmissionProfiles() {
+	// The MGR acceptor's SERVER_IDENT mask is advertised too. Its required
+	// mask is the native one, bit 21 without the bit-57 marker (accept.go),
+	// so only its supported mask is held to the marker rule.
+	acceptor := featureAdmissionProfile{name: "mgr-acceptor-osd-peer", supported: MgrOSDPeerFeatures}
+	for _, profile := range append(featureAdmissionProfiles(), acceptor) {
 		advertised |= profile.supported
 		for _, mask := range []uint64{profile.supported, profile.required} {
 			for bit, feature := range tentacleFeatureBits {

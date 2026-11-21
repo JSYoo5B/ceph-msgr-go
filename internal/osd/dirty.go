@@ -15,9 +15,17 @@ package osd
 // with no output; it sets ctx->undirty so make_writeable clears FLAG_DIRTY on
 // commit (PrimaryLogPG.cc:6294-6305, 8650-8662). Any ordinary WRITE sets that
 // flag, so a WRITE then ISDIRTY reports dirty and a following UNDIRTY clears it.
-// Each is accepted only as a standalone, flagless head operation in this initial
-// scope; compound ordering, snapshot interaction and the cache-tier agent paths
-// that also emit them are deliberately left to a later contract. The cache-tier
+// Each is accepted only as a standalone, flagless operation. UNDIRTY writes, so
+// it targets the head. ISDIRTY, like every read vector, may name a read snap; it
+// then reports the flags of the object the OSD resolves, and make_writeable
+// gives a clone the head's flags from before the cloning write
+// (PrimaryLogPG.cc:8745, osd_types.cc copy_user_bits). That snapshot form is
+// sent as requested but has no daemon evidence. Compounds stay refused: no
+// native client composes either opcode (librados is_dirty/undirty users and
+// ceph_test_rados, test/osd/RadosModel.h, send each alone), and ISDIRTY reads
+// the vector's staged new_obs while make_writeable sets FLAG_DIRTY only after
+// the vector ran. The cache-tier agent paths that also emit them are left to a
+// later contract. The cache-tier
 // opcodes (cache_op.go) return -EINVAL on a pool that is not a cache tier.
 // SET_CHUNK (set_chunk.go) and the TIER_* operations (tier_op.go) are separate
 // manifest contracts, although TIER_FLUSH and TIER_EVICT clear the dirty flag

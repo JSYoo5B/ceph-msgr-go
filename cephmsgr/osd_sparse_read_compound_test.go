@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,7 +52,11 @@ func sparseReadCompoundMessage(input OSDRequest, profile OSDProfile, outputs [][
 
 func TestOSDSparseReadCompoundRefusesScopeBeforeSharedAdmission(t *testing.T) {
 	for name, edit := range map[string]func(*OSDRequest){
-		"snapshot":      func(r *OSDRequest) { r.ReadSnapshot = 3 },
+		"snapdir": func(r *OSDRequest) { r.ReadSnapshot = osd.SnapDir },
+		"snapcontext": func(r *OSDRequest) {
+			r.ReadSnapshot, r.SnapContext = 3, OSDSnapContext{Sequence: 3, Snapshots: []uint64{3}}
+		},
+		"snapbalance":   func(r *OSDRequest) { r.ReadSnapshot, r.BalanceReads = 3, true },
 		"balance":       func(r *OSDRequest) { r.BalanceReads = true },
 		"localize":      func(r *OSDRequest) { r.LocalizeReads = true },
 		"cache":         func(r *OSDRequest) { r.IgnoreCache = true },
@@ -65,6 +70,9 @@ func TestOSDSparseReadCompoundRefusesScopeBeforeSharedAdmission(t *testing.T) {
 		"mapext": func(r *OSDRequest) {
 			r.Operations[1] = OSDOperation{Code: OSDMapExt, Length: 8, MapExt: OSDMapExtInput{MaxOutputBytes: 64}}
 		},
+		"isdirty":          func(r *OSDRequest) { r.Operations[1] = OSDOperation{Code: OSDIsdirty} },
+		"isdirty-snapshot": func(r *OSDRequest) { r.ReadSnapshot, r.Operations[1] = 3, OSDOperation{Code: OSDIsdirty} },
+		"undirty":          func(r *OSDRequest) { r.Operations[1] = OSDOperation{Code: OSDUndirty} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			o := backoffUnitConnection()
@@ -93,12 +101,17 @@ func TestOSDSparseReadCompoundRefusesScopeBeforeSharedAdmission(t *testing.T) {
 	}
 }
 
+// The head and a read snapshot share one reply contract; at a snapshot the
+// early error is the -ENOENT of an object absent at that snap id.
 func TestOSDSparseReadCompoundPublicPrefixAllProfiles(t *testing.T) {
 	for _, profile := range []OSDProfile{OSDProfileObjectHash, OSDProfileReplicatedPG, OSDProfileReplicatedPGReplyV8, OSDProfileReplicatedPGRequestV9ReplyV8} {
-		for _, kind := range []string{"success", "terminal", "early-error"} {
+		for _, kind := range []string{"success", "terminal", "early-error", "snapshot-success", "snapshot-terminal", "snapshot-early-error"} {
 			t.Run(profileNameForCacheTest(profile)+"/"+kind, func(t *testing.T) {
 				c, o, peer, ctx := enforceSnapProfileOpen(t, profile)
 				r := sparseReadCompoundInput()
+				if snapshot, found := strings.CutPrefix(kind, "snapshot-"); found {
+					kind, r.ReadSnapshot = snapshot, 3
+				}
 				if profile.replicatedPG() {
 					r.Placement = &OSDPlacement{PG: OSDPG{Pool: uint64(r.Object.Pool), Seed: 3}, Primary: o.target.ID}
 				}

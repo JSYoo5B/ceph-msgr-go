@@ -10,16 +10,19 @@ import "github.com/JSYoo5B/ceph-msgr-go/internal/osd"
 // granularity depends on the backing object store.
 //
 // It may be standalone, or combined only with further OSDSparseRead and
-// OSDRead operations (the native librbd object read) in a head-only request
-// to the replicated primary, without FAILOK, extent truncate fields,
-// snapshot, replica reads or resubmission. Decoded compound results appear
-// only after the whole reply validates; on a negative aggregate they cover
-// the completed prefix. The returned Length is the byte count, which may be
-// shorter than the range; past EOF the map and bytes are empty. A failed
-// operation carries no output. The local budget neither caps server work nor
-// truncates output: output over budget fails the session. Snapshot and
-// replica-read compounds, guards in compounds, MAPEXT compounds and EC are
-// not supported.
+// OSDRead operations (the native librbd object read) in a request to the
+// replicated primary at the head or at ReadSnapshot, without FAILOK, extent
+// truncate fields, replica reads or resubmission. At a snapshot every
+// operation reads the clone (or head) the OSD resolves; an object absent at
+// that snapshot fails the whole vector with -ENOENT before any operation
+// runs. Decoded compound results appear only after the whole reply
+// validates; on a negative aggregate they cover the completed prefix. The
+// returned Length is the byte count, which may be shorter than the range;
+// past EOF the map and bytes are empty. A failed operation carries no
+// output. The local budget neither caps server work nor truncates output:
+// output over budget fails the session. Replica-read compounds, guards in
+// compounds, MAPEXT, ISDIRTY or UNDIRTY in compounds and EC are not
+// supported.
 const OSDSparseRead OSDOpcode = OSDOpcode(osd.SparseRead)
 
 // OSDSparseReadInput bounds accepted encoded output, including eight bytes of

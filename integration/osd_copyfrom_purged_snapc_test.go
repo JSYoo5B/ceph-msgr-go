@@ -124,15 +124,21 @@ func TestCopyPurgedPhase(t *testing.T) {
 // src/osd/PrimaryLogPG.cc (execute_ctx, make_writeable, SnapTrimmer),
 // src/mon/OSDMonitor.cc. Not verified: more than one PG, a removal while a
 // PG is inactive (PeeringState::activate), the OSD's purged-snaps scrub that
-// can requeue such a clone, and other profiles.
+// can requeue such a clone, and profiles other than this row's and the
+// legacy-v6 osd.aes.ip4.crc suite that also selects it.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdcopyfrompurgedsnapcontext key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
 //scenario:covers CLIENT to OSD
 //fixture:isolated pauses both MGRs and allocates and removes self-managed snapshots in an owned pool it deletes
 func TestCephOSDCopyFromPurgedSnapContextIntegration(t *testing.T) {
-	fixture, request := osdFixture, osdObjectRequest
+	// The owned pool takes the selected profile's HASHPSPOOL policy, which
+	// the fixture sets as the global pool default before the daemons start
+	// (osd_pool_default_flag_hashpspool): the legacy-v6 client sends the raw
+	// object hash, and the owned-pool oracle checks the native flag against
+	// the request.
+	fixture, request, hash := osdFixture, osdObjectRequest, false
 	if isReplicatedPGFixtureProfile() {
-		fixture, request = replicatedPGFixture, replicatedPGRequest
+		fixture, request, hash = replicatedPGFixture, replicatedPGRequest, true
 	}
 	c, _, base, _ := fixture(t)
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
@@ -169,7 +175,8 @@ func TestCephOSDCopyFromPurgedSnapContextIntegration(t *testing.T) {
 		}
 	})
 
-	// One owned PG, so the observed PG is the PG of every owned object.
+	// One owned PG under either hash policy, so the observed PG is the PG of
+	// every owned object.
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		defer stop()
@@ -177,7 +184,7 @@ func TestCephOSDCopyFromPurgedSnapContextIntegration(t *testing.T) {
 			t.Error("owned pool was not removed")
 		}
 	})
-	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": 1, "size": base.Replicas, "min_size": base.MinSize, "hashpspool": true})
+	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": 1, "size": base.Replicas, "min_size": base.MinSize, "hashpspool": hash})
 	if created.PoolID <= 0 || created.PoolID == base.Pool || created.PGNum != 1 {
 		t.Fatal("owned pool identity differs", created)
 	}

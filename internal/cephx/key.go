@@ -1,8 +1,13 @@
 // Package cephx implements Tentacle credential and ticket cryptography.
 //
 // The exchanges ride Messenger AuthRequest/ReplyMore/RequestMore/Done frames
-// (the session's MonAuth and ServiceAuth adapters), not message types 17/18.
-// Only CLIENT identities are accepted. AUTH and MGR tickets are always
+// (the session's MonAuth and ServiceAuth adapters). A client.* identity's
+// tickets are renewed by a new handshake. The one daemon identity, a
+// NewMgrDaemon mgr.<id> principal, names the MGR entity type, requests the
+// fixed native MgrStandby mask (MON, OSD, MDS, MGR and AUTH), and renews in
+// session through MAuth/MAuthReply (types 17/18) with RenewalRequest and
+// FinishRenewal; it fetches its rotating MGR secrets the same way
+// (rotating.go). For a client.*, AUTH and MGR tickets are always
 // requested and OSD and MDS only when enabled; unsupported or incomplete
 // service masks and unrequested service authorizers are refused before any
 // proof is produced, and all services travel with the AUTH request (no
@@ -15,7 +20,9 @@
 // secret fails in both modes and CRC never skips verification of extra
 // tickets or of the service's nonce. An authorizer keeps its ticket snapshot
 // across renewal. A parsed ticket is a local receipt: it shows neither
-// permission, service availability nor native key generation.
+// permission, service availability nor native key generation. The service
+// side, ServiceVerifier (service.go), verifies an incoming MGR service
+// authorizer against rotating secrets by exact ID and runs the challenge.
 //
 // Source: ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxClientHandler.cc,
 // ceph/ceph/blob/v20.2.4/src/auth/cephx/CephxServiceHandler.cc and
