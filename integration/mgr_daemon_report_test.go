@@ -449,15 +449,24 @@ func TestCephMgrDaemonReportIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// statfs reads the committed digest. The read is retried when the admin
+	// client's MON session ended during it (the test stops a MON); it
+	// changes nothing, so its unknown outcome is safe to repeat.
 	statfs := func() cephmsgr.StatfsResult {
 		t.Helper()
-		call, stop := context.WithTimeout(ctx, 30*time.Second)
-		defer stop()
-		s, err := admin.Statfs(call, nil)
-		if err != nil {
-			t.Fatal("statfs", err)
+		for attempt := 1; ; attempt++ {
+			call, stop := context.WithTimeout(ctx, 30*time.Second)
+			s, err := admin.Statfs(call, nil)
+			stop()
+			var unknown *cephmsgr.OutcomeUnknownError
+			if err == nil {
+				return s
+			}
+			if !errors.As(err, &unknown) || ctx.Err() != nil || attempt == 5 {
+				t.Fatal("statfs", err)
+			}
+			t.Logf("statfs attempt %d: %v; read again", attempt, err)
 		}
-		return s
 	}
 	// awaitCommit waits for a Statfs at a version above after with digest d
 	// and the health checks ok accepts.
