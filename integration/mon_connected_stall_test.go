@@ -65,9 +65,7 @@ func TestCephMonPoolOpConnectedStallIntegration(t *testing.T) {
 	frozenEndpoint := pinned.Snapshot().Monitor.Endpoint
 	monState := c.Snapshot().Monitor
 
-	if err := testcluster.ControlDaemon(ctx, control, "pause", "mon", peon); err != nil {
-		t.Fatal("pause connected MON", err)
-	}
+	lease := pauseDaemon(t, ctx, control, "mon", peon, leaseUntil(ctx))
 	paused, recycled := true, false
 	defer func() {
 		if recycled {
@@ -76,7 +74,7 @@ func TestCephMonPoolOpConnectedStallIntegration(t *testing.T) {
 		restore, stop := context.WithTimeout(context.Background(), 180*time.Second)
 		defer stop()
 		if paused {
-			if err := testcluster.ControlDaemon(restore, control, "resume", "mon", peon); err != nil {
+			if err := endDaemonLease(restore, lease); err != nil {
 				markFixtureUnusable(t, control, "paused MON did not resume")
 				t.Error(err)
 				return
@@ -138,7 +136,7 @@ func TestCephMonPoolOpConnectedStallIntegration(t *testing.T) {
 		t.Fatalf("native snap_seq %d while the MON holding the request is frozen: the client replayed it (baseline %d)", seq, baseline)
 	}
 
-	if err := testcluster.ControlDaemon(ctx, control, "resume", "mon", peon); err != nil {
+	if _, err := resumeDaemon(ctx, lease); err != nil {
 		t.Fatal("resume MON", err)
 	}
 	paused = false
@@ -214,9 +212,7 @@ func TestCephMonPoolOpConnectedStopIntegration(t *testing.T) {
 	stoppedEndpoint := pinned.Snapshot().Monitor.Endpoint
 	monState := c.Snapshot().Monitor
 
-	if err := testcluster.ControlDaemon(ctx, control, "pause", "mon", leader); err != nil {
-		t.Fatal("pause leader", err)
-	}
+	lease := pauseDaemon(t, ctx, control, "mon", leader, leaseUntil(ctx))
 	paused, stopped, recycled := true, false, false
 	defer func() {
 		if recycled && !stopped {
@@ -225,7 +221,7 @@ func TestCephMonPoolOpConnectedStopIntegration(t *testing.T) {
 		restore, stop := context.WithTimeout(context.Background(), 180*time.Second)
 		defer stop()
 		if paused {
-			if err := testcluster.ControlDaemon(restore, control, "resume", "mon", leader); err != nil {
+			if err := endDaemonLease(restore, lease); err != nil {
 				markFixtureUnusable(t, control, "paused leader MON did not resume")
 				t.Error(err)
 				return
@@ -290,7 +286,7 @@ func TestCephMonPoolOpConnectedStopIntegration(t *testing.T) {
 		t.Logf("%s ended unknown %s after the stop began: %v", r.label, time.Since(stopping).Round(time.Millisecond), r.err)
 	}
 
-	if err := testcluster.ControlDaemon(ctx, control, "resume", "mon", leader); err != nil {
+	if _, err := resumeDaemon(ctx, lease); err != nil {
 		t.Fatal("resume leader", err)
 	}
 	paused = false

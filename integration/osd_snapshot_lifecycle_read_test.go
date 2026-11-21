@@ -92,7 +92,7 @@ func TestSnapLifecycleClones(t *testing.T) {
 // with a native read at the same id.
 //
 // The cells run in four phases: live; pending, with nosnaptrim set and both
-// MGRs paused through the fixture's daemon control before s1 is removed, and
+// MGRs paused under fixture-owned leases before s1 is removed, and
 // reached when the native pg query and osd dump show s1 in the snap_trimq and
 // the removed_snaps_queue; trimmed, after nosnaptrim is cleared, reached when
 // s1 is in the PG's purged_snaps while still queued; and pruned, after the
@@ -518,33 +518,24 @@ func TestCephOSDSnapshotLifecycleReadIntegration(t *testing.T) {
 	for _, s := range dump.Standbys {
 		managers = append(managers, s.Name)
 	}
-	paused := map[string]bool{}
+	// Each MGR is paused under its own lease; a lease's cleanup resumes it
+	// after a failure.
+	leases := map[string]*testcluster.DaemonLease{}
 	resume := func(ctx context.Context) error {
 		var errs []error
 		for _, name := range managers {
-			if paused[name] {
-				if err := testcluster.ControlDaemon(ctx, control, "resume", "mgr", name); err != nil {
+			if lease := leases[name]; lease != nil {
+				if _, err := resumeDaemon(ctx, lease); err != nil {
 					errs = append(errs, err)
 				} else {
-					delete(paused, name)
+					delete(leases, name)
 				}
 			}
 		}
 		return errors.Join(errs...)
 	}
-	t.Cleanup(func() {
-		restore, stop := context.WithTimeout(context.Background(), 30*time.Second)
-		defer stop()
-		if err := resume(restore); err != nil {
-			t.Error("resume the paused MGRs", err)
-		}
-	})
 	for _, name := range managers {
-		// Recorded first: an uncertain pause is still resumed.
-		paused[name] = true
-		if err := testcluster.ControlDaemon(ctx, control, "pause", "mgr", name); err != nil {
-			t.Fatal("pause mgr", name, err)
-		}
+		leases[name] = pauseDaemon(t, ctx, control, "mgr", name, leaseUntil(ctx))
 	}
 	receipt.Managers = managers
 	receipt.Removal, err = c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: uint32(receipt.Pool), Op: cephmsgr.SelfManagedSnapshotRemove, Snapshot: s1})

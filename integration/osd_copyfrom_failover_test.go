@@ -60,9 +60,7 @@ func TestCephOSDCopyFromSourceFailoverIntegration(t *testing.T) {
 	defer o.Close()
 
 	frozen := strconv.Itoa(int(srcRoute.ID))
-	if err := testcluster.ControlDaemon(ctx, dir, "pause", "osd", frozen); err != nil {
-		t.Fatal("pause source primary", err)
-	}
+	lease := pauseDaemon(t, ctx, dir, "osd", frozen, leaseUntil(ctx))
 	paused := true
 	defer func() {
 		// A daemon frozen past its heartbeat grace is restarted rather than
@@ -70,7 +68,7 @@ func TestCephOSDCopyFromSourceFailoverIntegration(t *testing.T) {
 		restore, stop := context.WithTimeout(context.Background(), 240*time.Second)
 		defer stop()
 		if paused {
-			if err := testcluster.ControlDaemon(restore, dir, "resume", "osd", frozen); err != nil {
+			if err := endDaemonLease(restore, lease); err != nil {
 				t.Error("resume", err)
 				return
 			}
@@ -96,7 +94,7 @@ func TestCephOSDCopyFromSourceFailoverIntegration(t *testing.T) {
 		t.Fatal("copy while the source primary was frozen", elapsed, err)
 	}
 	moved := poolPlace(t, ctx, 1, source, "")
-	if err := testcluster.ControlDaemon(ctx, dir, "resume", "osd", frozen); err != nil {
+	if _, err := resumeDaemon(ctx, lease); err != nil {
 		t.Fatal("resume", err)
 	}
 	paused = false
@@ -151,9 +149,7 @@ func TestCephOSDCopyFromDestinationCrashIntegration(t *testing.T) {
 	defer o.Close()
 
 	frozen, killed := strconv.Itoa(int(srcRoute.ID)), strconv.Itoa(int(dstRoute.ID))
-	if err := testcluster.ControlDaemon(ctx, dir, "pause", "osd", frozen); err != nil {
-		t.Fatal("pause source primary", err)
-	}
+	lease := pauseDaemon(t, ctx, dir, "osd", frozen, leaseUntil(ctx))
 	paused, down := true, false
 	restored := false
 	restore := func() {
@@ -164,7 +160,7 @@ func TestCephOSDCopyFromDestinationCrashIntegration(t *testing.T) {
 		recover, stop := context.WithTimeout(context.Background(), 240*time.Second)
 		defer stop()
 		if paused {
-			if err := testcluster.ControlDaemon(recover, dir, "resume", "osd", frozen); err != nil {
+			if err := endDaemonLease(recover, lease); err != nil {
 				t.Error("resume", err)
 				return
 			}
