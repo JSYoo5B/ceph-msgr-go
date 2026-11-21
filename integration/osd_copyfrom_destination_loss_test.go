@@ -347,10 +347,15 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	var staged opsInFlightOp
 	for {
 		pending("before the barrier")
-		ops := copyOpsInFlight(t, work, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
-		objecter := copyObjecterRequests(t, work, 2, r.dest, nil, pools.ids[1], r.source)
-		if !time.Now().Before(workDeadline) {
-			t.Fatal("pause budget expired before the staged barrier")
+		// The snapshots run under the test's context and are judged
+		// against the budget once they return (budgetedObservation).
+		var ops opsInFlightSnapshot
+		var objecter objecterRequestsSnapshot
+		if late := budgetedObservation(ctx, pauseDeadline(workDeadline), func(observe context.Context) {
+			ops = copyOpsInFlight(t, observe, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
+			objecter = copyObjecterRequests(t, observe, 2, r.dest, nil, pools.ids[1], r.source)
+		}); late != nil {
+			t.Fatal("pause budget expired before the staged barrier:", late)
 		}
 		if staged, err = checkCopyStaged(ops, objecter, route, r.gid, copyPrimaryCopyIncarnation, cell.commits); err == nil {
 			receipt.BarrierEpoch, receipt.BarrierReqid, receipt.BarrierPoint, receipt.BarrierEvents = ops.Before.Epoch, staged.Reqid, staged.FlagPoint, staged.Events

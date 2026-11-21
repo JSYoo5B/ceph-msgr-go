@@ -518,10 +518,9 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 	// the 16 s read lease, as in the destination-loss test.
 	thawDeadline := frozen.Add(16 * time.Second)
 	workDeadline := thawDeadline.Add(-3 * time.Second)
-	// Native observations use the test's context and are judged against
-	// the budget after they return: an observation abandoned at a deadline
-	// would leave its request to the fixture's oracle, which then reads the
-	// next request's input.
+	// Native observations run under the test's context and are judged
+	// against the budget once they return (budgetedObservation).
+	budget := pauseDeadline(workDeadline)
 	work, stopWork := context.WithDeadline(ctx, workDeadline)
 	defer stopWork()
 	r.recovery.freeze(t, work, paused)
@@ -531,12 +530,15 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 	}()
 	var writeOp opsInFlightOp
 	for {
-		ops := copyOpsInFlight(t, ctx, 1, r.source, nil, r.gid, copyPrimaryWriteIncarnation)
+		var ops opsInFlightSnapshot
+		late := budgetedObservation(ctx, budget, func(observe context.Context) {
+			ops = copyOpsInFlight(t, observe, 1, r.source, nil, r.gid, copyPrimaryWriteIncarnation)
+		})
 		var err error
-		if writeOp, err = checkSourceWriteHeld(ops, source, r.gid, copyPrimaryWriteIncarnation); err == nil {
+		if writeOp, err = checkSourceWriteHeld(ops, source, r.gid, copyPrimaryWriteIncarnation); err == nil && late == nil {
 			break
-		} else if !time.Now().Before(workDeadline) {
-			t.Fatalf("the source write was not held before the pause budget expired: %v\nop tracker: %s", err, boundedRaw(ops.Raw))
+		} else if late != nil {
+			t.Fatalf("the source write was not held before the pause budget expired: %v (%v)\nop tracker: %s", err, late, boundedRaw(ops.Raw))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -550,12 +552,15 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 	}()
 	for {
 		h.pending(t, "before its first copy-get was sent")
-		objecter := copyObjecterRequests(t, ctx, 2, r.dest, nil, r.pools.ids[1], r.source)
+		var objecter objecterRequestsSnapshot
+		late := budgetedObservation(ctx, budget, func(observe context.Context) {
+			objecter = copyObjecterRequests(t, observe, 2, r.dest, nil, r.pools.ids[1], r.source)
+		})
 		var err error
-		if h.first, err = checkFirstChunkSent(objecter, route, source.ID, false); err == nil {
+		if h.first, err = checkFirstChunkSent(objecter, route, source.ID, false); err == nil && late == nil {
 			break
-		} else if !time.Now().Before(workDeadline) {
-			t.Fatalf("the first copy-get was not sent before the pause budget expired: %v\nobjecter: %s", err, boundedRaw(objecter.Raw))
+		} else if late != nil {
+			t.Fatalf("the first copy-get was not sent before the pause budget expired: %v (%v)\nobjecter: %s", err, late, boundedRaw(objecter.Raw))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -564,12 +569,15 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 		t.Fatal("osd set pause", err)
 	}
 	for {
-		objecter := copyObjecterRequests(t, ctx, 2, r.dest, nil, r.pools.ids[1], r.source)
+		var objecter objecterRequestsSnapshot
+		late := budgetedObservation(ctx, budget, func(observe context.Context) {
+			objecter = copyObjecterRequests(t, observe, 2, r.dest, nil, r.pools.ids[1], r.source)
+		})
 		got, err := checkFirstChunkSent(objecter, route, source.ID, true)
-		if err == nil && got.TID == h.first.TID {
+		if err == nil && got.TID == h.first.TID && late == nil {
 			break
-		} else if !time.Now().Before(workDeadline) {
-			t.Fatalf("the sent first copy-get was not paused before the pause budget expired: %v\nobjecter: %s", err, boundedRaw(objecter.Raw))
+		} else if late != nil {
+			t.Fatalf("the sent first copy-get was not paused before the pause budget expired: %v (%v)\nobjecter: %s", err, late, boundedRaw(objecter.Raw))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

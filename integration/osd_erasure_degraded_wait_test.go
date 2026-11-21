@@ -202,7 +202,9 @@ func (r *ecEpochRun) unsetFlags(d degradedObject) {
 // publication. Every control of the held phase runs under held, which ends
 // a reserve before the deadline so that the resume still has its own time;
 // the resume runs under its own context ending at the deadline, independent
-// of the run's.
+// of the run's. Native oracle observations of the held phase run under the
+// run's context and are judged against held once they return
+// (budgetedObservation), so none is abandoned at its end.
 type pauseLease struct {
 	// request runs one fixture control request (request, response, name);
 	// fixtureRequest outside the cluster-free tests.
@@ -318,14 +320,20 @@ func (r *ecEpochRun) resume(p *pauseLease) {
 }
 
 // waitDegraded takes bounded snapshots of the primary's op tracker, each
-// under the pause's held phase, until one holds the write of client gid
+// judged against the pause's held phase once it returns (it runs under the
+// run's context, budgetedObservation), until one holds the write of client gid
 // under incarnation waiting for the degraded object, and returns that op.
 func (r *ecEpochRun) waitDegraded(d degradedObject, p *pauseLease, call heldCall, gid uint64, incarnation int32) opsInFlightOp {
 	r.t.Helper()
 	err := errors.New("no snapshot taken")
 	for attempt := 1; attempt <= 10 && p.held.Err() == nil; attempt++ {
-		s := primaryOpsInFlight(r.t, p.held, 1, d.object, gid, incarnation)
-		r.checkHeld(p, fmt.Sprintf("in-flight snapshot %d", attempt))
+		var s opsInFlightSnapshot
+		step := fmt.Sprintf("in-flight snapshot %d", attempt)
+		if err := budgetedObservation(r.ctx, func() error { return p.check(step) }, func(observe context.Context) {
+			s = primaryOpsInFlight(r.t, observe, 1, d.object, gid, incarnation)
+		}); err != nil {
+			r.t.Fatal(err)
+		}
 		var op opsInFlightOp
 		if op, err = checkDegradedWait(s, d.now, gid, incarnation); err == nil {
 			r.t.Logf("held at osd.%d (snapshot %d, %d ops in flight): %s, flag point %s, events %q", s.OSD, attempt, s.NumOps, op.Description, op.FlagPoint, op.Events)
