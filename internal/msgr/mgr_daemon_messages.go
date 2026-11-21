@@ -622,12 +622,24 @@ func checkLimits(b []byte) bool {
 // should_encode does, an MDS metric configuration is sent as absent to a
 // peer whose negotiated features lack SERVER_PACIFIC.
 func EncodeMgrConfigure(c MgrConfigureData, peerFeatures uint64, limit uint32) (MessageData, error) {
-	e := wire.Encoder{}
-	e.U32(c.StatsPeriod)
-	e.U32(c.StatsThreshold)
+	// The caller's queries and configuration are bounded before any of
+	// their bytes is copied: the front holds at least these.
 	if len(c.OSDPerfMetricQueries) > maxMgrMapEntries {
 		return MessageData{}, wire.ErrLimit
 	}
+	size := uint64(4 + 4 + 4 + 1)
+	for _, q := range c.OSDPerfMetricQueries {
+		size += uint64(len(q.Key)) + uint64(len(q.Value))
+	}
+	if m := c.MetricConfig; m != nil && (m.Type != MgrMetricMDS || peerFeatures&serverPacificMask == serverPacificMask) {
+		size += 4 + uint64(len(m.Payload))
+	}
+	if size > uint64(limit) {
+		return MessageData{}, wire.ErrLimit
+	}
+	e := wire.Encoder{}
+	e.U32(c.StatsPeriod)
+	e.U32(c.StatsThreshold)
 	e.U32(uint32(len(c.OSDPerfMetricQueries)))
 	for _, q := range c.OSDPerfMetricQueries {
 		if !checkRawStructure(q.Key, 1) || !checkLimits(q.Value) {
