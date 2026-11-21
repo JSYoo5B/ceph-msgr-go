@@ -10,6 +10,8 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -296,12 +298,17 @@ func allocatedPerCall(f func()) uint64 {
 	return (after.TotalAlloc - before.TotalAlloc) / 10
 }
 
-// TestOversizedReportAndBeaconAreRefusedBeforeCopying: an 8 MiB health
-// summary, detail line or progress message, and an 8 MiB beacon metadata
-// value, module option or command, are refused as ErrLimitExceeded under a
-// 64 KiB frame limit without converting or copying them, and nothing
-// reaches the MON.
-func TestOversizedReportAndBeaconAreRefusedBeforeCopying(t *testing.T) {
+// TestCallerContentIsBoundedBeforeCopying walks the field list of the two
+// MON send paths (SendBeacon and SendReport; see mgrBeaconLowerBound and
+// msgr.MonMgrReportFrameSize) under a 64 KiB frame limit. Each collection
+// gets 65,536 minimal elements and each byte field 8 MiB; every row must be
+// refused as ErrLimitExceeded within its allocation bound, measured as heap
+// bytes per call, so a collection the preflight does not count fails its
+// row. A deduplicated option set is bounded by its distinct entries: 65,536
+// or 1,048,576 distinct tags are refused within a bound set by the frame
+// limit, not by their number, and 65,536 repeats of one tag are sent as the
+// single tag at about the cost of one. Nothing refused reaches the MON.
+func TestCallerContentIsBoundedBeforeCopying(t *testing.T) {
 	f := newFakeMgrMon(t)
 	options := f.options()
 	options.MaxFrameSize = 64 << 10
@@ -311,41 +318,94 @@ func TestOversizedReportAndBeaconAreRefusedBeforeCopying(t *testing.T) {
 	}
 	defer d.Close()
 	f.next(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	h, err := d.Monitor(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := nativeTestDigest(t, "digest-empty")
+	const many = 1 << 16
 	big := strings.Repeat("x", 8<<20)
-	for name, r := range map[string]MgrMonReport{
-		"summary":  {Digest: digest, HealthChecks: []MgrHealthCheck{{Code: "A", Summary: big}}},
-		"detail":   {Digest: digest, HealthChecks: []MgrHealthCheck{{Code: "A", Detail: []string{big}}}},
-		"progress": {Digest: digest, ProgressEvents: []MgrProgressEvent{{ID: "p", Message: big}}},
-	} {
-		var err error
-		bytes := allocatedPerCall(func() { err = h.SendReport(ctx, r) })
-		if !errors.Is(err, ErrLimitExceeded) || errors.Is(err, ErrNotSent) {
-			t.Fatal(name, err)
+	digest := nativeTestDigest(t, "digest-empty")
+	strs := func(n int, distinct bool) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = "t"
+			if distinct {
+				out[i] = strconv.Itoa(i)
+			}
 		}
-		if bytes > 64<<10 {
-			t.Errorf("report %s: refusing allocated %d bytes per call", name, bytes)
-		}
+		return out
 	}
-	for name, b := range map[string]MgrBeacon{
-		"metadata": {Metadata: map[string]string{"k": big}},
-		"option":   {Modules: []ManagerModule{{Name: "m", Options: map[string]ManagerModuleOption{"o": {Tags: []string{big}}}}}},
-		"command":  {Commands: []MgrCommandDescriptor{{Help: big}}},
-	} {
+	pairs := func(n int) map[string]string {
+		m := make(map[string]string, n)
+		for i := range n {
+			m[strconv.Itoa(i)] = ""
+		}
+		return m
+	}
+	ipv4 := ManagerAddress{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:6800")}
+	addresses := func(a ManagerAddress) []ManagerAddress {
+		out := make([]ManagerAddress, many)
+		for i := range out {
+			out[i] = a
+		}
+		return out
+	}
+	optionWith := func(o ManagerModuleOption) []ManagerModule {
+		return []ManagerModule{{Name: "m", Options: map[string]ManagerModuleOption{"o": o}}}
+	}
+	options64k := make(map[string]ManagerModuleOption, many)
+	for i := range many {
+		options64k[strconv.Itoa(i)] = ManagerModuleOption{}
+	}
+	const small, setScratch = 64 << 10, 2 << 20
+	type row struct {
+		field    string
+		send     func() error
+		maxBytes uint64
+	}
+	beacon := func(b MgrBeacon) func() error { return func() error { return d.SendBeacon(ctx, b) } }
+	report := func(r MgrMonReport) func() error { return func() error { return h.SendReport(ctx, r) } }
+	rows := []row{
+		{"beacon Addresses (no endpoint)", beacon(MgrBeacon{Addresses: addresses(ManagerAddress{Type: 2})}), small},
+		{"beacon Addresses (IPv4)", beacon(MgrBeacon{Addresses: addresses(ipv4)}), small},
+		{"beacon Commands", beacon(MgrBeacon{Commands: make([]MgrCommandDescriptor, many)}), small},
+		{"beacon Commands[].Help", beacon(MgrBeacon{Commands: []MgrCommandDescriptor{{Help: big}}}), small},
+		{"beacon Metadata", beacon(MgrBeacon{Metadata: pairs(many)}), small},
+		{"beacon Metadata value", beacon(MgrBeacon{Metadata: map[string]string{"k": big}}), small},
+		{"beacon Services", beacon(MgrBeacon{Services: pairs(many)}), small},
+		{"beacon Modules", beacon(MgrBeacon{Modules: make([]ManagerModule, many)}), small},
+		{"beacon Modules[].Name", beacon(MgrBeacon{Modules: []ManagerModule{{Name: big}}}), small},
+		{"beacon Modules[].Options", beacon(MgrBeacon{Modules: []ManagerModule{{Name: "m", Options: options64k}}}), small},
+		{"beacon option Description", beacon(MgrBeacon{Modules: optionWith(ManagerModuleOption{Description: big})}), small},
+		{"beacon option EnumAllowed (distinct)", beacon(MgrBeacon{Modules: optionWith(ManagerModuleOption{EnumAllowed: strs(many, true)})}), setScratch},
+		{"beacon option Tags (distinct)", beacon(MgrBeacon{Modules: optionWith(ManagerModuleOption{Tags: strs(many, true)})}), setScratch},
+		{"beacon option Tags (1,048,576 distinct)", beacon(MgrBeacon{Modules: optionWith(ManagerModuleOption{Tags: strs(1<<20, true)})}), setScratch},
+		{"beacon option SeeAlso (distinct)", beacon(MgrBeacon{Modules: optionWith(ManagerModuleOption{SeeAlso: strs(many, true)})}), setScratch},
+		{"beacon option Tags entry", beacon(MgrBeacon{Modules: optionWith(ManagerModuleOption{Tags: []string{big}})}), small},
+		{"beacon Clients", beacon(MgrBeacon{Clients: make([]MgrBeaconClient, many)}), small},
+		{"beacon Clients[].Name", beacon(MgrBeacon{Clients: []MgrBeaconClient{{Name: big}}}), small},
+		{"beacon Clients[].Addresses", beacon(MgrBeacon{Clients: []MgrBeaconClient{{Name: "c", Addresses: addresses(ipv4)}}}), small},
+		{"report HealthChecks", report(MgrMonReport{Digest: digest, HealthChecks: make([]MgrHealthCheck, many)}), small},
+		{"report HealthChecks[].Summary", report(MgrMonReport{Digest: digest, HealthChecks: []MgrHealthCheck{{Code: "A", Summary: big}}}), small},
+		{"report HealthChecks[].Detail", report(MgrMonReport{Digest: digest, HealthChecks: []MgrHealthCheck{{Code: "A", Detail: make([]string, many)}}}), small},
+		{"report HealthChecks[].Detail line", report(MgrMonReport{Digest: digest, HealthChecks: []MgrHealthCheck{{Code: "A", Detail: []string{big}}}}), small},
+		{"report ProgressEvents", report(MgrMonReport{Digest: digest, ProgressEvents: make([]MgrProgressEvent, many)}), small},
+		{"report ProgressEvents[].Message", report(MgrMonReport{Digest: digest, ProgressEvents: []MgrProgressEvent{{ID: "p", Message: big}}}), small},
+		{"report ServiceMap", report(MgrMonReport{Digest: digest, ServiceMap: []byte(big)}), small},
+		{"report Digest", report(MgrMonReport{Digest: []byte(big)}), small},
+	}
+	for _, r := range rows {
 		var err error
-		bytes := allocatedPerCall(func() { err = d.SendBeacon(ctx, b) })
-		if !errors.Is(err, ErrLimitExceeded) {
-			t.Fatal(name, err)
+		bytes := allocatedPerCall(func() { err = r.send() })
+		if !errors.Is(err, ErrLimitExceeded) || errors.Is(err, ErrNotSent) {
+			t.Errorf("%s: %v", r.field, err)
 		}
-		if bytes > 64<<10 {
-			t.Errorf("beacon %s: refusing allocated %d bytes per call", name, bytes)
+		if bytes > r.maxBytes {
+			t.Errorf("%s: refusing allocated %d bytes per call, bound %d", r.field, bytes, r.maxBytes)
 		}
+		t.Logf("%s: refused with %d bytes per call", r.field, bytes)
 	}
 	time.Sleep(100 * time.Millisecond)
 	f.mu.Lock()
@@ -353,6 +413,37 @@ func TestOversizedReportAndBeaconAreRefusedBeforeCopying(t *testing.T) {
 	f.mu.Unlock()
 	if beacons != 0 || reports != 0 {
 		t.Fatal("refused content reached the MON", beacons, reports)
+	}
+
+	// Repeats of one tag fit after deduplication and are sent as that tag.
+	repeated := MgrBeacon{Modules: optionWith(ManagerModuleOption{Tags: strs(many, false)})}
+	bytes := allocatedPerCall(func() {
+		if err := d.SendBeacon(ctx, repeated); err != nil {
+			t.Error("repeated tag beacon", err)
+		}
+	})
+	if bytes > small {
+		t.Errorf("65,536 repeats of one tag allocated %d bytes per call", bytes)
+	}
+	t.Logf("65,536 repeats of one tag: sent with %d bytes per call", bytes)
+	single, err := maps.EncodeMgrBeacon(maps.MgrBeacon{Modules: []maps.ModuleInfo{wireModule(optionWith(ManagerModuleOption{Tags: []string{"t"}})[0])}}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deduplicated, err := maps.EncodeMgrBeacon(maps.MgrBeacon{Modules: []maps.ModuleInfo{wireModule(repeated.Modules[0])}}, 1<<20)
+	if err != nil || !slices.Equal(single.Front, deduplicated.Front) {
+		t.Fatal("65,536 repeats of one tag did not encode as the single tag", err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		f.mu.Lock()
+		n := len(f.beacons)
+		f.mu.Unlock()
+		if n == 10 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("repeated-tag beacons received", n)
+		}
 	}
 }
 
@@ -364,7 +455,7 @@ func TestMgrBeaconLowerBoundNeverExceedsTheFrame(t *testing.T) {
 	option := ManagerModuleOption{Name: "o", DefaultValue: "d", EnumAllowed: []string{"a", "a", "bb"}, Tags: []string{"t", "t"}, SeeAlso: []string{"s"}}
 	for name, b := range map[string]MgrBeacon{
 		"empty":     {},
-		"populated": {Available: true, Addresses: []ManagerAddress{address, address}, Metadata: map[string]string{"a": "b"}, Services: map[string]string{"x": "y"}, Features: 9},
+		"populated": {Available: true, Addresses: []ManagerAddress{address, address, {Type: 2}, {Type: 2, Endpoint: netip.MustParseAddrPort("[fd00::1]:6800")}}, Metadata: map[string]string{"a": "b"}, Services: map[string]string{"x": "y"}, Features: 9},
 		"modules": {Modules: []ManagerModule{{Name: "m", ErrorString: "e", Options: map[string]ManagerModuleOption{"o": option, "p": {}}}, {Name: "m"}},
 			Commands: []MgrCommandDescriptor{{Command: "c", Help: "h", Module: "m", Permissions: "r", Flags: 1}},
 			Clients:  []MgrBeaconClient{{Name: "c", Addresses: []ManagerAddress{address}}, {Name: "b"}}},
@@ -379,7 +470,11 @@ func TestMgrBeaconLowerBoundNeverExceedsTheFrame(t *testing.T) {
 		for _, c := range b.Clients {
 			content.Clients = append(content.Clients, maps.MgrClient{Name: c.Name, Addresses: wireAddresses(c.Addresses)})
 		}
-		if bound, front := mgrBeaconLowerBound(b), uint64(len(maps.EncodeMgrBeacon(content).Front)); bound > front {
+		m, err := maps.EncodeMgrBeacon(content, 1<<20)
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		if bound, front := mgrBeaconLowerBound(b, len(content.Name)), uint64(len(m.Front)); bound > front {
 			t.Errorf("%s: bound %d exceeds the %d-byte front", name, bound, front)
 		}
 	}
