@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
-	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
 // A write to an object that a returned shard of an optimized isa k=2,m=2 pool
@@ -195,89 +193,6 @@ func (r *ecEpochRun) unsetFlags(d degradedObject) {
 	*d.flagged = false
 }
 
-// pauseLease is one owned pause of an OSD through the fixture's daemon
-// control, bounded from before the pause was requested. The fixture may
-// freeze the daemon at any moment after the request is published, also while
-// the acknowledgement is still on its way, so the budget starts before that
-// publication. Every control of the held phase runs under held, which ends
-// a reserve before the deadline so that the resume still has its own time;
-// the resume runs under its own context ending at the deadline, independent
-// of the run's.
-type pauseLease struct {
-	// request runs one fixture control request (request, response, name);
-	// fixtureRequest outside the cluster-free tests.
-	request  func(ctx context.Context, request, response, name string) error
-	name     string
-	budget   time.Duration
-	deadline time.Time
-	// held ends reserve before deadline.
-	held     context.Context
-	stopHeld context.CancelFunc
-	resumed  bool
-}
-
-// fixtureRequest runs one control request through the native fixture's
-// control directory.
-func fixtureRequest(ctx context.Context, request, response, name string) error {
-	return testcluster.RequestControl(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), request, response, name)
-}
-
-// startPauseLease starts the budget, then requests the pause of osd name
-// under held. It returns the lease also on an error, since a pause request
-// that failed or was abandoned may still take effect: the caller's restore
-// owes its recovery either way.
-func startPauseLease(parent context.Context, request func(context.Context, string, string, string) error, name string, budget, reserve time.Duration) (*pauseLease, error) {
-	p := &pauseLease{request: request, name: name, budget: budget, deadline: time.Now().Add(budget)}
-	p.held, p.stopHeld = context.WithDeadline(parent, p.deadline.Add(-reserve))
-	if err := request(p.held, "pause-osd", "osd-pause", name); err != nil {
-		return p, fmt.Errorf("pause osd.%s: %w", name, err)
-	}
-	return p, p.check("the pause request")
-}
-
-// check requires step to have ended within the held phase.
-func (p *pauseLease) check(step string) error {
-	if err := p.held.Err(); err != nil {
-		return fmt.Errorf("%s ended past the held phase of osd.%s's %v pause budget: %w", step, p.name, p.budget, err)
-	}
-	return nil
-}
-
-// resume ends the pause under a context that ends at the deadline, and
-// requires the acknowledgement before it. The lease is resumed only when
-// the fixture acknowledged the resume; otherwise restore recovers it.
-func (p *pauseLease) resume() (left time.Duration, err error) {
-	p.stopHeld()
-	resume, stop := context.WithDeadline(context.Background(), p.deadline)
-	defer stop()
-	if err := p.request(resume, "resume-osd", "osd-resume", p.name); err != nil {
-		return 0, fmt.Errorf("resume osd.%s within its %v pause budget: %w", p.name, p.budget, err)
-	}
-	p.resumed = true
-	if left = time.Until(p.deadline); left <= 0 {
-		return left, fmt.Errorf("osd.%s stayed paused %v past its %v budget", p.name, -left, p.budget)
-	}
-	return left, nil
-}
-
-// restore is the lease's independent recovery: unless resume was
-// acknowledged, it asks the fixture to settle the original pause and resume
-// requests, even when they are still pending or were abandoned, and to
-// resume the daemon if it is still paused (recover-paused-osd,
-// integration/fixture/control_daemon.go). A plain resume would fail the
-// fixture when the daemon is not paused.
-func (p *pauseLease) restore(ctx context.Context) error {
-	p.stopHeld()
-	if p.resumed {
-		return nil
-	}
-	if err := p.request(ctx, "recover-paused-osd", "osd-pause-recovered", p.name); err != nil {
-		return fmt.Errorf("recover the pause of osd.%s: %w", p.name, err)
-	}
-	p.resumed = true
-	return nil
-}
-
 // pause pauses the OSD under degradedWaitPauseBudget and returns its lease,
 // whose restore the run's cleanup runs with its own 60 s bound. The cleanup is
 // registered before the outcome of the pause request is judged, so that a
@@ -319,7 +234,11 @@ func (r *ecEpochRun) resume(p *pauseLease) {
 
 // waitDegraded takes bounded snapshots of the primary's op tracker, each
 // under the pause's held phase, until one holds the write of client gid
-// under incarnation waiting for the degraded object, and returns that op.
+// under incarnation waiting for the degraded object, and returns that op. A
+// snapshot still outstanding when the held phase ends is abandoned and fails
+// the test; the lease resumes the OSD by its deadline all the same
+// (pauseLease), and the fixture serves that resume beside the outstanding
+// oracle request.
 func (r *ecEpochRun) waitDegraded(d degradedObject, p *pauseLease, call heldCall, gid uint64, incarnation int32) opsInFlightOp {
 	r.t.Helper()
 	err := errors.New("no snapshot taken")
@@ -785,146 +704,6 @@ func TestVersionAfter(t *testing.T) {
 			t.Errorf("versionAfter(%+v, %+v) = %v", c.a, c.b, got)
 		}
 	}
-}
-
-// fakePauseControl answers the pause lease's control requests in place of
-// the fixture: each request waits delays[request] (or until its context
-// ends) and is recorded with the time it was published. No daemon is
-// involved.
-type fakePauseControl struct {
-	delays    map[string]time.Duration
-	fail      map[string]error
-	requests  []string
-	published map[string]time.Time
-}
-
-func (f *fakePauseControl) request(ctx context.Context, request, response, name string) error {
-	if f.published == nil {
-		f.published = map[string]time.Time{}
-	}
-	f.requests = append(f.requests, request+" "+name)
-	f.published[request] = time.Now()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(f.delays[request]):
-	}
-	return f.fail[request]
-}
-
-func TestPauseLease(t *testing.T) {
-	const budget, reserve = time.Second, 300 * time.Millisecond
-	restore := func(t *testing.T, p *pauseLease) {
-		t.Helper()
-		ctx, stop := context.WithTimeout(context.Background(), time.Second)
-		defer stop()
-		if err := p.restore(ctx); err != nil {
-			t.Fatal("restore:", err)
-		}
-	}
-	t.Run("in time", func(t *testing.T) {
-		f := &fakePauseControl{}
-		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
-		if err != nil || p.check("a step") != nil {
-			t.Fatal("pause refused:", err)
-		}
-		if _, err := p.resume(); err != nil {
-			t.Fatal("resume refused:", err)
-		}
-		restore(t, p)
-		if !slices.Equal(f.requests, []string{"pause-osd 3", "resume-osd 3"}) {
-			t.Fatal("requests", f.requests)
-		}
-	})
-	t.Run("a slow pause acknowledgement uses the budget", func(t *testing.T) {
-		// The fixture may freeze the daemon before it acknowledges, so
-		// the budget is counted from before the request was published.
-		f := &fakePauseControl{delays: map[string]time.Duration{"pause-osd": 200 * time.Millisecond}}
-		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
-		if err != nil {
-			t.Fatal("pause refused:", err)
-		}
-		if p.deadline.After(f.published["pause-osd"].Add(budget)) {
-			t.Fatalf("the deadline %v is later than the budget from the pause request %v", p.deadline, f.published["pause-osd"].Add(budget))
-		}
-		select {
-		case <-p.held.Done():
-		case <-time.After(budget):
-			t.Fatal("the held phase outlasted the budget")
-		}
-		if p.check("a step after the slow acknowledgement") == nil {
-			t.Fatal("a step past the held phase accepted")
-		}
-		restore(t, p)
-		if !slices.Equal(f.requests, []string{"pause-osd 3", "recover-paused-osd 3"}) {
-			t.Fatal("the late step was not recovered", f.requests)
-		}
-	})
-	t.Run("a pause acknowledged after the held phase", func(t *testing.T) {
-		f := &fakePauseControl{delays: map[string]time.Duration{"pause-osd": 2 * budget}}
-		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatal("a pause without an acknowledgement in the held phase accepted:", err)
-		}
-		restore(t, p)
-		if !slices.Equal(f.requests, []string{"pause-osd 3", "recover-paused-osd 3"}) {
-			t.Fatal("the uncertain pause was not recovered", f.requests)
-		}
-	})
-	t.Run("a held control bounded by the held phase", func(t *testing.T) {
-		f := &fakePauseControl{}
-		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if end, ok := p.held.Deadline(); !ok || !end.Equal(p.deadline.Add(-reserve)) {
-			t.Fatalf("the held phase ends at %v (%v); want the reserve %v before the deadline %v", end, ok, reserve, p.deadline)
-		}
-		restore(t, p)
-	})
-	t.Run("a late resume", func(t *testing.T) {
-		f := &fakePauseControl{delays: map[string]time.Duration{"resume-osd": 2 * budget}}
-		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := p.resume(); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatal("a resume past the deadline accepted:", err)
-		}
-		restore(t, p)
-		if !slices.Equal(f.requests, []string{"pause-osd 3", "resume-osd 3", "recover-paused-osd 3"}) {
-			t.Fatal("the uncertain resume was not recovered", f.requests)
-		}
-	})
-	t.Run("a failed resume", func(t *testing.T) {
-		f := &fakePauseControl{fail: map[string]error{"resume-osd": errors.New("refused")}}
-		p, err := startPauseLease(context.Background(), f.request, "3", budget, reserve)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := p.resume(); err == nil {
-			t.Fatal("a failed resume accepted")
-		}
-		restore(t, p)
-		if !slices.Equal(f.requests, []string{"pause-osd 3", "resume-osd 3", "recover-paused-osd 3"}) {
-			t.Fatal("the failed resume was not recovered", f.requests)
-		}
-	})
-	t.Run("the resume is independent of the parent context", func(t *testing.T) {
-		f := &fakePauseControl{}
-		parent, cancel := context.WithCancel(context.Background())
-		p, err := startPauseLease(parent, f.request, "3", budget, reserve)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cancel()
-		if p.check("a step after the run ended") == nil {
-			t.Fatal("a held phase outliving its parent accepted")
-		}
-		if _, err := p.resume(); err != nil {
-			t.Fatal("resume after the run's context ended:", err)
-		}
-	})
 }
 
 func TestCheckStayedUp(t *testing.T) {

@@ -49,10 +49,7 @@ func sparseReadOracleAt(t *testing.T, ctx context.Context, name string, offset, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = testcluster.WritePublicEvidence(filepath.Join(dir, "osd-sparse-read-input.json"), data); err != nil {
-		t.Fatal(err)
-	}
-	if err = testcluster.ControlDaemon(ctx, dir, "verify", "osd-sparse-read", "observe"); err != nil {
+	if err = testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-sparse-read", "observe", testcluster.ControlInput{Name: "osd-sparse-read-input.json", Data: data}); err != nil {
 		t.Fatal(err)
 	}
 	data, err = os.ReadFile(filepath.Join(dir, "osd-sparse-read-result.json"))

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -17,43 +16,59 @@ func TestCopyFromThawAcknowledgementDeadline(t *testing.T) {
 	for _, stage := range []string{"resume pending", "late acknowledgement", "lost acknowledgement"} {
 		t.Run(stage, func(t *testing.T) {
 			dir := t.TempDir()
-			r := copyPrimaryRecovery{dir: dir, frozen: map[int32]bool{2: true}, killed: map[int32]bool{}}
+			r := copyPrimaryRecovery{dir: dir, frozen: map[int32]bool{}, killed: map[int32]bool{}}
 			parent, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			deadline := time.Now().Add(80 * time.Millisecond)
-			err := r.thaw(parent, 2, deadline)
-			if !errors.Is(err, context.DeadlineExceeded) || time.Now().Before(deadline) ||
-				time.Since(deadline) > time.Second || parent.Err() != nil || !r.frozen[2] {
-				t.Fatalf("resume wait: err=%v parent=%v time since cutoff=%v frozen=%v", err, parent.Err(), time.Since(deadline), r.frozen)
-			}
-
 			request := func(action string) string {
 				t.Helper()
-				path := filepath.Join(dir, action)
 				for {
-					data, err := os.ReadFile(path)
-					if err == nil {
-						fields := strings.Fields(string(data))
-						if len(fields) != 2 || fields[1] != "2" {
-							t.Fatalf("unexpected %s request: %q", action, data)
+					pending, err := controlEnvelopes(dir, action)
+					if err == nil && len(pending) != 0 {
+						if fields := pending[0].fields; len(pending) != 1 || len(fields) != 2 || fields[1] != "2" {
+							t.Fatalf("unexpected %s requests: %+v", action, pending)
 						}
-						return fields[0]
+						return pending[0].id
 					}
-					if !errors.Is(err, os.ErrNotExist) || parent.Err() != nil {
+					if err != nil || parent.Err() != nil {
 						t.Fatalf("waiting for %s: %v, %v", action, err, parent.Err())
 					}
 					time.Sleep(time.Millisecond)
 				}
 			}
+			envelope := func(action, id string) string { return filepath.Join(dir, action+"."+id+".request") }
 			ack := func(name string) {
 				t.Helper()
 				if err := os.WriteFile(filepath.Join(dir, name), nil, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
+			deadline := time.Now().Add(300 * time.Millisecond)
+			// The pause is acknowledged once published; freeze waits for it.
+			pauseID := make(chan string, 1)
+			go func() {
+				for parent.Err() == nil {
+					if pending, err := controlEnvelopes(dir, "pause-osd"); err == nil && len(pending) == 1 {
+						if fields := pending[0].fields; len(fields) == 2 && os.WriteFile(filepath.Join(dir, "osd-pause."+fields[0]), nil, 0600) == nil {
+							pauseID <- fields[0]
+							return
+						}
+					}
+					time.Sleep(time.Millisecond)
+				}
+				close(pauseID)
+			}()
+			r.freeze(t, parent, 2, deadline, 0)
+			if id, ok := <-pauseID; !ok || id == "" {
+				t.Fatal("the pause was not published")
+			}
+			err := r.thaw(2)
+			if !errors.Is(err, context.DeadlineExceeded) || time.Now().Before(deadline) ||
+				time.Since(deadline) > time.Second || parent.Err() != nil || !r.frozen[2] {
+				t.Fatalf("resume wait: err=%v parent=%v time since cutoff=%v frozen=%v", err, parent.Err(), time.Since(deadline), r.frozen)
+			}
 			resumeID := request("resume-osd")
 			if stage != "resume pending" {
-				if err := os.Remove(filepath.Join(dir, "resume-osd")); err != nil {
+				if err := os.Remove(envelope("resume-osd", resumeID)); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -74,8 +89,8 @@ func TestCopyFromThawAcknowledgementDeadline(t *testing.T) {
 				t.Fatal("uncertain replica was not scheduled for restart", err, r.frozen, r.killed)
 			}
 			if stage != "resume pending" {
-				if _, err := os.Stat(filepath.Join(dir, "resume-osd")); !errors.Is(err, os.ErrNotExist) {
-					t.Fatal("cleanup published a second ordinary resume", err)
+				if pending, err := controlEnvelopes(dir, "resume-osd"); err != nil || len(pending) != 0 {
+					t.Fatal("cleanup published a second ordinary resume", pending, err)
 				}
 			}
 		})

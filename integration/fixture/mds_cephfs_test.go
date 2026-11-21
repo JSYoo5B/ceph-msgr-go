@@ -247,7 +247,7 @@ func TestMDSCephFSNativeOutputShapes(t *testing.T) {
 func TestMDSCephFSControlRejectsBeforeNativeWork(t *testing.T) {
 	for _, enabled := range []string{"0", "1"} {
 		out := t.TempDir()
-		if err := os.WriteFile(filepath.Join(out, "mds-cephfs"), []byte("1 "+strings.Repeat("a1", 16)+" write go-file\n"), 0600); err != nil {
+		if err := writeRequestFile(out, "mds-cephfs", "1 "+strings.Repeat("a1", 16)+" write go-file\n"); err != nil {
 			t.Fatal(err)
 		}
 		c := &fixtureCluster{profile: profile{mdsFresh: enabled, mdsCephFS: enabled}}

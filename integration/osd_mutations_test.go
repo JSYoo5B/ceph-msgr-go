@@ -39,10 +39,7 @@ func nativeMutation(t *testing.T, ctx context.Context, input any) mutationOracle
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(dir, "osd-mutation-input.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err = testcluster.ControlDaemon(ctx, dir, "verify", "osd-mutation", "compare"); err != nil {
+	if err = testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-mutation", "compare", testcluster.ControlInput{Name: "osd-mutation-input.json", Data: data, Private: true}); err != nil {
 		t.Fatal("native mutation oracle", err)
 	}
 	data, err = os.ReadFile(filepath.Join(dir, "osd-mutation-result.json"))

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -65,11 +66,11 @@ func TestDaemonControlAdmitsOnlyStoppingTheCommandFixtureMDS(t *testing.T) {
 func TestRecoverPausedOSDOrdersPendingDaemonControl(t *testing.T) {
 	for _, pending := range []bool{false, true} {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "recover-paused-osd"), []byte("42 2"), 0600); err != nil {
+		if err := writeRequestFile(dir, "recover-paused-osd", "42 2"); err != nil {
 			t.Fatal(err)
 		}
 		if pending {
-			if err := os.WriteFile(filepath.Join(dir, "resume-osd"), []byte("41"), 0600); err != nil {
+			if err := writeRequestFile(dir, "resume-osd", "41"); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -83,5 +84,65 @@ func TestRecoverPausedOSDOrdersPendingDaemonControl(t *testing.T) {
 		} else if err != nil || ack != nil {
 			t.Fatal("recovery of an already resumed OSD", err, ack)
 		}
+	}
+}
+
+// Two pause leases that ended together both published a recovery before the
+// fixture polled: every pending recovery is served, per OSD, and a second
+// recovery of one OSD is only acknowledged. While an owned-pool oracle
+// request runs (pauseEndingActions), the pause of an OSD that no recovery
+// names stays pending.
+func TestRecoverPausedOSDServesEveryPendingRecovery(t *testing.T) {
+	for _, scope := range []daemonActionScope{allDaemonActions, pauseEndingActions} {
+		dir := t.TempDir()
+		for _, request := range []string{"43 2", "44 3", "45 2"} {
+			if err := writeRequestFile(dir, "recover-paused-osd", request); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if scope == pauseEndingActions {
+			if err := writeRequestFile(dir, "pause-osd", "46 5"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var c fixtureCluster
+		if err := c.daemonRequests(context.Background(), dir, scope); err != nil {
+			t.Fatal(scope, err)
+		}
+		for _, id := range []string{"43", "44", "45"} {
+			if !fileExists(filepath.Join(dir, "osd-pause-recovered."+id)) {
+				t.Fatal("recovery", id, "was not acknowledged in scope", scope)
+			}
+		}
+		if requestPending(t, dir, "recover-paused-osd") || scope == pauseEndingActions && !requestPending(t, dir, "pause-osd") {
+			t.Fatal("a recovery stayed pending, or an unrecovered OSD's pause was claimed, in scope", scope)
+		}
+	}
+}
+
+// The pending requests of one control are claimed one at a time in the
+// order of their request IDs, whatever their envelopes' directory order.
+func TestRequestsAreClaimedInPublicationOrder(t *testing.T) {
+	out := t.TempDir()
+	for _, request := range []string{"30 c", "4 a", "12 b"} {
+		writeControlRequest(t, out, "verify-x", request)
+	}
+	var c fixtureCluster
+	var got []string
+	for range 3 {
+		fields, err := c.request(out, "verify-x")
+		if err != nil || len(fields) != 2 {
+			t.Fatal(fields, err)
+		}
+		got = append(got, fields[1])
+	}
+	if strings.Join(got, "") != "abc" || requestPending(t, out, "verify-x") {
+		t.Fatal("claimed out of order or left pending:", got)
+	}
+	if err := os.WriteFile(filepath.Join(out, requestEnvelopeName("verify-x", "5")), []byte("6 a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.request(out, "verify-x"); err == nil {
+		t.Fatal("an envelope holding another request ID was claimed")
 	}
 }
