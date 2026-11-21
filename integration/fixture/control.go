@@ -30,6 +30,7 @@ func publishAck(out, name string) error {
 
 func (c *fixtureCluster) controlLoop(ctx context.Context, out string) {
 	defer close(c.done)
+	defer c.waitOwnedPool()
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -105,10 +106,21 @@ var controlInputName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*\.json$`)
 // controls polls every declared control once, in controlSequence order. It
 // stops on the first failure; earlier mutations and acknowledgements are not
 // replayed.
+//
+// While an owned-pool oracle request runs (controlOwnedPoolRequest), it
+// polls nothing else but the requests that end a pause (pauseEndingActions):
+// the other requests stay pending until the oracle request was settled, and
+// a pass that starts one skips the controls after it.
 func (c *fixtureCluster) controls(ctx context.Context, out string) error {
+	if c.ownedPoolRunning() {
+		return c.daemonRequests(ctx, out, pauseEndingActions)
+	}
 	for _, control := range controlSequence {
 		if err := control.poll(c, ctx, out); err != nil {
 			return err
+		}
+		if c.ownedPoolRunning() {
+			return c.daemonRequests(ctx, out, pauseEndingActions)
 		}
 	}
 	return nil
