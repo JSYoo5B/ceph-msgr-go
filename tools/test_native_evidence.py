@@ -10,6 +10,10 @@ from unittest import mock
 
 import native_evidence as evidence
 import native_evidence_capsend as capsend
+
+REPO = Path(__file__).resolve().parents[1]
+# The release this repository's fixture pins; receipts default to it.
+PIN = evidence.pinned_provider(REPO / "integration" / "fixture" / "go.mod")
 import scenario_plan
 
 
@@ -54,7 +58,7 @@ class NativeEvidenceTests(unittest.TestCase):
                    "osd": "1", "osd_profile": "legacy-v6", "osd_store": "bluestore", "osd_replicas": "1",
                    "mds_fresh": True, "mds_cephfs_data": True, "image": evidence.IMAGE, "image_id": "sha256:" + "c" * 64,
                    "architecture": "amd64", "daemon_version": "ceph version 20.2.4 (%s) tentacle (stable)" % evidence.SOURCE,
-                   "provider": evidence.PROVIDER, "provider_version": evidence.PROVIDER_VERSION}
+                   "provider": evidence.PROVIDER, "provider_version": PIN}
         return {"fixture-manifest.json": runtime,
                 "mds-cephfs-data-results.json": {"source_commit": evidence.SOURCE, "global_id": 10, "cephfs_nonce": 17,
                                                 "facts": {"restart_recipe": "cap-send", "cap_send_recovery": facts},
@@ -63,8 +67,8 @@ class NativeEvidenceTests(unittest.TestCase):
                     "residual_owned_sessions": [], "kept_new_blocklist": [], "config": {"unreviewed": "omitted"}},
                 "mds-fresh-cleanup.json": dict.fromkeys(capsend.FRESH_FLAGS, True) | {"source_commit": evidence.SOURCE}}
 
-    def collect(self):
-        return evidence.collect(self.request, self.receipts, self.tests, self.output)
+    def collect(self, pin=PIN):
+        return evidence.collect(self.request, self.receipts, self.tests, self.output, pin)
 
     def test_successful_bundle_is_closed_hashed_and_exactly_attributed(self):
         manifest = self.collect()
@@ -141,25 +145,77 @@ class NativeEvidenceTests(unittest.TestCase):
                 self.collect()
             self.write(self.receipts / name, self.raw[name])
 
-    def test_collection_admits_only_the_pinned_provider_release(self):
-        self.assertEqual(evidence.PROVIDER_VERSION, "v0.5.0")
-        for field, value in (("provider_version", "v0.3.0"), ("provider_version", "v0.4.0"), ("provider_version", "v0.6.0"),
-                             ("provider_version", ""),
-                             ("provider", "example.org/other-provider")):
-            data = dict(self.raw["fixture-manifest.json"], **{field: value})
-            self.write(self.receipts / "fixture-manifest.json", data)
-            with self.subTest(field=field, value=value), self.assertRaisesRegex(evidence.EvidenceError, "provider-mismatch"):
-                self.collect()
+    def test_collection_admits_the_release_the_tested_revision_pins(self):
+        # The trusted controller and the tested revision can pin different
+        # collectable releases during a provider move. The receipt must
+        # report the tested revision's pin, never the controller's.
+        self.assertEqual(evidence.COLLECTABLE_PROVIDER_VERSIONS, {"v0.5.0", "v1.0.1"})
+        for pin in sorted(evidence.COLLECTABLE_PROVIDER_VERSIONS):
+            others = sorted(evidence.COLLECTABLE_PROVIDER_VERSIONS - {pin})
+            for field, value in [("provider_version", other) for other in others] + [
+                    ("provider_version", "v0.3.0"), ("provider_version", "v1.0.0"), ("provider_version", ""),
+                    ("provider", "example.org/other-provider")]:
+                data = dict(self.raw["fixture-manifest.json"], provider_version=pin) | {field: value}
+                self.write(self.receipts / "fixture-manifest.json", data)
+                with self.subTest(pin=pin, field=field, value=value), self.assertRaisesRegex(evidence.EvidenceError, "provider-mismatch"):
+                    self.collect(pin)
+            self.write(self.receipts / "fixture-manifest.json", dict(self.raw["fixture-manifest.json"], provider_version=pin))
+            self.assertEqual(self.collect(pin)["observed"]["provider_version"], pin)
+            for name in list(self.output.iterdir()):
+                name.unlink()
+            self.output.rmdir()
+        self.write(self.receipts / "fixture-manifest.json", dict(self.raw["fixture-manifest.json"], provider_version="v1.0.0"))
+        for pin in ("v1.0.0", "v0.4.0", "", None):
+            with self.subTest(pin=pin), self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+                self.collect(pin)
         self.write(self.receipts / "fixture-manifest.json", self.raw["fixture-manifest.json"])
-        self.assertEqual(self.collect()["observed"]["provider_version"], "v0.5.0")
+
+    def test_the_tested_pin_is_read_from_one_unreplaced_requirement(self):
+        module = evidence.PROVIDER
+        self.assertIn(PIN, evidence.COLLECTABLE_PROVIDER_VERSIONS)
+        good = {
+            "block": "module m\n\ngo 1.26.0\n\nrequire (\n\t%s v1.0.1\n\tother.example/x v1.2.3\n)\n" % module,
+            "single line": "module m\nrequire %s v0.5.0\n" % module,
+            "indirect comment": "module m\nrequire (\n\t%s v1.0.1 // indirect\n)\n" % module,
+            "replace of another module": "module m\nrequire %s v1.0.1\nreplace other.example/x => ../x\n" % module,
+        }
+        for name, text in good.items():
+            path = self.root / ("good-%d.mod" % len(name))
+            path.write_text(text)
+            with self.subTest(name):
+                self.assertIn(evidence.pinned_provider(path), evidence.COLLECTABLE_PROVIDER_VERSIONS)
+        bad = {
+            "missing": "module m\nrequire other.example/x v1.2.3\n",
+            "unknown release": "module m\nrequire %s v1.0.0\n" % module,
+            "two requirements": "module m\nrequire %s v0.5.0\nrequire %s v1.0.1\n" % (module, module),
+            "no release": "module m\nrequire (\n\t%s\n)\n" % module,
+            "replace line": "module m\nrequire %s v1.0.1\nreplace %s => ../ctg\n" % (module, module),
+            "replace block": "module m\nrequire %s v1.0.1\nreplace (\n\t%s v1.0.1 => ../ctg\n)\n" % (module, module),
+            "pseudo-version": "module m\nrequire %s v1.0.2-0.20261120000000-abcdefabcdef\n" % module,
+        }
+        for name, text in bad.items():
+            path = self.root / ("bad-%s.mod" % name.replace(" ", "-"))
+            path.write_text(text)
+            with self.subTest(name), self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+                evidence.pinned_provider(path)
+        binary = self.root / "binary.mod"
+        binary.write_bytes(b"require \xff\n")
+        with self.assertRaisesRegex(evidence.EvidenceError, "provider-pin"):
+            evidence.pinned_provider(binary)
+        large = self.root / "large.mod"
+        large.write_text("// x\n" * (evidence.PIN_LIMIT // 4))
+        with self.assertRaises(evidence.EvidenceError):
+            evidence.pinned_provider(large)
+        with self.assertRaises(evidence.EvidenceError):
+            evidence.pinned_provider(self.root / "absent.mod")
 
     def test_verification_admits_only_the_named_retained_provider_releases(self):
         ctx = evidence.context(self.request)
         observed = self.collect()["observed"]
-        self.assertEqual(evidence.RETAINED_PROVIDER_VERSIONS, {"v0.3.0", "v0.4.0", "v0.5.0"})
-        for version in ("v0.3.0", "v0.4.0", "v0.5.0"):
+        self.assertEqual(evidence.RETAINED_PROVIDER_VERSIONS, {"v0.3.0", "v0.4.0", "v0.5.0", "v1.0.1"})
+        for version in ("v0.3.0", "v0.4.0", "v0.5.0", "v1.0.1"):
             evidence.validate_runtime(dict(observed, provider_version=version), ctx)
-        for version in ("v0.2.0", "v0.6.0", "", "main"):
+        for version in ("v0.2.0", "v0.6.0", "v1.0.0", "", "main"):
             with self.subTest(version=version), self.assertRaisesRegex(evidence.EvidenceError, "provider-mismatch"):
                 evidence.validate_runtime(dict(observed, provider_version=version), ctx)
 
@@ -241,7 +297,8 @@ class NativeEvidenceTests(unittest.TestCase):
         request, status = self.root / "request.json", self.root / "status.json"
         self.write(request, self.request)
         self.assertEqual(evidence.main(["collect", "--request", str(request), "--receipts", str(self.receipts),
-                                        "--tests", str(self.tests), "--output", str(self.output), "--status", str(status)]), 1)
+                                        "--tests", str(self.tests), "--output", str(self.output), "--status", str(status),
+                                        "--provider-pin", str(REPO / "integration" / "fixture" / "go.mod")]), 1)
         self.assertEqual(json.loads(status.read_text())["test_result"], "unknown")
 
     def test_retained_native_bundle_matches_the_independently_recorded_run(self):
@@ -296,7 +353,8 @@ class NativeEvidenceTests(unittest.TestCase):
         status = self.root / "status.json"
         (self.receipts / "mds-fresh-cleanup.json").unlink()
         self.assertEqual(evidence.main(["collect", "--request", str(request), "--receipts", str(self.receipts),
-                                        "--tests", str(self.tests), "--output", str(self.output), "--status", str(status)]), 1)
+                                        "--tests", str(self.tests), "--output", str(self.output), "--status", str(status),
+                                        "--provider-pin", str(REPO / "integration" / "fixture" / "go.mod")]), 1)
         result = json.loads(status.read_text())
         self.assertEqual((result["test_result"], result["evidence_result"]), ("passed", "incomplete"))
         self.assertFalse(self.output.exists())

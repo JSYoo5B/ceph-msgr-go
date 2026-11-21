@@ -32,9 +32,11 @@ attempt, scenario, selector, normalized requested profile, configured image,
 observed runtime, and the size and SHA-256 of each payload file), tests.json
 and runtime.json (inspected image ID and architecture, native daemon version,
 provider version, fixture-reported profile). Every field is required and
-unknown fields are refused. Collection requires the pinned SOURCE, IMAGE and
-PROVIDER_VERSION; verification also admits the provider releases of bundles
-recorded earlier. verify requires an expected run request (--request, or the
+unknown fields are refused. Collection requires the pinned SOURCE and IMAGE,
+and the provider release that the tested revision pins in
+integration/fixture/go.mod (--provider-pin), which must be one of
+COLLECTABLE_PROVIDER_VERSIONS; verification also admits the provider releases
+of bundles recorded earlier. verify requires an expected run request (--request, or the
 workflow's EXECUTION_SOURCE, TESTED_SHA, CONTROLLER_SHA, RUN_ID, RUN_ATTEMPT
 and MATRIX_JSON) supplied independently of the manifest; the manifest's own
 identity given back establishes only self-consistency.
@@ -53,7 +55,8 @@ Python's standard library, executes nothing it reads, and its daemon-free
 tests are tools/test_native_*evidence*.py.
 
     native_evidence.py collect --request REQUEST --receipts METADATA \
-        --tests native-tests.json --output BUNDLE --status STATUS
+        --tests native-tests.json --output BUNDLE --status STATUS \
+        --provider-pin TESTED_CHECKOUT/integration/fixture/go.mod
     native_evidence.py verify --request REQUEST --bundle BUNDLE
 """
 import argparse
@@ -70,12 +73,19 @@ import sys
 SCHEMA_VERSION = 1
 SOURCE = "7f793731f1b39eb4f465e960113d2363c311b964"
 IMAGE = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
-# Collection admits only the fixture provider release that integration/fixture
-# pins now. Verification of a retained bundle also admits the earlier releases
-# named by bundles recorded before each move; a bundle never changes release.
+# The trusted collector runs from the controller revision while the receipts
+# come from the tested revision, and a provider move changes the release
+# between them. So collection reads the release the tested revision pins in
+# integration/fixture/go.mod, admits it only when it is one of
+# COLLECTABLE_PROVIDER_VERSIONS, and requires the receipt to report exactly
+# that release. A release outside the set, a missing or ambiguous pin, a
+# replace of the provider and a receipt of another release are refused.
+# Verification of a retained bundle also admits the earlier releases named by
+# bundles recorded before each move; a bundle never changes release.
 PROVIDER = "github.com/JSYoo5B/ceph-testcontainers-go"
-PROVIDER_VERSION = "v0.5.0"
-RETAINED_PROVIDER_VERSIONS = frozenset({"v0.3.0", "v0.4.0", PROVIDER_VERSION})
+COLLECTABLE_PROVIDER_VERSIONS = frozenset({"v0.5.0", "v1.0.1"})
+RETAINED_PROVIDER_VERSIONS = frozenset({"v0.3.0", "v0.4.0"}) | COLLECTABLE_PROVIDER_VERSIONS
+PIN_LIMIT = 64 << 10
 INPUT_LIMIT = 16 << 20
 FILE_LIMIT = 256 << 10
 TOTAL_LIMIT = 1 << 20
@@ -175,6 +185,43 @@ def read(path, limit):
 
 def document(path, limit=INPUT_LIMIT):
     return decode(read(path, limit))
+
+
+def pinned_provider(path):
+    """The provider release a tested go.mod pins, if it is collectable.
+
+    The go.mod is read as data and never executed. Exactly one requirement
+    line must name PROVIDER with a release, and no replace directive may name
+    it, so the receipt's build information can only report that release.
+    """
+    try:
+        text = read(path, PIN_LIMIT).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise EvidenceError("provider-pin") from error
+    found, replaced, block = [], False, None
+    for raw in text.splitlines():
+        line = raw.split("//", 1)[0].strip()
+        if block and line == ")":
+            block = None
+            continue
+        words = line.split()
+        if not words:
+            continue
+        if block is None and words[0] in ("require", "replace") and words[1:] == ["("]:
+            block = words[0]
+            continue
+        directive = block
+        if block is None and words[0] in ("require", "replace"):
+            directive, words = words[0], words[1:]
+        if not words or words[0] != PROVIDER:
+            continue
+        if directive == "replace":
+            replaced = True
+        elif directive == "require":
+            found.append(words[1:])
+    need(not replaced and len(found) == 1 and len(found[0]) == 1, "provider-pin")
+    need(found[0][0] in COLLECTABLE_PROVIDER_VERSIONS, "provider-pin")
+    return found[0][0]
 
 
 def encoded(value):
@@ -321,7 +368,8 @@ def runtime_projection(raw, ctx):
     reported = {key: raw[field] for key, field in mapping.items()}
     need(reported == {key: ctx["profile"][key] for key in mapping}, "fixture-profile-mismatch")
     profile_family(ctx["profile"]).runtime_facts(raw, ctx)
-    need(raw["provider"] == PROVIDER and raw["provider_version"] == PROVIDER_VERSION, "provider-mismatch")
+    need(ctx.get("provider_pin") in COLLECTABLE_PROVIDER_VERSIONS, "provider-pin")
+    need(raw["provider"] == PROVIDER and raw["provider_version"] == ctx["provider_pin"], "provider-mismatch")
     value = {"image_id": raw["image_id"], "architecture": raw["architecture"], "daemon_version": raw["daemon_version"],
              "fixture_reported_profile": reported, "provider_version": raw["provider_version"]}
     validate_runtime(value, ctx)
@@ -394,13 +442,16 @@ def verify(bundle, expected):
     return manifest
 
 
-def collect(request, receipts, tests, output):
+def collect(request, receipts, tests, output, provider_pin):
+    """Collect one bundle; provider_pin is the release pinned_provider read."""
     ctx = context(request)
+    need(provider_pin in COLLECTABLE_PROVIDER_VERSIONS, "provider-pin")
     receipts, output = Path(receipts), Path(output)
     need(not output.exists() and not output.is_symlink(), "attempt-collision")
     need(not receipts.is_symlink() and receipts.is_dir(), "unsafe-receipt-directory")
     family = profile_family(ctx["profile"])
-    payloads = family.project(receipts, tests, ctx)
+    # Only the projection sees the pin; the manifest keeps the run context.
+    payloads = family.project(receipts, tests, dict(ctx, provider_pin=provider_pin))
     need(set(payloads) == family.FILES, "bundle-inventory")
     files, total, content = [], 0, {}
     for name in sorted(payloads):
@@ -451,6 +502,7 @@ def main(argv=None):
     capture.add_argument("--tests", required=True)
     capture.add_argument("--output", required=True)
     capture.add_argument("--status", required=True)
+    capture.add_argument("--provider-pin", required=True, help="the tested revision's integration/fixture/go.mod")
     check = sub.add_parser("verify")
     check.add_argument("--bundle", required=True)
     for command in (capture, check):
@@ -483,7 +535,7 @@ def main(argv=None):
         if failure:
             raise failure
         if args.command == "collect":
-            collect(request, args.receipts, args.tests, args.output)
+            collect(request, args.receipts, args.tests, args.output, pinned_provider(args.provider_pin))
         else:
             verify(args.bundle, context(request))
         status["test_result"] = "passed"
