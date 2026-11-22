@@ -36,6 +36,10 @@ type nativeMDSCephFSPushPlan struct {
 	MinCaps       uint64   `json:"recall_min_caps"`
 	MaxCaps       uint64   `json:"recall_max_caps"`
 	DropTimeout   int      `json:"cache_drop_timeout_s"`
+	// Charmap directory, entry name and normalization.
+	CharmapDir           string `json:"charmap_dir"`
+	CharmapEntry         string `json:"charmap_entry"`
+	CharmapNormalization string `json:"charmap_normalization"`
 }
 
 type nativeMDSCephFSPushOracle struct {
@@ -84,7 +88,7 @@ type mdsCephFSPushControl struct {
 	receipts *[]nativeMDSCephFSReceipt
 }
 
-var mdsCephFSPushNativeActions = []string{"push-stat", "push-rename", "push-snapshot-create", "push-snapshot-remove", "push-quota-set", "push-quota-clear"}
+var mdsCephFSPushNativeActions = []string{"push-stat", "push-rename", "push-snapshot-create", "push-snapshot-remove", "push-quota-set", "push-quota-clear", "push-charmap-set"}
 
 func (x *mdsCephFSPushControl) request(ctx context.Context, action, arg string) (nativeMDSCephFSReceipt, error) {
 	ctx, stop := context.WithTimeout(ctx, 120*time.Second)
@@ -191,12 +195,26 @@ func pushArrivals(s cephfsAgentSnapshot, from int) []pushArrival {
 // FLUSHMSG acknowledged after a `cache drop` recall whose gather only the
 // FLUSHMSG_ACK can end. Every agent's push count must equal the session
 // PushSequence. It runs first on the shared mds-cephfs fixture and must leave
-// no snapshot, quota, recall setting or session behind. Not exercised:
-// FORCE_RO, lease RENEW, cap snaps, nested snapshot realms, recall throttling
-// and multiple ranks.
+// no snapshot, quota, recall setting or session behind.
+//
+// The same fixture carries the read-only charmap checkpoint, since only the
+// push oracle holds the "p" grant a charmap vxattr needs. The oracle marks an
+// empty Go-created directory case-insensitive with NFKC normalization and
+// reads the three values back through the MDS (GETVXATTR). A Go session that
+// does not declare CHARMAP (bit 22) then decodes the same values from the
+// directory's InodeStat (CInode::encode_inodestat adds the option without
+// testing the bit), while the directory before the change and the push
+// directory keep the zero-option vector. Creating an entry in the charmap
+// directory without the bit answers -EPERM (Server::can_handle_charmap), and
+// the native oracle finds no such entry.
+//
+// Not exercised: FORCE_RO, lease RENEW, cap snaps, nested snapshot realms,
+// recall throttling, multiple ranks, an MDS that requires CHARMAP, the
+// charmap inherited by a new subdirectory, and any name the stock client
+// would transform (no CHARMAP session exists here).
 //
 //scenario:covers CLIENT to MDS/CephFS
-//fixture:isolated leaves a CephFS snapshot, quota and files when an earlier step fails; CephFS state is not checked
+//fixture:isolated leaves a CephFS snapshot, quota, charmap directory and files when an earlier step fails; CephFS state is not checked
 func TestCephMDSCephFSPushIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS=1 for owned native CephFS push acceptance")
@@ -234,6 +252,7 @@ func TestCephMDSCephFSPushIntegration(t *testing.T) {
 		plan.Directory != "ceph-msgr-cephfs-"+oracle.Token+"-push" || plan.LeaseDir != "lease" || plan.Victim != "victim" || plan.Renamed != "renamed" || plan.SnapDir != "snap" ||
 		plan.SnapFile != "snap-file" || plan.Snapshot != "ceph-msgr-snap-"+oracle.Token[:8] || plan.QuotaDir != "quota" || plan.QuotaFile != "quota-file" || plan.QuotaMaxBytes < 1<<24 ||
 		plan.RecallDir != "recall" || len(plan.RecallFiles) != 24 || plan.MinCaps != 8 || plan.MaxCaps != 12 || plan.DropTimeout != 10 ||
+		plan.CharmapDir != "charmap" || plan.CharmapEntry != "Entry" || plan.CharmapNormalization != "nfkc" ||
 		!oracle.PushBaseline.AllowSnaps || oracle.PushBaseline.Section != "mds."+fresh.MDS.Name || oracle.PushBaseline.DaemonMinCaps <= plan.MaxCaps || oracle.PushBaseline.DaemonMaxCaps <= plan.MaxCaps {
 		t.Fatal("owned CephFS push oracle, plan, baseline or identities differ")
 	}
@@ -443,7 +462,7 @@ func TestCephMDSCephFSPushIntegration(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 	}
-	var pIno, dIno, victimIno, sIno, snapFileIno, qIno, quotaFileIno, rIno, snapID uint64
+	var pIno, dIno, victimIno, sIno, snapFileIno, qIno, quotaFileIno, cIno, rIno, snapID uint64
 	recallInos := map[string]uint64{}
 
 	if !leaf("open_push_sessions", func(t *testing.T) {
@@ -663,6 +682,68 @@ func TestCephMDSCephFSPushIntegration(t *testing.T) {
 		return
 	}
 
+	if !leaf("charmap_metadata_without_the_charmap_feature", func(t *testing.T) {
+		const charmapBit = 22 // CEPHFS_FEATURE_CHARMAP
+		if cephmsgr.MDSFeatureBitsetHas(cephmsgr.MDSCephFSClientFeatures(), charmapBit) {
+			t.Fatal("the CephFS profile declares CHARMAP; this leaf is the undeclared-bit checkpoint")
+		}
+		_, n := observe(t, gidA)
+		if n == nil || n.ClientFeatures != nativeFeatureBits(cephmsgr.MDSCephFSClientFeatures()) {
+			t.Fatal("the MDS records a different client feature set for the Go session", n)
+		}
+		getattr := func(name string, ino uint64) (*cephmsgr.MDSInodeStat, cephmsgr.MDSOptionalMetadata) {
+			t.Helper()
+			first, _, trace, _, e := submit(t, sessionA, agentA, "go", name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetattr, Args: cephfsGetattrArgs(cephStatAll),
+				Path: cephmsgr.MDSFilePath{Ino: ino}})
+			if first.Result != 0 || !first.Safe || trace.Target == nil || trace.Target.Ino != ino {
+				t.Fatalf("%s differs: %+v", name, e)
+			}
+			opt, err := trace.Target.DecodeOptionalMetadata()
+			if err != nil {
+				t.Fatalf("%s optional metadata %x: %v", name, trace.Target.OptionalMetadata, err)
+			}
+			return trace.Target, opt
+		}
+		zero := func(name string, st *cephmsgr.MDSInodeStat, opt cephmsgr.MDSOptionalMetadata) {
+			t.Helper()
+			if string(st.OptionalMetadata) != "\x00\x00\x00\x00" || opt.Options != nil || opt.Charmap != nil {
+				t.Fatalf("%s is not the zero-option control: %x %+v", name, st.OptionalMetadata, opt)
+			}
+		}
+		cIno = mkdir(t, sessionA, agentA, "go", pIno, plan.CharmapDir)
+		st, opt := getattr("getattr charmap dir before", cIno)
+		zero("charmap directory before the change", st, opt)
+		r := native(t, "push-charmap-set", "")
+		c := r.Native.Charmap
+		if r.Native.Stat == nil || r.Native.Stat.Ino != cIno || c == nil || c.CaseSensitive != "0" || c.Normalization != plan.CharmapNormalization || c.Encoding != "utf8" {
+			t.Fatalf("native charmap readback differs: %+v %+v", c, r.Native.Stat)
+		}
+		st, opt = getattr("getattr charmap dir", cIno)
+		want := cephmsgr.MDSCharmap{CaseSensitive: false, Normalization: plan.CharmapNormalization, Encoding: "utf8"}
+		if opt.Charmap == nil || *opt.Charmap != want || len(opt.Options) != 1 || opt.Options[0].Kind != cephmsgr.MDSOptionalMetadataCharmap ||
+			opt.Options[0].Version != 1 || opt.Options[0].Compat != 1 {
+			t.Fatalf("Go charmap differs from the native readback %+v: %x %+v", *c, st.OptionalMetadata, opt)
+		}
+		facts["charmap_native"], facts["charmap_go"], facts["charmap_optional_metadata_hex"] = c, opt.Charmap, hex.EncodeToString(st.OptionalMetadata)
+		parentStat, parentOpt := getattr("getattr push dir", pIno)
+		zero("push directory", parentStat, parentOpt)
+		// Entry creation in the charmap directory is refused to a session
+		// without the bit; the same request in any other owned directory of
+		// this test succeeds.
+		first, safe, _, _, e := submit(t, sessionA, agentA, "go", "mkdir in charmap dir", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpMkdir, Flags: cephmsgr.MDSRequestFlagWantDentry,
+			Args: cephfsMkdirArgs(0o40755), Path: cephmsgr.MDSFilePath{Ino: cIno, Path: plan.CharmapEntry}})
+		if first.Result != -1 || safe.Result != -1 || first.IsTarget {
+			t.Fatalf("mkdir in the charmap directory was not refused with -EPERM: %+v", e)
+		}
+		facts["charmap_mkdir_result"], facts["charmap_mkdir_dentry_trace"] = first.Result, first.IsDentry
+		absent := native(t, "push-stat", "charmap-entry")
+		if absent.Native.Stat == nil || absent.Native.Stat.Exists || absent.Native.Stat.Errno != 2 {
+			t.Fatal("native stat finds the refused charmap entry", absent.Native.Stat)
+		}
+	}) {
+		return
+	}
+
 	if !leaf("recall_state_released_to_target", func(t *testing.T) {
 		rIno = mkdir(t, sessionA, agentA, "go", pIno, plan.RecallDir)
 		for _, name := range plan.RecallFiles {
@@ -837,7 +918,7 @@ func TestCephMDSCephFSPushIntegration(t *testing.T) {
 		for _, name := range slices.Sorted(maps.Keys(recallInos)) {
 			unlink(rIno, name)
 		}
-		for _, name := range []string{plan.LeaseDir, plan.SnapDir, plan.QuotaDir, plan.RecallDir} {
+		for _, name := range []string{plan.LeaseDir, plan.SnapDir, plan.QuotaDir, plan.CharmapDir, plan.RecallDir} {
 			rmdir(pIno, name)
 		}
 		rmdir(1, plan.Directory)

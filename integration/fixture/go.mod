@@ -3,11 +3,11 @@ module github.com/JSYoo5B/ceph-msgr-go/integration/fixture
 go 1.26.0
 
 require (
-	github.com/JSYoo5B/ceph-testcontainers-go v0.5.0
+	github.com/JSYoo5B/ceph-testcontainers-go v1.0.1
 	github.com/containerd/errdefs v1.0.0
-	github.com/moby/moby/api v1.56.1
-	github.com/moby/moby/client v0.6.2
-	github.com/testcontainers/testcontainers-go v0.44.0
+	github.com/moby/moby/api v1.57.0
+	github.com/moby/moby/client v0.6.3
+	github.com/testcontainers/testcontainers-go v0.45.0
 )
 
 require (

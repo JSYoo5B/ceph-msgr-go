@@ -21,9 +21,11 @@ import (
 // directory and a fourth identity, the push oracle (MDS "allow rwps"), to
 // provoke MDS pushes natively: a rename that revokes a Go dentry lease, a
 // snapshot created and removed on one owned directory, a quota set and
-// cleared on another, a temporary lowering of the owned daemon's
-// mds_min_caps_per_client and mds_max_caps_per_client (RECALL_STATE from the
-// upkeep thread) and one `cache drop` (RECALL_STATE followed by FLUSHMSG).
+// cleared on another, a charmap set on an empty third (Go reads it back
+// without the CHARMAP client feature), a temporary lowering of the owned
+// daemon's mds_min_caps_per_client and mds_max_caps_per_client
+// (RECALL_STATE from the upkeep thread) and one `cache drop` (RECALL_STATE
+// followed by FLUSHMSG).
 // Every mutation is journaled before it is issued and never reissued. The two
 // configuration entries are owned provider overrides on the daemon's own
 // section, restored by the test and again (idempotently, verified natively)
@@ -31,7 +33,8 @@ import (
 // preparation); its flags are never changed. Native behavior relied upon:
 // mds/Locker.cc (issue_client_lease, revoke_client_leases,
 // handle_client_lease), mds/Server.cc (handle_client_mksnap, _mksnap_finish,
-// _rmsnap_finish, handle_set_vxattr quota, recall_client_state,
+// _rmsnap_finish, handle_set_vxattr quota and charmap, handle_client_getvxattr,
+// can_handle_charmap, recall_client_state,
 // flush_session), mds/MDCache.cc (broadcast_quota_to_client,
 // do_realm_invalidate_and_update_notify, notify_global_snaprealm_update,
 // upkeep_main), mds/MDSRank.cc (cache drop), mds/MDSAuthCaps.cc and
@@ -67,6 +70,12 @@ type mdsCephFSPushPlan struct {
 	MinCaps       uint64   `json:"recall_min_caps"`
 	MaxCaps       uint64   `json:"recall_max_caps"`
 	DropTimeout   int      `json:"cache_drop_timeout_s"`
+	// CharmapDir is made case-insensitive with CharmapNormalization by the
+	// push oracle while it is empty (the MDS refuses a charmap change on a
+	// nonempty directory); CharmapEntry is the name Go then fails to create.
+	CharmapDir           string `json:"charmap_dir"`
+	CharmapEntry         string `json:"charmap_entry"`
+	CharmapNormalization string `json:"charmap_normalization"`
 }
 
 func mdsCephFSPushPlanFor(token string) mdsCephFSPushPlan {
@@ -85,12 +94,13 @@ func mdsCephFSPushPlanFor(token string) mdsCephFSPushPlan {
 	}
 	// A token-bound quota between 16 MiB and 272 MiB, in 4 KiB steps.
 	return mdsCephFSPushPlan{Directory: "ceph-msgr-cephfs-" + token + "-push", LeaseDir: "lease", Victim: "victim", Renamed: "renamed", SnapDir: "snap", SnapFile: "snap-file",
-		Snapshot: snapshot, QuotaDir: "quota", QuotaFile: "quota-file", QuotaMaxBytes: 1<<24 + 4096*int64(seed), RecallDir: "recall", RecallFiles: files,
+		Snapshot: snapshot, QuotaDir: "quota", QuotaFile: "quota-file", QuotaMaxBytes: 1<<24 + 4096*int64(seed),
+		CharmapDir: "charmap", CharmapEntry: "Entry", CharmapNormalization: "nfkc", RecallDir: "recall", RecallFiles: files,
 		MinCaps: mdsCephFSPushMinCaps, MaxCaps: mdsCephFSPushMaxCaps, DropTimeout: mdsCephFSPushDropSecs}
 }
 
 // mdsCephFSPushTargets are the closed names a push action may address.
-var mdsCephFSPushTargets = []string{"dir", "lease", "victim", "renamed", "snap", "snap-file", "snapshot", "quota", "quota-file", "recall"}
+var mdsCephFSPushTargets = []string{"dir", "lease", "victim", "renamed", "snap", "snap-file", "snapshot", "quota", "quota-file", "charmap", "charmap-entry", "recall"}
 
 // path maps a closed push target to its absolute path. The directory keeps
 // the "ceph-msgr-cephfs-" prefix and carries the "-push" suffix that the
@@ -119,6 +129,10 @@ func (p mdsCephFSPushPlan) path(target string) (string, error) {
 		return root + "/" + p.QuotaDir, nil
 	case "quota-file":
 		return root + "/" + p.QuotaDir + "/" + p.QuotaFile, nil
+	case "charmap":
+		return root + "/" + p.CharmapDir, nil
+	case "charmap-entry":
+		return root + "/" + p.CharmapDir + "/" + p.CharmapEntry, nil
 	case "recall":
 		return root + "/" + p.RecallDir, nil
 	}
@@ -126,8 +140,9 @@ func (p mdsCephFSPushPlan) path(target string) (string, error) {
 }
 
 func mdsCephFSPushNativeCaps(fsName string) ceph.ClientCaps {
-	// Metadata only: snapshots need the MDS "s" flag (MAY_SNAPSHOT) and
-	// ceph.quota vxattrs the "p" flag (MAY_SET_VXATTR). No OSD or MGR grant.
+	// Metadata only: snapshots need the MDS "s" flag (MAY_SNAPSHOT) and the
+	// ceph.quota and ceph.dir charmap vxattrs the "p" flag (MAY_SET_VXATTR).
+	// No OSD or MGR grant.
 	return ceph.ClientCaps{Mon: "allow r", MDS: "allow rwps fsname=" + fsName}
 }
 
@@ -341,7 +356,11 @@ func (c *fixtureCluster) prepareMDSCephFSPush(ctx context.Context, out string) e
 // The push driver is a separate fixed LibCephFS program bound to the push
 // directory. It admits the directory, its children and grandchildren, and
 // <dir>/<child>/.snap/<name> for snapshot actions; extra arguments are only a
-// rename destination (same rules) or a decimal quota. It always shuts down.
+// rename destination (same rules), a decimal quota or a charmap normalization
+// the stock client knows. setcharmap marks a direct child case-insensitive,
+// sets its normalization and reads the three values back with getxattr, which
+// the native client answers through the MDS (GETVXATTR), not from the
+// InodeStat it cached. It always shuts down.
 // Source: pybind/cephfs/cephfs.pyx at mdsFreshSource; independent driver.
 const mdsCephFSPushNativePython = `
 import cephfs, json, os, sys, time
@@ -396,6 +415,11 @@ try:
         except cephfs.NoData:
             out['quota_absent'] = True
         out['stat'] = stat(path)
+    elif action == 'setcharmap' and not snapshot and len(path.split('/')) == 3 and len(extra) == 1 and extra[0] in ('nfd', 'nfc', 'nfkd', 'nfkc'):
+        fs.setxattr(path, 'ceph.dir.casesensitive', b'0', 0)
+        fs.setxattr(path, 'ceph.dir.normalization', extra[0].encode(), 0)
+        out['charmap'] = {name: fs.getxattr(path, 'ceph.dir.' + name, 64).decode('utf-8') for name in ('casesensitive', 'normalization', 'encoding')}
+        out['stat'] = stat(path)
     else:
         raise ValueError('native CephFS push action is not admitted')
 finally:
@@ -433,6 +457,13 @@ func decodeMDSCephFSPushNative(action, path string, extra []string, data []byte)
 		readback := err == nil && parseErr == nil && strconv.FormatUint(decimal, 10) == string(value) && !result.QuotaAbsent
 		readback = readback || result.QuotaAbsent && result.ValueHex == ""
 		ok = len(extra) == 1 && readback && result.Stat != nil && result.Stat.Exists && validMDSCephFSStat(*result.Stat) && result.Stat.Mode&0o170000 == 0o040000
+	case "setcharmap":
+		// The three readbacks are evidence for the test to compare; each is
+		// present and bounded, and the target is a directory.
+		c := result.Charmap
+		ok = len(extra) == 1 && c != nil && c.CaseSensitive != "" && c.Normalization != "" && c.Encoding != "" &&
+			len(c.CaseSensitive)+len(c.Normalization)+len(c.Encoding) <= 192 && !result.QuotaAbsent && result.ValueHex == "" &&
+			result.Stat != nil && result.Stat.Exists && validMDSCephFSStat(*result.Stat) && result.Stat.Mode&0o170000 == 0o040000
 	}
 	if !ok || result.TimingsNS != nil && action != "rename" && action != "mksnap" && action != "rmsnap" {
 		return mdsCephFSNative{}, fmt.Errorf("native CephFS push %s output shape differs", action)
@@ -548,6 +579,12 @@ func (c *fixtureCluster) mdsCephFSPushAct(ctx context.Context, id int64, action 
 			return err
 		}
 		return native(m, "setquota", "quota", quota)
+	case "push-charmap-set":
+		m, err := record("push-charmap-set", x.push.CharmapDir+" ceph.dir.casesensitive=0 ceph.dir.normalization="+x.push.CharmapNormalization)
+		if err != nil {
+			return err
+		}
+		return native(m, "setcharmap", "charmap", x.push.CharmapNormalization)
 	case "push-quota-clear":
 		if err := requireApplied("push-quota-set"); err != nil {
 			return err

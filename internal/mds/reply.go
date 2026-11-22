@@ -49,7 +49,8 @@ type FragSplit struct {
 
 // InodeStat is the REPLY_ENCODING InodeStat (struct v8/compat1). Xattrs keeps
 // the raw xattr blob (an encoded map, or a zero count); OptionalMetadata keeps
-// the raw optmetadata multiton envelope payload.
+// the raw optmetadata multiton envelope payload, the option vector that
+// DecodeOptionalMetadata reads.
 type InodeStat struct {
 	Ino, SnapID                              uint64
 	Rdev                                     uint32
@@ -215,7 +216,7 @@ func decodeInodeStat(d *wire.Decoder) InodeStat {
 	s.Fscrypt = b.Bool()
 	s.FscryptAuth, s.FscryptFile = cloneOrNil(b.Bytes()), cloneOrNil(b.Bytes())
 	// optmetadata_multiton: a v1/compat1 envelope around the option vector.
-	// Its payload is preserved without interpreting option kinds.
+	// Its payload is preserved raw; DecodeOptionalMetadata interprets it.
 	if b.U8() != 1 || b.U8() != 1 {
 		b.Fail(wire.ErrVersion)
 	}

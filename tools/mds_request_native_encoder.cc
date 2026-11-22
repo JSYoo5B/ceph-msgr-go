@@ -13,7 +13,9 @@
 // encode_lease, mds/Server.cc set_trace_dist/_finalize_readdir), assembled
 // from the unchanged native element encoders (ceph_mds_reply_cap,
 // file_layout_t::to_legacy, utime_t, fragtree_t, ceph_dir_layout,
-// quota_info_t, the InodeStat optmetadata multiton). Their only proof is that
+// quota_info_t, the InodeStat optmetadata multiton with its charmap_md_t
+// option as CInode::encode_inodestat builds it from a directory charmap).
+// Their only proof is that
 // the unchanged native client decoders in messages/MClientReply.h
 // (InodeStat, DirStat, LeaseStat with REPLY_ENCODING features (uint64_t)-1)
 // consume them completely, in the order Client::insert_trace and
@@ -327,6 +329,10 @@ struct InodeSource {
   int64_t rsnaps = 0;
   std::map<std::string, std::string> snap_metadata;
   std::vector<uint8_t> fscrypt_auth, fscrypt_file;
+  // A directory charmap (include/cephfs/types.h charmap_md_t). Absent, the
+  // optmetadata multiton has no option, as for every inode without one.
+  bool charmap = false, charmap_casesensitive = true;
+  std::string charmap_normalization, charmap_encoding;
 };
 
 // encode_inodestat REPLY_ENCODING order: ENCODE_START(8, 1).
@@ -387,9 +393,20 @@ void encode_inodestat(const InodeSource& s, ceph::buffer::list& bl) {
   encode(s.fscrypt_auth, bl);
   encode(s.fscrypt_file, bl);
   {
-    // As CInode does: a default (zero-option) native multiton, encoded and
-    // appended without an extra length.
+    // As CInode does: the native multiton, with a CHARMAP option only when
+    // the inode has a charmap, encoded and appended without an extra length.
     decltype(InodeStat::optmetadata) optmetadata;
+    using kind_t = decltype(optmetadata)::optkind_t;
+    if (s.charmap) {
+      auto& opt = optmetadata.get_or_create_opt(kind_t::CHARMAP);
+      auto& cs = opt.template get_meta< charmap_md_t >();
+      if (s.charmap_casesensitive)
+        cs.mark_casesensitive();
+      else
+        cs.mark_caseinsensitive();
+      cs.set_normalization(s.charmap_normalization);
+      cs.set_encoding(s.charmap_encoding);
+    }
     ceph::buffer::list optmdbl;
     encode(optmetadata, optmdbl);
     ceph::encode_nohead(optmdbl, bl);
@@ -443,6 +460,18 @@ std::string inode_json(const InodeStat& s) {
   }
   snap_metadata += "}";
   const std::string dir_layout(reinterpret_cast<const char*>(&s.dir_layout), sizeof(s.dir_layout));
+  // The client multiton knows only UNKNOWN and CHARMAP options; any option
+  // other than one decoded charmap is outside these receipts.
+  using kind_t = decltype(s.optmetadata)::optkind_t;
+  std::string charmap = "null";
+  if (s.optmetadata.has_opt(kind_t::CHARMAP)) {
+    const auto& cs = s.optmetadata.get_opt(kind_t::CHARMAP).template get_meta< charmap_md_t >();
+    charmap = jobj({jkv("casesensitive", jbool(cs.is_casesensitive())),
+                    jkv("normalization", json_string(std::string(cs.get_normalization()))),
+                    jkv("encoding", json_string(std::string(cs.get_encoding())))});
+  }
+  if (s.optmetadata.size() != (charmap == "null" ? 0u : 1u))
+    throw std::runtime_error("native optmetadata carries an option these receipts do not model");
   return jobj({
       jkv("ino", jnum(s.vino.ino)),
       jkv("snapid", jnum(s.vino.snapid)),
@@ -496,7 +525,8 @@ std::string inode_json(const InodeStat& s) {
       jkv("fscrypt_flag_encoded", jbool(!s.fscrypt_auth.empty())),
       jkv("fscrypt_auth_hex", json_string(hex(s.fscrypt_auth))),
       jkv("fscrypt_file_hex", json_string(hex(s.fscrypt_file))),
-      jkv("optmetadata_count", jnum(s.optmetadata.size()))});
+      jkv("optmetadata_count", jnum(s.optmetadata.size())),
+      jkv("optmetadata_charmap", charmap)});
 }
 
 std::string dirstat_json(const DirStat& d) {
@@ -897,7 +927,10 @@ int main(int argc, char** argv) {
     emit_reply(root, "mds-request-native-reply-lookup", lookup_reply);
 
     // Safe READDIR reply: directory target trace, then the readdir blob as
-    // _finalize_readdir assembles it (dirstat, count, flags, entries).
+    // _finalize_readdir assembles it (dirstat, count, flags, entries). The
+    // directory is case-insensitive with NFKC normalization: its InodeStat
+    // carries the one CHARMAP option, while every other InodeStat of these
+    // vectors keeps the zero-option multiton as the control.
     auto readdir_source = request(CEPH_MDS_OP_READDIR, request_tid);
     auto readdir_reply = ceph::make_message<MClientReply>(*readdir_source, 0);
     readdir_reply->set_mdsmap_epoch(9);
@@ -909,6 +942,10 @@ int main(int argc, char** argv) {
       dir.cap.realm = 0x10000000000;
       dir.nfiles = 2;
       dir.dirfragtree.split(frag_t(), 1, false);
+      dir.charmap = true;
+      dir.charmap_casesensitive = false;
+      dir.charmap_normalization = "nfkc";
+      dir.charmap_encoding = "utf8";
       ceph::buffer::list trace;
       encode_inodestat(dir, trace);
       readdir_reply->set_trace(trace);
