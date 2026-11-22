@@ -48,8 +48,9 @@ func sparseReadCompoundExpect(op cephmsgr.OSDOperation, full []cephmsgr.OSDExten
 // FAILOK or a write is refused locally; an over-budget output is an unknown
 // outcome on a separate client. The native client does not execute the
 // compound itself. The same compound at a snapshot is
-// TestCephOSDSparseReadCompoundSnapshotIntegration's. Not verified: replica
-// reads, EC, mid-vector daemon errors, faults and resubmission.
+// TestCephOSDSparseReadCompoundSnapshotIntegration's, and with a replica-read
+// flag TestCephOSDSparseReadCompoundReplicaReadIntegration's. Not verified: EC,
+// mid-vector daemon errors, faults and resubmission.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdsparsereadcompound key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-request-v9-reply-v8.t-osdsparsereadcompound key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-request-v9-reply-v8

@@ -175,11 +175,12 @@ func TestSparseReadCompoundRequestScope(t *testing.T) {
 		"snapdir":   func(r *Request) { r.ReadSnap = SnapDir },
 		"snapc":     func(r *Request) { r.ReadSnap, r.SnapSeq, r.Snaps = 3, 3, []uint64{3} },
 		"ordersnap": func(r *Request) { r.ReadSnap, r.OrderSnap = 3, true },
-		"balance":   func(r *Request) { r.BalanceReads = true },
-		"snapbal":   func(r *Request) { r.ReadSnap, r.BalanceReads = 3, true },
 		"snapretry": func(r *Request) { r.ReadSnap, r.RetryAttempt = 3, 1 },
-		"localize":  func(r *Request) { r.LocalizeReads = true },
 		"resubmit":  func(r *Request) { r.RetryAttempt = 1 },
+		"balretry":  func(r *Request) { r.BalanceReads, r.RetryAttempt = true, 1 },
+		"locsnapdr": func(r *Request) { r.LocalizeReads, r.ReadSnap = true, SnapDir },
+		"balsnapc":  func(r *Request) { r.BalanceReads, r.ReadSnap, r.SnapSeq, r.Snaps = true, 3, 3, []uint64{3} },
+		"balcache":  func(r *Request) { r.BalanceReads, r.IgnoreCache = true, true },
 		"enforce":   func(r *Request) { r.EnforceSnapContext = true },
 		"ignorecch": func(r *Request) { r.IgnoreCache = true },
 	} {
@@ -201,6 +202,96 @@ func TestSparseReadCompoundRequestScope(t *testing.T) {
 	}
 	if _, err := EncodeRequestV9(V9Request{Request: sparseReadCompoundRequest(ops), PG: PG{Pool: 7, Seed: 1}, Shard: 2}, v9UnitFeatures, wire.DefaultLimit); !errors.Is(err, ErrRequest) {
 		t.Fatal("v9 compound EC shard admitted", err)
+	}
+}
+
+// requestFlagWord reads the request flags of an encoded MOSDOp front: after
+// the v6 pg_t and raw hash, or after the v8/v9 spg_t, raw hash, epoch and
+// incarnation, as the native vector tests read them.
+func requestFlagWord(t *testing.T, version string, m msgr.MessageData) uint32 {
+	t.Helper()
+	offset := 32
+	if version == "v6" {
+		offset = 8
+	}
+	if len(m.Front) < offset+4 {
+		t.Fatal("encoded front too short for its flag word", version)
+	}
+	return binary.LittleEndian.Uint32(m.Front[offset:])
+}
+
+// Every admitted layout, at the head and at a read snap, may carry
+// BALANCE_READS or LOCALIZE_READS, as librbd sends its object read under a
+// replica-read policy; the flag reaches the request flag word on every
+// encoder beside READ, and no other bit changes.
+func TestSparseReadCompoundReplicaReadFlags(t *testing.T) {
+	for name, ops := range sparseReadCompoundAdmitted() {
+		for _, snap := range []uint64{0, NoSnap, 3, MaxSnap} {
+			plain := sparseReadCompoundRequest(ops)
+			plain.ReadSnap = snap
+			for flagName, edit := range map[string]func(*Request){
+				"balance":  func(r *Request) { r.BalanceReads = true },
+				"localize": func(r *Request) { r.LocalizeReads = true },
+				"both":     func(r *Request) { r.BalanceReads, r.LocalizeReads = true, true },
+			} {
+				want := map[string]uint32{"balance": uint32(FlagBalanceReads), "localize": uint32(FlagLocalizeReads), "both": uint32(FlagBalanceReads | FlagLocalizeReads)}[flagName]
+				r := plain
+				edit(&r)
+				for version, encode := range inactiveCopyFromEncoders() {
+					base, err := encode(plain)
+					if err != nil {
+						t.Fatal("admitted compound refused", name, snap, version, err)
+					}
+					m, err := encode(r)
+					if err != nil || len(m.Data) != 0 || len(m.Middle) != 0 {
+						t.Fatal("replica-read compound refused", name, snap, flagName, version, err)
+					}
+					got, before := requestFlagWord(t, version, m), requestFlagWord(t, version, base)
+					if before&uint32(FlagRead) == 0 || before&uint32(FlagBalanceReads|FlagLocalizeReads) != 0 || got != before|want {
+						t.Fatalf("%s snap %d %s %s: flag word %#x, without the flag %#x", name, snap, flagName, version, got, before)
+					}
+					if len(m.Front) != len(base.Front) {
+						t.Fatal("a replica flag changed more than the flag word", name, version)
+					}
+				}
+			}
+		}
+	}
+}
+
+// The replica flags do not widen the compound's opcode or operation-flag
+// scope: every refused companion and FAILOK stays refused with either flag.
+func TestSparseReadCompoundReplicaReadKeepsRefusals(t *testing.T) {
+	sparse := compoundSparse(0, 64)
+	for name, ops := range map[string][]Operation{
+		"mapext":      {{Code: MapExt, Length: 8, MapExt: MapExtInput{MaxOutputBytes: 64}}, compoundRead(0, 8)},
+		"sparse-map":  {sparse, {Code: MapExt, Length: 8, MapExt: MapExtInput{MaxOutputBytes: 64}}},
+		"stat":        {sparse, {Code: Stat}},
+		"checksum":    {sparse, {Code: Checksum, Length: 8, Checksum: ChecksumInput{Type: ChecksumCRC32C}}},
+		"isdirty":     {sparse, {Code: Isdirty}},
+		"undirty":     {sparse, {Code: Undirty}},
+		"getxattr":    {sparse, {Code: GetXattr, Xattr: XattrInput{Name: "a", MaxOutputBytes: 64}}},
+		"write":       {sparse, {Code: Write, Length: 1, Data: []byte{1}}},
+		"failok":      {{Code: SparseRead, Length: 8, Flags: OpFailOK, SparseRead: SparseReadInput{MaxOutputBytes: 64}}, compoundRead(0, 8)},
+		"read-trunc":  {sparse, {Code: Read, Length: 8, TruncateSize: 4, TruncateSequence: 2}},
+		"exclusive":   {sparse, {Code: Read, Length: 8, Flags: OpExclusive}},
+		"read-failok": {sparse, {Code: Read, Length: 8, Flags: OpFailOK}},
+	} {
+		for _, snap := range []uint64{0, 3} {
+			for _, edit := range []func(*Request){
+				func(r *Request) { r.BalanceReads = true },
+				func(r *Request) { r.LocalizeReads = true },
+			} {
+				r := sparseReadCompoundRequest(ops)
+				r.ReadSnap = snap
+				edit(&r)
+				for version, encode := range inactiveCopyFromEncoders() {
+					if m, err := encode(r); err == nil || m.Type != 0 || len(m.Front) != 0 {
+						t.Fatal("replica flag admitted a refused compound", name, snap, version, err)
+					}
+				}
+			}
+		}
 	}
 }
 
