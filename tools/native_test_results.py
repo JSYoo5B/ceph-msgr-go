@@ -12,6 +12,18 @@ and the external test package both declare it) is refused by `snapshot`, before
 any run: `-run` runs both under that name and a result line cannot tell which
 one it reports.
 
+Before each suite run of its default path the fixture announces the
+top-level tests the run selects, on a line "Ceph test suite <suite> selects
+<n> top-level tests: <Test> ..." (integration/fixture/suite_part.go): the
+whole selection of a broad row, or the part of it a suite part runs. Every
+announced test needs a terminal result (PASS or SKIP; a FAIL fails anyway),
+and with an announcement a suite may report no result of a test it did not
+announce. A broad run that a timeout cut off therefore reports the tests it
+did not reach instead of passing on the tests it did. The announcement comes
+from the tested revision, so it can only add requirements: a revision that
+announces nothing (one from before announcements) is judged as before, and
+it never relaxes the snapshot's own expected tests.
+
 A fixture sequence (several rows' tests on one fixture, run one test at a
 time) reports the start-state check after each test on a line
 "Fixture start state after <suite>/<Test>: FAILED: ..." when it fails; that
@@ -58,6 +70,8 @@ SUITES = (("api", "integration"), ("client", "cephmsgr"))
 RGW_BACKEND = "rgw-fixture"
 RGW_SUITE = ("fixture", "integration/fixture")
 REVISION = re.compile(r"[0-9a-f]{40}")
+# The fixture's announcement of the tests one suite run selects.
+SELECTION = re.compile(r"Ceph test suite (api|client) selects (0|[1-9][0-9]*) top-level tests(?:: (Test\w*(?: Test\w*)*))?")
 
 
 def _git(root, *arguments):
@@ -131,8 +145,20 @@ def verify(request, text, stream=None, head=None):
     the test2json text (read from the request's file when None) and head the
     checkout's revision after the run (unchecked when None)."""
     suite, observed, problems, passed_checks = None, {}, [], set()
+    selected = {}
     backend = request.get("backend")
     for line in text.splitlines():
+        announced = SELECTION.fullmatch(line)
+        if announced:
+            names = announced[3].split() if announced[3] else []
+            if announced[1] in selected:
+                problems.append("%s suite: a second announcement of its selected tests" % announced[1])
+            elif int(announced[2]) != len(names) or len(set(names)) != len(names):
+                problems.append("%s suite: an announcement of %s tests names %d distinct tests"
+                                % (announced[1], announced[2], len(set(names))))
+            else:
+                selected[announced[1]] = names
+            continue
         if line in ("Running Ceph test suite: api", "Running Ceph test suite: client",
                     "Running Ceph test suite: " + RGW_SUITE[0]):
             suite = line.rsplit(" ", 1)[1]
@@ -155,6 +181,13 @@ def verify(request, text, stream=None, head=None):
         for key in map(tuple, request["expected"]):
             if observed.get(key) == "PASS" and key not in passed_checks:
                 problems.append("%s/%s: no passed fixture start-state check after it" % key)
+    for name, names in selected.items():
+        for test in names:
+            if observed.get((name, test)) not in ("PASS", "SKIP", "FAIL"):
+                problems.append("%s/%s: MISSING (announced as selected)" % (name, test))
+    for key in sorted(observed):
+        if key[0] in selected and key[1] not in selected[key[0]]:
+            problems.append("%s/%s: a result of a test its suite did not announce" % key)
     if not any(state == "PASS" for state in observed.values()):
         problems.append("no top-level native test passed")
     if "FAIL" in observed.values():
@@ -172,6 +205,7 @@ def verify(request, text, stream=None, head=None):
         for key in sorted(key for key in observed if key[0] == RGW_SUITE[0]):
             problems.append("%s/%s: a fixture-module result in a product-suite request" % key)
     result = {"selector": request["selector"], "expected": request["expected"],
+              "selected": [[name, test] for name in sorted(selected) for test in selected[name]],
               "observed": [{"suite": key[0], "test": key[1], "result": state}
                            for key, state in sorted(observed.items())],
               "problems": problems, "passed": not problems}
