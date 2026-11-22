@@ -223,6 +223,19 @@ type rbdJournalLostAppendView struct {
 	// Blocklist is the OSDMap blocklist the action read, nil when it read
 	// none.
 	Blocklist []rbdLockOwnerLossBlock
+	// The journal header as `rbd journal status` shows it: the minimum and
+	// active object sets and every registered client with its commit
+	// position, in the order listed.
+	MinimumSet, ActiveSet uint64
+	Clients               []rbdJournalClientView
+}
+
+// rbdJournalClientView is one registered journal client and its commit
+// position.
+type rbdJournalClientView struct {
+	ID        string
+	State     string
+	Positions []rbdJournalPosition
 }
 
 type rbdJournalLostAppendOutcome struct {
@@ -663,7 +676,13 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 		return nil, errors.New("native rbd journal status missing")
 	}
 	found := false
+	v.MinimumSet, v.ActiveSet, v.Clients = status.MinimumSet, status.ActiveSet, []rbdJournalClientView{}
 	for _, client := range status.Clients {
+		listed := rbdJournalClientView{ID: client.ID, State: client.State, Positions: []rbdJournalPosition{}}
+		for _, p := range client.CommitPosition.Positions {
+			listed.Positions = append(listed.Positions, rbdJournalPosition{p.Object, p.Tag, p.Entry})
+		}
+		v.Clients = append(v.Clients, listed)
 		if client.ID == "" {
 			found = true
 			v.ImageCommit = []rbdJournalPosition{}
