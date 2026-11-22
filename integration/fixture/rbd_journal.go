@@ -113,9 +113,10 @@ var capRBDJournalOwnerLoss = defineExclusiveCapability(fixtureRBD, "rbd-journal-
 // blocklists the owner's address and breaks the lock once no watcher
 // matches the record (managed_lock/AcquireRequest.cc send_break_lock,
 // managed_lock/BreakRequest.cc), acquires it, replays the journal and
-// journals and applies its own writes. This driver reports the boundary
-// and what is listed after the takeover; which branch librbd took is the
-// test's to bound from those observations, not this driver's to report.
+// journals and applies its own writes. This driver reports the boundary,
+// what is listed after the takeover and the lock state machines' lines of
+// librbd's debug log (lock_log); which branch librbd took is the test's to
+// judge from them.
 // Native behavior relied
 // upon in addition to the list above: osd/Watch.cc (a watch is kept for its
 // timeout after the last ping) at rbdBaseSource.
@@ -163,6 +164,10 @@ func rbdJournalActionsFor(p profile) []string {
 func rbdJournalBlocklisted(action string) bool {
 	return action == "observe-appended" || action == "force-break" || action == "observe-fenced" || action == "takeover"
 }
+
+// rbdJournalLockLogged names the actions whose librbd debug log the driver
+// filters into its lock_log output: the lock break and the takeover.
+func rbdJournalLockLogged(action string) bool { return action == "force-break" || action == "takeover" }
 
 // rbdJournalPlacement is the MON's placement of one object as `ceph osd map`
 // prints it.
@@ -505,7 +510,7 @@ func (p rbdJournalPlan) owned(token string) bool {
 // Sources: pybind/rbd/rbd.pyx and pybind/rados/rados.pyx at rbdBaseSource;
 // independent driver, no code copied.
 const rbdJournalNativePython = `
-import hashlib, json, os, struct, subprocess, sys, time
+import hashlib, json, os, re, struct, subprocess, sys, time
 import rados, rbd
 identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
@@ -782,8 +787,42 @@ def concurrent(ioctx, out):
     out['phases'] = state['phases']
     out['final_wait_ns'] = wait_proceed(3)
 
-cluster = rados.Rados(conffile=CONF, rados_id=identity[len('client.'):],
-                      conf={'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'})
+# The lock break and the takeover keep librbd's debug log at level 10 in a
+# private file; after the shutdown the driver keeps only the lines of the
+# lock state machines (lock_log). ManagedLock.cc, ExclusiveLock.cc,
+# ImageWatcher.cc and managed_lock/AcquireRequest.cc and BreakRequest.cc log
+# every step and its result at that level.
+LOCK_LOG = '/tmp/ceph-msgr-rbd-journal-%s-%s.log' % (token, request_id)
+LOCK_COMPONENTS = ('librbd::ManagedLock', 'librbd::ExclusiveLock', 'librbd::ImageWatcher', 'librbd::managed_lock::AcquireRequest', 'librbd::managed_lock::BreakRequest')
+LOCK_LINES, LOCK_TEXT = 320, 240
+LOG_LINE = re.compile(r'^\S+ +[0-9a-f]+ +(-?[0-9]+) (librbd::[A-Za-z_:]+): (.*)$')
+conf = {'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'}
+if action in ('force-break', 'takeover'):
+    conf.update(debug_rbd='10/10', log_to_file='true', log_file=LOCK_LOG)
+
+def lock_log():
+    # Pointers become per-run ordinals (@0, @1, ...), so that one request
+    # object stays recognizable without publishing an address.
+    try:
+        with open(LOCK_LOG, 'rb') as f:
+            data = f.read(64 << 20)
+    except FileNotFoundError:
+        return {'present': False, 'matched': 0, 'truncated': False, 'lines': []}
+    os.remove(LOCK_LOG)
+    lines, matched, pointers = [], 0, {}
+    for raw in data.split(b'\n'):
+        found = LOG_LINE.match(raw.decode('utf-8', 'replace'))
+        if found is None or found.group(2) not in LOCK_COMPONENTS:
+            continue
+        if found.group(2) == 'librbd::ImageWatcher' and 'lock' not in found.group(3):
+            continue
+        matched += 1
+        if len(lines) < LOCK_LINES:
+            body = re.sub(r'0x[0-9a-f]+', lambda m: '@%d' % pointers.setdefault(m.group(0), len(pointers)), found.group(3))
+            lines.append({'level': int(found.group(1)), 'component': found.group(2), 'text': body[:LOCK_TEXT]})
+    return {'present': True, 'matched': matched, 'truncated': matched > len(lines), 'lines': lines}
+
+cluster = rados.Rados(conffile=CONF, rados_id=identity[len('client.'):], conf=conf)
 cluster.connect(timeout=30)
 out = {'action': action, 'token': token, 'request_id': int(request_id), 'pool': pool, 'image': name, 'native_global_id': cluster.get_instance_id(),
        'started_ns': time.time_ns()}
@@ -876,6 +915,8 @@ try:
         ioctx.close()
 finally:
     cluster.shutdown()
+if action in ('force-break', 'takeover'):
+    out['lock_log'] = lock_log()
 out['finished_ns'] = time.time_ns()
 print(json.dumps(out, sort_keys=True))
 `
@@ -981,6 +1022,47 @@ type rbdJournalNative struct {
 	// Boundary is the takeover's lock record and header watchers, listed
 	// right before its first write.
 	Boundary *rbdJournalBoundary `json:"boundary,omitempty"`
+	// LockLog is the lock state machines' part of librbd's debug log of the
+	// force-break and takeover actions.
+	LockLog *rbdJournalLockLog `json:"lock_log,omitempty"`
+}
+
+// rbdJournalLockLogLines and rbdJournalLockLogText bound the lock log the
+// driver keeps (LOCK_LINES and LOCK_TEXT).
+const (
+	rbdJournalLockLogLines = 320
+	rbdJournalLockLogText  = 240
+)
+
+// rbdJournalLockLog is the driver's filtered librbd debug log: the lines of
+// librbd::ManagedLock, ExclusiveLock, managed_lock::AcquireRequest,
+// managed_lock::BreakRequest and the ImageWatcher lines that mention a lock,
+// in the order written, with pointers replaced by per-run ordinals. Matched
+// counts every such line, Truncated says that some were not kept.
+type rbdJournalLockLog struct {
+	Present   bool                    `json:"present"`
+	Matched   int                     `json:"matched"`
+	Truncated bool                    `json:"truncated"`
+	Lines     []rbdJournalLockLogLine `json:"lines"`
+}
+
+type rbdJournalLockLogLine struct {
+	Level     int    `json:"level"`
+	Component string `json:"component"`
+	Text      string `json:"text"`
+}
+
+// valid checks the lock log's shape and bounds.
+func (l *rbdJournalLockLog) valid() bool {
+	if l == nil || l.Lines == nil || len(l.Lines) > rbdJournalLockLogLines || l.Matched < len(l.Lines) || l.Truncated != (l.Matched > len(l.Lines)) || !l.Present && l.Matched != 0 {
+		return false
+	}
+	for _, line := range l.Lines {
+		if !strings.HasPrefix(line.Component, "librbd::") || len(line.Component) > 64 || len(line.Text) > rbdJournalLockLogText || line.Level < -1 || line.Level > 30 {
+			return false
+		}
+	}
+	return true
 }
 
 // rbdJournalBoundary is what the takeover action lists after its open and
@@ -1126,6 +1208,7 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 	ok = ok && rbdJournalBlocklisted(action) == (result.Blocklist != nil) && (!rbdJournalBlocklisted(action) || rbdLockBlocklistValid(result.Blocklist))
 	ok = ok && (action == "takeover") == (result.BlocklistBefore != nil) && (action != "takeover" || rbdLockBlocklistValid(result.BlocklistBefore))
 	ok = ok && (action == "takeover") == (result.Boundary != nil) && (action != "takeover" || result.Boundary.valid())
+	ok = ok && rbdJournalLockLogged(action) == (result.LockLog != nil) && (!rbdJournalLockLogged(action) || result.LockLog.valid())
 	if result.OracleRegister != nil {
 		ok = ok && rbdLockCallValid(result.OracleRegister, result.JournalHeader, "journal", "client_register") && result.OracleRegister.Code == 0
 	}

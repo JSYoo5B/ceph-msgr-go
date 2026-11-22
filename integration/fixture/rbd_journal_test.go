@@ -353,7 +353,11 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 		rbdJournalTarget(plan, "force-break") != "i:exclusive-lock-break,osd-blocklist" || rbdJournalTarget(plan, "takeover") != "i:exclusive-lock-break,osd-blocklist,journal-replay,native-write" {
 		t.Fatal("owner-loss action classification or target differs")
 	}
+	if !rbdJournalLockLogged("force-break") || !rbdJournalLockLogged("takeover") || rbdJournalLockLogged("observe-fenced") || rbdJournalLockLogged("replay") {
+		t.Fatal("lock log classification differs")
+	}
 	for _, field := range []string{"image.lock_break(rbd.RBD_LOCK_MODE_EXCLUSIVE, listed[0]['owner'])", "plan['takeover_events']", "'osd blocklist ls'",
+		"conf.update(debug_rbd='10/10', log_to_file='true', log_file=LOCK_LOG)", "    cluster.shutdown()\nif action in ('force-break', 'takeover'):\n    out['lock_log'] = lock_log()",
 		"out['boundary'] = {'lockers': lockers(image), 'watchers': watchers(image)}\n                started = time.monotonic_ns()\n                out['events'] = [apply(image, 'takeover', e)"} {
 		if !strings.Contains(rbdJournalNativePython, field) {
 			t.Fatal("native journal driver lacks", field)
@@ -547,6 +551,11 @@ func rbdJournalOutput(token string, plan rbdJournalPlan, action string) map[stri
 	if action == "takeover" {
 		value["blocklist_before"] = []map[string]any{}
 	}
+	if rbdJournalLockLogged(action) {
+		value["lock_log"] = map[string]any{"present": true, "matched": 2, "truncated": false, "lines": []map[string]any{
+			{"level": 10, "component": "librbd::managed_lock::AcquireRequest", "text": "@0 handle_get_locker: r=-2"},
+			{"level": 10, "component": "librbd::managed_lock::AcquireRequest", "text": "@0 handle_lock: r=0"}}}
+	}
 	events := func(phase string, planned []rbdJournalEvent) []map[string]any {
 		result := []map[string]any{}
 		for _, e := range planned {
@@ -719,6 +728,21 @@ func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 		"locked observation with a blocklist":  {"observe-locked", func(v map[string]any) { v["blocklist"] = []map[string]any{} }},
 		"replay with a blocklist":              {"replay", func(v map[string]any) { v["blocklist"] = []map[string]any{} }},
 		"replay with a write time":             {"replay", func(v map[string]any) { v["write_ns"] = 3 }},
+		"takeover without its lock log":        {"takeover", func(v map[string]any) { delete(v, "lock_log") }},
+		"break without its lock log":           {"force-break", func(v map[string]any) { delete(v, "lock_log") }},
+		"observation with a lock log":          {"observe-fenced", func(v map[string]any) { v["lock_log"] = rbdJournalOutput(token, plan, "takeover")["lock_log"] }},
+		"lock log miscounted": {"takeover", func(v map[string]any) {
+			v["lock_log"].(map[string]any)["matched"] = 1
+		}},
+		"lock log truncation unstated": {"takeover", func(v map[string]any) {
+			v["lock_log"].(map[string]any)["matched"] = 3
+		}},
+		"lock log line of another library": {"takeover", func(v map[string]any) {
+			v["lock_log"].(map[string]any)["lines"].([]map[string]any)[0]["component"] = "osdc::Objecter"
+		}},
+		"lock log line too long": {"takeover", func(v map[string]any) {
+			v["lock_log"].(map[string]any)["lines"].([]map[string]any)[0]["text"] = strings.Repeat("x", rbdJournalLockLogText+1)
+		}},
 	} {
 		value := rbdJournalOutput(token, plan, change.action)
 		change.change(value)
