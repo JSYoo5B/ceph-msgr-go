@@ -119,6 +119,7 @@ type nativeRBDJournalPlan struct {
 	ConcurrentOwnerEvents []nativeRBDJournalEvent `json:"concurrent_owner_events"`
 	GoConcurrentWrites    []nativeRBDExtent       `json:"go_concurrent_writes"`
 	ConcurrentEvents      []nativeRBDJournalEvent `json:"concurrent_events"`
+	TakeoverEvents        []nativeRBDJournalEvent `json:"takeover_events"`
 }
 
 type nativeRBDJournalApplied struct {
@@ -209,6 +210,28 @@ type nativeRBDJournal struct {
 	Phases         []nativeRBDJournalPhase   `json:"phases"`
 	AioReturns     []int64                   `json:"aio_return_values"`
 	FinalWaitNS    int64                     `json:"final_wait_ns"`
+	// The owner-loss and forced-break actions only (rbd_journal.go).
+	WriteNS         int64                       `json:"write_ns"`
+	ForceBreak      *nativeRBDJournalForceBreak `json:"force_break"`
+	BlocklistBefore *[]nativeRBDLockBlock       `json:"blocklist_before"`
+	Blocklist       *[]nativeRBDLockBlock       `json:"blocklist"`
+}
+
+// nativeRBDJournalForceBreak is the force-break action's own output.
+type nativeRBDJournalForceBreak struct {
+	Owners []struct {
+		Mode  int    `json:"mode"`
+		Owner string `json:"owner"`
+	} `json:"owners"`
+	WatchersBefore  []nativeRBDWatcher    `json:"watchers_before"`
+	LockersBefore   nativeRBDWriteLockers `json:"lockers_before"`
+	BlocklistBefore []nativeRBDLockBlock  `json:"blocklist_before"`
+	BreakNS         int64                 `json:"break_ns"`
+	OwnersAfter     []struct {
+		Mode  int    `json:"mode"`
+		Owner string `json:"owner"`
+	} `json:"owners_after"`
+	IsOwner bool `json:"is_owner"`
 }
 
 type nativeRBDJournalResult struct {
