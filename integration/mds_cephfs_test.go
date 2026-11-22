@@ -85,8 +85,13 @@ type nativeMDSCephFSOutput struct {
 		Available uint64 `json:"f_bavail"`
 		Files     uint64 `json:"f_files"`
 	} `json:"statfs"`
-	Flock *nativeMDSCephFSFlockProbe `json:"flock"`
-	Fcntl *nativeMDSCephFSFcntlState `json:"fcntl"`
+	Flock   *nativeMDSCephFSFlockProbe `json:"flock"`
+	Fcntl   *nativeMDSCephFSFcntlState `json:"fcntl"`
+	Charmap *struct {
+		CaseSensitive string `json:"casesensitive"`
+		Normalization string `json:"normalization"`
+		Encoding      string `json:"encoding"`
+	} `json:"charmap"`
 }
 
 type nativeMDSCephFSFlockState struct {

@@ -234,5 +234,6 @@ func FuzzDecodeTrace(f *testing.F) {
 		DecodeReaddir(raw)
 		DecodeSnapTrace(raw)
 		DecodeXattrs(raw)
+		DecodeOptionalMetadata(raw)
 	})
 }

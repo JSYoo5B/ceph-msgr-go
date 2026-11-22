@@ -82,11 +82,15 @@ var tentacleCephFSFeatures = []struct {
 	// root_squash session is reported as a broken client (health error, by
 	// source; not observed live).
 	{"client_mds_auth_caps", consumerOwned},
-	// charmap: entry creation in a charmap directory answers -EPERM without
-	// the bit. The plan is an explicit CephFS opt-in in which the caller
-	// states it validates, normalizes and folds names (never a default),
-	// after a charmap_md_t decoder over OptionalMetadata with fresh native
-	// vectors and a live comparison with a native client.
+	// charmap: the MDS adds a directory's charmap to every REPLY_ENCODING
+	// InodeStat without testing the bit, and InodeStat.DecodeOptionalMetadata
+	// decodes it (TestDecodeOptionalMetadataMatchesFreshNative; the charmap
+	// leaf of TestCephMDSCephFSPushIntegration reads it with a session that
+	// lacks the bit). Entry creation in a charmap directory answers -EPERM
+	// without the bit, which that leaf also checks. Declaring the bit needs
+	// an explicit CephFS opt-in in which the caller states it validates,
+	// normalizes and folds names (never a default), with a native comparison
+	// of transformed names and their alternate names.
 	{"charmap", implement},
 	// blockdiff: CEPH_MDS_OP_FILE_BLOCKDIFF can travel through raw Submit
 	// with caller-built arguments; snapshot selection, paging and block
