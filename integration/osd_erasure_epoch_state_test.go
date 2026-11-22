@@ -310,16 +310,16 @@ func (r *ecEpochRun) state(object string) pgIntervalObservation {
 	return nativePool(r.t, r.ctx, "pgstate", map[string]any{"slot": 1, "object": object}).PGState
 }
 
-// healthy reads the object's placement and one observation of its PG and
-// requires the PG active+clean under a primary on its own primary-eligible
-// shard without a pg_temp. It returns the placement and the epoch at which
-// the PG's interval started.
+// healthy observes the object's PG, within a bounded number of
+// observations, until one shows it active+clean on its placement, and
+// requires a primary on its own primary-eligible shard without a pg_temp.
+// A write or a snapshot allocation just before may leave the primary
+// behind the newest map for a moment, which one observation cannot tell
+// from a PG that is not clean. It returns the placement and the epoch at
+// which the PG's interval started.
 func (r *ecEpochRun) healthy(object string) (osdFixtureOracle, uint32) {
 	r.t.Helper()
-	seen := r.state(object)
-	if err := seen.cleanOn(); err != nil {
-		r.t.Fatalf("the PG of %s is not active+clean on its placement: %v", object, err)
-	}
+	seen := r.waitState("active+clean on its placement", object, func(o pgIntervalObservation) error { return o.cleanOn() })
 	route := *seen.Before
 	r.facts.checkPlacement(r.t, route)
 	if route.Name != object || route.PGTemp {
