@@ -81,46 +81,82 @@ var requestEnvelope = regexp.MustCompile(`^\.([1-9][0-9]{0,18})\.request$`)
 // more line "input <file name>" per input, each name once (internal/
 // testcluster RequestControlInput). A malformed envelope fails the fixture.
 func pendingRequests(out, name string) ([]pendingRequest, error) {
-	entries, err := os.ReadDir(out)
+	pending, rejected, err := scanRequests(out, name)
 	if err != nil {
 		return nil, err
 	}
+	if len(rejected) != 0 {
+		return nil, rejected[0].err
+	}
+	return pending, nil
+}
+
+// rejectedRequest is a pending envelope that is not a well-formed request:
+// id is the request ID of its file name.
+type rejectedRequest struct {
+	path string
+	id   string
+	err  error
+}
+
+// scanRequests returns the well-formed pending envelopes of the control
+// name in request-ID order, and every malformed one apart, so that a caller
+// that must keep serving its other requests (the lease loop) can reject one
+// envelope without stopping at it. err is set only when the directory
+// itself cannot be read.
+func scanRequests(out, name string) ([]pendingRequest, []rejectedRequest, error) {
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		return nil, nil, err
+	}
 	var pending []pendingRequest
+	var rejected []rejectedRequest
 	for _, entry := range entries {
 		rest, ok := strings.CutPrefix(entry.Name(), name)
 		match := requestEnvelope.FindStringSubmatch(rest)
 		if !ok || match == nil {
 			continue
 		}
-		id, err := strconv.ParseInt(match[1], 10, 64)
-		if err != nil {
-			return nil, errors.New("invalid fixture request envelope")
-		}
 		path := filepath.Join(out, entry.Name())
-		data, err := os.ReadFile(path)
+		r, err := parseRequest(path, match[1])
 		if err != nil {
-			return nil, err
-		}
-		lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
-		fields := strings.Fields(lines[0])
-		if len(fields) == 0 {
-			return nil, errors.New("empty fixture request")
-		}
-		if fields[0] != match[1] {
-			return nil, errors.New("invalid fixture request identity")
-		}
-		r := pendingRequest{path: path, id: id, fields: fields}
-		for _, line := range lines[1:] {
-			words := strings.Fields(line)
-			if len(words) != 2 || words[0] != "input" || !controlInputName.MatchString(words[1]) || slices.Contains(r.inputs, words[1]) {
-				return nil, errors.New("invalid fixture request input line")
-			}
-			r.inputs = append(r.inputs, words[1])
+			rejected = append(rejected, rejectedRequest{path: path, id: match[1], err: err})
+			continue
 		}
 		pending = append(pending, r)
 	}
 	slices.SortFunc(pending, func(a, b pendingRequest) int { return cmp.Compare(a.id, b.id) })
-	return pending, nil
+	return pending, rejected, nil
+}
+
+// parseRequest reads the envelope at path, whose file name carries the
+// request ID id.
+func parseRequest(path, id string) (pendingRequest, error) {
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return pendingRequest{}, errors.New("invalid fixture request envelope")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return pendingRequest{}, err
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	fields := strings.Fields(lines[0])
+	if len(fields) == 0 {
+		return pendingRequest{}, errors.New("empty fixture request")
+	}
+	if fields[0] != id {
+		return pendingRequest{}, errors.New("invalid fixture request identity")
+	}
+	r := pendingRequest{path: path, id: n, fields: fields}
+	for _, line := range lines[1:] {
+		words := strings.Fields(line)
+		if len(words) != 2 || words[0] != "input" || !controlInputName.MatchString(words[1]) || slices.Contains(r.inputs, words[1]) {
+			return pendingRequest{}, errors.New("invalid fixture request input line")
+		}
+		r.inputs = append(r.inputs, words[1])
+	}
+	return r, nil
 }
 
 // claim removes one pending envelope, which only the fixture does, and
