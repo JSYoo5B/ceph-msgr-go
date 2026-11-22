@@ -30,7 +30,7 @@ import (
 //scenario:covers CLIENT to OSD
 //fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2DisconnectedNotifyIntegration(t *testing.T) {
-	r := startECEpochRun(t, 900*time.Second)
+	r := startECEpochRun(t, erasureK2M2, 900*time.Second)
 	const (
 		object      = "ec-disconnected-notify"
 		incarnation = 71
@@ -124,12 +124,10 @@ func TestCephOSDErasureOptimizedK2M2DisconnectedNotifyIntegration(t *testing.T) 
 	}
 	ro.Close()
 	r.watchers("after the UNWATCH at the replacement", object, 0, gid, cookie)
-	replaced := r.state(object).Query
-	if replaced == nil {
-		t.Fatal("no pg query under the replacement before the return")
-	}
-	r.primaryBack(object, route, outage, replaced.SameIntervalSince)
+	replaced := r.heldThrough("the notifies, the RECONNECT and the UNWATCH through the replacement", object, fresh).Query
+	back, _ := r.primaryBack(object, route, outage, replaced.SameIntervalSince)
 	r.watchers("at the returned primary", object, 0, gid, cookie)
+	r.heldThrough("the watcher list at the returned primary", object, back)
 }
 
 // TestCephOSDErasureOptimizedK2M2SnapTrimFailoverIntegration: a self-managed
@@ -150,7 +148,7 @@ func TestCephOSDErasureOptimizedK2M2DisconnectedNotifyIntegration(t *testing.T) 
 //scenario:covers CLIENT to OSD
 //fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2SnapTrimFailoverIntegration(t *testing.T) {
-	r := startECEpochRun(t, 900*time.Second)
+	r := startECEpochRun(t, erasureK2M2, 900*time.Second)
 	const object = "ec-snaptrim-failover"
 	first := bytes.Repeat([]byte("ec-trim-first\x00\xff"), 400)
 	second := bytes.Repeat([]byte("ec-trim-second\x01"), 300)
@@ -223,10 +221,7 @@ func TestCephOSDErasureOptimizedK2M2SnapTrimFailoverIntegration(t *testing.T) {
 	t.Logf("snapshot %d removed under osd.%d (shard %d): pending in %s %s at epoch %d, trim queue %v, purged %v",
 		s1, fresh.ID, fresh.Shard, pending.PGID, pending.State, pending.Epoch, pending.SnapTrimQueue, pending.PurgedSnaps)
 
-	replaced := r.state(object).Query
-	if replaced == nil {
-		t.Fatal("no pg query under the replacement before the return")
-	}
+	replaced := r.heldThrough("the write, the removal and the reads through the replacement", object, fresh).Query
 	back, _ := r.primaryBack(object, route, outage, replaced.SameIntervalSince)
 	var trimmed copyPurgedTrimState
 	for attempt := 1; ; attempt++ {
@@ -247,4 +242,5 @@ func TestCephOSDErasureOptimizedK2M2SnapTrimFailoverIntegration(t *testing.T) {
 	checkECClones(t, "after the trim", after.list, map[uint64]int{s2: len(second)}, s2)
 	t.Logf("snapshot %d trimmed by osd.%d (%s, %s at epoch %d): purged %v, queue %v; clone %d and the head remain",
 		s1, back.ID, trimmed.PGID, copyPurgedPhase(trimmed, s1), trimmed.Epoch, trimmed.PurgedSnaps, trimmed.RemovedSnapQueue, s2)
+	r.heldThrough("the trim and the reads at the returned primary", object, back)
 }
