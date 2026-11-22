@@ -651,8 +651,8 @@ type rbdGroupResponder struct {
 	action     string
 	allowed    []uint32
 	events     []rbdGroupNotification
-	inFlight   map[uint64]int // notify ID -> handlers not yet recorded
-	changed    chan struct{}  // closed and replaced on every recording
+	ledger     rbdWatchLedger
+	changed    chan struct{} // closed and replaced on every recording
 	failure    error
 	pings      int
 	pingErrors []string
@@ -660,7 +660,7 @@ type rbdGroupResponder struct {
 }
 
 func newRBDGroupResponder() *rbdGroupResponder {
-	return &rbdGroupResponder{held: make(chan rbdGroupHeld), inFlight: map[uint64]int{}, changed: make(chan struct{})}
+	return &rbdGroupResponder{held: make(chan rbdGroupHeld), changed: make(chan struct{})}
 }
 
 func (r *rbdGroupResponder) fail(err error) {
@@ -684,7 +684,7 @@ func (r *rbdGroupResponder) begin(action string, allowed ...uint32) {
 func (r *rbdGroupResponder) receive(received, started time.Time, event cephmsgr.OSDWatchEvent) (rbdGroupNotification, []uint32) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.inFlight[event.NotifyID]++
+	r.ledger.receive(event.NotifyID)
 	n := rbdGroupNotification{Action: r.action, AfterMS: float64(received.Sub(started).Microseconds()) / 1000, NotifyID: event.NotifyID,
 		NotifierGlobalID: event.NotifierGlobalID, Cookie: event.Cookie, PayloadHex: hex.EncodeToString(event.Payload)}
 	return n, slices.Clone(r.allowed)
@@ -696,42 +696,18 @@ func (r *rbdGroupResponder) record(n rbdGroupNotification) {
 	defer r.mu.Unlock()
 	n.Index = len(r.events)
 	r.events = append(r.events, n)
-	if r.inFlight[n.NotifyID]--; r.inFlight[n.NotifyID] <= 0 {
-		delete(r.inFlight, n.NotifyID)
-	}
+	r.ledger.record(n.NotifyID)
 	close(r.changed)
 	r.changed = make(chan struct{})
 }
 
 // settle waits, bounded by ctx, until every notification in ids is recorded
 // and no received notification is still unrecorded, and returns the
-// recorded notifications. A notifier that returned after its notify
-// completed has had every acknowledgement it waited for submitted, so after
-// settle each of them is recorded.
+// recorded notifications (settleRBDWatch).
 func (r *rbdGroupResponder) settle(ctx context.Context, ids ...uint64) ([]rbdGroupNotification, error) {
-	for {
-		r.mu.Lock()
-		var missing []uint64
-		for _, id := range ids {
-			if !slices.ContainsFunc(r.events, func(n rbdGroupNotification) bool { return n.NotifyID == id }) {
-				missing = append(missing, id)
-			}
-		}
-		inFlight := len(r.inFlight)
-		events, failure, changed := slices.Clone(r.events), r.failure, r.changed
-		r.mu.Unlock()
-		if failure != nil {
-			return events, failure
-		}
-		if len(missing) == 0 && inFlight == 0 {
-			return events, nil
-		}
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			return events, fmt.Errorf("member header notifications did not settle (unrecorded notify IDs %v, %d in flight): %w", missing, inFlight, ctx.Err())
-		}
-	}
+	return settleRBDWatch(ctx, &r.mu, &r.ledger, func() ([]rbdGroupNotification, <-chan struct{}, error) {
+		return slices.Clone(r.events), r.changed, r.failure
+	}, ids)
 }
 
 func (r *rbdGroupResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, epoch uint32, started time.Time, event cephmsgr.OSDWatchEvent) {
@@ -781,11 +757,6 @@ func (r *rbdGroupResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, ep
 	}
 }
 
-// rbdGroupSettleTimeout bounds the wait for the Go watcher to record the
-// acknowledgements a returned native creation waited for: each is one OSD
-// round trip after the notify already completed.
-const rbdGroupSettleTimeout = 30 * time.Second
-
 // settleRBDGroupCreation waits for the member header notifications of one
 // native creation to settle, keyed by the exact quiesce and unquiesce notify
 // IDs, and judges them: exactly that quiesce (no retry) answered with answer,
@@ -794,7 +765,7 @@ const rbdGroupSettleTimeout = 30 * time.Second
 // unquiesce and one ReleasedLock after it, both from the creating client,
 // with a HeaderUpdate between them.
 func settleRBDGroupCreation(ctx context.Context, r *rbdGroupResponder, action string, quiesceID, unquiesceID, nativeGID uint64, answer int32) ([]rbdGroupNotification, error) {
-	settleCtx, cancel := context.WithTimeout(ctx, rbdGroupSettleTimeout)
+	settleCtx, cancel := context.WithTimeout(ctx, rbdNotifySettleTimeout)
 	defer cancel()
 	events, err := r.settle(settleCtx, quiesceID, unquiesceID)
 	if err != nil {
