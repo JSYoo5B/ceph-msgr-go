@@ -58,12 +58,14 @@ func poolSparseMapAt(t *testing.T, ctx context.Context, object, snap string) poo
 // every allocated one; and -ENOENT before any operation runs for the object
 // created after the snapshot, which leaves every per-op result zero. Native
 // head and snapshot state, bytes and maps are unchanged afterwards. Refused
-// shapes at the snapshot (SnapDir, a SnapContext, replica reads, FAILOK, and
+// shapes at the snapshot (SnapDir, a SnapContext, FAILOK, and
 // STAT, MAPEXT, ISDIRTY or UNDIRTY in the vector) are not sent and leave the
 // transaction IDs consecutive.
 //
-// Not verified: self-managed snapshots, removed or trimmed snapshots, EC,
-// replica reads, mid-vector daemon errors, faults and resubmission.
+// The same compound with a replica-read flag, at the head and at a snapshot,
+// is TestCephOSDSparseReadCompoundReplicaReadIntegration's. Not verified:
+// self-managed snapshots, removed or trimmed snapshots, EC, mid-vector daemon
+// errors, faults and resubmission.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdsparsereadcompoundsnapshot key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-request-v9-reply-v8.t-osdsparsereadcompoundsnapshot key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-request-v9-reply-v8
@@ -278,13 +280,11 @@ func TestCephOSDSparseReadCompoundSnapshotIntegration(t *testing.T) {
 				at(r)
 				r.SnapContext = cephmsgr.OSDSnapContext{Sequence: snap.SnapID, Snapshots: []uint64{snap.SnapID}}
 			}, baseline},
-			"balance":  {func(r *cephmsgr.OSDRequest) { at(r); r.BalanceReads = true }, baseline},
-			"localize": {func(r *cephmsgr.OSDRequest) { at(r); r.LocalizeReads = true }, baseline},
-			"failok":   {at, []cephmsgr.OSDOperation{hint(sr(0, 8), uint32(cephmsgr.OSDFailOK)), rd(0, 8)}},
-			"stat":     {at, []cephmsgr.OSDOperation{sr(0, 8), {Code: cephmsgr.OSDStat}}},
-			"mapext":   {at, []cephmsgr.OSDOperation{{Code: cephmsgr.OSDMapExt, Length: 8, MapExt: cephmsgr.OSDMapExtInput{MaxOutputBytes: 64}}, sr(0, 8)}},
-			"isdirty":  {at, []cephmsgr.OSDOperation{sr(0, 8), {Code: cephmsgr.OSDIsdirty}}},
-			"undirty":  {nil, []cephmsgr.OSDOperation{sr(0, 8), {Code: cephmsgr.OSDUndirty}}},
+			"failok":  {at, []cephmsgr.OSDOperation{hint(sr(0, 8), uint32(cephmsgr.OSDFailOK)), rd(0, 8)}},
+			"stat":    {at, []cephmsgr.OSDOperation{sr(0, 8), {Code: cephmsgr.OSDStat}}},
+			"mapext":  {at, []cephmsgr.OSDOperation{{Code: cephmsgr.OSDMapExt, Length: 8, MapExt: cephmsgr.OSDMapExtInput{MaxOutputBytes: 64}}, sr(0, 8)}},
+			"isdirty": {at, []cephmsgr.OSDOperation{sr(0, 8), {Code: cephmsgr.OSDIsdirty}}},
+			"undirty": {nil, []cephmsgr.OSDOperation{sr(0, 8), {Code: cephmsgr.OSDUndirty}}},
 		} {
 			reply, err := send(clone, tc.configure, tc.ops...)
 			var server *cephmsgr.OSDError

@@ -9,8 +9,11 @@ import (
 // SparseReadCompound identifies the multi-operation SPARSE_READ subset: the
 // native librbd object read (librbd/io/ObjectRequest.cc:238-246) composes
 // SPARSE_READ and READ extents in one vector, at the image's read snap
-// (get_read_snap() at :227, the head or a snapshot). Standalone SPARSE_READ
-// and every other vector retain their own policy.
+// (get_read_snap() at :227, the head or a snapshot), with the request flags of
+// ImageCtx::get_read_flags (:247-248, librbd/ImageCtx.cc:317-331 and
+// :876-883): BALANCE_READS or LOCALIZE_READS under rbd_read_from_replica_policy,
+// or at a snapshot under rbd_balance_snap_reads or rbd_localize_snap_reads.
+// Standalone SPARSE_READ and every other vector retain their own policy.
 //
 // Pinned Ceph 20.2.4 7f793731f1b39eb4f465e960113d2363c311b964,
 // PrimaryLogPG.cc:5835-6024: both handlers read ctx->new_obs.oi, which equals
@@ -18,12 +21,20 @@ import (
 // At a read snap that is the object find_object_context resolved (:12067-12264):
 // the first clone at or above the snap id that names it, the head when the snap
 // id exceeds the snapset seq, and -ENOENT before any operation runs otherwise.
+// A replica serves the vector only with one of those flags, since it may read
+// and neither writes nor caches (:2058-2073), and only when no log entry of the
+// head newer than its pg_committed_to exists (:2346-2357, PeeringState.cc
+// can_serve_replica_read, PGLog.h has_write_since, which compares heads, so a
+// read snap does not exempt a clone); otherwise it answers -EAGAIN before
+// find_object_context, like any early error. Each operation then reads the
+// replica's own committed object as on the primary.
 // LGPL-2.1; independently translated, no source copied.
 //
 // The subset admits SPARSE_READ and READ with fadvise hints only, at the head
-// or a read snap from 1 through MaxSnap, on the replicated primary, with no
-// FAILOK, truncate fields, SnapContext, replica read, IgnoreCache,
-// EnforceSnapContext, resubmission or EC shard; a vector with CHECKSUM keeps
+// or a read snap from 1 through MaxSnap, on the replicated primary or, with
+// BalanceReads or LocalizeReads, on any replica the caller targets, with no
+// FAILOK, truncate fields, SnapContext, IgnoreCache, EnforceSnapContext,
+// resubmission or EC shard; a vector with CHECKSUM keeps
 // the checksum subset. MAPEXT, ISDIRTY and UNDIRTY stay standalone: no native
 // client composes them (librados IoCtxImpl::mapext sends MAPEXT in its own
 // request; librados is_dirty/undirty users and ceph_test_rados send each
@@ -93,11 +104,13 @@ func validateSparseReadCompoundWork(ops []Operation, limit uint32) error {
 	return nil
 }
 
-// ValidateSparseReadCompoundRequest checks only the request's snapshot and
-// primary scope: the head (ReadSnap zero or NoSnap) or a read snap from 1
-// through MaxSnap, never SnapDir, a SnapContext or a replica read. Existing
-// ordering, lock and redirect validators still run; this does not broaden them
-// or infer remote object state, such as which clone a snap id resolves to.
+// ValidateSparseReadCompoundRequest checks only the request's snapshot scope:
+// the head (ReadSnap zero or NoSnap) or a read snap from 1 through MaxSnap,
+// never SnapDir, a SnapContext or a resubmission. The replica-read flags are
+// left to the shared replica validator, which admits them for this read-only
+// vector. Existing ordering, lock and redirect validators still run; this does
+// not broaden them or infer remote object state, such as which clone a snap id
+// resolves to or whether a replica will bounce the read.
 func ValidateSparseReadCompoundRequest(r Request) error {
 	if !SparseReadCompound(r.Operations) {
 		return nil
@@ -105,7 +118,7 @@ func ValidateSparseReadCompoundRequest(r Request) error {
 	if err := validateSparseReadCompoundShape(r.Operations); err != nil {
 		return err
 	}
-	if r.ReadSnap > MaxSnap && r.ReadSnap != NoSnap || r.SnapSeq != 0 || len(r.Snaps) != 0 || r.OrderSnap || r.EnforceSnapContext || r.BalanceReads || r.LocalizeReads || r.RetryAttempt != 0 {
+	if r.ReadSnap > MaxSnap && r.ReadSnap != NoSnap || r.SnapSeq != 0 || len(r.Snaps) != 0 || r.OrderSnap || r.EnforceSnapContext || r.RetryAttempt != 0 {
 		return ErrRequest
 	}
 	return nil
