@@ -821,7 +821,7 @@ def concurrent(ioctx, out):
 # every step and its result at that level.
 LOCK_LOG = '/tmp/ceph-msgr-rbd-journal-%s-%s.log' % (token, request_id)
 LOCK_COMPONENTS = ('librbd::ManagedLock', 'librbd::ExclusiveLock', 'librbd::ImageWatcher', 'librbd::managed_lock::AcquireRequest', 'librbd::managed_lock::BreakRequest')
-LOCK_LINES, LOCK_TEXT = 320, 240
+LOCK_LINES, LOCK_TEXT, LOCK_BYTES = 320, 240, 64 << 20
 LOG_LINE = re.compile(r'^\S+ +[0-9a-f]+ +(-?[0-9]+) (librbd::[A-Za-z_:]+): (.*)$')
 conf = {'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'}
 if action in ('force-break', 'takeover'):
@@ -829,13 +829,17 @@ if action in ('force-break', 'takeover'):
 
 def lock_log():
     # Pointers become per-run ordinals (@0, @1, ...), so that one request
-    # object stays recognizable without publishing an address.
+    # object stays recognizable without publishing an address. A file longer
+    # than LOCK_BYTES is read no further: its later lines are lost, so the
+    # log says so (over_cap) and counts as truncated whatever the prefix holds.
     try:
         with open(LOCK_LOG, 'rb') as f:
-            data = f.read(64 << 20)
+            data = f.read(LOCK_BYTES + 1)
     except FileNotFoundError:
-        return {'present': False, 'matched': 0, 'truncated': False, 'lines': []}
+        return {'present': False, 'matched': 0, 'truncated': False, 'over_cap': False, 'lines': []}
     os.remove(LOCK_LOG)
+    over_cap = len(data) > LOCK_BYTES
+    data = data[:LOCK_BYTES]
     lines, matched, pointers = [], 0, {}
     for raw in data.split(b'\n'):
         found = LOG_LINE.match(raw.decode('utf-8', 'replace'))
@@ -847,7 +851,7 @@ def lock_log():
         if len(lines) < LOCK_LINES:
             body = re.sub(r'0x[0-9a-f]+', lambda m: '@%d' % pointers.setdefault(m.group(0), len(pointers)), found.group(3))
             lines.append({'level': int(found.group(1)), 'component': found.group(2), 'text': body[:LOCK_TEXT]})
-    return {'present': True, 'matched': matched, 'truncated': matched > len(lines), 'lines': lines}
+    return {'present': True, 'matched': matched, 'truncated': over_cap or matched > len(lines), 'over_cap': over_cap, 'lines': lines}
 
 cluster = rados.Rados(conffile=CONF, rados_id=identity[len('client.'):], conf=conf)
 cluster.connect(timeout=30)
@@ -1054,22 +1058,27 @@ type rbdJournalNative struct {
 	LockLog *rbdJournalLockLog `json:"lock_log,omitempty"`
 }
 
-// rbdJournalLockLogLines and rbdJournalLockLogText bound the lock log the
-// driver keeps (LOCK_LINES and LOCK_TEXT).
+// rbdJournalLockLogLines, rbdJournalLockLogText and rbdJournalLockLogBytes
+// bound the lock log the driver keeps and the part of the file it reads
+// (LOCK_LINES, LOCK_TEXT and LOCK_BYTES).
 const (
 	rbdJournalLockLogLines = 320
 	rbdJournalLockLogText  = 240
+	rbdJournalLockLogBytes = 64 << 20
 )
 
 // rbdJournalLockLog is the driver's filtered librbd debug log: the lines of
 // librbd::ManagedLock, ExclusiveLock, managed_lock::AcquireRequest,
 // managed_lock::BreakRequest and the ImageWatcher lines that mention a lock,
 // in the order written, with pointers replaced by per-run ordinals. Matched
-// counts every such line, Truncated says that some were not kept.
+// counts every such line in the part the driver read, OverCap says that the
+// file was longer than the driver reads (rbdJournalLockLogBytes), and
+// Truncated says that some lines were not kept, either way.
 type rbdJournalLockLog struct {
 	Present   bool                    `json:"present"`
 	Matched   int                     `json:"matched"`
 	Truncated bool                    `json:"truncated"`
+	OverCap   bool                    `json:"over_cap"`
 	Lines     []rbdJournalLockLogLine `json:"lines"`
 }
 
@@ -1081,7 +1090,7 @@ type rbdJournalLockLogLine struct {
 
 // valid checks the lock log's shape and bounds.
 func (l *rbdJournalLockLog) valid() bool {
-	if l == nil || l.Lines == nil || len(l.Lines) > rbdJournalLockLogLines || l.Matched < len(l.Lines) || l.Truncated != (l.Matched > len(l.Lines)) || !l.Present && l.Matched != 0 {
+	if l == nil || l.Lines == nil || len(l.Lines) > rbdJournalLockLogLines || l.Matched < len(l.Lines) || l.Truncated != (l.OverCap || l.Matched > len(l.Lines)) || !l.Present && (l.Matched != 0 || l.OverCap) {
 		return false
 	}
 	for _, line := range l.Lines {

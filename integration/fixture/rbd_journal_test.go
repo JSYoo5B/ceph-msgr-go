@@ -568,7 +568,7 @@ func rbdJournalOutput(token string, plan rbdJournalPlan, action string) map[stri
 		value["blocklist_before"] = []map[string]any{}
 	}
 	if rbdJournalLockLogged(action) {
-		value["lock_log"] = map[string]any{"present": true, "matched": 2, "truncated": false, "lines": []map[string]any{
+		value["lock_log"] = map[string]any{"present": true, "matched": 2, "truncated": false, "over_cap": false, "lines": []map[string]any{
 			{"level": 10, "component": "librbd::managed_lock::AcquireRequest", "text": "@0 handle_get_locker: r=-2"},
 			{"level": 10, "component": "librbd::managed_lock::AcquireRequest", "text": "@0 handle_lock: r=0"}}}
 	}
@@ -755,6 +755,12 @@ func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 		"lock log truncation unstated": {"takeover", func(v map[string]any) {
 			v["lock_log"].(map[string]any)["matched"] = 3
 		}},
+		"lock log over its byte cap unstated": {"takeover", func(v map[string]any) {
+			v["lock_log"].(map[string]any)["over_cap"] = true
+		}},
+		"missing lock log over its byte cap": {"takeover", func(v map[string]any) {
+			v["lock_log"] = map[string]any{"present": false, "matched": 0, "truncated": true, "over_cap": true, "lines": []map[string]any{}}
+		}},
 		"lock log line of another library": {"takeover", func(v map[string]any) {
 			v["lock_log"].(map[string]any)["lines"].([]map[string]any)[0]["component"] = "osdc::Objecter"
 		}},
@@ -794,5 +800,25 @@ func TestRBDJournalNativeDriverParses(t *testing.T) {
 	cmd.Stdin = strings.NewReader(rbdJournalNativePython)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatal("native RBD journal driver is not valid Python", err, string(output))
+	}
+}
+
+// TestRBDJournalLockLogOverCap: a lock log the driver read only up to its
+// byte cap is valid evidence only as a truncated one, whatever the read
+// prefix matched.
+func TestRBDJournalLockLogOverCap(t *testing.T) {
+	line := rbdJournalLockLogLine{Level: 10, Component: "librbd::managed_lock::AcquireRequest", Text: "@0 handle_lock: r=0"}
+	for name, c := range map[string]struct {
+		log   rbdJournalLockLog
+		valid bool
+	}{
+		"complete":                  {rbdJournalLockLog{Present: true, Matched: 1, Lines: []rbdJournalLockLogLine{line}}, true},
+		"over the cap, truncated":   {rbdJournalLockLog{Present: true, Matched: 1, Truncated: true, OverCap: true, Lines: []rbdJournalLockLogLine{line}}, true},
+		"over the cap, untruncated": {rbdJournalLockLog{Present: true, Matched: 1, OverCap: true, Lines: []rbdJournalLockLogLine{line}}, false},
+		"absent over the cap":       {rbdJournalLockLog{Truncated: true, OverCap: true, Lines: []rbdJournalLockLogLine{}}, false},
+	} {
+		if got := c.log.valid(); got != c.valid {
+			t.Errorf("%s: valid() = %v, want %v", name, got, c.valid)
+		}
 	}
 }
