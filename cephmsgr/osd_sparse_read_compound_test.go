@@ -56,17 +56,25 @@ func TestOSDSparseReadCompoundRefusesScopeBeforeSharedAdmission(t *testing.T) {
 		"snapcontext": func(r *OSDRequest) {
 			r.ReadSnapshot, r.SnapContext = 3, OSDSnapContext{Sequence: 3, Snapshots: []uint64{3}}
 		},
-		"snapbalance":   func(r *OSDRequest) { r.ReadSnapshot, r.BalanceReads = 3, true },
-		"balance":       func(r *OSDRequest) { r.BalanceReads = true },
-		"localize":      func(r *OSDRequest) { r.LocalizeReads = true },
 		"cache":         func(r *OSDRequest) { r.IgnoreCache = true },
 		"resubmit":      func(r *OSDRequest) { r.Resubmit = &OSDSubmission{} },
 		"retry":         func(r *OSDRequest) { r.RetryAttempt = 1 },
-		"FAILOK-sparse": func(r *OSDRequest) { r.Operations[0].Flags = OSDFailOK },
-		"FAILOK-read":   func(r *OSDRequest) { r.Operations[1].Flags = OSDFailOK },
-		"truncate":      func(r *OSDRequest) { r.Operations[1].TruncateSize, r.Operations[1].TruncateSequence = 4, 2 },
-		"stat":          func(r *OSDRequest) { r.Operations[1] = OSDOperation{Code: OSDStat} },
-		"write":         func(r *OSDRequest) { r.Operations[1] = OSDOperation{Code: OSDWriteFull, Length: 1, Data: []byte{1}} },
+		"balance-retry": func(r *OSDRequest) { r.BalanceReads, r.RetryAttempt = true, 1 },
+		"localize-resubmit": func(r *OSDRequest) {
+			r.LocalizeReads, r.Resubmit = true, &OSDSubmission{}
+		},
+		"balance-snapdir": func(r *OSDRequest) { r.BalanceReads, r.ReadSnapshot = true, osd.SnapDir },
+		"balance-FAILOK":  func(r *OSDRequest) { r.BalanceReads, r.Operations[0].Flags = true, OSDFailOK },
+		"localize-mapext": func(r *OSDRequest) {
+			r.LocalizeReads = true
+			r.Operations[1] = OSDOperation{Code: OSDMapExt, Length: 8, MapExt: OSDMapExtInput{MaxOutputBytes: 64}}
+		},
+		"balance-isdirty": func(r *OSDRequest) { r.BalanceReads, r.Operations[1] = true, OSDOperation{Code: OSDIsdirty} },
+		"FAILOK-sparse":   func(r *OSDRequest) { r.Operations[0].Flags = OSDFailOK },
+		"FAILOK-read":     func(r *OSDRequest) { r.Operations[1].Flags = OSDFailOK },
+		"truncate":        func(r *OSDRequest) { r.Operations[1].TruncateSize, r.Operations[1].TruncateSequence = 4, 2 },
+		"stat":            func(r *OSDRequest) { r.Operations[1] = OSDOperation{Code: OSDStat} },
+		"write":           func(r *OSDRequest) { r.Operations[1] = OSDOperation{Code: OSDWriteFull, Length: 1, Data: []byte{1}} },
 		"mapext": func(r *OSDRequest) {
 			r.Operations[1] = OSDOperation{Code: OSDMapExt, Length: 8, MapExt: OSDMapExtInput{MaxOutputBytes: 64}}
 		},
@@ -102,18 +110,33 @@ func TestOSDSparseReadCompoundRefusesScopeBeforeSharedAdmission(t *testing.T) {
 }
 
 // The head and a read snapshot share one reply contract; at a snapshot the
-// early error is the -ENOENT of an object absent at that snap id.
+// early error is the -ENOENT of an object absent at that snap id. A replica
+// read targets a connection that is not the PG's primary and carries its
+// flag on the wire; its early error is a replica's -EAGAIN bounce, which is
+// reported as the server's code and not resent.
 func TestOSDSparseReadCompoundPublicPrefixAllProfiles(t *testing.T) {
 	for _, profile := range []OSDProfile{OSDProfileObjectHash, OSDProfileReplicatedPG, OSDProfileReplicatedPGReplyV8, OSDProfileReplicatedPGRequestV9ReplyV8} {
-		for _, kind := range []string{"success", "terminal", "early-error", "snapshot-success", "snapshot-terminal", "snapshot-early-error"} {
+		for _, kind := range []string{"success", "terminal", "early-error", "snapshot-success", "snapshot-terminal", "snapshot-early-error", "balance-success", "balance-early-error", "localize-snapshot-success", "localize-snapshot-early-error"} {
 			t.Run(profileNameForCacheTest(profile)+"/"+kind, func(t *testing.T) {
 				c, o, peer, ctx := enforceSnapProfileOpen(t, profile)
 				r := sparseReadCompoundInput()
+				replica := uint64(0)
+				if rest, found := strings.CutPrefix(kind, "balance-"); found {
+					kind, r.BalanceReads, replica = rest, true, osd.FlagBalanceReads
+				}
+				if rest, found := strings.CutPrefix(kind, "localize-"); found {
+					kind, r.LocalizeReads, replica = rest, true, osd.FlagLocalizeReads
+				}
 				if snapshot, found := strings.CutPrefix(kind, "snapshot-"); found {
 					kind, r.ReadSnapshot = snapshot, 3
 				}
 				if profile.replicatedPG() {
 					r.Placement = &OSDPlacement{PG: OSDPG{Pool: uint64(r.Object.Pool), Seed: 3}, Primary: o.target.ID}
+					if replica != 0 {
+						// The PG's primary is another OSD: only the replica
+						// flag lets this connection serve the read.
+						r.Placement.Primary = o.target.ID + 1
+					}
 				}
 				first := sparseReadCompoundPayload(0, []byte{0, 255, 'A', '\n'})
 				read := []byte{1, 2, 3, 4}
@@ -126,6 +149,9 @@ func TestOSDSparseReadCompoundPublicPrefixAllProfiles(t *testing.T) {
 					outputs[2], lengths[2], codes[2], aggregate = nil, 64, -5, -5
 				case "early-error":
 					outputs, lengths, aggregate = [][]byte{nil, nil, nil}, []uint64{64, 4, 64}, -2
+					if replica != 0 {
+						aggregate = -11
+					}
 				}
 				done := make(chan struct {
 					reply OSDReply
@@ -139,6 +165,13 @@ func TestOSDSparseReadCompoundPublicPrefixAllProfiles(t *testing.T) {
 					}{got, err}
 				}()
 				sent := peer.next(t)
+				at := 32
+				if sent.Version == 6 {
+					at = 8
+				}
+				if flags := binary.LittleEndian.Uint32(sent.Front[at:]); flags&uint32(osd.FlagBalanceReads|osd.FlagLocalizeReads) != uint32(replica) || flags&uint32(osd.FlagRead) == 0 {
+					t.Fatalf("sent request flags %#x, want replica flag %#x beside READ", flags, replica)
+				}
 				m := sparseReadCompoundMessage(r, profile, outputs, lengths, codes, aggregate)
 				m.Transaction = sent.Transaction
 				if err := osdMapsWrite(peer, m); err != nil {
