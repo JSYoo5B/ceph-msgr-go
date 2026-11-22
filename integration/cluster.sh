@@ -97,59 +97,78 @@ if test "$osd_fixture" = 1; then
     fixture_phase=osd-bootstrap
     sh /out/osd-fixture.sh "$root"
 fi
+# pending NAME: the oldest pending envelope of the control NAME, by request
+# ID (internal/testcluster RequestEnvelope): REQ is its path and REQ_ID its
+# ID. Every publication has its own envelope, so two publishers of one
+# control never replace each other's request. One directory listing may miss
+# an envelope renamed in while it is read and still return a later one, so
+# the oldest is taken from a second listing, once a first one has returned
+# an envelope: every request published before that envelope had been
+# published before the first listing ended (integration/fixture/control.go
+# scanRequests).
+pending() {
+    test -n "$(ls /out | sed -n "s/^$1\.\([1-9][0-9]*\)\.request\$/\1/p")" || return 1
+    REQ_ID=$(ls /out | sed -n "s/^$1\.\([1-9][0-9]*\)\.request\$/\1/p" | sort -n | head -n 1)
+    REQ=/out/$1.$REQ_ID.request
+    test -n "$REQ_ID"
+}
 touch /out/ready
 while true; do
-    if test -f /out/observe-mon-command; then
+    if pending observe-mon-command; then
         fixture_phase=observe-mon-command
         test "$config_fixture" = 1 || exit 2
-        read -r request_id token phase extra < /out/observe-mon-command
+        read -r request_id token phase extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 && test -z "$extra" || exit 2
         case "$phase" in initial|applied|overwritten|recovered|cleanup) ;; *) exit 2 ;; esac
-        rm /out/observe-mon-command
+        rm "$REQ"
         # librados' Python timeout is ineffective for mon_command. The outer
         # process timeout bounds even a native mutation with no returned reply.
         timeout 25 python3 /out/mon_command_outcome_oracle.py "$root" /out "$request_id" "$token" "$phase"
         sh /out/publish-ack.sh "/out/mon-command-observed.$request_id"
         fixture_phase=control-idle
     fi
-    if test -f /out/observe-mgr-command; then
+    if pending observe-mgr-command; then
         fixture_phase=observe-mgr-command
         test "$config_fixture" = 1 || exit 2
-        read -r request_id token phase extra < /out/observe-mgr-command
+        read -r request_id token phase extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 && test -z "$extra" || exit 2
         case "$phase" in initial|applied|overwritten|recovered|restore|restored) ;; *) exit 2 ;; esac
-        rm /out/observe-mgr-command
+        rm "$REQ"
         # Python mon_command/mgr_command ignore their timeout arguments. The
         # outer process timeout also bounds the one native restoration.
         timeout 30 python3 /out/mgr_command_outcome_oracle.py "$root" /out "$request_id" "$token" "$phase"
         sh /out/publish-ack.sh "/out/mgr-command-observed.$request_id"
         fixture_phase=control-idle
     fi
-    if test -f /out/observe-mon-tell; then
+    if pending observe-mon-tell; then
         fixture_phase=observe-mon-tell
         test "$config_fixture" = 1 || exit 2
-        read -r request_id token phase target extra < /out/observe-mon-tell
+        read -r request_id token phase target extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 && test -z "$extra" || exit 2
         case "$phase" in initial|applied|overwritten|recovered|restore|restored) ;; *) exit 2 ;; esac
         case "$target" in a|b|c) ;; *) exit 2 ;; esac
-        rm /out/observe-mon-tell
+        rm "$REQ"
         # Python mon_command ignores its timeout argument. The outer process
         # timeout also bounds the one native restoration of the owned option.
         timeout 30 python3 /out/mon_tell_outcome_oracle.py "$root" /out "$request_id" "$token" "$phase" "$target"
         sh /out/publish-ack.sh "/out/mon-tell-observed.$request_id"
         fixture_phase=control-idle
     fi
-    if test -f /out/observe-service-holder; then
+    if pending observe-service-holder; then
         fixture_phase=observe-service-holder
         test "$config_fixture" = 1 || exit 2
-        read -r request_id token phase extra < /out/observe-service-holder
+        read -r request_id token phase extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 && test -z "$extra" || exit 2
         case "$phase" in start|start-large|start-wide) holder_timeout=60 ;; observe|cleanup) holder_timeout=30 ;; release) holder_timeout=45 ;; *) exit 2 ;; esac
-        rm /out/observe-service-holder
+        rm "$REQ"
         # The detached holder outlives this request, so the loop stays free for
         # daemon controls. Python mon_command ignores its timeout argument; the
         # outer process timeout bounds each phase (the holder has its own
@@ -158,103 +177,117 @@ while true; do
         sh /out/publish-ack.sh "/out/service-holder-observed.$request_id"
         fixture_phase=control-idle
     fi
-    if test -f /out/verify-osd-maps; then
+    if pending verify-osd-maps; then
         fixture_phase=verify-osd-maps
         # Native blob validation also serves MON-only map acquisition; no OSD
         # daemon or object fixture is required to receive the MON's raw maps.
-        read -r request_id label extra < /out/verify-osd-maps
+        read -r request_id label extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 && test "$label" = received && test -z "$extra" || exit 2
-        rm /out/verify-osd-maps
+        # The manifest is request-scoped (testcluster.RequestControlInput):
+        # the second line names it and the claim moves the test's
+        # osd-map-manifest.json.<request ID> to the name the oracle reads.
+        test "$(sed -n 2p "$REQ")" = "input osd-map-manifest.json" || exit 2
+        test -z "$(sed -n '3,$p' "$REQ")" || exit 2
+        rm "$REQ"
+        mv "/out/osd-map-manifest.json.$request_id" /out/osd-map-manifest.json
         fixture_phase=verify-osd-map-oracle
         timeout 30 python3 /out/osd_map_oracle.py /out "$root" 2>> /out/osd-map-control.log
         sh /out/publish-ack.sh "/out/osd-maps-verify.$request_id"
         fixture_phase=control-idle
     fi
-    if test -f /out/verify-digest; then
+    if pending verify-digest; then
         fixture_phase=verify-digest
         test "$config_fixture" = 1 || exit 2
-        read -r request_id name label extra < /out/verify-digest
+        read -r request_id name label extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 || exit 2
         case "$name" in a|b|c) ;; *) exit 2 ;; esac
         case "$label" in initial|muted|unmuted|renewal|learned-mon|reopen) ;; *) exit 2 ;; esac
         test -z "$extra" || exit 2
-        rm /out/verify-digest
+        rm "$REQ"
         timeout 20 python3 /out/digest_oracle.py "$root" /out "$name" "$label"
         sh /out/publish-ack.sh "/out/digest-verify.$request_id"
     fi
-    if test -f /out/verify-monitor-map; then
+    if pending verify-monitor-map; then
         fixture_phase=verify-monitor-map
         test "$config_fixture" = 1 || exit 2
-        read -r request_id label extra < /out/verify-monitor-map
+        read -r request_id label extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 || exit 2
         case "$label" in initial|added|removed) ;; *) exit 2 ;; esac
         test -z "$extra" || exit 2
-        rm /out/verify-monitor-map
+        rm "$REQ"
         timeout 30 python3 /out/monitor_oracle.py "$root" /out
         sh /out/publish-ack.sh "/out/monitor-map-verify.$request_id"
     fi
-    if test -f /out/verify-manager-map; then
+    if pending verify-manager-map; then
         fixture_phase=verify-manager-map
         test "$config_fixture" = 1 || exit 2
-        read -r request_id label extra < /out/verify-manager-map
+        read -r request_id label extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 || exit 2
         case "$label" in initial|replacement|disabled|restored) ;; *) exit 2 ;; esac
         test -z "$extra" || exit 2
-        rm /out/verify-manager-map
+        rm "$REQ"
         timeout 10 python3 /out/manager_oracle.py "$root" /out
         sh /out/publish-ack.sh "/out/manager-map-verify.$request_id"
     fi
-    if test -f /out/verify-tell-descriptions; then
+    if pending verify-tell-descriptions; then
         fixture_phase=verify-tell-descriptions
         test "$config_fixture" = 1 || exit 2
-        read -r request_id label extra < /out/verify-tell-descriptions
+        read -r request_id label extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 || exit 2
         test "$label" = initial && test -z "$extra" || exit 2
-        rm /out/verify-tell-descriptions
+        rm "$REQ"
         timeout 25 python3 /out/tell_command_oracle.py "$root" /out
         sh /out/publish-ack.sh "/out/tell-descriptions-verify.$request_id"
     fi
-    if test -f /out/verify-command-descriptions; then
+    if pending verify-command-descriptions; then
         fixture_phase=verify-command-descriptions
         test "$config_fixture" = 1 || exit 2
-        read -r request_id label extra < /out/verify-command-descriptions
+        read -r request_id label extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 || exit 2
         case "$label" in initial|renewal|learned-mon|mgr-replacement) ;; *) exit 2 ;; esac
         test -z "$extra" || exit 2
-        rm /out/verify-command-descriptions
+        rm "$REQ"
         timeout 15 python3 /out/command_oracle.py "$root" /out "$request_id" "$label"
         sh /out/publish-ack.sh "/out/command-descriptions-verify.$request_id"
     fi
-    if test -f /out/verify-hostname-config; then
+    if pending verify-hostname-config; then
         fixture_phase=verify-hostname-config
         test "$config_fixture" = 1 || exit 2
-        read -r request_id label extra < /out/verify-hostname-config
+        read -r request_id label extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 || exit 2
         case "$label" in initial|subscriptions|reopen|changed|renewal|learned|restored) ;; *) exit 2 ;; esac
         test -z "$extra" || exit 2
-        rm /out/verify-hostname-config
+        rm "$REQ"
         timeout 30 python3 /out/hostname_config_oracle.py "$root" /out "$request_id" "$label"
         sh /out/publish-ack.sh "/out/hostname-config-verify.$request_id"
     fi
-    if test -f /out/verify-config; then
+    if pending verify-config; then
         fixture_phase=verify-config
         fixture_phase=verify-config-read
         test "$config_fixture" = 1 || exit 2
-        read -r request_id identity label extra < /out/verify-config
+        read -r request_id identity label extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 || exit 2
         case "$identity" in client.test|client.configwatch) ;; *) exit 2 ;; esac
         case "$label" in initial|reopen|reset|global|client|exact|no-read|no-read-update|fallback-client|fallback-global|removed|raw|replacement|after-overflow|renewal-1|renewal-2|learned|final-deletion) ;; *) exit 2 ;; esac
         test -z "$extra" || exit 2
         fixture_phase="verify-config-$label-remove"
-        rm /out/verify-config
+        rm "$REQ"
         fixture_phase="verify-config-$label-oracle"
         # A fresh native CLI is the independent read oracle. Full effective
         # configuration remains in memory; only these controlled keys may be
@@ -338,10 +371,11 @@ PY
         sh /out/publish-ack.sh "/out/config-verify.$request_id"
         fixture_phase=control-idle
     fi
-    if test -f /out/verify-service-keys; then
+    if pending verify-service-keys; then
         fixture_phase=verify-service-keys
         test "$auth_epoch" = 1 || exit 2
-        read -r request_id name mgr_id map_epoch auth_key_epoch extra < /out/verify-service-keys
+        read -r request_id name mgr_id map_epoch auth_key_epoch extra < "$REQ"
+        test "$request_id" = "$REQ_ID" || exit 2
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         case "$name" in a|b) ;; *) exit 2 ;; esac
         for value in "$mgr_id" "$map_epoch" "$auth_key_epoch"; do
@@ -349,7 +383,7 @@ PY
             test "$value" -gt 0 || exit 2
         done
         test -z "$extra" || exit 2
-        rm /out/verify-service-keys
+        rm "$REQ"
         keys_ready=false
         key_probe_deadline=$(( $(date +%s) + 15 ))
         service_key_probe() {

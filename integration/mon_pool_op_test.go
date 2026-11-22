@@ -477,9 +477,6 @@ func TestCephMonPoolOpLeaderStopIntegration(t *testing.T) {
 	}
 	baseline, _ := first.SnapshotID()
 	monState := c.Snapshot().Monitor
-	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", initial.Leader); err != nil {
-		t.Fatal("stop leader", err)
-	}
 	stopped := true
 	defer func() {
 		if !stopped {
@@ -497,6 +494,9 @@ func TestCephMonPoolOpLeaderStopIntegration(t *testing.T) {
 			t.Error(err)
 		}
 	}()
+	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", initial.Leader); err != nil {
+		t.Fatal("stop leader", err)
+	}
 	started := time.Now()
 	during, err := pinned.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
 	assertLeaderStopClientIdentity(t, pinned, subjectBefore, "allocation during election")

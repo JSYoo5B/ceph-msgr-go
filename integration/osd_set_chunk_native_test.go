@@ -186,10 +186,7 @@ func TestCephOSDSetChunkNativeIntegration(t *testing.T) {
 		t.Fatal("native placement pool differs", route.Pool, pools.ids[1])
 	}
 	input, _ := json.Marshal(map[string]int64{"source_pool_id": pools.ids[1], "chunk_pool_id": pools.ids[2]})
-	if err := testcluster.WritePublicEvidence(filepath.Join(directory, "osd-set-chunk-input.json"), input); err != nil {
-		t.Fatal(err)
-	}
-	if err := testcluster.ControlDaemon(ctx, directory, "verify", "osd-set-chunk", "checkpoint"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, directory, "verify", "osd-set-chunk", "checkpoint", testcluster.ControlInput{Name: "osd-set-chunk-input.json", Data: input}); err != nil {
 		t.Fatal("native SET_CHUNK checkpoint", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(directory, "osd-set-chunk-result.json"))

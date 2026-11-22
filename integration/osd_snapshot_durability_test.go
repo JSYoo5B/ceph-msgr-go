@@ -59,9 +59,6 @@ func TestCephOSDSnapshotDurabilityIntegration(t *testing.T) {
 		t.Fatal("ONDISK snapshot write", err)
 	}
 	name := strconv.FormatInt(int64(route.ID), 10)
-	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
-		t.Fatal(err)
-	}
 	restarted := false
 	defer func() {
 		if !restarted {
@@ -71,6 +68,9 @@ func TestCephOSDSnapshotDurabilityIntegration(t *testing.T) {
 			waitOSDFixtureClean(t, recover, base)
 		}
 	}()
+	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
+		t.Fatal(err)
+	}
 	if err := testcluster.ControlDaemon(ctx, dir, "start", "osd", name); err != nil {
 		t.Fatal(err)
 	}

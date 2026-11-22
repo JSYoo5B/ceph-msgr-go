@@ -353,7 +353,7 @@ func TestMDSCephFSCompletionBlocklistOwnership(t *testing.T) {
 func TestMDSCephFSCompletionControlRejectsBeforeNativeWork(t *testing.T) {
 	for _, enabled := range []string{"0", "1"} {
 		out := t.TempDir()
-		if err := os.WriteFile(filepath.Join(out, "mds-cephfs-completion"), []byte("1 "+strings.Repeat("a1", 16)+" blackhole-on\n"), 0600); err != nil {
+		if err := writeRequestFile(out, "mds-cephfs-completion", "1 "+strings.Repeat("a1", 16)+" blackhole-on\n"); err != nil {
 			t.Fatal(err)
 		}
 		c := &fixtureCluster{profile: profile{mdsFresh: enabled, mdsCephFSCompletion: enabled}}

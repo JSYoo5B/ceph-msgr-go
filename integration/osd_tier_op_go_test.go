@@ -156,13 +156,10 @@ func tierGoOracle(t *testing.T, ctx context.Context, input map[string]any) json.
 	if err != nil || len(raw) > 4096 {
 		t.Fatal("bounded tier observer input", err)
 	}
-	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "osd-tier-op-go-input.json"), raw); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(filepath.Join(dir, "osd-tier-op-go-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-tier-op", "call"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-tier-op", "call", testcluster.ControlInput{Name: "osd-tier-op-go-input.json", Data: raw}); err != nil {
 		t.Fatal("native tier observer", input["action"], err)
 	}
 	f, err := os.Open(filepath.Join(dir, "osd-tier-op-go-result.json"))

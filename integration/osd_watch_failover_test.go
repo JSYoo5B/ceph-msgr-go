@@ -88,9 +88,6 @@ func TestCephOSDWatchFailoverIntegration(t *testing.T) {
 	}
 
 	victim := strconv.Itoa(int(route.ID))
-	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", victim); err != nil {
-		t.Fatal(err)
-	}
 	restarted := false
 	defer func() {
 		if restarted {
@@ -106,6 +103,9 @@ func TestCephOSDWatchFailoverIntegration(t *testing.T) {
 		fresh := nativeMutation(t, restore, map[string]any{"compare": false, "placement": true}).Placement
 		publishReplicaOSDRouting(t, dir, adoptMutationPlacement(t, base, fresh))
 	}()
+	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", victim); err != nil {
+		t.Fatal(err)
+	}
 	old.Close()
 	var fresh osdFixtureOracle
 	deadline := time.Now().Add(90 * time.Second)

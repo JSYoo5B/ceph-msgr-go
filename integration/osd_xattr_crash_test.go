@@ -131,10 +131,10 @@ func TestCephOSDXattrCrashIntegration(t *testing.T) {
 	if committed.Code != 0 || committed.Version != reply.UserVersion || committed.Version <= prepared.Version || committed.Seconds != int64(request.ModificationTime.Seconds) || committed.Nanos != int64(request.ModificationTime.Nanoseconds) || !bytes.Equal(committed.Data, want) || !reflect.DeepEqual(xattrInventory(committed), wantInventory) {
 		t.Fatal("native before-crash bytes/attrs/version/mtime differ from ONDISK vector")
 	}
+	stopped = true
 	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", primaryName); err != nil {
 		t.Fatal("kill actual selected metadata primary", err)
 	}
-	stopped = true
 	if err := o.Close(); err != nil {
 		t.Fatal("close killed metadata primary session", err)
 	}

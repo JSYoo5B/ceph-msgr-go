@@ -320,8 +320,11 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	workDeadline := thawDeadline.Add(-4 * time.Second)
 	work, stopWork := context.WithDeadline(ctx, workDeadline)
 	defer stopWork()
+	// Every frozen replica has its own lease, all with one deadline; the
+	// fixture resumes each by it also while a snapshot below is still
+	// outstanding.
 	for _, osd := range frozen {
-		recovery.freeze(t, work, osd)
+		recovery.freeze(t, work, osd, thawDeadline)
 	}
 	call, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
@@ -384,7 +387,7 @@ func copyDestinationLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 		t.Fatal("pause budget expired before thaw")
 	}
 	for _, osd := range frozen {
-		if err := recovery.thaw(ctx, osd, thawDeadline); err != nil {
+		if err := recovery.thaw(osd); err != nil {
 			t.Fatalf("resume osd.%d within the pause budget: %v", osd, err)
 		}
 	}

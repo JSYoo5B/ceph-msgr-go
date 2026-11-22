@@ -57,14 +57,11 @@ type mdsMapCleanupItem struct {
 // Its complete fs dump/fs get JSON is retained alongside parsed wire maps.
 func mdsMapsControl(ctx context.Context, dir, action string) (nativeMDSMaps, error) {
 	var result nativeMDSMaps
-	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "mds-maps-input.json"), []byte("{}\n")); err != nil {
-		return result, err
-	}
 	path := filepath.Join(dir, "mds-maps-result.json")
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return result, err
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "mds-maps", action); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "mds-maps", action, testcluster.ControlInput{Name: "mds-maps-input.json", Data: []byte("{}\n")}); err != nil {
 		return result, err
 	}
 	f, err := os.Open(path)

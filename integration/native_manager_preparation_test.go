@@ -38,19 +38,9 @@ func TestCephNativeManagerPreparationIntegration(t *testing.T) {
 	if len(before) != 0 {
 		t.Fatal("isolated preparation fixture already needed a restoration")
 	}
-	if err := testcluster.ControlDaemon(ctx, control, "pause", "mgr", name); err != nil {
-		t.Fatal("public standby pause", err)
-	}
-	resumed := false
-	t.Cleanup(func() {
-		if !resumed {
-			cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
-			defer stop()
-			if err := testcluster.ControlDaemon(cleanup, control, "resume", "mgr", name); err != nil {
-				t.Error("resume owned standby after acceptance failure", err)
-			}
-		}
-	})
+	// The lease outlasts the 45 s hold; its cleanup resumes the standby
+	// after a failure.
+	lease := pauseDaemon(t, ctx, control, "mgr", name, leaseUntil(ctx))
 	t.Logf("paused native standby mgr.%s for 45s with ordinary 12s AUTH/service tickets; Go clients remain unpaused", name)
 	timer := time.NewTimer(45 * time.Second)
 	defer timer.Stop()
@@ -59,10 +49,9 @@ func TestCephNativeManagerPreparationIntegration(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	if err := testcluster.ControlDaemon(ctx, control, "resume", "mgr", name); err != nil {
+	if _, err := resumeDaemon(ctx, lease); err != nil {
 		t.Fatal("public standby resume", err)
 	}
-	resumed = true
 	observed := struct {
 		Daemon    string `json:"daemon"`
 		Missing   bool   `json:"missing"`

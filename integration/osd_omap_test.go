@@ -134,13 +134,10 @@ func nativeOmapRead(t *testing.T, ctx context.Context, base osdFixtureOracle, mo
 	if len(data) > 1<<20 {
 		t.Fatal("OMAP native input exceeds bound")
 	}
-	if err := os.WriteFile(filepath.Join(dir, "osd-omap-input.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(filepath.Join(dir, "osd-omap-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-omap", mode); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-omap", mode, testcluster.ControlInput{Name: "osd-omap-input.json", Data: data, Private: true}); err != nil {
 		t.Fatal("native OMAP "+mode, err)
 	}
 	f, err := os.Open(filepath.Join(dir, "osd-omap-result.json"))

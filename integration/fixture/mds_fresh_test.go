@@ -251,7 +251,7 @@ func TestMDSFreshObservationScope(t *testing.T) {
 func TestMDSFreshControlRejectsBeforeNativeWork(t *testing.T) {
 	for _, enabled := range []string{"0", "1"} {
 		out := t.TempDir()
-		if err := os.WriteFile(filepath.Join(out, "mds-fresh-observe"), []byte("1 unowned 42\n"), 0600); err != nil {
+		if err := writeRequestFile(out, "mds-fresh-observe", "1 unowned 42\n"); err != nil {
 			t.Fatal(err)
 		}
 		c := &fixtureCluster{profile: profile{mdsFresh: enabled}}

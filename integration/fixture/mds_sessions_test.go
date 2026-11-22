@@ -282,7 +282,7 @@ func TestMDSSessionsNativeMapAndDaemonReadbacks(t *testing.T) {
 func TestMDSSessionsControlRejectsBeforeNativeWork(t *testing.T) {
 	for _, enabled := range []string{"0", "1"} {
 		out := t.TempDir()
-		if err := os.WriteFile(filepath.Join(out, "mds-sessions"), []byte("1 "+strings.Repeat("a1", 16)+" refuse-on\n"), 0600); err != nil {
+		if err := writeRequestFile(out, "mds-sessions", "1 "+strings.Repeat("a1", 16)+" refuse-on\n"); err != nil {
 			t.Fatal(err)
 		}
 		c := &fixtureCluster{profile: profile{mdsFresh: enabled, mdsSessions: enabled}}
