@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -251,20 +252,10 @@ func run(ctx context.Context, project, out string, p profile, budget jobBudget) 
 		}
 	} else {
 		// The client package's final recovery test leaves MON a down. Preserve the
-		// public API -> client suite ordering within each disposable fixture.
-		for _, name := range suiteNames {
-			if err := c.checkControl(); err != nil {
-				return err
-			}
-			timeout, err := budget.suiteTimeout(p, time.Now(), false)
-			if err != nil {
-				return fmt.Errorf("%s native suite: %w", name, err)
-			}
-			budget.report(os.Stderr, name, timeout)
-			fmt.Printf("Running Ceph test suite: %s\n", name)
-			if err := c.runSuite(ctx, out, proxy, p, name, []string{"-test.run", p.testRun, "-test.v", "-test.timeout", timeout}, os.Stdout); err != nil {
-				return err
-			}
+		// public API -> client suite ordering within each disposable fixture,
+		// also within a suite part (suite_part.go).
+		if err := runSuites(ctx, p, suiteRunner(c, out, proxy, p, budget)); err != nil {
+			return err
 		}
 	}
 	if err := c.checkControl(); err != nil {
@@ -292,6 +283,32 @@ const coldBootstrapProofBudget = 30 * time.Second
 
 // suiteNames are the native suites in the order every fixture runs them.
 var suiteNames = []string{"api", "client"}
+
+// suiteRunner binds the default path (runSuites) to the started fixture.
+// Each suite run gets the time the job budget leaves it (job_budget.go); its
+// listing is bounded by the start of the teardown reserve.
+func suiteRunner(c *fixtureCluster, out, proxy string, p profile, budget jobBudget) suiteSteps {
+	return suiteSteps{
+		alive: c.checkControl,
+		list: func(ctx context.Context, suite, selector string) (string, error) {
+			var listing bytes.Buffer
+			ctx, stop := budget.workContext(ctx, p)
+			defer stop()
+			err := c.runSuite(ctx, out, proxy, p, suite, []string{"-test.list", selector}, &listing)
+			return listing.String(), err
+		},
+		run: func(ctx context.Context, suite, selector string, w io.Writer) error {
+			timeout, err := budget.suiteTimeout(p, time.Now(), false)
+			if err != nil {
+				return fmt.Errorf("%s native suite: %w", suite, err)
+			}
+			budget.report(os.Stderr, suite, timeout)
+			fmt.Fprintf(w, "Running Ceph test suite: %s\n", suite)
+			return c.runSuite(ctx, out, proxy, p, suite, []string{"-test.run", selector, "-test.v", "-test.timeout", timeout}, w)
+		},
+		stdout: os.Stdout,
+	}
+}
 
 // runSuite runs one native suite binary with args, its output to w.
 func (c *fixtureCluster) runSuite(ctx context.Context, out, proxy string, p profile, name string, args []string, w io.Writer) error {
