@@ -276,9 +276,10 @@ func waitMDSSession(ctx context.Context, s *cephmsgr.MDSSession, limit time.Dura
 // TestCephMDSSessionsIntegration accepts the CephFS session against a live
 // Tentacle MDS with native `session ls`: open, renewal, STALE and resume,
 // confirmed close, REJECT reasons, native and autoclose eviction observed as
-// Lost with the address guard, required-feature admission per profile and
-// reclaim. STALE needs mds_defer_session_stale=false, because
-// Server::find_idle_sessions never marks a capless session stale by default.
+// Lost with the address guard, required-feature admission per profile
+// (including the CHARMAP opt-in) and reclaim. STALE needs
+// mds_defer_session_stale=false, because Server::find_idle_sessions never
+// marks a capless session stale by default.
 // Reclaim encoding is checked only against the daemon. Not verified live:
 // RECALL_STATE, FLUSHMSG, FORCE_RO, root-claim and duplicate-uuid REJECTs, a
 // cancelled OPEN, reclaim EPERM and failover.
@@ -867,6 +868,63 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 		return
 	}
 
+	// CHARMAP is declared only by the CephFS opt-in (EnableCephFSCharmap). A
+	// filesystem that requires it refuses the default CephFS profile with the
+	// native reason and admits the opt-in, whose MDS session record keeps the
+	// bit; admission itself creates no entry.
+	if !leaf("admit_required_charmap_only_with_the_opt_in", func(t *testing.T) {
+		on, err := control.request(ctx, "require-charmap-on")
+		if err != nil || on.Map.Required["feature_22"] != "charmap" || len(on.Map.Required) != 1 || on.Mutation == nil || on.Mutation.State != "applied" {
+			t.Fatal("charmap requirement was not applied", err)
+		}
+		plain, plainConn, _ := newClient(t, "O", identity, freshKey, func(o *cephmsgr.Options) { o.EnableCephFS = true })
+		if cephmsgr.MDSFeatureBitsetHas(plain.MDSClientFeatures(), mds.FeatureCharmap) {
+			t.Fatal("the default CephFS profile declares CHARMAP")
+		}
+		rejected := reject(t, "O-charmap-required", identity, plainConn, plain.Snapshot().GlobalID, metadata("-o"))
+		if !strings.Contains(rejected.Reason, "missing required features") {
+			t.Fatal("default CephFS CHARMAP refusal lost the native reason", rejected.Reason)
+		}
+		c, conn, _ := newClient(t, "P", identity, freshKey, func(o *cephmsgr.Options) { o.EnableCephFS, o.EnableCephFSCharmap = true, true })
+		if !bytes.Equal(c.MDSClientFeatures(), cephmsgr.MDSCephFSCharmapClientFeatures()) {
+			t.Fatal("the opt-in does not declare the CephFS bitset plus CHARMAP", c.MDSClientFeatures())
+		}
+		meta, gid := metadata("-p"), c.Snapshot().GlobalID
+		s, err := conn.OpenSession(ctx, cephmsgr.MDSSessionOptions{Metadata: meta, RenewInterval: 2 * time.Second})
+		if err != nil {
+			t.Fatal("open the CephFS charmap opt-in with charmap required", err)
+		}
+		closeLater(t, s)
+		open, err := s.WaitOpen(ctx)
+		if err != nil || !cephmsgr.MDSFeatureBitsetHas(open.SupportedFeatures, mds.FeatureCharmap) {
+			t.Fatal("MDS OPEN does not advertise CHARMAP", err)
+		}
+		native, err := control.request(ctx, "observe", gid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := checkNativeCephFSCharmapSession(native.session(gid), identity, meta); err != nil {
+			t.Fatal(err)
+		}
+		closing, stop := context.WithTimeout(ctx, 15*time.Second)
+		err = s.Close(closing)
+		stop()
+		sessions = append(sessions, describeMDSSession("P-charmap-required", identity, s))
+		if err != nil || !errors.Is(s.Err(), cephmsgr.ErrMDSSessionClosed) {
+			t.Fatal("admitted CHARMAP session close was not confirmed", err)
+		}
+		closed, err := control.request(ctx, "observe", gid)
+		if err != nil || closed.session(gid) != nil {
+			t.Fatal("admitted CHARMAP session remained after close", err)
+		}
+		off, err := control.request(ctx, "require-charmap-off")
+		if err != nil || !maps.Equal(off.Map.Required, base.Map.Required) || off.Mutation == nil || off.Mutation.State != "restored" {
+			t.Fatal("charmap requirement was not restored", err)
+		}
+	}) {
+		return
+	}
+
 	if !leaf("reject_foreign_filesystem_caps", func(t *testing.T) {
 		client, conn, _ := newClient(t, "E", foreign, foreignKey)
 		meta := map[string]string{"entity_id": strings.TrimPrefix(foreign, "client."), "hostname": "ceph-msgr-go-" + prefix + "-e", "root": "/"}
@@ -1156,6 +1214,9 @@ func TestMDSSessionNativeOpenImages(t *testing.T) {
 	}
 	if got := nativeFeatureBits(cephmsgr.MDSCephFSClientFeatures()); got != "0x00000000001cb7ff" {
 		t.Fatal("declared CephFS client features do not print as bits 0-10, 12, 13, 15 and 18-20", got)
+	}
+	if got := nativeFeatureBits(cephmsgr.MDSCephFSCharmapClientFeatures()); got != "0x00000000005cb7ff" {
+		t.Fatal("declared CephFS charmap opt-in features do not print as bits 0-10, 12, 13, 15, 18-20 and 22", got)
 	}
 	for raw, want := range map[string]string{"": "0x0", "ff01": "0x00000000000001ff", "000000000000000001": "0x00000000000000010000000000000000"} {
 		data, _ := hex.DecodeString(raw)

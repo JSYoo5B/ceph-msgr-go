@@ -230,9 +230,19 @@ func (x *mdsCephFSControl) stat(ctx context.Context, target string) (nativeMDSCe
 }
 
 func checkNativeCephFSSession(n *nativeMDSSession, identity string, metadata map[string]string) error {
-	declared := nativeFeatureBits(mds.CephFSClientFeatures)
+	return checkNativeCephFSSessionDeclaring(n, identity, metadata, mds.CephFSClientFeatures, "0x00000000001cb7ff")
+}
+
+// checkNativeCephFSCharmapSession checks a session of the CHARMAP opt-in
+// (Options.EnableCephFSCharmap): the CephFS bitset plus bit 22.
+func checkNativeCephFSCharmapSession(n *nativeMDSSession, identity string, metadata map[string]string) error {
+	return checkNativeCephFSSessionDeclaring(n, identity, metadata, mds.CephFSCharmapClientFeatures, "0x00000000005cb7ff")
+}
+
+func checkNativeCephFSSessionDeclaring(n *nativeMDSSession, identity string, metadata map[string]string, features []byte, printed string) error {
+	declared := nativeFeatureBits(features)
 	if n == nil || n.State != "open" || n.AuthType != "client" || n.AuthID != strings.TrimPrefix(identity, "client.") || n.EntityType != "client" || n.Address == "" ||
-		n.ClientFeatures != declared || n.ClientFeatures != "0x00000000001cb7ff" || n.MetricFlags != "0x0" || !maps.Equal(n.Metadata, metadata) {
+		n.ClientFeatures != declared || n.ClientFeatures != printed || n.MetricFlags != "0x0" || !maps.Equal(n.Metadata, metadata) {
 		return fmt.Errorf("native CephFS session differs from the declared client: %+v", n)
 	}
 	return nil
