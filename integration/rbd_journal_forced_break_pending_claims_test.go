@@ -187,6 +187,15 @@ func TestRBDJournalForcedPendingClaims(t *testing.T) {
 		"advance left the flag set":        func(r *rbdJournalLostAppendRecord) { fp(r).Advance.FlagFinally = true },
 		"advance on another pool":          func(r *rbdJournalLostAppendRecord) { fp(r).Advance.Pool = "rbd" },
 		"canceled append not in flight":    func(r *rbdJournalLostAppendRecord) { fp(r).Advance.OpsBefore = fp(r).Advance.OpsBefore[:1] },
+		"canceled append held twice": func(r *rbdJournalLostAppendRecord) {
+			fp(r).Advance.OpsBefore = append(fp(r).Advance.OpsBefore, fp(r).Advance.OpsBefore[1])
+		},
+		"awaited append held twice": func(r *rbdJournalLostAppendRecord) {
+			fp(r).Advance.OpsBefore = append(fp(r).Advance.OpsBefore, fp(r).Advance.OpsBefore[0])
+		},
+		"another subject operation held": func(r *rbdJournalLostAppendRecord) {
+			fp(r).Advance.OpsBefore = append(fp(r).Advance.OpsBefore, rbdLockOwnerLossOp{Client: "client.4321", Transaction: 15, InitiatedAt: "2023-11-14T22:13:29.000200+0000"})
+		},
 		"held by another client": func(r *rbdJournalLostAppendRecord) {
 			fp(r).Advance.OpsBefore[0].Client = "client.4300"
 		},

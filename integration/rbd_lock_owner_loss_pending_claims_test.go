@@ -157,16 +157,25 @@ func TestRBDLockOwnerLossPendingClaims(t *testing.T) {
 		// answered: the epoch was raised from below the named one, the OSD
 		// held both requests since before the handoff, and answered the
 		// second with the blocklisted code.
-		"advance receipt missing":         {"answered", func(r *record) { r.Pending.Advance = nil }},
-		"epoch was already there":         {"answered", func(r *record) { r.Pending.Advance.EpochBefore = r.Pending.NamedEpoch }},
-		"advance began before the break":  {"answered", func(r *record) { r.Pending.Advance.EpochBefore = 26 }},
-		"epoch stopped below the named":   {"answered", func(r *record) { r.Pending.Advance.EpochAfter = r.Pending.NamedEpoch - 1 }},
-		"epoch stopped below its target":  {"answered", func(r *record) { r.Pending.Advance.EpochAfter = 34 }},
-		"pool flag left set":              {"answered", func(r *record) { r.Pending.Advance.FlagFinally = true }},
-		"no command issued":               {"answered", func(r *record) { r.Pending.Advance.Commands = nil }},
-		"OSD did not hold the canceled":   {"answered", func(r *record) { r.Pending.Advance.OpsBefore = r.Pending.Advance.OpsBefore[1:] }},
-		"OSD did not hold the awaited":    {"answered", func(r *record) { r.Pending.Advance.OpsBefore = r.Pending.Advance.OpsBefore[:1] }},
-		"OSD held nothing":                {"answered", func(r *record) { r.Pending.Advance.OpsBefore = nil }},
+		"advance receipt missing":        {"answered", func(r *record) { r.Pending.Advance = nil }},
+		"epoch was already there":        {"answered", func(r *record) { r.Pending.Advance.EpochBefore = r.Pending.NamedEpoch }},
+		"advance began before the break": {"answered", func(r *record) { r.Pending.Advance.EpochBefore = 26 }},
+		"epoch stopped below the named":  {"answered", func(r *record) { r.Pending.Advance.EpochAfter = r.Pending.NamedEpoch - 1 }},
+		"epoch stopped below its target": {"answered", func(r *record) { r.Pending.Advance.EpochAfter = 34 }},
+		"pool flag left set":             {"answered", func(r *record) { r.Pending.Advance.FlagFinally = true }},
+		"no command issued":              {"answered", func(r *record) { r.Pending.Advance.Commands = nil }},
+		"OSD did not hold the canceled":  {"answered", func(r *record) { r.Pending.Advance.OpsBefore = r.Pending.Advance.OpsBefore[1:] }},
+		"OSD did not hold the awaited":   {"answered", func(r *record) { r.Pending.Advance.OpsBefore = r.Pending.Advance.OpsBefore[:1] }},
+		"OSD held nothing":               {"answered", func(r *record) { r.Pending.Advance.OpsBefore = nil }},
+		"OSD held the canceled twice": {"answered", func(r *record) {
+			r.Pending.Advance.OpsBefore = append(r.Pending.Advance.OpsBefore, r.Pending.Advance.OpsBefore[0])
+		}},
+		"OSD held the awaited twice": {"answered", func(r *record) {
+			r.Pending.Advance.OpsBefore = append(r.Pending.Advance.OpsBefore, r.Pending.Advance.OpsBefore[1])
+		}},
+		"OSD held another zombie request": {"answered", func(r *record) {
+			r.Pending.Advance.OpsBefore = append(r.Pending.Advance.OpsBefore, rbdLockOwnerLossOp{Client: "client.4791", Transaction: 12, InitiatedAt: "2026-11-13T00:59:59.500000+0000"})
+		}},
 		"held request of another client":  {"answered", func(r *record) { r.Pending.Advance.OpsBefore[1].Client = "client.4788" }},
 		"held request with another tid":   {"answered", func(r *record) { r.Pending.Advance.OpsBefore[0].Transaction = 9 }},
 		"OSD received it after the start": {"answered", func(r *record) { r.Pending.Advance.OpsBefore[1].InitiatedAt = "2026-11-13T01:00:00.500000+0000" }},

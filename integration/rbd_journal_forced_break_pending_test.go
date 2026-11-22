@@ -364,18 +364,18 @@ func rbdJournalForcedPendingClaims(r *rbdJournalLostAppendRecord, stage string) 
 			fp.SentAtEpoch, fp.NamedEpoch, text(a))
 	}
 	pendingAt, err := time.Parse(time.RFC3339Nano, pending.ObservedUTC)
-	for _, request := range []rbdLockOwnerLossAttempt{awaited, canceled} {
-		i := slices.IndexFunc(a.OpsBefore, func(o rbdLockOwnerLossOp) bool {
-			return o.Client == owner && o.Transaction == request.Submission.Transaction && request.Submission.Transaction != 0
-		})
-		if i < 0 {
-			fail("advance: the OSD did not report the subject's %s (transaction %d) in flight before the epoch was raised: %s", request.Label, request.Submission.Transaction, text(a.OpsBefore))
+	ops, opProblems := rbdLockOwnerLossHeld(a.OpsBefore, owner, awaited.Submission.Transaction, canceled.Submission.Transaction)
+	for _, p := range opProblems {
+		fail("advance: before the epoch was raised, %s: %s", p, text(a.OpsBefore))
+	}
+	for i, request := range []rbdLockOwnerLossAttempt{awaited, canceled} {
+		if ops[i] == nil {
 			continue
 		}
-		initiated, parseErr := rbdLockOwnerLossUntil(a.OpsBefore[i].InitiatedAt)
+		initiated, parseErr := rbdLockOwnerLossUntil(ops[i].InitiatedAt)
 		at, atErr := time.Parse(time.RFC3339Nano, initiated)
 		if err != nil || parseErr != nil || atErr != nil || !at.Before(pendingAt) {
-			fail("advance: the OSD did not have the subject's %s before the observe-pending observation (initiated %q, observed %q)", request.Label, a.OpsBefore[i].InitiatedAt, pending.ObservedUTC)
+			fail("advance: the OSD did not have the subject's %s before the observe-pending observation (initiated %q, observed %q)", request.Label, ops[i].InitiatedAt, pending.ObservedUTC)
 		}
 	}
 	if slices.ContainsFunc(a.OpsAfter, func(o rbdLockOwnerLossOp) bool { return o.Client == owner }) {
@@ -552,8 +552,8 @@ func runRBDJournalForcedBreakPending(t *testing.T, s rbdJournalForcedPendingStep
 	s.done("ping")
 
 	// Entries 1 and 2, held by the OSD: they name an epoch the cluster has
-	// not reached. Each is sent once, from its own goroutine, and never
-	// again.
+	// not reached. The test invokes each once, from its own goroutine, and
+	// never again; the OSD's in-flight list shows what reached it.
 	type pendingCall struct {
 		label  string
 		route  rbdRoute
@@ -664,7 +664,7 @@ func runRBDJournalForcedBreakPending(t *testing.T, s rbdJournalForcedPendingStep
 	}
 	fp.Advance = advance.Advance
 	s.done("advance-map")
-	// The OSD now has the named map and answers entry 1. Nothing is resent.
+	// The OSD now has the named map and answers entry 1. The test invokes nothing again.
 	settle(t, 0, 30*time.Second)
 	fp.AnsweredUTC = time.Now().UTC().Format(time.RFC3339Nano)
 	s.done("pending_answered")
