@@ -245,7 +245,7 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 			// one included, is needed to answer a read of all k data chunks.
 			// The payload must reach the last data chunk of its first stripe
 			// for that to cover every data shard.
-			needed := facts.size-1 == width.k && len(payload) > (width.k-1)*facts.chunk && len(payload) <= width.k*facts.chunk
+			needed := erasureReadNeedsEveryShard(facts, width, len(payload))
 			t.Logf("native object bytes matched with osd.%d down after clean recovery of osd.%d (%d shards left, k=%d, chunk %d, returned shard needed: %v)",
 				other, victim, facts.size-1, width.k, facts.chunk, needed)
 			if width == erasureK3M1 && !needed {
@@ -253,4 +253,12 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 			}
 		}
 	})
+}
+
+// erasureReadNeedsEveryShard reports whether a full read of an object of
+// size bytes, during an outage of one shard of a clean pool, needs every
+// remaining shard: exactly k shards remain, and the object reaches the last
+// data chunk of its single stripe, so every data shard holds part of it.
+func erasureReadNeedsEveryShard(facts erasureFacts, width erasureWidth, size int) bool {
+	return facts.size-1 == width.k && facts.chunk > 0 && size > (width.k-1)*facts.chunk && size <= width.k*facts.chunk
 }
