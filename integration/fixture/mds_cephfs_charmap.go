@@ -315,3 +315,9 @@ func (c *fixtureCluster) mdsCephFSCharmapAct(ctx context.Context, id int64, acti
 	}
 	return nil
 }
+
+// saveMetadata (diagnostics.go) collects the public receipt the CephFS
+// charmap test writes beside this file's native readback when it exists.
+var _ = collectDiagnosticFiles(
+	"mds-cephfs-charmap-results.json",
+)
