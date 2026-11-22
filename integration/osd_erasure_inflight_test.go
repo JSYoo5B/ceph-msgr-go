@@ -504,12 +504,14 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 
 		// Restart the killed OSD and wait for clean PGs: the returned shard
 		// must not change what the native observer reads.
+		// The read counts for the clean placement only if a judged clean
+		// observation precedes it and that interval held through it.
 		restore()
-		recovered := poolObserve(t, ctx, 1, object, "", "")
+		back, _ := erasureCleanPG(t, ctx, object, facts)
+		recovered := erasureReadThrough(t, ctx, "the native read on the clean placement after recovery", object, back)
 		if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || recovered.Seconds != final.Seconds || recovered.Nanos != final.Nanos || !maps.Equal(xattrInventory(recovered), xattrInventory(final)) {
 			t.Fatal("native state after recovery differs", recovered.Version, final.Version)
 		}
-		back := poolPlace(t, ctx, 1, object, "")
 		t.Logf("after recovery: epoch %d primary osd.%d shard %d acting %v version %d", back.Epoch, back.ID, back.Shard, back.Acting, recovered.Version)
 	}
 
