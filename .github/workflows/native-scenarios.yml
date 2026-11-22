@@ -210,7 +210,15 @@ jobs:
           # one keep POST_RUN_RESERVE seconds. The runner derives its suites'
           # -test.timeout from this deadline (integration/fixture/job_budget.go).
           POST_RUN_RESERVE=180
+          if ! [[ "$JOB_STARTED" =~ ^[1-9][0-9]*$ && "$JOB_BUDGET_MINUTES" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::job clock '$JOB_STARTED' or budget '$JOB_BUDGET_MINUTES' is not a positive integer"
+            exit 1
+          fi
           export CEPH_MSGR_JOB_DEADLINE=$((JOB_STARTED + JOB_BUDGET_MINUTES * 60 - POST_RUN_RESERVE))
+          if test "$CEPH_MSGR_JOB_DEADLINE" -le "$(date +%s)"; then
+            echo "::error::the job budget is spent before the fixture runner starts"
+            exit 1
+          fi
           # Only the runner receives the row's fixture inputs: the trusted
           # helper forwards each matrix parameter p as CEPH_MSGR_TEST_<P>
           # (tools/native_env.py), so a new input adds no line here.

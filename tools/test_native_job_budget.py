@@ -8,6 +8,7 @@ first, and the variable the one the fixture reads.
 """
 import re
 import subprocess
+import time
 import unittest
 from pathlib import Path
 
@@ -56,17 +57,41 @@ class NativeJobBudgetTests(unittest.TestCase):
         fixture = FIXTURE_BUDGET.read_text(encoding="utf-8")
         self.assertIn('const jobDeadlineEnv = "CEPH_MSGR_JOB_DEADLINE"', fixture)
 
-    def test_the_deadline_arithmetic_is_the_job_end_less_the_reserve(self):
+    def deadline_block(self):
+        """The run step's lines from the reserve through the deadline check."""
         run = step(job_text(), "Real MON, MGR and opt-in OSD protocol verification")
-        lines = [line.strip() for line in run.splitlines()
-                 if line.strip().startswith(("POST_RUN_RESERVE=", "export CEPH_MSGR_JOB_DEADLINE="))]
-        script = "\n".join(lines + ['printf %s "$CEPH_MSGR_JOB_DEADLINE"'])
+        lines = [line[10:] for line in run.splitlines()]
+        start = next(i for i, line in enumerate(lines) if line.startswith("POST_RUN_RESERVE="))
+        export = next(i for i, line in enumerate(lines) if line.startswith("export CEPH_MSGR_JOB_DEADLINE="))
+        end = next(i for i in range(export, len(lines)) if lines[i] == "fi")
+        return "\n".join(lines[start:end + 1])
+
+    def run_block(self, started, minutes):
+        script = self.deadline_block() + '\nprintf %s "$CEPH_MSGR_JOB_DEADLINE"'
+        return subprocess.run(["bash", "-eo", "pipefail", "-c", script], capture_output=True, text=True,
+                              env={"PATH": "/usr/bin:/bin", "JOB_STARTED": started, "JOB_BUDGET_MINUTES": minutes})
+
+    def test_the_deadline_arithmetic_is_the_job_end_less_the_reserve(self):
+        reserve = int(re.search(r"POST_RUN_RESERVE=(\d+)", self.deadline_block())[1])
+        now = int(time.time())
         for minutes in ("45", "120"):
             with self.subTest(minutes=minutes):
-                result = subprocess.run(["bash", "-eo", "pipefail", "-c", script], capture_output=True, text=True,
-                                        env={"JOB_STARTED": "1000", "JOB_BUDGET_MINUTES": minutes}, check=True)
-                reserve = int(re.search(r"POST_RUN_RESERVE=(\d+)", script)[1])
-                self.assertEqual(int(result.stdout), 1000 + int(minutes) * 60 - reserve)
+                result = self.run_block(str(now), minutes)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(int(result.stdout), now + int(minutes) * 60 - reserve)
+
+    def test_a_missing_clock_or_a_spent_budget_stops_before_the_runner(self):
+        now = int(time.time())
+        malformed = "is not a positive integer"
+        for started, minutes, reason in (("", "45", malformed), ("x", "45", malformed), ("0", "45", malformed),
+                                         (str(now), "", malformed), (str(now), "0", malformed),
+                                         (str(now), "-5", malformed), (str(now), "45x", malformed),
+                                         (str(now - 45 * 60), "45", "the job budget is spent")):
+            with self.subTest(started=started, minutes=minutes):
+                result = self.run_block(started, minutes)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("::error::", result.stdout)
+                self.assertIn(reason, result.stdout)
 
 
 if __name__ == "__main__":
