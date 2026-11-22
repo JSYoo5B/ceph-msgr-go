@@ -220,7 +220,7 @@ func run(ctx context.Context, project, out string, p profile, budget jobBudget) 
 			terminationErr := c.Terminate(cleanup)
 			if p.mgrServiceColdBootstrap() {
 				// Independent inspection is read-only and never repeats teardown.
-				proof, stopProof := context.WithTimeout(context.Background(), 30*time.Second)
+				proof, stopProof := context.WithTimeout(context.Background(), coldBootstrapProofBudget)
 				proofErr := confirmColdBootstrapCleanup(proof, out)
 				stopProof()
 				terminationErr = errors.Join(terminationErr, proofErr)
@@ -270,17 +270,25 @@ func run(ctx context.Context, project, out string, p profile, budget jobBudget) 
 	if err := c.checkControl(); err != nil {
 		return err
 	}
-	if err := c.finishMDSFresh(ctx); err != nil {
+	// The finish steps are reserved by the suites' timeouts and cut at the
+	// start of the teardown reserve (job_budget.go).
+	finish, stopFinish := budget.workContext(ctx, p)
+	defer stopFinish()
+	if err := c.finishMDSFresh(finish); err != nil {
 		return err
 	}
-	if err := c.finishRBDBase(ctx); err != nil {
+	if err := c.finishRBDBase(finish); err != nil {
 		return err
 	}
-	if err := c.finishOSDCachePools(ctx); err != nil {
+	if err := c.finishOSDCachePools(finish); err != nil {
 		return err
 	}
 	return saveMetadata(out, p.diagnostics)
 }
+
+// coldBootstrapProofBudget bounds the read-only removal proof of the
+// cold-bootstrap fixture after termination; teardownReserve counts it.
+const coldBootstrapProofBudget = 30 * time.Second
 
 // suiteNames are the native suites in the order every fixture runs them.
 var suiteNames = []string{"api", "client"}

@@ -43,7 +43,10 @@ import (
 
 const (
 	sequenceEnv = "CEPH_MSGR_TEST_SEQUENCE"
-	// sequenceStartStateBudget bounds each start-state check between tests.
+	// sequenceStartStateBudget bounds each start-state check between tests
+	// and after the last one. Under a job deadline a sequence test's timeout
+	// leaves it, and the check is cut to the time left
+	// (jobBudget.checkBudget).
 	sequenceStartStateBudget = 60 * time.Second
 	// sequenceRecordFile is the sequence's progress record, kept with the
 	// diagnostics: each test's run window and the check after it.
@@ -234,6 +237,8 @@ func sequenceRunner(c *fixtureCluster, out, proxy string, p profile, budget jobB
 		alive: c.checkControl,
 		list: func(ctx context.Context, suite, selector string) (string, error) {
 			var listing bytes.Buffer
+			ctx, stop := budget.workContext(ctx, p)
+			defer stop()
 			err := c.runSuite(ctx, out, proxy, p, suite, []string{"-test.list", selector}, &listing)
 			return listing.String(), err
 		},
@@ -245,7 +250,9 @@ func sequenceRunner(c *fixtureCluster, out, proxy string, p profile, budget jobB
 			return c.runSuite(ctx, out, proxy, p, suite, []string{"-test.run", "^" + test + "$", "-test.v", "-test.timeout", timeout}, os.Stdout)
 		},
 		check: func(ctx context.Context) (startStateReport, error) {
-			return c.verifyStartState(ctx, out, sequenceStartStateBudget)
+			return budget.boundedCheck(ctx, p, time.Now(), func(ctx context.Context, limit time.Duration) (startStateReport, error) {
+				return c.verifyStartState(ctx, out, limit)
+			})
 		},
 		record: func(r sequenceRecord) error {
 			data, err := json.MarshalIndent(r, "", "  ")
