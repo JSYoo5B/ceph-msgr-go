@@ -69,7 +69,7 @@ func TestCephFSCharmapOptInDeclaresOnlyCharmap(t *testing.T) {
 	// A name the stock client would fold and normalize, with its original
 	// spelling as the alternate name; and one it would not have produced.
 	for _, r := range []MDSRequest{
-		{Op: MDSOpMkdir, Path: MDSFilePath{Ino: 0x10000000001, Path: "café-dir"}, AlternateName: []byte("Café-Dir")},
+		{Op: MDSOpMkdir, Path: MDSFilePath{Ino: 0x10000000001, Path: "caf\u00e9-dir"}, AlternateName: []byte("Cafe\u0301-Dir")},
 		{Op: MDSOpCreate, Path: MDSFilePath{Ino: 0x10000000001, Path: "Upper\xff"}},
 	} {
 		call, err := s.Submit(ctx, r)

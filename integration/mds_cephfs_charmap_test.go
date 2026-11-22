@@ -71,14 +71,14 @@ type nativeMDSCephFSCharmapOutput struct {
 // out because the library applies no policy of its own. The native probes
 // check each against the stock client's own wrapping.
 var charmapWireNames = map[string]string{
-	"Ｓｕｂ-Ｄｉｒ":       "sub-dir",
-	"Café-File":    "café-file",
-	"Ｎｏｄｅ":          "node",
-	"Ｓｙｍ-Ｌｉｎｋ":      "sym-link",
-	"Ｈａｒｄ-Ｌｉｎｋ":     "hard-link",
-	"Ｒｅｎａｍｅｄ":       "renamed",
-	"Ａｆｔｅｒ-Ｒｅｓｔａｒｔ": "after-restart",
-	"Ｎａｔｉｖｅ-Ｅｎｔｒｙ":  "native-entry",
+	"\uff33\uff55\uff42-\uff24\uff49\uff52":                                     "sub-dir",
+	"Cafe\u0301-File":                                                           "caf\u00e9-file",
+	"\uff2e\uff4f\uff44\uff45":                                                  "node",
+	"\uff33\uff59\uff4d-\uff2c\uff49\uff4e\uff4b":                               "sym-link",
+	"\uff28\uff41\uff52\uff44-\uff2c\uff49\uff4e\uff4b":                         "hard-link",
+	"\uff32\uff45\uff4e\uff41\uff4d\uff45\uff44":                                "renamed",
+	"\uff21\uff46\uff54\uff45\uff52-\uff32\uff45\uff53\uff54\uff41\uff52\uff54": "after-restart",
+	"\uff2e\uff41\uff54\uff49\uff56\uff45-\uff25\uff4e\uff54\uff52\uff59":       "native-entry",
 }
 
 // charmapPlanOrder is the operation that creates each planned entry, in the

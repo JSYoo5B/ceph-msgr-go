@@ -83,14 +83,14 @@ type mdsCephFSCharmapPlan struct {
 // and from the folded form in case.
 func mdsCephFSCharmapPlanFor() mdsCephFSCharmapPlan {
 	return mdsCephFSCharmapPlan{Dir: "charmap", Normalization: "nfkc", Entries: []mdsCephFSCharmapEntry{
-		{"Ｓｕｂ-Ｄｉｒ", "SUB-DIR"},
-		{"Café-File", "CAFÉ-FILE"},
-		{"Ｎｏｄｅ", "NODE"},
-		{"Ｓｙｍ-Ｌｉｎｋ", "SYM-link"},
-		{"Ｈａｒｄ-Ｌｉｎｋ", "HARD-LINK"},
-		{"Ｒｅｎａｍｅｄ", "RENAMED"},
-		{"Ａｆｔｅｒ-Ｒｅｓｔａｒｔ", "AFTER-RESTART"},
-	}, Native: mdsCephFSCharmapEntry{"Ｎａｔｉｖｅ-Ｅｎｔｒｙ", "NATIVE-entry"}}
+		{"\uff33\uff55\uff42-\uff24\uff49\uff52", "SUB-DIR"},
+		{"Cafe\u0301-File", "CAF\u00c9-FILE"},
+		{"\uff2e\uff4f\uff44\uff45", "NODE"},
+		{"\uff33\uff59\uff4d-\uff2c\uff49\uff4e\uff4b", "SYM-link"},
+		{"\uff28\uff41\uff52\uff44-\uff2c\uff49\uff4e\uff4b", "HARD-LINK"},
+		{"\uff32\uff45\uff4e\uff41\uff4d\uff45\uff44", "RENAMED"},
+		{"\uff21\uff46\uff54\uff45\uff52-\uff32\uff45\uff53\uff54\uff41\uff52\uff54", "AFTER-RESTART"},
+	}, Native: mdsCephFSCharmapEntry{"\uff2e\uff41\uff54\uff49\uff56\uff45-\uff25\uff4e\uff54\uff52\uff59", "NATIVE-entry"}}
 }
 
 // charmapPath is the charmap directory, a direct child of the owned directory.
