@@ -97,6 +97,8 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"10", token, "require-multi-off"}, "require-multi-off", nil},
 		{[]string{"10", token, "require-deleg-on"}, "require-deleg-on", nil},
 		{[]string{"10", token, "require-deleg-off"}, "require-deleg-off", nil},
+		{[]string{"10", token, "require-charmap-on"}, "require-charmap-on", nil},
+		{[]string{"10", token, "require-charmap-off"}, "require-charmap-off", nil},
 		{[]string{"10", token, "stale-on"}, "stale-on", nil},
 		{[]string{"10", token, "stale-off"}, "stale-off", nil},
 	} {
@@ -112,7 +114,7 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		{"10", token, "observe", "042"}, {"10", token, "observe", "18446744073709551616"},
 		{"10", token, "evict"}, {"10", token, "evict", "42", "43"}, {"10", token, "refuse-on", "42"},
 		{"10", token, "fs", "set"}, {"10", token, "osd", "blocklist", "rm"}, {"10", token, "stale-on", "60"},
-		{"10", token, "require-reclaim-on", "reply_encoding"}, {"10", token, "require-multi-on", "charmap"}, {"10", token, "require-deleg-on", "deleg_ino"}, {"10", token, "require-deleg"}, {"10", token, "require-charmap-on"}, {"10", token, "require-reclaim"},
+		{"10", token, "require-reclaim-on", "reply_encoding"}, {"10", token, "require-multi-on", "charmap"}, {"10", token, "require-deleg-on", "deleg_ino"}, {"10", token, "require-deleg"}, {"10", token, "require-charmap-on", "charmap"}, {"10", token, "require-charmap"}, {"10", token, "require-reclaim"},
 		{"0", token, "observe", "42"}, {"010", token, "observe", "42"}, {"-1", token, "observe", "42"},
 	} {
 		if _, _, err := parseMDSSessionsRequest(fields, token, 0); err == nil {
@@ -132,12 +134,14 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		"require-multi-off":   {"multi_reconnect", "feature_12", "required_client_features_multi_reconnect"},
 		"require-deleg-on":    {"deleg_ino", "feature_13", "required_client_features_deleg_ino"},
 		"require-deleg-off":   {"deleg_ino", "feature_13", "required_client_features_deleg_ino"},
+		"require-charmap-on":  {"charmap", "feature_22", "required_client_features_charmap"},
+		"require-charmap-off": {"charmap", "feature_22", "required_client_features_charmap"},
 	} {
 		if got, ok := mdsSessionsRequirementFor(action); !ok || got != want {
 			t.Fatal("required-feature toggle changed", action, got, ok)
 		}
 	}
-	for _, action := range []string{"require", "require-reclaim", "refuse-on", "stale-on", "require-charmap-on", "-on"} {
+	for _, action := range []string{"require", "require-reclaim", "refuse-on", "stale-on", "require-charmap", "require-blockdiff-on", "-on"} {
 		if _, ok := mdsSessionsRequirementFor(action); ok {
 			t.Fatal("non-requirement action mapped to a required feature", action)
 		}

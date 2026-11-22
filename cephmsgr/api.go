@@ -199,6 +199,27 @@ type Options struct {
 	// operations and file data layout remain the consumer's. Without it, MDS
 	// connections stay command/session-only.
 	EnableCephFS bool
+	// EnableCephFSCharmap (requires EnableCephFS) also declares the CephFS
+	// client feature CHARMAP (bit 22) in every REQUEST_OPEN, so the MDS lets
+	// the session add entries to a directory that has a charmap (create,
+	// mkdir, symlink, link and rename destinations answer -EPERM without the
+	// bit; the pinned MDS does not check it for MKNOD) and admits it to a
+	// filesystem that requires the feature. The MDS neither checks nor
+	// transforms names, MKNOD's included. Setting this
+	// states that the caller treats every name it sends into such a
+	// directory as the stock client does (Client::_wrap_name at the pinned
+	// tag): it reads the directory's charmap (MDSInodeStat
+	// DecodeOptionalMetadata), refuses a name that is not valid in its
+	// encoding, applies its normalization and, when it is case-insensitive,
+	// case folding, sends the result as the path component and the original
+	// spelling as MDSRequest.AlternateName, and uses the transformed name
+	// wherever the name travels again (lookups, MDSCapReconnect paths). Native
+	// clients list the alternate name of a case-insensitive directory's entry
+	// as its name. The library validates, normalizes and folds nothing; a
+	// directory's charmap is inherited by a new subdirectory. A new MDS
+	// incarnation keeps the declaration from its session map: reconnect sends
+	// no feature bits.
+	EnableCephFSCharmap bool
 	// EnableMgrService permits OpenMgrService: an explicit service-daemon
 	// registration on a dedicated MGR connection (MMgrOpen/Update/Report/Close).
 	// It adds no Messenger feature bit and changes no MON/MGR command behavior;

@@ -211,7 +211,9 @@ func pushArrivals(s cephfsAgentSnapshot, from int) []pushArrival {
 // Not exercised: FORCE_RO, lease RENEW, cap snaps, nested snapshot realms,
 // recall throttling, multiple ranks, an MDS that requires CHARMAP, the
 // charmap inherited by a new subdirectory, and any name the stock client
-// would transform (no CHARMAP session exists here).
+// would transform (no CHARMAP session exists here; the opt-in is
+// TestCephMDSCephFSCharmapIntegration and a leaf of
+// TestCephMDSSessionsIntegration).
 //
 //scenario:covers CLIENT to MDS/CephFS
 //fixture:isolated leaves a CephFS snapshot, quota, charmap directory and files when an earlier step fails; CephFS state is not checked

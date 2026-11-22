@@ -38,10 +38,19 @@ func cephfsTestClient(t *testing.T) (*Client, <-chan *mdsTestPeer, context.Conte
 // counts from 1); later dials are Messenger resume attempts.
 func cephfsTestClientWith(t *testing.T, configure func(*mdsTestPeer, int)) (*Client, <-chan *mdsTestPeer, context.Context) {
 	t.Helper()
+	return cephfsTestClientOptions(t, configure, nil)
+}
+
+// cephfsTestClientOptions also lets a test change the client options.
+func cephfsTestClientOptions(t *testing.T, configure func(*mdsTestPeer, int), change func(*Options)) (*Client, <-chan *mdsTestPeer, context.Context) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	options := mockOptions(t, 20, [16]byte{1})
 	options.EnableMDS, options.EnableCephFS, options.MaxMDSConnections, options.MaxInFlight = true, true, 2, 4
+	if change != nil {
+		change(&options)
+	}
 	peers := make(chan *mdsTestPeer, 16)
 	var dials atomic.Int32
 	options.DialContext = func(ctx context.Context, _, endpoint string) (net.Conn, error) {

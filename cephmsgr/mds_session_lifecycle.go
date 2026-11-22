@@ -27,11 +27,7 @@ func (m *MDSConnection) OpenSession(ctx context.Context, options MDSSessionOptio
 	if uint32(len(options.Metadata)) > mds.MaxSessionMetadata {
 		return nil, fmt.Errorf("ceph: MDS session metadata entry count: %w", ErrLimitExceeded)
 	}
-	features := mds.ClientFeatures
-	if c.options.EnableCephFS {
-		features = mds.CephFSClientFeatures
-	}
-	request := mds.EncodeRequestOpen(options.Metadata, features)
+	request := mds.EncodeRequestOpen(options.Metadata, c.mdsClientFeatures())
 	if uint64(len(request.Front))+41 > uint64(c.options.MaxFrameSize) {
 		return nil, fmt.Errorf("ceph: MDS session metadata exceeds frame limit: %w", ErrLimitExceeded)
 	}

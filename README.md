@@ -178,7 +178,9 @@ and wire subset (`go doc github.com/JSYoo5B/ceph-msgr-go/cephmsgr`).
   compatibility path.
 - Only implemented features are advertised. OSD opcodes outside the supported
   set are refused, and CephFS client feature bits that are not implemented
-  are withheld.
+  are withheld. CHARMAP is declared only with `EnableCephFSCharmap`, by which
+  the caller states that it sends names into a charmap directory normalized
+  and case-folded as the stock client does; the library transforms no name.
 - CRC connections negotiate snappy or zstd compression when the peer offers
   it; live compressed frames are unverified, and secure-mode compression and
   zlib are not implemented.
