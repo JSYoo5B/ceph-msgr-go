@@ -44,7 +44,7 @@ import (
 //     and whose unquiesce it never answers;
 //   - over-limit: a group snapshot creation after native librbd set member
 //     a's snapshot limit to its current snapshot count, so cls_rbd refuses
-//     member a's snapshot with EDQUOT after member b's exists and native
+//     member a's snapshot with EDQUOT while member b's is created and native
 //     librbd removes member b's snapshot and the record; the limit is then
 //     removed natively;
 //   - rollback: the group rolled back to the first group snapshot;

@@ -107,7 +107,7 @@ func rbdGroupSample(action, token string, plan rbdGroupPlan) rbdGroupNative {
 	}
 	if slices.Contains(rbdGroupCreating, action) {
 		c := &rbdGroupCreation{Snapshot: plan.createdSnapshot(action), GroupID: "g1", ImageIDs: map[string]string{"a": "i0", "b": "i1"},
-			QuiesceAttempts: rbdGroupDefaultQuiesceAttempts, Errno: map[string]int{"refused": 16, "timed-out": 110, "over-limit": 122}[action], ElapsedNS: 5}
+			QuiesceAttempts: rbdGroupDefaultQuiesceAttempts, Errno: map[string]int{"refused": 16, "timed-out": 110, "over-limit": 2}[action], ElapsedNS: 5}
 		if action == "timed-out" || action == "retried" {
 			c.QuiesceAttempts = plan.QuiesceAttempts
 		}

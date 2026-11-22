@@ -316,10 +316,20 @@ const (
 	// OSD's ETIMEDOUT (ceph/ceph/blob/v20.2.4/src/librbd/ImageWatcher.cc
 	// notify_quiesce).
 	rbdGroupQuiesceTimedOut = 110
-	// The over-limit creation's result: cls_rbd's snapshot_add refuses a
-	// snapshot once the image holds snap_limit snapshots with EDQUOT
-	// (ceph/ceph/blob/v20.2.4/src/cls/rbd/cls_rbd.cc).
-	rbdGroupSnapLimitExceeded = 122
+	// The over-limit creation's result. cls_rbd's snapshot_add refuses
+	// member a's snapshot with EDQUOT once the image holds snap_limit
+	// snapshots (ceph/ceph/blob/v20.2.4/src/cls/rbd/cls_rbd.cc), but the
+	// group path creates member snapshots with
+	// SNAP_CREATE_FLAG_SKIP_NOTIFY_QUIESCE, and there SnapshotCreateRequest
+	// completes its finisher with the snapshot ID release's result instead
+	// of the saved EDQUOT (send_notify_unquiesce returns
+	// create_context_finisher(m_ret_val), which the state callback adapter
+	// completes with the handler's own result;
+	// ceph/ceph/blob/v20.2.4/src/librbd/operation/SnapshotCreateRequest.cc,
+	// ceph/ceph/blob/v20.2.4/src/librbd/Utils.h). Group::snap_create then
+	// finds no member snapshot in the group namespace and returns ENOENT
+	// (ceph/ceph/blob/v20.2.4/src/librbd/api/Group.cc).
+	rbdGroupMemberSnapshotMissing = 2
 	// rbd_quiesce_notification_attempts: the plan's count for the timed-out
 	// and retried creations, and librbd's default for the others
 	// (ceph/ceph/blob/v20.2.4/src/common/options/rbd.yaml.in).
@@ -1178,15 +1188,19 @@ func TestRBDGroupStderrAllowed(t *testing.T) {
 //     returns success and the locks are released.
 //   - over-limit: native librbd sets member a's snapshot limit to its
 //     snapshot count. The quiesce is answered with ResponseMessage(0);
-//     cls_rbd's snapshot_add refuses member a's snapshot with EDQUOT after
-//     member b's exists. At the unquiesce the record is still INCOMPLETE with
-//     zero member snapshot IDs, member a has no new snapshot, member b's new
-//     snapshot names the INCOMPLETE record in its group namespace (Go and
-//     native snapshot_get are byte-identical) and both locks are held. The
-//     creation returns EDQUOT, a header update follows the unquiesce on
-//     member b, and afterwards the record and member b's snapshot are gone
-//     (Go snapshot_get answers ENOENT). Native librbd removes the limit, and
-//     Go and native snapshot_get_limit then answer no limit.
+//     cls_rbd's snapshot_add refuses member a's snapshot with EDQUOT while
+//     member b's is created. At the unquiesce the record is still INCOMPLETE
+//     with zero member snapshot IDs, member a has no new snapshot, member
+//     b's new snapshot names the INCOMPLETE record in its group namespace
+//     (Go and native snapshot_get are byte-identical) and both locks are
+//     held. A header update follows the unquiesce on member b, and
+//     afterwards the record and member b's snapshot are gone (Go
+//     snapshot_get answers ENOENT). The creation returns ENOENT, not the
+//     class's EDQUOT: on the group path librbd's per-image snapshot request
+//     completes with success after the refusal, and snap_create then finds
+//     no member snapshot (rbdGroupMemberSnapshotMissing). Native librbd
+//     removes the limit, and Go and native snapshot_get_limit then answer no
+//     limit.
 //
 // After each creation the Go reads of the group and both members are
 // compared with native librbd again, and every member's data objects with
@@ -2313,10 +2327,11 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	// The over-limit creation: native librbd first sets member a's snapshot
 	// limit to its snapshot count. Go accepts the quiesce; librbd locks both
 	// members and creates both member snapshots, cls_rbd refuses member a's
-	// with EDQUOT after member b's exists, and librbd unquiesces, removes
-	// member b's snapshot and the INCOMPLETE record and returns EDQUOT
-	// (ceph/ceph/blob/v20.2.4/src/librbd/api/Group.cc snap_create
-	// remove_image_snaps, ceph/ceph/blob/v20.2.4/src/cls/rbd/cls_rbd.cc
+	// with EDQUOT while member b's is created, and librbd unquiesces,
+	// removes member b's snapshot and the INCOMPLETE record and returns
+	// ENOENT (rbdGroupMemberSnapshotMissing: the per-image request reports
+	// success without a snapshot; ceph/ceph/blob/v20.2.4/src/librbd/api/Group.cc
+	// snap_create remove_image_snaps, ceph/ceph/blob/v20.2.4/src/cls/rbd/cls_rbd.cc
 	// snapshot_add). Native librbd removes the limit afterwards.
 	t.Run("over_limit_member_snapshot_compensation", func(t *testing.T) {
 		prior := []rbdGroupSnapRecord{first, secondRecord, retriedRecord}
@@ -2354,8 +2369,8 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 				}},
 			}})
 		evidence.Records["over-limit"], evidence.Snapshots["over-limit"] = record, record.ID
-		if n.Creation.Errno != rbdGroupSnapLimitExceeded {
-			t.Fatal("over-limit group snapshot creation must return cls_rbd's EDQUOT", n.Creation.Errno)
+		if n.Creation.Errno != rbdGroupMemberSnapshotMissing {
+			t.Fatal("over-limit group snapshot creation must return librbd's ENOENT for the missing member snapshot", n.Creation.Errno)
 		}
 		l := n.Creation.SnapLimit
 		limited := memberHeader("a")
@@ -2376,7 +2391,7 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 		}
 		call(t, cell+"_after_snapshot_get_b", secondID, memberHeader("b"), "rbd", "snapshot_get", rbdLE64(compensated), -2)
 		checkData(t, cell, n, records, views(plan.SecondSnapshot, plan.RetriedSnapshot))
-		t.Logf("over-limit group snapshot %s: member b's snapshot %d existed at the unquiesce, EDQUOT returned, snapshot and record removed", record.ID, compensated)
+		t.Logf("over-limit group snapshot %s: member a refused, member b's snapshot %d existed at the unquiesce, ENOENT returned, snapshot and record removed", record.ID, compensated)
 	})
 	unwatch(t)
 	if t.Failed() {
