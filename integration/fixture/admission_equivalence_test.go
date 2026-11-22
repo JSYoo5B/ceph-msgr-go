@@ -718,7 +718,11 @@ func loadBoth(env map[string]string) (current, legacy admissionModes) {
 
 // historicalCatalogRows are the current catalog's rows of the migration, in
 // catalog order. A migration row that is gone or renamed fails the test: the
-// proof would otherwise shrink without notice.
+// proof would otherwise shrink without notice. A migration row that was
+// partitioned into suite parts (suite_part.go) is its parts' configuration
+// without suite_part, the row they were partitioned from, under its
+// original identifier; TestSuitePartsCoverTheirSelectionOnce requires its
+// parts to differ only in suite_part.
 func historicalCatalogRows(t *testing.T) []ciScenario {
 	t.Helper()
 	historical := map[string]bool{}
@@ -727,6 +731,9 @@ func historicalCatalogRows(t *testing.T) []ciScenario {
 	}
 	var rows []ciScenario
 	for _, row := range ciRepositoryCatalog(t) {
+		if origin, ok := suitePartOrigin(row); ok {
+			row = origin
+		}
 		if historical[row.ID] {
 			rows = append(rows, row)
 			delete(historical, row.ID)
