@@ -76,13 +76,23 @@ func MDSSessionClientFeatures() []byte { return slices.Clone(mds.ClientFeatures)
 // enables no asynchronous directory operation.
 func MDSCephFSClientFeatures() []byte { return slices.Clone(mds.CephFSClientFeatures) }
 
+// MDSCephFSCharmapClientFeatures is the bitset an EnableCephFS session
+// declares with EnableCephFSCharmap: MDSCephFSClientFeatures plus CHARMAP
+// (22), 0x5cb7ff in native `session ls`.
+func MDSCephFSCharmapClientFeatures() []byte { return slices.Clone(mds.CephFSCharmapClientFeatures) }
+
 // MDSClientFeatures is the exact bitset this client declares in REQUEST_OPEN.
 // It is fixed by the selected profile and cannot be widened by the caller.
-func (c *Client) MDSClientFeatures() []byte {
-	if c.options.EnableCephFS {
-		return MDSCephFSClientFeatures()
+func (c *Client) MDSClientFeatures() []byte { return slices.Clone(c.mdsClientFeatures()) }
+
+func (c *Client) mdsClientFeatures() []byte {
+	switch {
+	case c.options.EnableCephFSCharmap:
+		return mds.CephFSCharmapClientFeatures
+	case c.options.EnableCephFS:
+		return mds.CephFSClientFeatures
 	}
-	return MDSSessionClientFeatures()
+	return mds.ClientFeatures
 }
 
 // MDSFeatureBitsetHas tests one bit in a raw feature_bitset_t byte image, such

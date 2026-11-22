@@ -40,9 +40,9 @@ type (
 // MDSOptionalMetadataCharmap is the option kind of a directory charmap.
 // Reading it needs no CHARMAP client feature: the MDS reports a charmap to
 // every REPLY_ENCODING session, and refuses only the creation of an entry in
-// such a directory (-EPERM) by a session without that feature, which neither
-// profile declares. Name validation, normalization and folding stay with
-// the caller.
+// such a directory (-EPERM) by a session without that feature, which only
+// Options.EnableCephFSCharmap declares. Name validation, normalization and
+// folding stay with the caller.
 const MDSOptionalMetadataCharmap = mds.OptionalMetadataCharmap
 
 // Metadata operation codes and request flags (CEPH_MDS_OP_*, CEPH_MDS_FLAG_*).

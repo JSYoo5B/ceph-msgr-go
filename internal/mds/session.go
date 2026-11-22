@@ -71,9 +71,27 @@ var ClientFeatures = []byte{0xff, 0x05, 0, 0, 0, 0, 0, 0}
 // filesystem that requires one of them. A directory charmap still arrives in
 // InodeStat optional metadata (InodeStat.DecodeOptionalMetadata), and the MDS
 // answers -EPERM when this profile creates an entry in such a directory.
+// CHARMAP is declared only by CephFSCharmapClientFeatures.
 // Not claimed: multi-rank or failover reclaim, use or release of delegated
 // inodes, and asynchronous directory operations.
 var CephFSClientFeatures = []byte{0xff, 0xb7, 0x1c, 0, 0, 0, 0, 0}
+
+// FeatureCharmap is CEPHFS_FEATURE_CHARMAP.
+const FeatureCharmap = 22
+
+// CephFSCharmapClientFeatures is CephFSClientFeatures plus CHARMAP (22),
+// declared only when the caller opts in to a directory name policy. Besides
+// admission (a filesystem can require it, and a new incarnation checks the
+// requirement against the features the session map kept), the pinned MDS
+// reads the bit only in Server::can_handle_charmap: a session without it is answered -EPERM when it would add a dentry (create,
+// mknod, mkdir, symlink, link or rename destination) to a directory that has
+// a charmap. The MDS neither checks nor transforms the name; the bit is the
+// client's promise that it sent the name the way the stock client does
+// (Client::_wrap_name: UTF-8 validation, the directory's normalization, case
+// folding when it is case-insensitive, and the original spelling as the
+// alternate name). The library sends the caller's name and alternate name
+// unchanged; the policy is the caller's. No message format depends on it.
+var CephFSCharmapClientFeatures = []byte{0xff, 0xb7, 0x5c, 0, 0, 0, 0, 0}
 
 // NoOldestClientTID is the native MClientSession default. The MDS ignores it
 // for completed-request trimming; no metadata request exists in this stage.
@@ -126,9 +144,9 @@ func sessionMessage(version uint16, front []byte) msgr.MessageData {
 }
 
 // EncodeRequestOpen builds the v7 REQUEST_OPEN that a current Tentacle client
-// sends: metadata in key order, the declared feature bitset (ClientFeatures or
-// CephFSClientFeatures), an empty metric spec (no metrics are sent), flags 0,
-// no cap auths and the default oldest TID.
+// sends: metadata in key order, the declared feature bitset (ClientFeatures,
+// CephFSClientFeatures or CephFSCharmapClientFeatures), an empty metric spec
+// (no metrics are sent), flags 0, no cap auths and the default oldest TID.
 func EncodeRequestOpen(metadata map[string]string, features []byte) msgr.MessageData {
 	e := wire.Encoder{}
 	encodeHead(&e, SessionRequestOpen, 0)
