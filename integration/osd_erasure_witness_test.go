@@ -96,6 +96,55 @@ func (o pgIntervalObservation) heldSince(route osdFixtureOracle) error {
 	return nil
 }
 
+// errIntervalChanged marks a complete observation after requests that
+// shows their interval no longer holding (heldThrough).
+var errIntervalChanged = errors.New("the interval changed around the requests")
+
+// heldThrough judges one observation taken after requests that carried
+// route. It is nil when the interval held (heldSince). It wraps
+// errIntervalChanged when the observation is complete and shows something
+// else: another placement or an interval that started after route's epoch.
+// It is a plain error when the observation itself is incomplete, which says
+// nothing about the interval: placement records that differ or are missing,
+// no complete query reply, a reply for another shard than the placement's
+// primary holds, or a primary behind the placement's epoch.
+func (o pgIntervalObservation) heldThrough(route osdFixtureOracle) error {
+	held := o.heldSince(route)
+	if held == nil {
+		return nil
+	}
+	if o.Before == nil || o.After == nil || !reflect.DeepEqual(o.Before, o.After) {
+		return held
+	}
+	q := o.Query
+	if q == nil || o.Code != 0 || o.QueryFailure != "" || q.SameIntervalSince == 0 || q.Epoch < o.Before.Epoch ||
+		q.Info.PGID != o.Before.PGID+"s"+strconv.Itoa(int(o.Before.Shard)) || q.Info.Shard != int(o.Before.Shard) {
+		return held
+	}
+	return fmt.Errorf("%w: %v", errIntervalChanged, held)
+}
+
+// erasureAwaitHeldThrough takes observations after requests that carried
+// route, at most attempts, pausing between them, until one is complete. It
+// returns that observation and its number, with nil when the interval held
+// and an error wrapping errIntervalChanged when it changed; an interval
+// start only grows, so a change is final and ends the observations at once.
+// An error without errIntervalChanged means no complete observation was
+// taken.
+func erasureAwaitHeldThrough(observe func() pgIntervalObservation, route osdFixtureOracle, attempts int, pause func()) (pgIntervalObservation, int, error) {
+	err := errors.New("no observation")
+	for attempt := 1; attempt <= attempts; attempt++ {
+		o := observe()
+		if err = o.heldThrough(route); err == nil || errors.Is(err, errIntervalChanged) {
+			return o, attempt, err
+		}
+		if attempt < attempts {
+			pause()
+		}
+	}
+	return pgIntervalObservation{}, attempts, fmt.Errorf("no complete observation within %d: %w", attempts, err)
+}
+
 // failedOverOn judges one observation after the loss of origin's primary
 // and returns the shard of the primary it accepts. A pool with nonprimary
 // shards is judged by replacedOn: the first member of the primary-first
@@ -483,6 +532,81 @@ func TestErasureReadShard(t *testing.T) {
 		route.Shard = c.shard
 		if got := erasureReadShard(route, c.k, c.chunk, c.size); got != c.want {
 			t.Fatal("read shard", c, got)
+		}
+	}
+}
+
+func TestErasureIntervalHeldThrough(t *testing.T) {
+	receipt, route := pgIntervalChange()
+	held := heldAt(receipt.OriginObservation, 28, 24)
+	if err := held.heldThrough(route); err != nil {
+		t.Fatal("an interval that held refused:", err)
+	}
+	both := func(edit func(*osdFixtureOracle)) func(*pgIntervalObservation) {
+		return func(o *pgIntervalObservation) { edit(o.Before); edit(o.After) }
+	}
+	// A complete observation of something else is a change of interval.
+	for name, edit := range map[string]func(*pgIntervalObservation){
+		"interval changed and came back": func(o *pgIntervalObservation) { o.Query.SameIntervalSince = 27 },
+		"another primary": both(func(p *osdFixtureOracle) {
+			p.ID, p.PrimaryID, p.Shard, p.Address = 2, 2, 1, "v2:192.0.2.8:6800/3"
+		}),
+		"another address":   both(func(p *osdFixtureOracle) { p.Address = "v2:192.0.2.7:6800/9" }),
+		"one position gone": both(func(p *osdFixtureOracle) { p.Up[2], p.Acting[2] = crushItemNone, crushItemNone }),
+		"a pg_temp":         both(func(p *osdFixtureOracle) { p.PGTemp = true }),
+		"primary's sets":    func(o *pgIntervalObservation) { o.Query.Acting = []int32{3, 2, crushItemNone, 0} },
+	} {
+		o := heldAt(receipt.OriginObservation, 28, 24)
+		edit(&o)
+		if o.Before.Shard != route.Shard {
+			o.Query.Info.PGID, o.Query.Info.Shard = route.PGID+"s"+strconv.Itoa(int(o.Before.Shard)), int(o.Before.Shard)
+		}
+		if err := o.heldThrough(route); !errors.Is(err, errIntervalChanged) {
+			t.Error("not reported as a changed interval:", name, err)
+		}
+	}
+	// An incomplete observation says nothing about the interval.
+	for name, edit := range map[string]func(*pgIntervalObservation){
+		"records differ":    func(o *pgIntervalObservation) { o.After.Epoch = 29 },
+		"no record after":   func(o *pgIntervalObservation) { o.After = nil },
+		"no query":          func(o *pgIntervalObservation) { o.Query, o.QueryFailure = nil, "pg query returned -110" },
+		"query refused":     func(o *pgIntervalObservation) { o.Code = -110 },
+		"query of shard 1":  func(o *pgIntervalObservation) { o.Query.Info.PGID, o.Query.Info.Shard = "3.7s1", 1 },
+		"primary behind":    func(o *pgIntervalObservation) { o.Query.Epoch = 27 },
+		"no interval start": func(o *pgIntervalObservation) { o.Query.SameIntervalSince = 0 },
+	} {
+		o := heldAt(receipt.OriginObservation, 28, 24)
+		edit(&o)
+		if err := o.heldThrough(route); err == nil || errors.Is(err, errIntervalChanged) {
+			t.Error("an incomplete observation not reported as incomplete:", name, err)
+		}
+	}
+
+	// The wait re-observes an incomplete observation and stops at the first
+	// complete one, held or changed.
+	behind := heldAt(receipt.OriginObservation, 28, 24)
+	behind.Query.Epoch = 27
+	changed := heldAt(receipt.OriginObservation, 29, 29)
+	for name, c := range map[string]struct {
+		seen    []pgIntervalObservation
+		attempt int
+		changed bool
+		ok      bool
+	}{
+		"held at once":            {[]pgIntervalObservation{held}, 1, false, true},
+		"held after one behind":   {[]pgIntervalObservation{behind, held}, 2, false, true},
+		"changed after one":       {[]pgIntervalObservation{behind, changed, held}, 2, true, false},
+		"changed, held again":     {[]pgIntervalObservation{changed, held}, 1, true, false},
+		"never complete":          {[]pgIntervalObservation{behind, behind, behind}, 3, false, false},
+		"never complete, no more": {[]pgIntervalObservation{behind, behind, behind, held}, 3, false, false},
+	} {
+		calls, pauses := 0, 0
+		o, n, err := erasureAwaitHeldThrough(func() pgIntervalObservation { calls++; return c.seen[calls-1] }, route, 3, func() { pauses++ })
+		if n != c.attempt || calls != c.attempt || errors.Is(err, errIntervalChanged) != c.changed || (err == nil) != c.ok || pauses != calls-1 {
+			t.Error(name, n, calls, pauses, err)
+		}
+		if c.ok && !reflect.DeepEqual(o, c.seen[n-1]) {
+			t.Error(name, "returned another observation")
 		}
 	}
 }
