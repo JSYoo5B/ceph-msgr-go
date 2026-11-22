@@ -380,42 +380,50 @@ func (r *partialWriteRun) comeBack(o *shardOutage) pgIntervalReceipt {
 	return pgIntervalReceipt{}
 }
 
-// leftOutShard is the single nonprimary shard the partial overwrite left
-// out.
-func (r *partialWriteRun) leftOutShard(state partialOverwrite) int {
+// leftOut returns the shards the partial overwrite left out, which must be
+// exactly the pool's nonprimary shards, and the partial-write record of each
+// from the full write to the overwrite. The last of them is the one an
+// outage control takes away; on a pool with more than one, the others stay.
+func (r *partialWriteRun) leftOut(state partialOverwrite) (skipped []int, away int, records []shardPartialWrite) {
 	r.t.Helper()
-	skipped := state.want.skipped()
-	if len(skipped) != 1 || !slices.Contains(r.facts.nonprimary, skipped[0]) {
-		r.t.Fatalf("the overwrite left out shards %v; this control needs exactly one nonprimary shard", skipped)
+	skipped = state.want.skipped()
+	if len(skipped) == 0 || !slices.Equal(skipped, r.facts.nonprimary) {
+		r.t.Fatalf("the overwrite left out shards %v; this control needs exactly the nonprimary shards %v", skipped, r.facts.nonprimary)
 	}
-	return skipped[0]
+	return skipped, skipped[len(skipped)-1], rangeRecords(skipped, state.want.full, state.want.patch)
 }
 
-// After the partial overwrite of the first control, which leaves the
-// nonprimary data shard out, that shard's OSD is taken out of the PG by the
-// fixture's forced kill and the PG must become active on its original
-// primary with that position empty. The object is read back natively and
-// through the Go client, which the primary must answer without that shard.
-// Nothing is written. The OSD is started again and the PG must be
-// active+clean on its original placement in a newer interval. Every acting
-// shard's store is then captured: the returned shard still holds only the
-// full write's entry, with its head, last_update and last_complete at the
-// overwrite, past its last entry, and the partial-write range between them
-// in its own info. This states what each shard's own log holds at capture
+// rangeRecords is one partial-write record per shard, from one version to
+// another, in shard order.
+func rangeRecords(shards []int, from, to string) []shardPartialWrite {
+	records := make([]shardPartialWrite, 0, len(shards))
+	for _, shard := range shards {
+		records = append(records, shardPartialWrite{Shard: shard, From: from, To: to})
+	}
+	return records
+}
+
+// erasurePartialWriteShardReturnScenario: after the partial overwrite of
+// the first control, which leaves the nonprimary data shards out, the OSD of
+// the last of them is taken out of the PG by the fixture's forced kill and
+// the PG must become active on its original primary with that position
+// empty. The object is read back natively and through the Go client, which
+// the primary must answer without that shard. Nothing is written. The OSD is
+// started again and the PG must be active+clean on its original placement in
+// a newer interval. Every acting shard's store is then captured: the
+// returned shard, and on k>2 every left-out shard that stayed, still holds
+// only the full write's entry, with its head, last_update and last_complete
+// at the overwrite, past its last entry, and the partial-write range of
+// every left-out shard in its own info. This states what each shard's own log holds at capture
 // time; it claims nothing about eviction, loss or replay.
 // Not run: a parity or primary shard outage, two members away, and a capture
 // while the member is away.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteshardreturnshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
-//scenario:covers CLIENT to OSD
-//fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
-func TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration(t *testing.T) {
-	run := startPartialWriteRun(t, 900*time.Second)
+func erasurePartialWriteShardReturnScenario(t *testing.T, width erasureWidth) {
+	run := startPartialWriteRun(t, width, 900*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince
 	state := run.partialOverwrite()
-	left := run.leftOutShard(state)
-	records := []shardPartialWrite{{Shard: left, From: state.want.full, To: state.want.patch}}
-	// Both peerings below apply the range only if the primary recorded it.
+	_, left, records := run.leftOut(state)
+	// Both peerings below apply the ranges only if the primary recorded them.
 	run.waitPrimaryRecords(records, started)
 
 	outage := run.leave(left, started)
@@ -446,6 +454,36 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegrati
 	t.Logf("the PG stayed in the interval that started at epoch %d", interval)
 }
 
+// TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration is erasurePartialWriteShardReturnScenario on optimized isa
+// k=2,m=2 (four OSDs; nonprimary shard {1}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteshardreturnshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
+func TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteShardReturnScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1PartialWriteShardReturnShardHistoryIntegration is erasurePartialWriteShardReturnScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1partialwriteshardreturnshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
+func TestCephOSDErasureOptimizedK3M1PartialWriteShardReturnShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteShardReturnScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2PartialWriteShardReturnShardHistoryIntegration is erasurePartialWriteShardReturnScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2partialwriteshardreturnshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
+func TestCephOSDErasureOptimizedK4M2PartialWriteShardReturnShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteShardReturnScenario(t, erasureK4M2)
+}
+
 // shardLogRecovered restates what the pinned source leaves in the own log of
 // every acting shard, the returned one included, once the PG is clean again
 // after an outage of one member during which the last write was
@@ -470,10 +508,15 @@ func (r *partialWriteRun) readVersion(label string, incarnation uint32, write ce
 	}
 }
 
-// recoveredShardLogs requires every acting shard's own log to be exactly
-// what shardLogRecovered restates for the writes, and its partial-write
-// records to be one of the lists records returns.
-func (r *partialWriteRun) recoveredShardLogs(label string, primary pgHistorySnapshot, shards shardHistorySnapshot, object string, writes []shardWrite, records func(shard int) [][]shardPartialWrite) {
+// recoveredShardLogs requires the returned shard's own log to be exactly
+// what shardLogRecovered restates for the writes, every other acting shard's
+// to be what shardLogExpected restates for a PG that did not peer after the
+// last write, and every shard's partial-write records to be one of the lists
+// records returns. A shard that stayed has every write that named it,
+// received as a sub-write; a left-out shard that stayed was advanced
+// through its range by the outage's peering (src/osd/PeeringState.cc
+// :324-364) and so has nothing to recover from the log.
+func (r *partialWriteRun) recoveredShardLogs(label string, primary pgHistorySnapshot, shards shardHistorySnapshot, object string, writes []shardWrite, returned int, records func(shard int) [][]shardPartialWrite) {
 	r.t.Helper()
 	for i, write := range writes {
 		if _, err := writeEntry(primary.Targets[i].Locations, object, write.version); err != nil {
@@ -484,12 +527,21 @@ func (r *partialWriteRun) recoveredShardLogs(label string, primary pgHistorySnap
 	if primary.Head != last || primary.LogEntries != len(writes) {
 		r.t.Fatalf("%s: the live primary's log holds %d entries and ends at %s, not the %d writes ending at %s", label, primary.LogEntries, primary.Head, len(writes), last)
 	}
-	expected, err := shardLogRecovered(writes, r.facts.size)
+	recovered, err := shardLogRecovered(writes, r.facts.size)
 	if err != nil {
 		r.t.Fatal(err)
 	}
+	if returned < 0 || returned >= r.facts.size {
+		r.t.Fatalf("returned shard %d is not a shard of the pool", returned)
+	}
 	for i, shard := range shards.Shards {
 		role := erasureShardRole(i, r.width.k, r.facts.nonprimary)
+		expected := recovered
+		if i != returned {
+			if expected, err = shardLogExpected(writes, i, r.facts.size, false); err != nil {
+				r.t.Fatal(err)
+			}
+		}
 		locations := make([][]pgHistoryLocation, len(writes))
 		for j := range writes {
 			locations[j] = shard.Targets[j].Locations
@@ -509,35 +561,33 @@ func (r *partialWriteRun) recoveredShardLogs(label string, primary pgHistorySnap
 	}
 }
 
-// After the partial overwrite of the first control, which leaves the
-// nonprimary data shard out, that shard's OSD is taken out of the PG by the
-// fixture's forced kill. While the PG is active without it, the Go client
-// overwrites a few bytes inside that shard's chunk, exactly once; the write
-// must be acknowledged, and it is read back natively and through the Go
-// client. The primary's own info must then show the absent shard's range
-// reset to that write. The OSD is started again and the PG must be
-// active+clean on its original placement in a newer interval, which includes
-// the recovery of the object to the returned shard. Every acting shard's
-// store is then captured: every shard, the returned one included, holds all
-// three entries with its head at the degraded write and an empty missing
-// set. The returned shard's copy therefore now holds the entry of the
-// overwrite it was left out of, which names the other shards only; it
-// received that entry from the primary's log at its return. The object is
+// erasurePartialWriteDegradedWriteScenario: after the partial overwrite of
+// the first control, which leaves the nonprimary data shards out, the OSD of
+// the last of them is taken out of the PG by the fixture's forced kill.
+// While the PG is active without it, the Go client overwrites a few bytes
+// inside that shard's chunk, exactly once; the write must be acknowledged,
+// and it is read back natively and through the Go client. The primary's own
+// info must then show the range of every left-out shard reset to that
+// write. The OSD is started again and the PG must be active+clean on its
+// original placement in a newer interval, which includes the recovery of the
+// object to the returned shard. Every acting shard's store is then
+// captured: the returned shard holds all three entries with its head at the
+// degraded write. Its copy therefore now holds the entry of the overwrite it
+// was left out of, which names other shards only; it received that entry
+// from the primary's log at its return. Every other shard holds exactly the
+// writes that named it: on k>2 a left-out shard that stayed holds the full
+// and the degraded write and not the overwrite, because the outage's
+// peering advanced it through its range. The object is
 // read back natively and through the Go client. This states what each
 // shard's own log holds at capture time; it does not read the returned
 // shard's chunk and claims nothing about eviction, loss or replay.
 // Not run: a second degraded write, a write during recovery, and backfill
 // instead of log recovery.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritedegradedwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
-//scenario:covers CLIENT to OSD
-//fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
-func TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration(t *testing.T) {
-	run := startPartialWriteRun(t, 900*time.Second)
+func erasurePartialWriteDegradedWriteScenario(t *testing.T, width erasureWidth) {
+	run := startPartialWriteRun(t, width, 900*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince
 	state := run.partialOverwrite()
-	left := run.leftOutShard(state)
-	records := []shardPartialWrite{{Shard: left, From: state.want.full, To: state.want.patch}}
+	skipped, left, records := run.leftOut(state)
 	run.waitPrimaryRecords(records, started)
 
 	outage := run.leave(left, started)
@@ -573,20 +623,52 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegra
 	t.Logf("degraded write %s [%d,+%d) at %s, user version %d, without osd.%d (shard %d)", key, offset, len(degraded), writes[2].version, reply.UserVersion, outage.osd, left)
 	run.readVersion("read without the member", absentReadIncarnation, reply)
 	// The return's peering must find the range reset: it then cannot advance
-	// the returning shard, which gets every entry after its last_update.
-	reset := []shardPartialWrite{{Shard: left, From: writes[2].version, To: writes[2].version}}
+	// the returning shard, which gets every entry after its last_update. The
+	// write names every shard, so it resets the range of every left-out
+	// shard, present or away.
+	reset := rangeRecords(skipped, writes[2].version, writes[2].version)
 	run.waitAbsentRecords(outage, reset)
 
 	returned := run.comeBack(outage)
 	interval := returned.Observation.Query.SameIntervalSince
 	primary, shards := run.capture([]pgHistoryTarget{state.fullKey, state.patchKey, key}, state.misses, nil)
-	run.recoveredShardLogs("after the recovery", primary, shards, state.want.object, writes, func(int) [][]shardPartialWrite { return [][]shardPartialWrite{reset} })
+	run.recoveredShardLogs("after the recovery", primary, shards, state.want.object, writes, left, func(int) [][]shardPartialWrite { return [][]shardPartialWrite{reset} })
 	run.observe("recovery", reply)
 	run.readVersion("read after the recovery", returnedReadIncarnation, reply)
 	if ended := run.showInterval().Observation.Query.SameIntervalSince; ended != interval {
 		t.Fatalf("the PG's interval started at epoch %d when the member was back and at epoch %d after the last capture", interval, ended)
 	}
 	t.Logf("the PG stayed in the interval that started at epoch %d", interval)
+}
+
+// TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration is erasurePartialWriteDegradedWriteScenario on optimized isa
+// k=2,m=2 (four OSDs; nonprimary shard {1}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritedegradedwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
+func TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteDegradedWriteScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1PartialWriteDegradedWriteShardHistoryIntegration is erasurePartialWriteDegradedWriteScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1partialwritedegradedwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
+func TestCephOSDErasureOptimizedK3M1PartialWriteDegradedWriteShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteDegradedWriteScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2PartialWriteDegradedWriteShardHistoryIntegration is erasurePartialWriteDegradedWriteScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2partialwritedegradedwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
+func TestCephOSDErasureOptimizedK4M2PartialWriteDegradedWriteShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteDegradedWriteScenario(t, erasureK4M2)
 }
 
 // pgAbsentObservation builds one synthetic receipt of PG 3.7 without the
@@ -833,6 +915,37 @@ func TestReobserveAbsent(t *testing.T) {
 			if err := checkPGAbsent(seen, route, 1, 24); err != nil || seen.Observation.Query.SameIntervalSince != 26 {
 				t.Errorf("%s: returned an observation that is not held in the interval since 26: %v", name, err)
 			}
+		}
+	}
+}
+
+func TestRangeRecords(t *testing.T) {
+	got := rangeRecords([]int{1, 2}, "25'1", "25'2")
+	if want := []shardPartialWrite{{1, "25'1", "25'2"}, {2, "25'1", "25'2"}}; !slices.Equal(got, want) {
+		t.Fatal("records", got, want)
+	}
+	if got := rangeRecords(nil, "25'1", "25'2"); len(got) != 0 {
+		t.Fatal("records of no shard", got)
+	}
+}
+
+// On k=3,m=1 the overwrite leaves shards 1 and 2 out and the outage takes
+// shard 2. After the degraded write and the recovery, shard 2 holds every
+// write (shardLogRecovered), while shard 1, which stayed, holds the writes
+// that named it and its head is at the degraded write, its last entry.
+func TestRecoveredShardLogsOfAStayedShard(t *testing.T) {
+	writes := []shardWrite{{"full write", "25'1", []int{0, 1, 2, 3}}, {"partial overwrite", "25'2", []int{0, 3}}, {"degraded write", "27'3", []int{0, 1, 2, 3}}}
+	returned, err := shardLogRecovered(writes, 4)
+	if err != nil || !reflect.DeepEqual(returned, shardLogState{[]bool{true, true, true}, "27'3", false}) {
+		t.Fatal("returned shard", returned, err)
+	}
+	for shard, want := range map[int]shardLogState{
+		0: {[]bool{true, true, true}, "27'3", false},
+		1: {[]bool{true, false, true}, "27'3", false},
+		3: {[]bool{true, true, true}, "27'3", false},
+	} {
+		if got, err := shardLogExpected(writes, shard, 4, false); err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("shard %d: %v %v; want %v", shard, got, err, want)
 		}
 	}
 }
