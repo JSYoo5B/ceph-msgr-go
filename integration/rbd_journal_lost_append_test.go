@@ -1477,9 +1477,8 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		// failed run would name a lock that is no longer the subject's.
 		unlocked = true
 		// The takeover is to start while the subject's watch is listed. Its
-		// own boundary observation and the observer's notifications show
-		// whether it did; this bound only refuses to start a takeover that
-		// could not.
+		// own boundary observation shows whether it did; this bound only
+		// refuses to start a takeover that could not.
 		age := time.Since(watched)
 		ol.WatchAgeAtTakeover = age.Round(time.Millisecond).String()
 		if age > rbdJournalOwnerLossTakeoverStart {

@@ -224,7 +224,7 @@ func TestRBDJournalOwnerLossClaims(t *testing.T) {
 			r.OwnerLoss.Takeover.BoundaryWatchers[0].Address = "10.0.0.9:0/12"
 		},
 		// The observer's notifications of the takeover.
-		"no RequestLock (the watch was gone)": func(r *rbdJournalLostAppendRecord) {
+		"no RequestLock before the acquisition": func(r *rbdJournalLostAppendRecord) {
 			r.OwnerLoss.Takeover.Notes = r.OwnerLoss.Takeover.Notes[2:]
 		},
 		"no notifications":  func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.Notes = nil },
@@ -314,7 +314,7 @@ func TestRBDJournalForcedBreakClaims(t *testing.T) {
 		// The break of a live owner.
 		"no ping before the break":  func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.PingBefore = nil },
 		"ping refused before break": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.PingBefore.Class = "refused" },
-		"owner dead at the break": func(r *rbdJournalLostAppendRecord) {
+		"subject watch not listed at the break": func(r *rbdJournalLostAppendRecord) {
 			r.OwnerLoss.Break.WatchersBefore = r.OwnerLoss.Break.WatchersBefore[1:]
 		},
 		"owner watch of another cookie at the break": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Break.WatchersBefore[0].Cookie++ },

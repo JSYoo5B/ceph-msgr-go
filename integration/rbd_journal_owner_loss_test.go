@@ -27,18 +27,24 @@ import (
 // its silent connection and never sends anything again, so it releases
 // nothing, does not unwatch and does not renew its watch, which the OSD
 // keeps for its timeout after the registration. A native librbd write (the
-// takeover) then takes the lock. Right before its first write the takeover
-// lists the subject's lock record (client, cookie and address) and the
-// subject's watch with that cookie at that address. The observer receives
-// from the takeover's instance and watch handle at least one RequestLock,
-// then its AcquiredLock and its ReleasedLock: librbd requests the lock only
-// after its acquisition found the owner's watch listed (AcquireRequest.cc,
-// BreakRequest.cc handle_get_watchers and ExclusiveLock.cc in
-// ceph/ceph/blob/v20.2.4/src/librbd/), so the takeover asked a listed owner.
-// It then blocklisted the address of the subject's lock record and broke
-// the lock, which BreakRequest.cc does only once no watcher matches the
-// record; that order is librbd's and is not observed separately. The
-// takeover acquires the lock, opens the journal, replays the owned entry and
+// takeover) then takes the lock. Two observations bound how it found the
+// lock. Right before its first write the takeover lists the subject's lock
+// record (client, cookie and address) and the subject's watch with that
+// cookie at that address. The observer receives from the takeover's
+// instance and watch handle at least one RequestLock, then only its
+// AcquiredLock and its ReleasedLock. A RequestLock says who asked and when,
+// not why: at v20.2.4 ExclusiveLock.cc post_acquire_lock_handler sends it
+// when the acquisition ends with -EBUSY (AcquireRequest.cc handle_get_locker)
+// or -EAGAIN, and BreakRequest.cc returns -EAGAIN when a watcher matches the
+// locker's address and handle (handle_get_watchers) or when the locker
+// changed on its recheck (handle_get_locker), all in
+// ceph/ceph/blob/v20.2.4/src/librbd/. The two observations are consistent
+// with the live-watcher branch, which the run is set up to reach, but do not
+// single it out. After the takeover the address of the subject's lock
+// record is blocklisted and the lock was taken; that is consistent with
+// BreakRequest.cc, which blocklists that address and then breaks the lock
+// once no watcher matches the record, and neither that check nor that order
+// is observed. The takeover acquires the lock, opens the journal, replays the owned entry and
 // journals and applies its own write, which covers the first half of the
 // owned extent. The takeover's native
 // observation shows the owned entry exactly once in the journal, followed
@@ -292,28 +298,34 @@ func rbdJournalTakeoverClaims(r *rbdJournalLostAppendRecord, v, before, locked, 
 	}
 }
 
-// rbdJournalTakeoverBoundaryClaims checks how the takeover found the lock.
+// rbdJournalTakeoverBoundaryClaims checks what the takeover listed when it
+// started and, in the owner-loss variant, the notifications it sent.
 // In both variants the boundary is what the takeover instance listed after
 // its open and right before its first write, before its lock acquisition
 // started: the lock record and the header watchers, its own watch among them.
 //
 // Owner-loss variant: the boundary lists the subject's lock record (client,
 // cookie and address) and the subject's watch with that cookie at that
-// address, which is how librbd's liveness check matches a live owner. The
-// observer's header watch then received, from the takeover's instance and
-// watch handle, at least one RequestLock, followed only by its AcquiredLock
-// and its ReleasedLock, each acknowledged empty. librbd sends RequestLock
-// after an acquisition that found the lock busy and its owner alive
-// (v20.2.4 managed_lock/AcquireRequest.cc handle_break_lock -EAGAIN from
-// managed_lock/BreakRequest.cc handle_get_watchers; ExclusiveLock.cc
-// post_acquire_lock_handler), so a correlated RequestLock means librbd found
-// the subject's watch listed. That it blocklisted and broke the lock only
-// once the watch was gone is BreakRequest's order and is not observed
-// separately: the observation shows the address blocklisted, the lock
-// taken and the watch gone after the takeover.
+// address, the pair librbd's liveness check compares. The observer's header
+// watch then received, from the takeover's instance and watch handle, at
+// least one RequestLock, followed only by its AcquiredLock and its
+// ReleasedLock, each acknowledged empty. These are the claims: the subject
+// was listed when the takeover started, and the takeover asked for the lock
+// before it announced it. The RequestLock does not name the branch that
+// sent it. At v20.2.4 ExclusiveLock.cc post_acquire_lock_handler sends it
+// for -EBUSY (managed_lock/AcquireRequest.cc handle_get_locker, an
+// incompatible lock) and for -EAGAIN, which managed_lock/BreakRequest.cc
+// returns from handle_get_watchers (a watcher matches the locker's address
+// and handle) and from handle_get_locker (the locker changed on the
+// recheck). The record is consistent with the live-watcher branch the run
+// is set up to reach. That librbd blocklisted the address and broke the
+// lock once no watcher matched is likewise consistent with BreakRequest's
+// order and is not observed: the observation shows the address
+// blocklisted, the lock taken and the watch gone after the takeover.
 //
 // Forced-break variant: the boundary lists no lock record and not the
-// subject's watch, so the takeover took a free lock. The variant keeps no
+// subject's watch, which is consistent with the takeover taking a free lock
+// (AcquireRequest.cc handle_get_locker -ENOENT, then send_lock). The variant keeps no
 // observer watch and judges no notification.
 func rbdJournalTakeoverBoundaryClaims(r *rbdJournalLostAppendRecord, fail func(string, ...any)) {
 	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
