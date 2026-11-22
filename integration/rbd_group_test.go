@@ -631,7 +631,6 @@ type rbdGroupHeld struct {
 	Op       uint32
 	Request  rbdAsyncRequestID
 	Received time.Time
-	Index    int
 	Answer   chan []byte
 }
 
@@ -641,15 +640,27 @@ type rbdGroupHeld struct {
 // test, which reads the cluster before it answers (a quiesce with a
 // ResponseMessage, an unquiesce with an empty acknowledgement). It pings the
 // watch while idle.
+//
+// A notification is recorded only after its acknowledgement returned, which
+// can be after the notifier's notify completed: the OSD completes the notify
+// once it has the acknowledgement, independently of when the Go watcher
+// receives the OSD reply. A verdict on the recorded notifications therefore
+// settles first (settle).
 type rbdGroupResponder struct {
 	mu         sync.Mutex
 	action     string
 	allowed    []uint32
 	events     []rbdGroupNotification
+	inFlight   map[uint64]int // notify ID -> handlers not yet recorded
+	changed    chan struct{}  // closed and replaced on every recording
 	failure    error
 	pings      int
 	pingErrors []string
 	held       chan rbdGroupHeld
+}
+
+func newRBDGroupResponder() *rbdGroupResponder {
+	return &rbdGroupResponder{held: make(chan rbdGroupHeld), inFlight: map[uint64]int{}, changed: make(chan struct{})}
 }
 
 func (r *rbdGroupResponder) fail(err error) {
@@ -668,24 +679,65 @@ func (r *rbdGroupResponder) begin(action string, allowed ...uint32) {
 	r.mu.Unlock()
 }
 
-func (r *rbdGroupResponder) snapshot() ([]rbdGroupNotification, error) {
+// receive opens the record of one notification: it is in flight until
+// record appends it.
+func (r *rbdGroupResponder) receive(received, started time.Time, event cephmsgr.OSDWatchEvent) (rbdGroupNotification, []uint32) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return slices.Clone(r.events), r.failure
+	r.inFlight[event.NotifyID]++
+	n := rbdGroupNotification{Action: r.action, AfterMS: float64(received.Sub(started).Microseconds()) / 1000, NotifyID: event.NotifyID,
+		NotifierGlobalID: event.NotifierGlobalID, Cookie: event.Cookie, PayloadHex: hex.EncodeToString(event.Payload)}
+	return n, slices.Clone(r.allowed)
+}
+
+// record appends a received notification with its acknowledgement.
+func (r *rbdGroupResponder) record(n rbdGroupNotification) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n.Index = len(r.events)
+	r.events = append(r.events, n)
+	if r.inFlight[n.NotifyID]--; r.inFlight[n.NotifyID] <= 0 {
+		delete(r.inFlight, n.NotifyID)
+	}
+	close(r.changed)
+	r.changed = make(chan struct{})
+}
+
+// settle waits, bounded by ctx, until every notification in ids is recorded
+// and no received notification is still unrecorded, and returns the
+// recorded notifications. A notifier that returned after its notify
+// completed has had every acknowledgement it waited for submitted, so after
+// settle each of them is recorded.
+func (r *rbdGroupResponder) settle(ctx context.Context, ids ...uint64) ([]rbdGroupNotification, error) {
+	for {
+		r.mu.Lock()
+		var missing []uint64
+		for _, id := range ids {
+			if !slices.ContainsFunc(r.events, func(n rbdGroupNotification) bool { return n.NotifyID == id }) {
+				missing = append(missing, id)
+			}
+		}
+		inFlight := len(r.inFlight)
+		events, failure, changed := slices.Clone(r.events), r.failure, r.changed
+		r.mu.Unlock()
+		if failure != nil {
+			return events, failure
+		}
+		if len(missing) == 0 && inFlight == 0 {
+			return events, nil
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return events, fmt.Errorf("member header notifications did not settle (unrecorded notify IDs %v, %d in flight): %w", missing, inFlight, ctx.Err())
+		}
+	}
 }
 
 func (r *rbdGroupResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, epoch uint32, started time.Time, event cephmsgr.OSDWatchEvent) {
 	received := time.Now()
-	r.mu.Lock()
-	n := rbdGroupNotification{Action: r.action, Index: len(r.events), AfterMS: float64(received.Sub(started).Microseconds()) / 1000, NotifyID: event.NotifyID,
-		NotifierGlobalID: event.NotifierGlobalID, Cookie: event.Cookie, PayloadHex: hex.EncodeToString(event.Payload)}
-	allowed := slices.Clone(r.allowed)
-	r.mu.Unlock()
-	defer func() {
-		r.mu.Lock()
-		r.events = append(r.events, n)
-		r.mu.Unlock()
-	}()
+	n, allowed := r.receive(received, started, event)
+	defer func() { r.record(n) }()
 	if event.Opcode != cephmsgr.OSDWatchNotification || event.Cookie != w.Cookie() {
 		n.Unexpected = true
 		r.fail(fmt.Errorf("unexpected member header watch event opcode %d cookie %d", event.Opcode, event.Cookie))
@@ -695,7 +747,7 @@ func (r *rbdGroupResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, ep
 	op, request, err := decodeRBDQuiesceNotify(event.Payload)
 	if err == nil {
 		n.Op, n.Request, n.Held = op, &request, true
-		h := rbdGroupHeld{Event: event, Op: op, Request: request, Received: received, Index: n.Index, Answer: make(chan []byte, 1)}
+		h := rbdGroupHeld{Event: event, Op: op, Request: request, Received: received, Answer: make(chan []byte, 1)}
 		select {
 		case r.held <- h:
 		case <-ctx.Done():
@@ -729,6 +781,72 @@ func (r *rbdGroupResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, ep
 	}
 }
 
+// rbdGroupSettleTimeout bounds the wait for the Go watcher to record the
+// acknowledgements a returned native creation waited for: each is one OSD
+// round trip after the notify already completed.
+const rbdGroupSettleTimeout = 30 * time.Second
+
+// settleRBDGroupCreation waits for the member header notifications of one
+// native creation to settle, keyed by the exact quiesce and unquiesce notify
+// IDs, and judges them: exactly that quiesce (no retry) answered with answer,
+// exactly that unquiesce answered empty, every notification acknowledged
+// once, and for an accepted creation (answer 0) one AcquiredLock before the
+// unquiesce and one ReleasedLock after it, both from the creating client,
+// with a HeaderUpdate between them.
+func settleRBDGroupCreation(ctx context.Context, r *rbdGroupResponder, action string, quiesceID, unquiesceID, nativeGID uint64, answer int32) ([]rbdGroupNotification, error) {
+	settleCtx, cancel := context.WithTimeout(ctx, rbdGroupSettleTimeout)
+	defer cancel()
+	events, err := r.settle(settleCtx, quiesceID, unquiesceID)
+	if err != nil {
+		return events, err
+	}
+	var own []rbdGroupNotification
+	for _, e := range events {
+		if e.Action == action {
+			own = append(own, e)
+		}
+	}
+	seen := map[uint64]bool{}
+	var quiesces []rbdGroupNotification
+	count := map[uint32]int{}
+	for _, e := range own {
+		if seen[e.NotifyID] {
+			return events, fmt.Errorf("%s: member header notification %d recorded twice", action, e.NotifyID)
+		}
+		seen[e.NotifyID] = true
+		count[e.Op]++
+		if e.Op == rbdNotifyQuiesce || e.Op == rbdNotifyUnquiesce {
+			quiesces = append(quiesces, e)
+			continue
+		}
+		if e.Unexpected || e.AckDisposition != rbdAckSubmittedEmpty || e.AckHex != "" || e.AckError != "" || e.NotifierGlobalID != nativeGID {
+			return events, fmt.Errorf("%s: member header notification differs: %+v", action, e)
+		}
+	}
+	// One quiesce (no retry after a timeout) and one unquiesce, the exact
+	// notifications the test held.
+	if len(quiesces) != 2 || quiesces[0].NotifyID != quiesceID || quiesces[0].Op != rbdNotifyQuiesce || quiesces[0].AckDisposition != rbdAckSubmittedResponse ||
+		quiesces[0].AckHex != hex.EncodeToString(rbdResponseMessage(answer)) || quiesces[1].NotifyID != unquiesceID || quiesces[1].Op != rbdNotifyUnquiesce ||
+		quiesces[1].AckDisposition != rbdAckSubmittedEmpty || quiesces[1].AckHex != "" || slices.ContainsFunc(quiesces, func(e rbdGroupNotification) bool { return e.AckError != "" || e.NotifierGlobalID != nativeGID }) {
+		return events, fmt.Errorf("%s: member header quiesce requests differ: %+v", action, quiesces)
+	}
+	if answer != 0 {
+		if len(own) != 2 {
+			return events, fmt.Errorf("%s: a refused creation sent more than its quiesce and unquiesce: %+v", action, own)
+		}
+		return events, nil
+	}
+	position := func(op uint32) int {
+		return slices.IndexFunc(own, func(e rbdGroupNotification) bool { return e.Op == op })
+	}
+	acquired, header, unquiesce, released := position(rbdNotifyAcquiredLock), position(rbdNotifyHeaderUpdate), position(rbdNotifyUnquiesce), position(rbdNotifyReleasedLock)
+	if count[rbdNotifyAcquiredLock] != 1 || count[rbdNotifyReleasedLock] != 1 || count[rbdNotifyHeaderUpdate] == 0 || position(rbdNotifyQuiesce) != 0 ||
+		acquired < 0 || header < acquired || unquiesce < acquired || released < unquiesce || released < header {
+		return events, fmt.Errorf("%s: member header lock notifications differ: %+v", action, own)
+	}
+	return events, nil
+}
+
 // waitRBDGroupState polls the group driver's published creation state until
 // it holds the named phase, or the control action ended.
 func waitRBDGroupState(ctx context.Context, path, phase string, finished <-chan struct{}, finishedErr *error) (nativeRBDGroupState, nativeRBDGroupCreationPhase, error) {
@@ -758,6 +876,113 @@ func waitRBDGroupState(ctx context.Context, path, phase string, finished <-chan 
 			return nativeRBDGroupState{}, nativeRBDGroupCreationPhase{}, ctx.Err()
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+// TestRBDGroupCreationSettlement checks the member header notification
+// verdict against a Go watcher that records the final acknowledgements only
+// after the native creation returned: the verdict waits for the exact
+// quiesce and unquiesce notify IDs and every notification in flight, and
+// still refuses a retried quiesce, a duplicate, a wrong answer, a missing
+// lock notification and a notification that never settles.
+func TestRBDGroupCreationSettlement(t *testing.T) {
+	const native, quiesceID, unquiesceID = 4100, 11, 14
+	type step struct {
+		id       uint64
+		op       uint32
+		ack      []byte
+		late     bool // recorded only after the native creation returned
+		unseen   bool // not yet received when the native creation returned
+		never    bool // received but never recorded
+		notifier uint64
+	}
+	accepted := func() []step {
+		return []step{{id: quiesceID, op: rbdNotifyQuiesce, ack: rbdResponseMessage(0)}, {id: 12, op: rbdNotifyAcquiredLock}, {id: 13, op: rbdNotifyHeaderUpdate},
+			{id: unquiesceID, op: rbdNotifyUnquiesce}, {id: 15, op: rbdNotifyReleasedLock}}
+	}
+	refused := func() []step {
+		return []step{{id: quiesceID, op: rbdNotifyQuiesce, ack: rbdResponseMessage(rbdGroupQuiesceRefusal)}, {id: unquiesceID, op: rbdNotifyUnquiesce}}
+	}
+	late := func(steps []step, from int, unseen bool) []step {
+		for i := from; i < len(steps); i++ {
+			steps[i].late, steps[i].unseen = true, unseen
+		}
+		return steps
+	}
+	with := func(steps []step, f func([]step) []step) []step { return f(steps) }
+	cases := []struct {
+		name   string
+		answer int32
+		steps  []step
+		ok     bool
+	}{
+		{"accepted recorded before return", 0, accepted(), true},
+		{"accepted unquiesce and release recorded after return", 0, late(accepted(), 3, false), true},
+		// The unquiesce key holds the verdict until it is received; the
+		// release librbd waited for is already in flight.
+		{"accepted unquiesce received after return", 0, with(late(accepted(), 3, false), func(s []step) []step { s[3].unseen = true; return s }), true},
+		{"refused unquiesce recorded after return", rbdGroupQuiesceRefusal, late(refused(), 1, false), true},
+		{"refused unquiesce received after return", rbdGroupQuiesceRefusal, late(refused(), 1, true), true},
+		{"unquiesce never recorded", rbdGroupQuiesceRefusal, with(refused(), func(s []step) []step { s[1].never = true; return s }), false},
+		{"unquiesce never received", rbdGroupQuiesceRefusal, refused()[:1], false},
+		{"lock notification never recorded", 0, with(accepted(), func(s []step) []step { s[4].never = true; return s }), false},
+		{"retried quiesce", rbdGroupQuiesceRefusal, append([]step{{id: 10, op: rbdNotifyQuiesce, ack: rbdResponseMessage(rbdGroupQuiesceRefusal)}}, refused()...), false},
+		{"duplicate notify ID", 0, append(accepted(), step{id: 15, op: rbdNotifyReleasedLock}), false},
+		{"quiesce answered otherwise", 0, with(accepted(), func(s []step) []step { s[0].ack = rbdResponseMessage(-95); return s }), false},
+		{"unquiesce answered with a response", rbdGroupQuiesceRefusal, with(refused(), func(s []step) []step { s[1].ack = rbdResponseMessage(0); return s }), false},
+		{"accepted without its release", 0, accepted()[:4], false},
+		{"accepted with a second acquire", 0, append(accepted(), step{id: 16, op: rbdNotifyAcquiredLock}), false},
+		{"release before the unquiesce", 0, with(accepted(), func(s []step) []step { s[3], s[4] = s[4], s[3]; return s }), false},
+		{"refused with a lock notification", rbdGroupQuiesceRefusal, append(refused(), step{id: 15, op: rbdNotifyReleasedLock}), false},
+		{"lock notification from another client", 0, with(accepted(), func(s []step) []step { s[1].notifier = native + 1; return s }), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRBDGroupResponder()
+			r.begin("cell", rbdNotifyQuiesce, rbdNotifyUnquiesce, rbdNotifyAcquiredLock, rbdNotifyReleasedLock, rbdNotifyHeaderUpdate)
+			started := time.Now()
+			deliver := func(s step) rbdGroupNotification {
+				notifier := s.notifier
+				if notifier == 0 {
+					notifier = native
+				}
+				n, _ := r.receive(time.Now(), started, cephmsgr.OSDWatchEvent{Opcode: cephmsgr.OSDWatchNotification, NotifyID: s.id, NotifierGlobalID: notifier, Cookie: 1})
+				n.Op, n.AckHex, n.AckDisposition = s.op, hex.EncodeToString(s.ack), rbdAckDispositionOf(false, s.ack, nil)
+				return n
+			}
+			// later holds, in delivery order, what the watcher records
+			// after the native creation returned.
+			var later []func()
+			for _, s := range tc.steps {
+				switch {
+				case s.unseen:
+					later = append(later, func() { r.record(deliver(s)) })
+				case s.never:
+					deliver(s)
+				case s.late:
+					n := deliver(s)
+					later = append(later, func() { r.record(n) })
+				default:
+					r.record(deliver(s))
+				}
+			}
+			// The native creation has returned here.
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				for _, f := range later {
+					f()
+				}
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			events, err := settleRBDGroupCreation(ctx, r, "cell", quiesceID, unquiesceID, native, tc.answer)
+			if tc.ok && (err != nil || len(events) != len(tc.steps)) {
+				t.Fatal("settled creation refused", err, events)
+			}
+			if !tc.ok && err == nil {
+				t.Fatalf("creation verdict admitted %+v", events)
+			}
+		})
 	}
 }
 
@@ -1395,7 +1620,7 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 		t.Fatal("Go member header watch", err)
 	}
 	evidence.GoWatchCookie = w.Cookie()
-	responder = &rbdGroupResponder{held: make(chan rbdGroupHeld)}
+	responder = newRBDGroupResponder()
 	respondCtx, stopResponding := context.WithCancel(ctx)
 	responderDone := make(chan struct{})
 	responderStarted := time.Now()
@@ -1436,6 +1661,13 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	unwatch := func(t *testing.T) {
 		stopResponding()
 		<-responderDone
+		// A notification after the last settled creation is judged too.
+		responder.mu.Lock()
+		failure := responder.failure
+		responder.mu.Unlock()
+		if failure != nil {
+			t.Error("member header watch responder", failure)
+		}
 		if watching {
 			watching = false
 			req := osdRequest(wr)
@@ -1613,20 +1845,10 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 			t.Fatal("native RBD group", action, controlErr)
 		}
 		n := receipt(t, action, stderr)
-		events, failure := responder.snapshot()
-		if failure != nil {
-			t.Fatal(failure)
-		}
-		var quiesces []rbdGroupNotification
-		for _, e := range events {
-			if e.Action == action && (e.Op == rbdNotifyQuiesce || e.Op == rbdNotifyUnquiesce) {
-				quiesces = append(quiesces, e)
-			}
-		}
-		// One quiesce (no retry after a timeout) and one unquiesce.
-		if len(quiesces) != 2 || quiesces[0].Op != rbdNotifyQuiesce || quiesces[1].Op != rbdNotifyUnquiesce || quiesces[0].AckDisposition != rbdAckSubmittedResponse ||
-			quiesces[1].AckDisposition != rbdAckSubmittedEmpty || quiesces[0].AckHex != hex.EncodeToString(rbdResponseMessage(answer)) {
-			t.Fatal("member header quiesce requests differ", action, quiesces)
+		// The native return does not order the Go watcher's recording of
+		// the acknowledgements librbd waited for.
+		if _, err := settleRBDGroupCreation(ctx, responder, action, quiesce.Event.NotifyID, unquiesce.Event.NotifyID, state.NativeGlobalID, answer); err != nil {
+			t.Fatal(err)
 		}
 		cr := n.Creation
 		last := "incomplete-observed"
