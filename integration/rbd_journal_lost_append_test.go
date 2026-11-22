@@ -1423,9 +1423,50 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	}
 
 	if ownerLoss {
+		// The observer watches the image header from here on, answering
+		// every notification as a non-owner, so that the native takeover's
+		// lock requests and announcements are received by a Go client. Its
+		// watch is registered after the last observation before the loss and
+		// changes nothing the earlier stages judged.
+		ol := record.OwnerLoss
+		hr := route(t, header)
+		oc, err := observer.OpenOSD(ctx, cephmsgr.OSDTarget{ID: hr.Primary, Address: hr.Address})
+		if err != nil {
+			t.Fatal("observer header connection", err)
+		}
+		observerWatch := request(hr)
+		observerWatch.Operations = nil
+		ow, _, err := oc.WatchObject(ctx, observerWatch, cephmsgr.OSDWatchOptions{TimeoutSeconds: rbdJournalLostAppendWatchTimeout})
+		if err != nil {
+			t.Fatal("observer header watch", err)
+		}
+		ol.ObserverWatchCookie = ow.Cookie()
+		responder := &rbdLockResponder{changed: make(chan struct{})}
+		responderCtx, stopResponder := context.WithCancel(ctx)
+		responderDone := make(chan struct{})
+		go func() {
+			defer close(responderDone)
+			runRBDLockResponder(responderCtx, ow, hr.Epoch, rbdClientID{GID: record.ObserverGlobalID, Handle: ow.Cookie()}, responder, time.Now())
+		}()
+		observing := true
+		unwatch := func() error {
+			observing = false
+			stopResponder()
+			<-responderDone
+			_, err := ow.Unwatch(ctx, hr.Epoch)
+			return err
+		}
+		defer func() {
+			if observing {
+				_ = unwatch()
+			}
+		}()
+		done("observer_watch")
+
 		// The subject dies as a lock owner: it closes its silent connection
 		// and sends nothing again. Its lock record and its watch stay until
-		// native librbd breaks the one and the OSD drops the other.
+		// native librbd breaks the one and the OSD drops the other, a watch
+		// timeout after its registration (the subject never pinged).
 		before := int(osdDials.Load())
 		record.DialsBeforeClose = &before
 		if err := closeAll(); err != nil {
@@ -1435,13 +1476,38 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		// Native librbd breaks the lock; the compensating unlock of a
 		// failed run would name a lock that is no longer the subject's.
 		unlocked = true
+		// The takeover is to start while the subject's watch is listed. Its
+		// own boundary observation and the observer's notifications show
+		// whether it did; this bound only refuses to start a takeover that
+		// could not.
+		age := time.Since(watched)
+		ol.WatchAgeAtTakeover = age.Round(time.Millisecond).String()
+		if age > rbdJournalOwnerLossTakeoverStart {
+			t.Fatalf("the subject's watch was registered %v ago; with its %d s timeout a takeover started now may no longer find it listed", age, rbdJournalLostAppendWatchTimeout)
+		}
+		mark := responder.mark()
 		taken := native(t, "takeover")
-		record.OwnerLoss.Takeover = rbdJournalTakeoverOf(taken)
+		ol.Takeover = rbdJournalTakeoverOf(taken)
+		_, notes, err := responder.settleSince(ctx, mark)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			t.Fatal("observer header watch", err)
+		}
+		if err != nil {
+			// A responder failure is the claims' to judge.
+			ol.Takeover.NoteFailure = err.Error()
+			notes, _ = responder.snapshot()
+			notes = notes[min(mark, len(notes)):]
+		}
+		ol.Takeover.Notes = notes
+		if err := unwatch(); err != nil {
+			t.Fatal("observer header unwatch", err)
+		}
 		total := int(osdDials.Load())
 		record.DialsTotal = &total
 		judge(t, "takeover")
-		t.Logf("go journal owner loss mode=%s tag=%d entry=0 object=%s submission_tid=%d locker=%s takeover_write=%v watch_registered_to_takeover_end=%s",
-			mode, tag, entry.ObjectName, record.Outcome.Submission.Transaction, record.OwnerLoss.LockerAddress, time.Duration(taken.WriteNS), time.Since(watched).Round(time.Millisecond))
+		t.Logf("go journal owner loss mode=%s tag=%d entry=0 object=%s submission_tid=%d locker=%s watch_age_at_takeover=%s native_requests=%d takeover_write=%v watch_registered_to_takeover_end=%s",
+			mode, tag, entry.ObjectName, record.Outcome.Submission.Transaction, ol.LockerAddress, ol.WatchAgeAtTakeover, rbdJournalRequestLocks(ol.Takeover), time.Duration(taken.WriteNS),
+			time.Since(watched).Round(time.Millisecond))
 		return
 	}
 

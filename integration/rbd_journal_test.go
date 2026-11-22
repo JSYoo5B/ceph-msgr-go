@@ -215,6 +215,12 @@ type nativeRBDJournal struct {
 	ForceBreak      *nativeRBDJournalForceBreak `json:"force_break"`
 	BlocklistBefore *[]nativeRBDLockBlock       `json:"blocklist_before"`
 	Blocklist       *[]nativeRBDLockBlock       `json:"blocklist"`
+	// Boundary is the lock record and the header watchers the takeover
+	// listed after its open and right before its first write.
+	Boundary *struct {
+		Lockers  nativeRBDWriteLockers `json:"lockers"`
+		Watchers []nativeRBDWatcher    `json:"watchers"`
+	} `json:"boundary"`
 }
 
 // nativeRBDJournalForceBreak is the force-break action's own output.

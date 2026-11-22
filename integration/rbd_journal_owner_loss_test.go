@@ -21,16 +21,26 @@ import (
 // up to the observation after the recorded unknown outcome: the subject holds
 // the image's exclusive lock in librbd's managed-lock format, one AioWrite
 // entry it appended under its own tag is in the journal, the reply to that
-// append was withheld and the subject's wait was canceled. The subject then
-// dies as a lock owner: it closes its silent connection and never sends
-// anything again, so it releases nothing, does not unwatch and does not
-// renew its watch. A native librbd write (the takeover) asks that owner for
-// the lock while its watch is still listed, and once the OSD dropped the
-// watch it blocklists the address of the subject's lock record and breaks
-// the lock (managed_lock/AcquireRequest.cc and BreakRequest.cc at
-// ceph/ceph/blob/v20.2.4/src/librbd/), acquires it, opens the journal,
-// replays the owned entry and journals and applies its own write, which
-// covers the first half of the owned extent. The takeover's native
+// append was withheld and the subject's wait was canceled. A second Go
+// client (the observer) then watches the image header and answers every
+// notification as a non-owner. The subject dies as a lock owner: it closes
+// its silent connection and never sends anything again, so it releases
+// nothing, does not unwatch and does not renew its watch, which the OSD
+// keeps for its timeout after the registration. A native librbd write (the
+// takeover) then takes the lock. Right before its first write the takeover
+// lists the subject's lock record (client, cookie and address) and the
+// subject's watch with that cookie at that address. The observer receives
+// from the takeover's instance and watch handle at least one RequestLock,
+// then its AcquiredLock and its ReleasedLock: librbd requests the lock only
+// after its acquisition found the owner's watch listed (AcquireRequest.cc,
+// BreakRequest.cc handle_get_watchers and ExclusiveLock.cc in
+// ceph/ceph/blob/v20.2.4/src/librbd/), so the takeover asked a listed owner.
+// It then blocklisted the address of the subject's lock record and broke
+// the lock, which BreakRequest.cc does only once no watcher matches the
+// record; that order is librbd's and is not observed separately. The
+// takeover acquires the lock, opens the journal, replays the owned entry and
+// journals and applies its own write, which covers the first half of the
+// owned extent. The takeover's native
 // observation shows the owned entry exactly once in the journal, followed
 // only by native librbd's own entry under the next tag, whose predecessor is
 // the owned entry; the image is the setup with the owned extent and then the
@@ -64,18 +74,23 @@ func TestCephRBDJournalOwnerLossIntegration(t *testing.T) {
 // entry at its offset and the subject holding the lock with its watch
 // listed. The subject pings its watch; then a native librbd instance that
 // does not own the lock breaks it with lock_break, naming the one owner it
-// lists. librbd does not ask whether that owner is alive: it blocklists the
-// owner's address and breaks the lock while the subject's watch is still
-// listed (internal.cc lock_break, ManagedLock.cc break_lock and
-// managed_lock/BreakRequest.cc with force_break_lock at
-// ceph/ceph/blob/v20.2.4/src/librbd/). The subject then sends, once each on
+// lists. Right before lock_break that instance lists the subject's lock
+// record (client, cookie and address) and the subject's watch with that
+// cookie at that address. librbd does not ask whether that owner is alive:
+// with force_break_lock it skips the liveness check, blocklists the
+// owner's address and breaks the lock (internal.cc lock_break,
+// ManagedLock.cc break_lock and managed_lock/BreakRequest.cc at
+// ceph/ceph/blob/v20.2.4/src/librbd/). After lock_break the instance lists
+// no owner and the address blocklisted; the order of the two is
+// BreakRequest's and is not observed separately. The subject then sends, once each on
 // the connection that sent lock.lock and naming the OSDMap epoch it read
 // after the break, a watch ping, the append of its second entry and the
 // unlock. The OSD answers each with -108 (EBLOCKLISTED), a known refusal,
 // and none is sent again. A native observation shows every journal object
 // unchanged since the append, the lock free and the subject's watch gone.
-// Finally a native librbd write takes the free lock, replays the subject's
-// entry and journals and applies its own write over the first half of that
+// Finally a native librbd write, which lists no lock record and not the
+// subject's watch right before its first write, takes the free lock,
+// replays the subject's entry and journals and applies its own write over the first half of that
 // extent: the same postconditions as in the owner-loss variant, except that
 // the subject's address was already blocklisted before the takeover. Not
 // covered: a fenced owner's requests on a connection whose address the lock
@@ -103,9 +118,16 @@ const (
 // the recorded outcome, then the closed silent connection and the takeover.
 var (
 	rbdJournalOwnerLossOrder = []string{"setup", "lock", "tag_create", "observe-locked", "append_submitted", "barrier", "checkpoint", "outcome_recorded",
-		"observe-recorded", "blocked_connection_closed", "takeover"}
+		"observe-recorded", "observer_watch", "blocked_connection_closed", "takeover"}
 	rbdJournalOwnerLossStages = []string{"checkpoint", "observe-recorded", "takeover"}
 )
+
+// rbdJournalOwnerLossTakeoverStart bounds the age of the subject's watch,
+// registered without a later ping, when the owner-loss variant requests the
+// takeover. It leaves the takeover's start-up two thirds of the remaining
+// watch lifetime; the claims do not rely on it, they judge what the takeover
+// listed and what the observer received.
+const rbdJournalOwnerLossTakeoverStart = 20 * time.Second
 
 // The forced-break variant's order and the stages at which it is judged.
 var (
@@ -136,6 +158,13 @@ type rbdJournalOwnerLoss struct {
 	// takeover committed the owned entry and its own entries.
 	ExpectedCommitTakeover []rbdJournalPosition
 	Takeover               *rbdJournalTakeover
+	// ObserverWatchCookie is the observer's image header watch, registered
+	// before the subject's loss and removed after the takeover (owner-loss
+	// variant only).
+	ObserverWatchCookie uint64
+	// WatchAgeAtTakeover is the time from the subject's watch registration
+	// to the takeover request (owner-loss variant only).
+	WatchAgeAtTakeover string
 	// The forced-break variant only.
 	Break       *rbdJournalBreak
 	PingBefore  *rbdLockOwnerLossAttempt
@@ -145,12 +174,37 @@ type rbdJournalOwnerLoss struct {
 	Probe *rbdJournalLostAppendEntry
 }
 
-// rbdJournalTakeover is the takeover action's own output.
+// rbdJournalTakeover is the takeover action's own output, and in the
+// owner-loss variant the header notifications the observer received while
+// it ran.
 type rbdJournalTakeover struct {
 	Owner                      bool
 	WriteNS                    int64
 	Events                     []rbdJournalLostAppendEvent
 	BlocklistBefore, Blocklist []rbdLockOwnerLossBlock
+	// NativeGlobalID is the takeover instance's global ID.
+	NativeGlobalID uint64
+	// The boundary: the lock record and the header watchers the takeover
+	// listed after its open and right before its first write, that is
+	// before its lock acquisition started.
+	BoundaryLockers   []rbdJournalLockRecord
+	BoundaryTag       string
+	BoundaryExclusive bool
+	BoundaryWatchers  []rbdJournalWatch
+	// Notes are the observer's header notifications received from the
+	// takeover's request to its return, in receipt order; NoteFailure is the
+	// observer responder's failure, if any.
+	Notes       []rbdLockNotification
+	NoteFailure string
+}
+
+// rbdJournalLockRecord is one locker of the image header's lock record.
+type rbdJournalLockRecord struct{ Client, Cookie, Address string }
+
+// rbdJournalWatch is one header watcher as native librbd lists it.
+type rbdJournalWatch struct {
+	GlobalID, Cookie uint64
+	Address          string
 }
 
 // rbdJournalBreak is the force-break action's own output.
@@ -158,11 +212,11 @@ type rbdJournalBreak struct {
 	Owners, OwnersAfter []string
 	IsOwner             bool
 	BreakNS             int64
-	// The lock record and whether the subject's watch was listed, before
-	// lock_break.
-	LockerBefore, LockerAddressBefore string
-	SubjectWatcherBefore              bool
-	BlocklistBefore, Blocklist        []rbdLockOwnerLossBlock
+	// The lock record (client, cookie and address) and the header watchers
+	// the breaking instance read right before lock_break.
+	LockerBefore, LockerCookieBefore, LockerAddressBefore string
+	WatchersBefore                                        []rbdJournalWatch
+	BlocklistBefore, Blocklist                            []rbdLockOwnerLossBlock
 }
 
 // rbdJournalBlocked says whether address has an exact blocklist entry.
@@ -189,6 +243,7 @@ func rbdJournalTakeoverClaims(r *rbdJournalLostAppendRecord, v, before, locked, 
 	if !tk.Owner || tk.WriteNS <= 0 || !v.LockFree || v.SubjectWatcher {
 		fail("takeover: native librbd did not own the lock for its writes and release it, or the subject's watch is still listed (owner=%v free=%v subject watcher=%v)", tk.Owner, v.LockFree, v.SubjectWatcher)
 	}
+	rbdJournalTakeoverBoundaryClaims(r, fail)
 	if ol.LockerAddress == "" || !rbdJournalBlocked(tk.Blocklist, ol.LockerAddress) || !rbdJournalBlocked(v.Blocklist, ol.LockerAddress) ||
 		rbdJournalBlocked(tk.BlocklistBefore, ol.LockerAddress) != ol.Forced {
 		fail("takeover: the subject's lock record address %q is not blocklisted after the takeover, or its blocklisting before it does not match the variant (forced=%v): before %s, after %s",
@@ -235,6 +290,78 @@ func rbdJournalTakeoverClaims(r *rbdJournalLostAppendRecord, v, before, locked, 
 	if v.LastTag != (rbdJournalLostAppendTag{e.Tag + 1, true, e.Tag, e.EntryTID}) || v.NextTag != e.Tag+2 {
 		fail("takeover: native tag differs (tag=%+v next=%d)", v.LastTag, v.NextTag)
 	}
+}
+
+// rbdJournalTakeoverBoundaryClaims checks how the takeover found the lock.
+// In both variants the boundary is what the takeover instance listed after
+// its open and right before its first write, before its lock acquisition
+// started: the lock record and the header watchers, its own watch among them.
+//
+// Owner-loss variant: the boundary lists the subject's lock record (client,
+// cookie and address) and the subject's watch with that cookie at that
+// address, which is how librbd's liveness check matches a live owner. The
+// observer's header watch then received, from the takeover's instance and
+// watch handle, at least one RequestLock, followed only by its AcquiredLock
+// and its ReleasedLock, each acknowledged empty. librbd sends RequestLock
+// after an acquisition that found the lock busy and its owner alive
+// (v20.2.4 managed_lock/AcquireRequest.cc handle_break_lock -EAGAIN from
+// managed_lock/BreakRequest.cc handle_get_watchers; ExclusiveLock.cc
+// post_acquire_lock_handler), so a correlated RequestLock means librbd found
+// the subject's watch listed. That it blocklisted and broke the lock only
+// once the watch was gone is BreakRequest's order and is not observed
+// separately: the observation shows the address blocklisted, the lock
+// taken and the watch gone after the takeover.
+//
+// Forced-break variant: the boundary lists no lock record and not the
+// subject's watch, so the takeover took a free lock. The variant keeps no
+// observer watch and judges no notification.
+func rbdJournalTakeoverBoundaryClaims(r *rbdJournalLostAppendRecord, fail func(string, ...any)) {
+	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+	ol := r.OwnerLoss
+	tk := ol.Takeover
+	own := slices.IndexFunc(tk.BoundaryWatchers, func(w rbdJournalWatch) bool { return w.GlobalID == tk.NativeGlobalID })
+	if tk.NativeGlobalID == 0 || tk.NativeGlobalID == r.SubjectGlobalID || tk.NativeGlobalID == r.ObserverGlobalID || tk.BoundaryLockers == nil || own < 0 {
+		fail("takeover boundary: the takeover's identity, its lock record or its own header watch is missing (client.%d, lockers %s, watchers %s)",
+			tk.NativeGlobalID, text(tk.BoundaryLockers), text(tk.BoundaryWatchers))
+		return
+	}
+	listed := slices.Contains(tk.BoundaryWatchers, rbdJournalWatch{r.SubjectGlobalID, r.WatchCookie, ol.LockerAddress})
+	if ol.Forced {
+		if len(tk.BoundaryLockers) != 0 || slices.ContainsFunc(tk.BoundaryWatchers, func(w rbdJournalWatch) bool { return w.GlobalID == r.SubjectGlobalID }) {
+			fail("takeover boundary: the lock is not free or the subject's watch is listed when the takeover starts (lockers %s, watchers %s)", text(tk.BoundaryLockers), text(tk.BoundaryWatchers))
+		}
+		if tk.Notes != nil || tk.NoteFailure != "" || ol.ObserverWatchCookie != 0 {
+			fail("takeover notifications: the forced-break variant keeps no observer watch")
+		}
+		return
+	}
+	locker := rbdJournalLockRecord{fmt.Sprintf("client.%d", r.SubjectGlobalID), r.LockCookie, ol.LockerAddress}
+	if !slices.Equal(tk.BoundaryLockers, []rbdJournalLockRecord{locker}) || tk.BoundaryTag != rbdLockTag || !tk.BoundaryExclusive || !listed {
+		fail("takeover boundary: the takeover did not start with the subject's lock record %s and its matching watch listed (lockers %s, tag %q, exclusive %v, watchers %s)",
+			text(locker), text(tk.BoundaryLockers), tk.BoundaryTag, tk.BoundaryExclusive, text(tk.BoundaryWatchers))
+	}
+	native := rbdClientID{GID: tk.NativeGlobalID, Handle: tk.BoundaryWatchers[own].Cookie}
+	notes, requests := tk.Notes, rbdJournalRequestLocks(tk)
+	ok := tk.NoteFailure == "" && ol.ObserverWatchCookie != 0 && requests > 0 && len(notes) == requests+2 &&
+		notes[requests].Op == rbdNotifyAcquiredLock && notes[requests+1].Op == rbdNotifyReleasedLock
+	for _, n := range notes {
+		ok = ok && n.Client == native && n.NotifierGlobalID == native.GID && n.Cookie == ol.ObserverWatchCookie && !n.Force && !n.Own && n.Role == "non-owner" &&
+			n.AckDisposition == rbdAckSubmittedEmpty && n.AckError == "" && !n.Unexpected
+	}
+	if !ok {
+		fail("takeover notifications: the observer did not receive at least one RequestLock from the takeover %s, then only its AcquiredLock and its ReleasedLock, each acknowledged empty (failure %q): %s",
+			text(native), tk.NoteFailure, text(notes))
+	}
+}
+
+// rbdJournalRequestLocks counts the RequestLock notifications that open the
+// observer's notifications of the takeover.
+func rbdJournalRequestLocks(tk *rbdJournalTakeover) int {
+	n := 0
+	for n < len(tk.Notes) && tk.Notes[n].Op == rbdNotifyRequestLock {
+		n++
+	}
+	return n
 }
 
 // rbdJournalForcedBreakClaims checks the forced-break record up to one
@@ -332,7 +459,10 @@ func rbdJournalForcedBreakClaims(r *rbdJournalLostAppendRecord, stage string) []
 	if p := ol.PingBefore; p == nil || p.Class != "applied" || p.Code != 0 || p.Invocations != 1 {
 		fail("ping: the subject's watch was not renewed before the break: %s", text(p))
 	}
-	if b == nil || !slices.Equal(b.Owners, []string{ol.LockerAddress}) || b.LockerBefore != owner || b.LockerAddressBefore != ol.LockerAddress || !b.SubjectWatcherBefore ||
+	if b == nil || !slices.Equal(b.Owners, []string{ol.LockerAddress}) || b.LockerBefore != owner || b.LockerCookieBefore != r.LockCookie || b.LockerAddressBefore != ol.LockerAddress ||
+		// The subject's watch as librbd's liveness check matches an owner:
+		// its cookie at the lock record's address.
+		!slices.Contains(b.WatchersBefore, rbdJournalWatch{r.SubjectGlobalID, r.WatchCookie, ol.LockerAddress}) ||
 		len(b.OwnersAfter) != 0 || b.IsOwner || b.BreakNS <= 0 {
 		fail("force-break: native librbd did not break the lock of the one live owner, the subject: %s", text(b))
 	} else {
@@ -376,7 +506,17 @@ func rbdJournalForcedBreakClaims(r *rbdJournalLostAppendRecord, stage string) []
 
 // rbdJournalTakeoverOf projects the takeover action's own output.
 func rbdJournalTakeoverOf(n *nativeRBDJournal) *rbdJournalTakeover {
-	tk := &rbdJournalTakeover{Owner: n.Owner != nil && *n.Owner, WriteNS: n.WriteNS, Events: []rbdJournalLostAppendEvent{}}
+	tk := &rbdJournalTakeover{Owner: n.Owner != nil && *n.Owner, WriteNS: n.WriteNS, Events: []rbdJournalLostAppendEvent{}, NativeGlobalID: n.NativeGlobalID}
+	if b := n.Boundary; b != nil {
+		tk.BoundaryLockers, tk.BoundaryWatchers = []rbdJournalLockRecord{}, []rbdJournalWatch{}
+		tk.BoundaryTag, tk.BoundaryExclusive = b.Lockers.Tag, b.Lockers.Exclusive
+		for _, l := range b.Lockers.Lockers {
+			tk.BoundaryLockers = append(tk.BoundaryLockers, rbdJournalLockRecord{l.Client, l.Cookie, l.Address})
+		}
+		for _, w := range b.Watchers {
+			tk.BoundaryWatchers = append(tk.BoundaryWatchers, rbdJournalWatch{w.ID, w.Cookie, w.Address})
+		}
+	}
 	for _, e := range n.Events {
 		if e.Kind == "write" {
 			tk.Events = append(tk.Events, rbdJournalLostAppendEvent{Type: "AioWrite", Offset: e.Offset, Length: e.Length})
@@ -468,9 +608,13 @@ func runRBDJournalForcedBreak(t *testing.T, s rbdJournalForcedBreakSteps) {
 		b.OwnersAfter = append(b.OwnersAfter, o.Owner)
 	}
 	if len(fb.LockersBefore.Lockers) == 1 {
-		b.LockerBefore, b.LockerAddressBefore = fb.LockersBefore.Lockers[0].Client, fb.LockersBefore.Lockers[0].Address
+		l := fb.LockersBefore.Lockers[0]
+		b.LockerBefore, b.LockerCookieBefore, b.LockerAddressBefore = l.Client, l.Cookie, l.Address
 	}
-	b.SubjectWatcherBefore = slices.ContainsFunc(fb.WatchersBefore, func(w nativeRBDWatcher) bool { return w.ID == s.gid && w.Cookie == s.w.Cookie() })
+	b.WatchersBefore = []rbdJournalWatch{}
+	for _, w := range fb.WatchersBefore {
+		b.WatchersBefore = append(b.WatchersBefore, rbdJournalWatch{w.ID, w.Cookie, w.Address})
+	}
 	if b.BlocklistBefore, err = rbdLockOwnerLossBlocks(fb.BlocklistBefore); err != nil {
 		t.Fatal(err)
 	}

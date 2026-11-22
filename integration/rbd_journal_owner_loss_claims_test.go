@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -38,8 +39,31 @@ func rbdJournalTakeoverSample(r *rbdJournalLostAppendRecord, forced bool) {
 	r.OwnerLoss.TakeoverEvents = []rbdJournalLostAppendEvent{{Type: "AioWrite", Offset: 40 << 10, Length: 2 << 10}}
 	r.OwnerLoss.ExpectedHeadTakeover, r.OwnerLoss.ExpectedCommitTakeover = hash("c"), slices.Clone(v.ImageCommit)
 	r.OwnerLoss.Takeover = &rbdJournalTakeover{Owner: true, WriteNS: 9000, Events: []rbdJournalLostAppendEvent{{Type: "AioWrite", Offset: 40 << 10, Length: 2 << 10}},
-		BlocklistBefore: before, Blocklist: slices.Clone(block)}
+		BlocklistBefore: before, Blocklist: slices.Clone(block), NativeGlobalID: rbdJournalTakeoverSampleGID,
+		BoundaryLockers: []rbdJournalLockRecord{}, BoundaryWatchers: []rbdJournalWatch{{rbdJournalTakeoverSampleGID, rbdJournalTakeoverSampleHandle, "10.0.0.5:0/5"}}}
+	if forced {
+		return
+	}
+	// Owner loss: the subject's lock record and watch at the boundary, the
+	// observer's watch beside it, and the takeover's requests, acquisition
+	// and release as the observer received them.
+	tk := r.OwnerLoss.Takeover
+	tk.BoundaryLockers = []rbdJournalLockRecord{{fmt.Sprintf("client.%d", r.SubjectGlobalID), r.LockCookie, rbdJournalOwnerLossSampleAddress}}
+	tk.BoundaryTag, tk.BoundaryExclusive = rbdLockTag, true
+	tk.BoundaryWatchers = append([]rbdJournalWatch{{r.SubjectGlobalID, r.WatchCookie, rbdJournalOwnerLossSampleAddress}, {r.ObserverGlobalID, 66, "10.0.0.6:0/6"}}, tk.BoundaryWatchers...)
+	r.OwnerLoss.ObserverWatchCookie, r.OwnerLoss.WatchAgeAtTakeover = 66, "14.2s"
+	native := rbdClientID{GID: rbdJournalTakeoverSampleGID, Handle: rbdJournalTakeoverSampleHandle}
+	for i, op := range []uint32{rbdNotifyRequestLock, rbdNotifyRequestLock, rbdNotifyAcquiredLock, rbdNotifyReleasedLock} {
+		tk.Notes = append(tk.Notes, rbdLockNotification{Index: i, NotifyID: uint64(700 + i), NotifierGlobalID: native.GID, Cookie: 66, Op: op, Client: native, Role: "non-owner",
+			AckDisposition: rbdAckSubmittedEmpty})
+	}
 }
+
+// The takeover instance of the samples.
+const (
+	rbdJournalTakeoverSampleGID    = 4500
+	rbdJournalTakeoverSampleHandle = 99
+)
 
 // rbdJournalOwnerLossSample is a consistent record of one owner-loss run in
 // the given connection mode: the lost-append sample up to the observation
@@ -87,8 +111,9 @@ func rbdJournalForcedBreakSample() *rbdJournalLostAppendRecord {
 		return rbdLockOwnerLossAttempt{Label: label, Invocations: 1, Class: "refused", ErrorCode: -108, Error: "ceph: OSD result code -108", Submission: cephmsgr.OSDSubmission{Transaction: 12}}
 	}
 	r.OwnerLoss = &rbdJournalOwnerLoss{Forced: true, LockerAddress: rbdJournalOwnerLossSampleAddress,
-		Break: &rbdJournalBreak{Owners: []string{rbdJournalOwnerLossSampleAddress}, OwnersAfter: []string{}, BreakNS: 3000, LockerBefore: "client.4321",
-			LockerAddressBefore: rbdJournalOwnerLossSampleAddress, SubjectWatcherBefore: true, BlocklistBefore: []rbdLockOwnerLossBlock{}, Blocklist: slices.Clone(block)},
+		Break: &rbdJournalBreak{Owners: []string{rbdJournalOwnerLossSampleAddress}, OwnersAfter: []string{}, BreakNS: 3000, LockerBefore: "client.4321", LockerCookieBefore: base.LockCookie,
+			WatchersBefore:      []rbdJournalWatch{{base.SubjectGlobalID, base.WatchCookie, rbdJournalOwnerLossSampleAddress}, {base.ObserverGlobalID, 66, "10.0.0.6:0/6"}},
+			LockerAddressBefore: rbdJournalOwnerLossSampleAddress, BlocklistBefore: []rbdLockOwnerLossBlock{}, Blocklist: slices.Clone(block)},
 		PingBefore:  &rbdLockOwnerLossAttempt{Label: "watch_ping", Invocations: 1, Class: "applied"},
 		Fenced:      []rbdLockOwnerLossAttempt{fenced("watch_ping_fenced"), fenced("journal_append_fenced"), fenced("lock_unlock_fenced")},
 		FencedEpoch: 44,
@@ -169,6 +194,69 @@ func TestRBDJournalOwnerLossClaims(t *testing.T) {
 		"tag without the owned entry":     func(r *rbdJournalLostAppendRecord) { tk(r).LastTag.PredecessorTag = 1 },
 		"second native tag":               func(r *rbdJournalLostAppendRecord) { tk(r).NextTag = 5 },
 		"lock handed off before the loss": func(r *rbdJournalLostAppendRecord) { r.Views["observe-recorded"].LockFree = true },
+		"observer watch missing": func(r *rbdJournalLostAppendRecord) {
+			r.Order = slices.DeleteFunc(r.Order, func(s string) bool { return s == "observer_watch" })
+		},
+		// The takeover boundary: the subject's lock record and watch.
+		"boundary without the takeover's identity": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.NativeGlobalID = 0 },
+		"boundary without its own watch": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.BoundaryWatchers = r.OwnerLoss.Takeover.BoundaryWatchers[:2]
+		},
+		"boundary lock already free": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.BoundaryLockers = []rbdJournalLockRecord{} },
+		"boundary lock of another cookie": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.BoundaryLockers[0].Cookie = "auto 1"
+		},
+		"boundary lock of another client": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.BoundaryLockers[0].Client = "client.4300"
+		},
+		"boundary lock at another address": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.BoundaryLockers[0].Address = "10.0.0.9:0/12"
+		},
+		"boundary lock not managed": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.BoundaryTag = "" },
+		"boundary lock shared":      func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.BoundaryExclusive = false },
+		"subject watch gone at the boundary": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.BoundaryWatchers = r.OwnerLoss.Takeover.BoundaryWatchers[1:]
+		},
+		"subject watch of another cookie at the boundary": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.BoundaryWatchers[0].Cookie++
+		},
+		"subject watch at another address at the boundary": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.BoundaryWatchers[0].Address = "10.0.0.9:0/12"
+		},
+		// The observer's notifications of the takeover.
+		"no RequestLock (the watch was gone)": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.Notes = r.OwnerLoss.Takeover.Notes[2:]
+		},
+		"no notifications":  func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.Notes = nil },
+		"no observer watch": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.ObserverWatchCookie = 0 },
+		"responder failed":  func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.NoteFailure = "header watch ended" },
+		"RequestLock from another client": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.Notes[0].Client.GID, r.OwnerLoss.Takeover.Notes[0].NotifierGlobalID = 4300, 4300
+		},
+		"RequestLock from another handle": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.Notes[1].Client.Handle = 98 },
+		"RequestLock notifier differs": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.Notes[0].NotifierGlobalID = r.SubjectGlobalID
+		},
+		"forced RequestLock": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.Notes[0].Force = true },
+		"RequestLock after the acquisition": func(r *rbdJournalLostAppendRecord) {
+			n := r.OwnerLoss.Takeover.Notes
+			n[1].Op, n[2].Op = n[2].Op, n[1].Op
+		},
+		"acquisition not announced": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.Notes = slices.Delete(r.OwnerLoss.Takeover.Notes, 2, 3)
+		},
+		"release not announced": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.Notes = r.OwnerLoss.Takeover.Notes[:3] },
+		"extra notification": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.Notes = append(r.OwnerLoss.Takeover.Notes, r.OwnerLoss.Takeover.Notes[3])
+		},
+		"acknowledged as owner": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.Notes[0].AckDisposition = rbdAckSubmittedResponse
+		},
+		"acknowledgement failed": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.Notes[2].AckError = "ceph: OSD result code -2"
+		},
+		"unexpected notification":       func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.Notes[3].Unexpected = true },
+		"notification on another watch": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.Notes[0].Cookie = 67 },
 	} {
 		r := rbdJournalOwnerLossSample("secure")
 		mutate(r)
@@ -226,11 +314,18 @@ func TestRBDJournalForcedBreakClaims(t *testing.T) {
 		// The break of a live owner.
 		"no ping before the break":  func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.PingBefore = nil },
 		"ping refused before break": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.PingBefore.Class = "refused" },
-		"owner dead at the break":   func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Break.SubjectWatcherBefore = false },
+		"owner dead at the break": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Break.WatchersBefore = r.OwnerLoss.Break.WatchersBefore[1:]
+		},
+		"owner watch of another cookie at the break": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Break.WatchersBefore[0].Cookie++ },
+		"owner watch at another address at the break": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Break.WatchersBefore[0].Address = "10.0.0.9:0/12"
+		},
 		"broke another owner": func(r *rbdJournalLostAppendRecord) {
 			r.OwnerLoss.Break.Owners, r.OwnerLoss.Break.LockerAddressBefore = []string{"10.0.0.2:0/2"}, "10.0.0.2:0/2"
 		},
 		"lock record of another client": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Break.LockerBefore = "client.4300" },
+		"lock record of another cookie": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Break.LockerCookieBefore = "auto 1" },
 		"break without blocklist": func(r *rbdJournalLostAppendRecord) {
 			r.OwnerLoss.Break.Blocklist = []rbdLockOwnerLossBlock{}
 		},
@@ -280,6 +375,16 @@ func TestRBDJournalForcedBreakClaims(t *testing.T) {
 		},
 		"takeover changed the probe object": func(r *rbdJournalLostAppendRecord) { r.Views["takeover"].ObjectSizes[1] += 10 },
 		"takeover without replay":           func(r *rbdJournalLostAppendRecord) { r.Views["takeover"].ImageHeadSHA256 = strings.Repeat("d", 64) },
+		"takeover boundary still locked": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.BoundaryLockers = []rbdJournalLockRecord{{"client.4321", r.LockCookie, rbdJournalOwnerLossSampleAddress}}
+		},
+		"subject watch listed at the takeover boundary": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.BoundaryWatchers = append(r.OwnerLoss.Takeover.BoundaryWatchers, rbdJournalWatch{r.SubjectGlobalID, r.WatchCookie, rbdJournalOwnerLossSampleAddress})
+		},
+		"takeover boundary without its own watch": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.BoundaryWatchers = []rbdJournalWatch{} },
+		"forced-break notifications judged": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.Notes = rbdJournalOwnerLossSample("crc").OwnerLoss.Takeover.Notes
+		},
 		"order: fenced before the break": func(r *rbdJournalLostAppendRecord) {
 			i, j := slices.Index(r.Order, "force-break"), slices.Index(r.Order, "fenced")
 			r.Order[i], r.Order[j] = r.Order[j], r.Order[i]
