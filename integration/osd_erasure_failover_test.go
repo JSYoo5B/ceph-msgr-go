@@ -53,6 +53,48 @@ func TestCephOSDErasureOptimizedK2M2FailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M2, true, "isa")
 }
 
+// The same phases on the optimized k=2,m=2 pool with the jerasure plugin.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2jerasurefailover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
+//fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK2M2JerasureFailoverIntegration(t *testing.T) {
+	erasureFailoverScenario(t, erasureK2M2, true, "jerasure")
+}
+
+// The same phases on an optimized isa k=3,m=1 pool over four OSDs. The
+// nonprimary shards are {1,2}, so after the loss of the shard-0 primary
+// only parity shard 3 can lead; one loss leaves min_size 3 shards and the
+// PG stays active. Under the primary-first pg_temp (OSDMap::pgtemp_primaryfirst,
+// v20.2.4: shard 0, the parity shards, then the nonprimary shards) actual
+// shard 3 travels as wire shard 1 for pool size 4 with two nonprimary
+// shards, and the same shard sent unconverted names a shard that OSD does
+// not hold.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1failover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
+//fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK3M1FailoverIntegration(t *testing.T) {
+	erasureFailoverScenario(t, erasureK3M1, true, "isa")
+}
+
+// The same phases on an optimized isa k=4,m=2 pool over six OSDs: size 6,
+// min_size 5, nonprimary shards {1,2,3}. After the shard-0 primary's loss
+// parity shard 4, the first primary-eligible shard of the primary-first
+// order, must lead (wire shard 1 for pool size 6 with three nonprimary
+// shards); parity shard 5 would lead only after a second loss, below
+// min_size, so it is not observed.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2failover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
+//fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK4M2FailoverIntegration(t *testing.T) {
+	erasureFailoverScenario(t, erasureK4M2, true, "isa")
+}
+
 func erasureFailoverScenario(t *testing.T, width erasureWidth, optimized bool, plugin string) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
@@ -243,6 +285,13 @@ func erasureFailoverScenario(t *testing.T, width erasureWidth, optimized bool, p
 		if fresh.Replicas != facts.size || fresh.Nonprimary != len(facts.nonprimary) {
 			t.Fatal("placement after failover changed the pool facts", fresh.Replicas, fresh.Nonprimary)
 		}
+		// The primary-first order is shard 0, the primary-eligible parity
+		// shards, then the nonprimary shards, and a pg_temp's primary is its
+		// first live member (OSDMap::_get_temp_osds, v20.2.4). With only shard
+		// 0 lost, the first parity shard, k, must lead an optimized pool.
+		if lead := erasureLeadAfterLoss(facts, int(old.Shard)); optimized && old.Shard == 0 && (int(fresh.Shard) != lead || !fresh.PGTemp) {
+			t.Fatalf("after the loss of shard 0 the primary holds shard %d (pg_temp %v), expected shard %d", fresh.Shard, fresh.PGTemp, lead)
+		}
 		// The OSD silently discards a request older than its PG's current
 		// interval, and the map may still move while peering settles. Like
 		// Objecter on a new map, the caller resends with the newer placement;
@@ -287,4 +336,16 @@ func slicesContains(ids []int32, id int32) bool {
 		}
 	}
 	return false
+}
+
+// erasureLeadAfterLoss is the first shard of the primary-first order other
+// than lost that may lead: shard 0, then the primary-eligible shards in
+// order, nonprimary shards last and never as a lead.
+func erasureLeadAfterLoss(facts erasureFacts, lost int) int {
+	for shard := range facts.size {
+		if shard != lost && !slices.Contains(facts.nonprimary, shard) {
+			return shard
+		}
+	}
+	return -1
 }

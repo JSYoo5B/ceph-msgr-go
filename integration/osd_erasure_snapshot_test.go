@@ -47,6 +47,36 @@ func TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration(t *testi
 	erasureSnapshotScenario(t, erasureK2M2, true, "isa")
 }
 
+// The same on the optimized isa k=3,m=1 pool over four OSDs. One killed OSD
+// leaves min_size 3 shards, so the degraded write is accepted. After clean
+// recovery and a second single-OSD outage exactly k=3 shards remain,
+// including the returned one, so the native full-object read cannot be
+// answered without the returned shard's chunk: the object spans all three
+// data chunks, and with one shard missing a k=3,m=1 code needs every
+// remaining shard. This shows the returned shard's participation by
+// arithmetic, not its bytes on disk.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1snapshotanddegradedwrite key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
+//fixture:isolated kills two OSDs; restart waits osd-ready clean (second start unchecked), no pg_temp proof
+func TestCephOSDErasureOptimizedK3M1SnapshotAndDegradedWriteIntegration(t *testing.T) {
+	erasureSnapshotScenario(t, erasureK3M1, true, "isa")
+}
+
+// The same on the optimized isa k=4,m=2 pool over six OSDs: one killed OSD
+// leaves min_size 5 shards. After recovery five shards remain during the
+// second outage, one more than k, so the read does not show which shards
+// were used.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2snapshotanddegradedwrite key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//scenario:covers Daemon-to-daemon
+//fixture:isolated kills two OSDs; restart waits osd-ready clean (second start unchecked), no pg_temp proof
+func TestCephOSDErasureOptimizedK4M2SnapshotAndDegradedWriteIntegration(t *testing.T) {
+	erasureSnapshotScenario(t, erasureK4M2, true, "isa")
+}
+
 func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, plugin string) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
@@ -211,7 +241,16 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 			if n := poolObserve(t, ctx, 1, object, "", ""); !bytes.Equal(n.Data, payload) {
 				t.Fatal("native object bytes after clean recovery and a second single-OSD outage differ")
 			}
-			t.Logf("native object bytes matched with osd.%d down after clean recovery of osd.%d", other, victim)
+			// With exactly k shards left every one of them, the returned
+			// one included, is needed to answer a read of all k data chunks.
+			// The payload must reach the last data chunk of its first stripe
+			// for that to cover every data shard.
+			needed := facts.size-1 == width.k && len(payload) > (width.k-1)*facts.chunk && len(payload) <= width.k*facts.chunk
+			t.Logf("native object bytes matched with osd.%d down after clean recovery of osd.%d (%d shards left, k=%d, chunk %d, returned shard needed: %v)",
+				other, victim, facts.size-1, width.k, facts.chunk, needed)
+			if width == erasureK3M1 && !needed {
+				t.Fatal("the k=3,m=1 read does not need every remaining shard", len(payload), facts.chunk)
+			}
 		}
 	})
 }

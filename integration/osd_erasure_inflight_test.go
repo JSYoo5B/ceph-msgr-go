@@ -57,6 +57,28 @@ func TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration(t *testing.T) {
 	erasureInFlightScenario(t, erasureK2M2, true, "isa", true)
 }
 
+// The same two in-flight phases on the optimized isa k=3,m=1 pool over four
+// OSDs. The replacement primary leads on parity shard 3 under the
+// primary-first pg_temp, so the explicit resubmission of the unapplied
+// phase travels with primary-first numbering for two nonprimary shards.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1inflight key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK3M1InFlightMutationIntegration(t *testing.T) {
+	erasureInFlightScenario(t, erasureK3M1, true, "isa", false)
+}
+
+// The same two in-flight phases on the optimized isa k=4,m=2 pool over six
+// OSDs, where the replacement primary leads on parity shard 4.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2inflight key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK4M2InFlightMutationIntegration(t *testing.T) {
+	erasureInFlightScenario(t, erasureK4M2, true, "isa", false)
+}
+
 // erasureFaultClient wraps the connections of one Go client to a single OSD
 // endpoint and counts every OSD dial, so a test can show that nothing
 // reconnected or resent after an unknown outcome.
