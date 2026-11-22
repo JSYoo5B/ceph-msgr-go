@@ -467,18 +467,18 @@ func admitSingleProfile(p profile, getenv func(string) string) (profile, error) 
 			return profile{}, fmt.Errorf("MGR service acceptance requires its exclusive selector %s and either two MGRs with one legacy-v6 OSD or zero initial MGRs without OSDs", selected)
 		}
 	}
-	if p.osdTopology().erasureCapacity {
-		// The four-daemon topology exists only for the bounded k=2,m=2
+	if topology := p.osdTopology(); topology.erasureCapacity != "" {
+		// The four- and six-daemon topologies exist only for the bounded
 		// erasure-width scenarios. The fixture's ordinary pools keep the
 		// three-replica policy; broad OSD selections stay on topology "3".
-		// The nonoptimized k=2,m=2 baseline is the default; every other
-		// selection is one exact test with the erasure-width capability.
-		selected = "^TestCephOSDErasureK2M2Integration$"
+		// Each has one default baseline; every other selection is one exact
+		// test admitted by the topology's own erasure-width capability.
+		selected = topology.erasureDefault
 		if p.osd != "1" || (p.osdProfile != "legacy-v6" && p.osdProfile != "replicated-pg-v8") || p.osdSoak != "" || p.monFreeze != "" ||
 			p.osdCachePools != "0" || p.mgrService != "0" || p.mdsFresh != "0" || p.rbdBase != "0" ||
 			p.sparseReadOracle != "" || p.mapExtOracle != "" || p.u64XattrOracle != "" || p.writeSameOracle != "" ||
-			!ownSelection(p.testRun, selected, p.admitsExclusive(fixtureOSDErasureCapacity)) {
-			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires its default selector %s or one test admitted by an exclusive capability of this topology, such as %s, BlueStore and the legacy-v6 or replicated-pg-v8 profile", selected, capOSDErasureWidth.name)
+			!ownSelection(p.testRun, selected, p.admitsExclusive(topology.erasureCapacity)) {
+			return profile{}, fmt.Errorf("%s topology requires its default selector %s or one test admitted by an exclusive capability of this topology, such as %s or %s, BlueStore and the legacy-v6 or replicated-pg-v8 profile", topology.erasureCapacity, selected, capOSDErasureWidth.name, capOSDErasureWidthSix.name)
 		}
 	}
 	p.testRun = cmp.Or(p.testRun, selected)
@@ -511,9 +511,12 @@ type osdTopology struct {
 	// poolSize and poolMinSize are the replicated bootstrap defaults and
 	// the fixture data pool's size and min_size.
 	poolSize, poolMinSize int
-	// erasureCapacity marks a topology that exists only to host a wider
-	// erasure-coded pool owned by its exclusive test.
-	erasureCapacity bool
+	// erasureCapacity names the fixture of a topology that exists only to
+	// host a wider erasure-coded pool owned by its exclusive test; empty for
+	// the ordinary topologies. erasureDefault is that fixture's default
+	// selection.
+	erasureCapacity ownFixture
+	erasureDefault  string
 }
 
 // capOSDErasureWidth admits one exact test other than the default k=2,m=2
@@ -522,15 +525,23 @@ var capOSDErasureWidth = defineExclusiveCapability(fixtureOSDErasureCapacity, "o
 	"run one test other than the default k=2,m=2 baseline on the four-OSD erasure-capacity topology",
 	"OSD=1 OSD_REPLICAS=4", nil)
 
+// capOSDErasureWidthSix admits one exact test other than the default
+// optimized k=4,m=2 baseline on the six-OSD erasure-capacity topology.
+var capOSDErasureWidthSix = defineExclusiveCapability(fixtureOSDErasureSix, "osd-erasure-width-six",
+	"run one test other than the default optimized k=4,m=2 baseline on the six-OSD erasure-capacity topology",
+	"OSD=1 OSD_REPLICAS=6", nil)
+
 // osdTopologies is the closed CEPH_MSGR_TEST_OSD_REPLICAS vocabulary. The
 // variable keeps its historical name because the trusted native workflow
 // already forwards it; its value selects a topology, not an arbitrary count.
 // "1" and "3" keep their original meaning. "4" adds a fourth BlueStore
-// daemon for a k=2,m=2 pool while the replicated pools stay size 3/min_size 2.
+// daemon for the k=2,m=2 and k=3,m=1 pools, and "6" has six for a k=4,m=2
+// pool; on both the replicated pools stay size 3/min_size 2.
 var osdTopologies = map[string]osdTopology{
 	"1": {daemons: 1, poolSize: 1, poolMinSize: 1},
 	"3": {daemons: 3, poolSize: 3, poolMinSize: 2},
-	"4": {daemons: 4, poolSize: 3, poolMinSize: 2, erasureCapacity: true},
+	"4": {daemons: 4, poolSize: 3, poolMinSize: 2, erasureCapacity: fixtureOSDErasureCapacity, erasureDefault: "^TestCephOSDErasureK2M2Integration$"},
+	"6": {daemons: 6, poolSize: 3, poolMinSize: 2, erasureCapacity: fixtureOSDErasureSix, erasureDefault: "^TestCephOSDErasureOptimizedK4M2Integration$"},
 }
 
 func osdTopologyNames() []string {

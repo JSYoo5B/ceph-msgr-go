@@ -52,14 +52,14 @@ func TestOSDEpochStateControlsAdmissionOverTheCatalog(t *testing.T) {
 				// itself loads on the four-OSD erasure-capacity topology.
 				own := ciRowEnvironment(t, row.Params)
 				rowProfile, rowErr := loadProfile(func(k string) string { return own[k] })
-				width := rowErr == nil && rowProfile.osdTopology().erasureCapacity
+				width := rowErr == nil && rowProfile.osdTopology().erasureCapacity == fixtureOSDErasureCapacity
 				declared := capabilities != ""
 				switch {
 				case declared && width && (err != nil || p.testRun != selector || !p.admits(capOSDErasureWidth)):
 					t.Errorf("%s with %s [%s]: the control was not admitted alone: %v", row.ID, selector, capabilities, err)
 				case declared && !width && err == nil:
 					t.Errorf("%s with %s [%s]: osd-erasure-width was admitted off the four-OSD topology", row.ID, selector, capabilities)
-				case !declared && err == nil && p.osdTopology().erasureCapacity:
+				case !declared && err == nil && p.osdTopology().erasureCapacity != "":
 					t.Errorf("%s with %s: the four-OSD topology admitted the control without osd-erasure-width", row.ID, selector)
 				}
 				if declared && err == nil {
