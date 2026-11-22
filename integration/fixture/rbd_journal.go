@@ -143,6 +143,30 @@ var capRBDJournalForcedBreak = defineExclusiveCapability(fixtureRBD, "rbd-journa
 // journal and journal their own writes.
 var rbdJournalForcedBreakActions = []string{"setup", "observe-locked", "observe-appended", "force-break", "observe-fenced", "takeover"}
 
+// capRBDJournalForcedBreakPending admits the forced-break sequence in which
+// the Go owner has two journal appends held at the OSD through the break:
+// its test runs alone on a fresh RBD fixture, and the journal control
+// replaces the ordinary sequence with rbdJournalForcedBreakPendingActions.
+var capRBDJournalForcedBreakPending = defineExclusiveCapability(fixtureRBD, "rbd-journal-forced-break-pending",
+	"run one test alone on a fresh RBD fixture with the journal forced-break sequence with pending appends (native lock break, blocklist and OSDMap epoch advance)",
+	"RBD=1", nil)
+
+// rbdJournalForcedBreakPendingActions is the forced-break sequence with
+// appends pending at the OSD. After the Go owner's answered append
+// (`observe-appended`) it sends two more appends that name an OSDMap epoch
+// the cluster has not reached, so the OSD holds them (osd/OSD.cc
+// dispatch_session_waiting at rbdBaseSource); `observe-pending` is the
+// read-only observation while both are held. `force-break` breaks the lock
+// as in the forced-break sequence. `advance-map` runs no native driver: the
+// fixture raises the OSDMap epoch as the lock control's pending sequence
+// does (rbdLockAdvanceMap in rbd_lock.go), reading the OSD's operations in
+// flight before and after, which lets the OSD answer what it held.
+// `observe-fenced` follows the answer, `observe-new-connection` the Go
+// owner's requests on a new OSD connection, and `takeover` is the native
+// takeover of the forced-break sequence.
+var rbdJournalForcedBreakPendingActions = []string{"setup", "observe-locked", "observe-appended", "observe-pending", "force-break", "advance-map", "observe-fenced",
+	"observe-new-connection", "takeover"}
+
 // rbdJournalActionsFor returns the action sequence the profile admits.
 func rbdJournalActionsFor(p profile) []string {
 	switch {
@@ -154,6 +178,8 @@ func rbdJournalActionsFor(p profile) []string {
 		return rbdJournalOwnerLossActions
 	case p.admits(capRBDJournalForcedBreak):
 		return rbdJournalForcedBreakActions
+	case p.admits(capRBDJournalForcedBreakPending):
+		return rbdJournalForcedBreakPendingActions
 	}
 	return rbdJournalActions
 }
@@ -162,7 +188,8 @@ func rbdJournalActionsFor(p profile) []string {
 // the observations and actions of the owner-loss and forced-break sequences
 // from the moment a lock break can have happened.
 func rbdJournalBlocklisted(action string) bool {
-	return action == "observe-appended" || action == "force-break" || action == "observe-fenced" || action == "takeover"
+	return action == "observe-appended" || action == "observe-pending" || action == "force-break" || action == "observe-fenced" || action == "observe-new-connection" ||
+		action == "takeover"
 }
 
 // rbdJournalLockLogged names the actions whose librbd debug log the driver
@@ -516,7 +543,7 @@ identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
 ACTIONS = ('setup', 'observe-registered', 'write', 'observe-committed', 'inspect', 'replay', 'concurrent',
            'observe-locked', 'checkpoint', 'observe-recorded', 'change-primary', 'observe-resubmitted',
-           'observe-appended', 'force-break', 'observe-fenced', 'takeover')
+           'observe-appended', 'force-break', 'observe-fenced', 'takeover', 'observe-pending', 'observe-new-connection')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('image') != 'ceph-msgr-journal-' + token or plan.get('features') != 69
@@ -666,7 +693,7 @@ def observe(ioctx, out):
     out['status'] = cli(['journal', 'status', '--format', 'json', spec], json.loads)
     if action in ('setup', 'inspect', 'replay', 'concurrent', 'checkpoint', 'takeover'):
         out['inspect'] = cli(['journal', 'inspect', '--verbose', spec], parse_inspect)
-    if action in ('observe-appended', 'force-break', 'observe-fenced', 'takeover'):
+    if action in ('observe-appended', 'observe-pending', 'force-break', 'observe-fenced', 'observe-new-connection', 'takeover'):
         out['blocklist'] = blocklist()
     out['blobs'] = {'image_head': publish(PREFIX + 'image-head.bin', head), 'journal_objects': publish(PREFIX + 'journal-objects.bin', view)}
 
@@ -1323,13 +1350,16 @@ func rbdJournalTarget(plan rbdJournalPlan, action string) string {
 		return plan.Image + ":exclusive-lock-break,osd-blocklist"
 	case "takeover":
 		return plan.Image + ":exclusive-lock-break,osd-blocklist,journal-replay,native-write"
+	case "advance-map":
+		return plan.Pool + ":pool-flag-" + rbdLockAdvanceFlag + ",osdmap-epoch"
 	}
 	return plan.Image
 }
 
 // rbdJournalControl runs one native action of the closed journal sequence.
 // The setup, write, inspect, checkpoint and replay actions are journaled as
-// mutations, the observations as read-only actions.
+// mutations, the observations as read-only actions. `advance-map` is the
+// fixture's own OSDMap epoch advance and runs no driver.
 func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fields []string) (resultErr error) {
 	x := c.rbdBase
 	if c.profile.rbdBase != "1" || x == nil || x.out != out || x.setup == nil || x.native == nil || !x.plan.owned(x.token) || !x.journalPlan.owned(x.token) {
@@ -1377,6 +1407,13 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 			return c.rbdBaseFinish(m, err)
 		}
 	}
+	if action == "advance-map" {
+		// The fixture's own administrative commands only; the Go test's
+		// observations follow as their own actions.
+		advance, err := rbdLockAdvanceMap(ctx, x.plan.Pool, c.rbdLockAdvanceOps(x.plan.Pool))
+		result["advance"] = advance
+		return c.rbdBaseFinish(m, err)
+	}
 	process, native, err := c.rbdJournalRunNative(ctx, action, id)
 	result["native_process"] = process
 	if err == nil && native.PoolID != x.poolID {
@@ -1395,7 +1432,8 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	// The Go lock owner of the owner-loss and forced-break sequences is
 	// blocklisted by whoever breaks its lock; the cleanup removes that
 	// entry.
-	if action == "observe-locked" && (c.profile.admits(capRBDJournalOwnerLoss) || c.profile.admits(capRBDJournalForcedBreak)) && native.Lockers != nil {
+	if action == "observe-locked" && (c.profile.admits(capRBDJournalOwnerLoss) || c.profile.admits(capRBDJournalForcedBreak) || c.profile.admits(capRBDJournalForcedBreakPending)) &&
+		native.Lockers != nil {
 		for _, l := range native.Lockers.Lockers {
 			x.lockOwnerAddresses = append(x.lockOwnerAddresses, l.Address)
 		}
@@ -1408,9 +1446,11 @@ var _ = defineRequestControl("rbd-journal", frozenControlRank(15), (*fixtureClus
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.
 var _ = collectDiagnosticFiles(
+	"rbd-journal-advance-map.json",
 	"rbd-journal-change-primary.json",
 	"rbd-journal-checkpoint.json",
 	"rbd-journal-force-break.json",
+	"rbd-journal-forced-break-pending-results.json",
 	"rbd-journal-forced-break-results.json",
 	"rbd-journal-inspect.json",
 	"rbd-journal-lost-append-outcome.json",
@@ -1419,6 +1459,8 @@ var _ = collectDiagnosticFiles(
 	"rbd-journal-observe-committed.json",
 	"rbd-journal-observe-fenced.json",
 	"rbd-journal-observe-locked.json",
+	"rbd-journal-observe-new-connection.json",
+	"rbd-journal-observe-pending.json",
 	"rbd-journal-observe-recorded.json",
 	"rbd-journal-observe-registered.json",
 	"rbd-journal-observe-resubmitted.json",

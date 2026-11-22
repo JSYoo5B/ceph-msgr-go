@@ -110,10 +110,10 @@ func TestCephRBDJournalOwnerLossIntegration(t *testing.T) {
 // replays the subject's entry and journals and applies its own write over the first half of that
 // extent: the same postconditions as in the owner-loss variant, except that
 // the subject's address was already blocklisted before the takeover. Not
-// covered: a fenced owner's requests on a connection whose address the lock
-// record does not name (each OSD connection of a client without
-// EnableCephFS has its own address nonce), requests in flight at the break,
-// and a break by a client that is not librbd.
+// covered here: a fenced owner's requests on a connection whose address the
+// lock record does not name and requests in flight at the break (both in
+// TestCephRBDJournalForcedBreakPendingIntegration), and a break by a client
+// that is not librbd.
 //
 //scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournalforcedbreak key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-forced-break
 //scenario:row rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournalforcedbreak key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-forced-break

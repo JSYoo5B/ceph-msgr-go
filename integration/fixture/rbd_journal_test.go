@@ -92,7 +92,8 @@ func TestRBDJournalPlanIsTokenBound(t *testing.T) {
 
 func TestRBDJournalRequestIsClosedAndOrdered(t *testing.T) {
 	token := strings.Repeat("a1", 16)
-	for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions, rbdJournalPrimaryChangeActions, rbdJournalOwnerLossActions, rbdJournalForcedBreakActions} {
+	for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions, rbdJournalPrimaryChangeActions, rbdJournalOwnerLossActions, rbdJournalForcedBreakActions,
+		rbdJournalForcedBreakPendingActions} {
 		for next := range actions {
 			for i, action := range actions {
 				id, got, err := parseRBDJournalRequest(actions, []string{"7", token, action}, token, 6, next)
@@ -142,6 +143,7 @@ const (
 	rbdLockOwnerLossPendingSelector = "^TestCephRBDLockOwnerLossPendingIntegration$"
 	rbdJournalOwnerLossSelector     = "^TestCephRBDJournalOwnerLossIntegration$"
 	rbdJournalForcedBreakSelector   = "^TestCephRBDJournalForcedBreakIntegration$"
+	rbdJournalForcedPendingSelector = "^TestCephRBDJournalForcedBreakPendingIntegration$"
 )
 
 // rbdSelectionProfile is the profile of the RBD catalog row that selects
@@ -304,7 +306,8 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 			return base[key]
 		})
 	}
-	for selector, want := range map[string][]string{rbdJournalOwnerLossSelector: rbdJournalOwnerLossActions, rbdJournalForcedBreakSelector: rbdJournalForcedBreakActions} {
+	for selector, want := range map[string][]string{rbdJournalOwnerLossSelector: rbdJournalOwnerLossActions, rbdJournalForcedBreakSelector: rbdJournalForcedBreakActions,
+		rbdJournalForcedPendingSelector: rbdJournalForcedBreakPendingActions} {
 		p, err := load(selector)
 		if err != nil || p.testRun != selector || p.rbdReplicas() != "1" || !slices.Equal(rbdJournalActionsFor(p), want) || !slices.Equal(rbdLockActionsFor(p), rbdLockActions) {
 			t.Fatal("journal owner-loss selector admission differs", selector, p.testRun, err)
@@ -312,15 +315,16 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 		if row := rbdSelectionProfile(t, selector); !slices.Equal(rbdJournalActionsFor(row), want) {
 			t.Fatal("catalog row of", selector, "selects another sequence")
 		}
-		for _, widened := range []string{strings.TrimSuffix(selector, "$"), strings.TrimPrefix(selector, "^"), "^TestCephRBDJournal(OwnerLoss|ForcedBreak)Integration$"} {
+		for _, widened := range []string{strings.TrimSuffix(selector, "$"), strings.TrimPrefix(selector, "^"), "^TestCephRBDJournal(OwnerLoss|ForcedBreak|ForcedBreakPending)Integration$"} {
 			if _, err := load(widened); err == nil {
 				t.Fatal("unanchored or widened journal owner-loss selector admitted", widened)
 			}
 		}
 	}
-	for _, selector := range []string{"", rbdJournalLostAppendSelector, rbdLockOwnerLossSelector} {
+	for _, selector := range []string{"", rbdJournalLostAppendSelector, rbdLockOwnerLossSelector, rbdLockOwnerLossPendingSelector} {
 		p, err := load(selector)
-		if err != nil || slices.Equal(rbdJournalActionsFor(p), rbdJournalOwnerLossActions) || slices.Equal(rbdJournalActionsFor(p), rbdJournalForcedBreakActions) {
+		if err != nil || slices.Equal(rbdJournalActionsFor(p), rbdJournalOwnerLossActions) || slices.Equal(rbdJournalActionsFor(p), rbdJournalForcedBreakActions) ||
+			slices.Equal(rbdJournalActionsFor(p), rbdJournalForcedBreakPendingActions) {
 			t.Fatal("another RBD selection runs a journal owner-loss sequence", selector, err)
 		}
 	}
@@ -330,7 +334,7 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 	}
 	token := strings.Repeat("a1", 16)
 	for next := 0; next <= len(rbdJournalLostAppendActions); next++ {
-		for _, action := range []string{"observe-appended", "force-break", "observe-fenced", "takeover"} {
+		for _, action := range []string{"observe-appended", "observe-pending", "force-break", "advance-map", "observe-fenced", "observe-new-connection", "takeover"} {
 			for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions, rbdJournalPrimaryChangeActions} {
 				if _, _, err := parseRBDJournalRequest(actions, []string{"7", token, action}, token, 6, next); err == nil {
 					t.Fatal("owner-loss action admitted in another sequence", action, next)
@@ -341,7 +345,7 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 			t.Fatal("replay admitted in the owner-loss sequence", next)
 		}
 	}
-	for _, action := range slices.Concat(rbdJournalOwnerLossActions, rbdJournalForcedBreakActions) {
+	for _, action := range slices.Concat(rbdJournalOwnerLossActions, rbdJournalForcedBreakActions, slices.DeleteFunc(slices.Clone(rbdJournalForcedBreakPendingActions), func(a string) bool { return a == "advance-map" })) {
 		if !strings.Contains(rbdJournalNativePython, "'"+action+"'") {
 			t.Fatal("native journal driver does not admit", action)
 		}
@@ -353,8 +357,20 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 		rbdJournalTarget(plan, "force-break") != "i:exclusive-lock-break,osd-blocklist" || rbdJournalTarget(plan, "takeover") != "i:exclusive-lock-break,osd-blocklist,journal-replay,native-write" {
 		t.Fatal("owner-loss action classification or target differs")
 	}
-	if !rbdJournalLockLogged("force-break") || !rbdJournalLockLogged("takeover") || rbdJournalLockLogged("observe-fenced") || rbdJournalLockLogged("replay") {
-		t.Fatal("lock log classification differs")
+	// The pending variant: its two observations read the blocklist and
+	// change nothing, the advance is the fixture's own mutation of the pool
+	// and runs no driver, and the lock log belongs to the break and the
+	// takeover only.
+	if !rbdJournalReadOnly("observe-pending") || !rbdJournalReadOnly("observe-new-connection") || rbdJournalReadOnly("advance-map") ||
+		!rbdJournalBlocklisted("observe-pending") || !rbdJournalBlocklisted("observe-new-connection") || rbdJournalInspected("observe-new-connection") ||
+		!rbdJournalLockLogged("force-break") || !rbdJournalLockLogged("takeover") || rbdJournalLockLogged("observe-fenced") || rbdJournalLockLogged("replay") ||
+		rbdJournalTarget(rbdJournalPlan{Pool: "p"}, "advance-map") != "p:pool-flag-"+rbdLockAdvanceFlag+",osdmap-epoch" ||
+		strings.Contains(rbdJournalNativePython, "'advance-map'") {
+		t.Fatal("pending forced-break action classification or target differs")
+	}
+	want = append(slices.Clone(rbdJournalForcedBreakActions[:3]), "observe-pending", "force-break", "advance-map", "observe-fenced", "observe-new-connection", "takeover")
+	if !slices.Equal(rbdJournalForcedBreakPendingActions, want) {
+		t.Fatal("pending forced-break sequence differs from the forced-break sequence", rbdJournalForcedBreakPendingActions)
 	}
 	for _, field := range []string{"image.lock_break(rbd.RBD_LOCK_MODE_EXCLUSIVE, listed[0]['owner'])", "plan['takeover_events']", "'osd blocklist ls'",
 		"conf.update(debug_rbd='10/10', log_to_file='true', log_file=LOCK_LOG)", "    cluster.shutdown()\nif action in ('force-break', 'takeover'):\n    out['lock_log'] = lock_log()",
@@ -614,7 +630,9 @@ func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 		return data
 	}
 	fb := func(v map[string]any) map[string]any { return v["force_break"].(map[string]any) }
-	for _, action := range slices.Concat(rbdJournalActions, rbdJournalLostAppendActions, []string{"change-primary", "observe-resubmitted"}, rbdJournalOwnerLossActions, rbdJournalForcedBreakActions) {
+	pendingDriven := slices.DeleteFunc(slices.Clone(rbdJournalForcedBreakPendingActions), func(a string) bool { return a == "advance-map" })
+	for _, action := range slices.Concat(rbdJournalActions, rbdJournalLostAppendActions, []string{"change-primary", "observe-resubmitted"}, rbdJournalOwnerLossActions, rbdJournalForcedBreakActions,
+		pendingDriven) {
 		if _, err := decodeRBDJournalNative(action, token, 9, plan, encode(rbdJournalOutput(token, plan, action))); err != nil {
 			t.Fatal("well-formed journal output refused", action, err)
 		}
@@ -742,6 +760,10 @@ func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 		}},
 		"lock log line too long": {"takeover", func(v map[string]any) {
 			v["lock_log"].(map[string]any)["lines"].([]map[string]any)[0]["text"] = strings.Repeat("x", rbdJournalLockLogText+1)
+		}},
+		"pending observation without blocklist": {"observe-pending", func(v map[string]any) { delete(v, "blocklist") }},
+		"new connection observation with inspect": {"observe-new-connection", func(v map[string]any) {
+			v["inspect"] = rbdJournalOutput(token, plan, "checkpoint")["inspect"]
 		}},
 	} {
 		value := rbdJournalOutput(token, plan, change.action)
