@@ -16,8 +16,8 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
-// A write to an object that a returned shard of an optimized isa k=2,m=2 pool
-// is missing, while the norecover and nobackfill flags keep the PG from
+// A write to an object that a returned shard of an optimized isa pool
+// (k=2,m=2, k=3,m=1 or k=4,m=2) is missing, while the norecover and nobackfill flags keep the PG from
 // recovering it and osd_backoff_on_degraded keeps its default (false). The
 // pinned source (Ceph v20.2.4) gives the expected native behaviour:
 //
@@ -328,7 +328,7 @@ func degradedWaitOps(tail, value []byte, attr string) []cephmsgr.OSDOperation {
 	}
 }
 
-// TestCephOSDErasureOptimizedK2M2DegradedWriteWaitIntegration: a write
+// erasureDegradedWriteWaitScenario: a write
 // during recovery of its object on an optimized EC PG. The OSD of the last
 // parity shard is killed, the object is overwritten through the unchanged
 // shard-0 primary while it is away, and the norecover and nobackfill flags
@@ -348,12 +348,8 @@ func degradedWaitOps(tail, value []byte, attr string) []cephmsgr.OSDOperation {
 // Not verified: a write that waits for an unreadable object (missing on the
 // primary), an op held inside the EC backend for sub-write commits, a pause
 // past the heartbeat grace, backfill and async recovery targets.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2degradedwritewait key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
-//scenario:covers CLIENT to OSD
-//fixture:isolated kills and pauses an OSD and sets norecover/nobackfill; restart waits osd-ready clean
-func TestCephOSDErasureOptimizedK2M2DegradedWriteWaitIntegration(t *testing.T) {
-	r := startECEpochRun(t, 900*time.Second)
+func erasureDegradedWriteWaitScenario(t *testing.T, width erasureWidth) {
+	r := startECEpochRun(t, width, 900*time.Second)
 	const (
 		object          = "ec-degraded-wait"
 		attr            = "ec-degraded-wait"
@@ -423,15 +419,45 @@ func TestCephOSDErasureOptimizedK2M2DegradedWriteWaitIntegration(t *testing.T) {
 	}
 }
 
+// TestCephOSDErasureOptimizedK2M2DegradedWriteWaitIntegration is erasureDegradedWriteWaitScenario on optimized isa
+// k=2,m=2 (four OSDs).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2degradedwritewait key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills and pauses an OSD and sets norecover/nobackfill; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK2M2DegradedWriteWaitIntegration(t *testing.T) {
+	erasureDegradedWriteWaitScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1DegradedWriteWaitIntegration is erasureDegradedWriteWaitScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1degradedwritewait key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills and pauses an OSD and sets norecover/nobackfill; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK3M1DegradedWriteWaitIntegration(t *testing.T) {
+	erasureDegradedWriteWaitScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2DegradedWriteWaitIntegration is erasureDegradedWriteWaitScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2degradedwritewait key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills and pauses an OSD and sets norecover/nobackfill; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK4M2DegradedWriteWaitIntegration(t *testing.T) {
+	erasureDegradedWriteWaitScenario(t, erasureK4M2)
+}
+
 // versionAfter reports whether a is a newer PG version than b.
 func versionAfter(a, b cephmsgr.OSDVersion) bool {
 	return a.Epoch > b.Epoch || a.Epoch == b.Epoch && a.Version > b.Version
 }
 
-// TestCephOSDErasureOptimizedK2M2DegradedWaitAtDyingPrimaryIntegration: a
+// erasureDegradedWaitAtDyingPrimaryScenario: a
 // request held at the primary after do_op decoded it, when that primary's
 // OSD dies. The object is degraded as in
-// TestCephOSDErasureOptimizedK2M2DegradedWriteWaitIntegration and the
+// erasureDegradedWriteWaitScenario and the
 // returned OSD is paused, so the Go APPEND+SETXATTR waits for the degraded
 // object, shown by a bracketed dump_ops_in_flight. The primary's OSD is then
 // killed through the fixture's forced kill while the returned OSD is still
@@ -451,12 +477,8 @@ func versionAfter(a, b cephmsgr.OSDVersion) bool {
 // after its sub-writes were sent, which other shards may have applied, a
 // genuinely lagging primary, an orderly stop or partition, and other
 // shards' logs.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2degradedwaitatdyingprimary key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
-//scenario:covers CLIENT to OSD
-//fixture:isolated kills and pauses OSDs and sets norecover/nobackfill; restart waits osd-ready clean
-func TestCephOSDErasureOptimizedK2M2DegradedWaitAtDyingPrimaryIntegration(t *testing.T) {
-	r := startECEpochRun(t, 900*time.Second)
+func erasureDegradedWaitAtDyingPrimaryScenario(t *testing.T, width erasureWidth) {
+	r := startECEpochRun(t, width, 900*time.Second)
 	const (
 		object          = "ec-degraded-wait-dying"
 		attr            = "ec-degraded-wait-dying"
@@ -581,7 +603,38 @@ func TestCephOSDErasureOptimizedK2M2DegradedWaitAtDyingPrimaryIntegration(t *tes
 	if err := checkOneDial(dialed, fc.dialSnapshot(), endpoint, osdEndpoint(t, back.Address)); err != nil {
 		t.Fatal("the resubmission did not open exactly its one connection:", err)
 	}
+	r.heldThrough("the log reads and the resubmission at the returned primary", object, back)
 	t.Logf("applied once by the resubmission at %s, version %d -> %d; the original outcome stays unknown", replayVersion(reply), d.pre.Version, final.Version)
+}
+
+// TestCephOSDErasureOptimizedK2M2DegradedWaitAtDyingPrimaryIntegration is erasureDegradedWaitAtDyingPrimaryScenario on optimized isa
+// k=2,m=2 (four OSDs).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2degradedwaitatdyingprimary key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills and pauses OSDs and sets norecover/nobackfill; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK2M2DegradedWaitAtDyingPrimaryIntegration(t *testing.T) {
+	erasureDegradedWaitAtDyingPrimaryScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1DegradedWaitAtDyingPrimaryIntegration is erasureDegradedWaitAtDyingPrimaryScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1degradedwaitatdyingprimary key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills and pauses OSDs and sets norecover/nobackfill; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK3M1DegradedWaitAtDyingPrimaryIntegration(t *testing.T) {
+	erasureDegradedWaitAtDyingPrimaryScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2DegradedWaitAtDyingPrimaryIntegration is erasureDegradedWaitAtDyingPrimaryScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2degradedwaitatdyingprimary key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills and pauses OSDs and sets norecover/nobackfill; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK4M2DegradedWaitAtDyingPrimaryIntegration(t *testing.T) {
+	erasureDegradedWaitAtDyingPrimaryScenario(t, erasureK4M2)
 }
 
 // degradedWaitSnapshot builds one synthetic receipt of PG 3.7's primary

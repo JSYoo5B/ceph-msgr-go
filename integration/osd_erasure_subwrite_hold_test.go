@@ -20,7 +20,8 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
-// A write held inside the EC backend of an optimized isa k=2,m=2 pool while
+// A write held inside the EC backend of an optimized isa pool (k=2,m=2,
+// k=3,m=1 or k=4,m=2) while
 // it waits for its sub-write commits, and what an epoch change does to it.
 // The OSD of the last parity shard is paused through the fixture's daemon
 // control (heldPause, daemon_lease_test.go) before one
@@ -75,9 +76,12 @@ const subWriteHoldEvent = "started"
 // (src/osd/ECCommon.cc:898-903, src/osd/ECBackend.cc:346, :390).
 var subWriteLocalCommit = []string{"sub_op_started", "sub_op_committed"}
 
-// subWriteStripe is one full stripe of the pool's two 4 KiB data chunks: an
-// APPEND of that length at a stripe boundary writes every shard.
-const subWriteStripe = 8192
+// subWriteStripe is one full stripe of a pool of k data chunks of chunk
+// bytes (chunk from the native stripe_width): an APPEND of that length at a
+// stripe boundary writes every shard.
+func subWriteStripe(k, chunk int) int {
+	return k * chunk
+}
 
 // subWriteRecord is one MOSDECSubOpWrite of the request in one OSD's op
 // history (oracle mode subwrites, tools/osd_pool_mode_subwrites_oracle.py).
@@ -326,8 +330,8 @@ type subWriteRun struct {
 // its PG, reads the healthy placement, dials the fault client to the
 // primary and builds the held write: an APPEND of one full stripe and a
 // SETXATTR under incarnation.
-func startSubWriteRun(t *testing.T, object string, incarnation int32, seeded, mutated uint32) *subWriteRun {
-	r := &subWriteRun{ecEpochRun: startECEpochRun(t, 900*time.Second), object: object, incarnation: incarnation, attr: object}
+func startSubWriteRun(t *testing.T, width erasureWidth, object string, incarnation int32, seeded, mutated uint32) *subWriteRun {
+	r := &subWriteRun{ecEpochRun: startECEpochRun(t, width, 900*time.Second), object: object, incarnation: incarnation, attr: object}
 	route, _ := r.healthy(object)
 	other := ""
 	for i := range 64 {
@@ -340,7 +344,11 @@ func startSubWriteRun(t *testing.T, object string, incarnation int32, seeded, mu
 	if other == "" {
 		t.Fatal("no name of 64 candidates maps to the PG of", object, route.PGID)
 	}
-	r.data = bytes.Repeat([]byte{0x53, 0, 0xff, 'S'}, subWriteStripe/4)
+	stripe := subWriteStripe(width.k, r.facts.chunk)
+	if stripe <= 0 || stripe%16 != 0 {
+		t.Fatalf("the stripe of k=%d chunks of %d bytes is not a positive multiple of 16", width.k, r.facts.chunk)
+	}
+	r.data = bytes.Repeat([]byte{0x53, 0, 0xff, 'S'}, stripe/4)
 	r.seed = r.write("seed", route, r.data, seeded, cephmsgr.OSDSnapContext{})
 	r.write("seed the other object", r.place(other), []byte("another object of the same PG\x00\xff"), seeded, cephmsgr.OSDSnapContext{})
 	r.route, r.since = r.healthy(object)
@@ -367,7 +375,7 @@ func startSubWriteRun(t *testing.T, object string, incarnation int32, seeded, mu
 	if r.dialed[r.endpoint] != 1 {
 		t.Fatal("the held write's connection was not dialed exactly once", r.dialed)
 	}
-	r.tail = bytes.Repeat([]byte("sub-write hold\x00\xff"), subWriteStripe/16)
+	r.tail = bytes.Repeat([]byte("sub-write hold\x00\xff"), stripe/16)
 	r.value = []byte{0, 0xff, 's'}
 	r.ops = degradedWaitOps(r.tail, r.value, r.attr)
 	r.held = r.request(r.route, r.ops...)
@@ -573,14 +581,14 @@ func heldOnce(locations []pgHistoryLocation, route osdFixtureOracle, version str
 	return nil
 }
 
-// TestCephOSDErasureOptimizedK2M2SubWriteHoldIntegration: a write held
-// inside the EC backend of an optimized isa k=2,m=2 pool waiting for its
+// erasureSubWriteHoldScenario: a write held
+// inside the EC backend of an optimized isa pool waiting for its
 // sub-write commits. With the OSD of the last parity shard paused, one Go
 // APPEND of a full stripe plus SETXATTR must be held at the primary: a
 // bracketed dump_ops_in_flight shows exactly that op, decoded for the object
 // at its PG shard and epoch, executed, with the primary's own shard
-// committed and without commit_sent, and the op histories of the two other
-// remote shards each show the MOSDECSubOpWrite of that request identity
+// committed and without commit_sent, and the op histories of the other
+// remote shards (every shard but the primary's and the paused one) each show the MOSDECSubOpWrite of that request identity
 // committed at the placement's epoch, and no roll-forward of it. A STAT of
 // another object of the same PG completes on the same connection meanwhile.
 // After the pause ends, the write must complete once with ONDISK under its
@@ -598,13 +606,9 @@ func heldOnce(locations []pgHistoryLocation, route osdFixtureOracle, version str
 //
 // The primary's own shard is seen committed on the client op itself. Not
 // verified: a pause past the heartbeat grace, a write whose plan leaves a
-// shard out, and other widths and plugins.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2subwritehold key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
-//scenario:covers CLIENT to OSD
-//fixture:isolated pauses an OSD; restart waits osd-ready clean
-func TestCephOSDErasureOptimizedK2M2SubWriteHoldIntegration(t *testing.T) {
-	r := startSubWriteRun(t, "ec-subwrite-hold", 91, 1700014000, 1700014002)
+// shard out, and other plugins and wider codes.
+func erasureSubWriteHoldScenario(t *testing.T, width erasureWidth) {
+	r := startSubWriteRun(t, width, "ec-subwrite-hold", 91, 1700014000, 1700014002)
 	paused := r.route.Acting[r.last]
 	before := r.osdState(paused)
 	p, call, op, committed := r.pauseAndHold()
@@ -671,11 +675,40 @@ func TestCephOSDErasureOptimizedK2M2SubWriteHoldIntegration(t *testing.T) {
 	}
 }
 
-// TestCephOSDErasureOptimizedK2M2SubWriteShardLostIntegration: the held
+// TestCephOSDErasureOptimizedK2M2SubWriteHoldIntegration is erasureSubWriteHoldScenario on optimized isa
+// k=2,m=2 (four OSDs).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2subwritehold key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses an OSD; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK2M2SubWriteHoldIntegration(t *testing.T) {
+	erasureSubWriteHoldScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1SubWriteHoldIntegration is erasureSubWriteHoldScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1subwritehold key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses an OSD; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK3M1SubWriteHoldIntegration(t *testing.T) {
+	erasureSubWriteHoldScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2SubWriteHoldIntegration is erasureSubWriteHoldScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2subwritehold key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses an OSD; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK4M2SubWriteHoldIntegration(t *testing.T) {
+	erasureSubWriteHoldScenario(t, erasureK4M2)
+}
+
+// erasureSubWriteShardLostScenario: the held
 // shard dies and the primary stays. The write is held as in
-// TestCephOSDErasureOptimizedK2M2SubWriteHoldIntegration, with the two other
-// remote shards' sub-writes committed. The paused OSD is SIGKILLed while
-// frozen, so it never reads its sub-write. Every remaining shard holds the
+// erasureSubWriteHoldScenario, with the other remote shards' sub-writes
+// committed. The paused OSD is SIGKILLed while frozen, so it never reads its sub-write. Every remaining shard holds the
 // entry, so the new interval keeps it, and the primary requeues the client
 // op and answers it from its log. Without any resubmission, the original
 // call must complete with ONDISK under its original transaction, at the
@@ -687,13 +720,9 @@ func TestCephOSDErasureOptimizedK2M2SubWriteHoldIntegration(t *testing.T) {
 //
 // Not verified: the reply's per-op return data beyond the code (a duplicate
 // answer carries the logged op returns), the loss of a shard the write plan
-// left out, and other widths and plugins.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2subwriteshardlost key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
-//scenario:covers CLIENT to OSD
-//fixture:isolated pauses and kills an OSD; restart waits osd-ready clean
-func TestCephOSDErasureOptimizedK2M2SubWriteShardLostIntegration(t *testing.T) {
-	r := startSubWriteRun(t, "ec-subwrite-shard-lost", 92, 1700015000, 1700015002)
+// left out, and other plugins and wider codes.
+func erasureSubWriteShardLostScenario(t *testing.T, width erasureWidth) {
+	r := startSubWriteRun(t, width, "ec-subwrite-shard-lost", 92, 1700015000, 1700015002)
 	p, call, op, committed := r.pauseAndHold()
 	lost := r.kill(r.route.Acting[r.last])
 	r.checkHeld(p, "the kill of the paused shard's OSD")
@@ -726,6 +755,7 @@ func TestCephOSDErasureOptimizedK2M2SubWriteShardLostIntegration(t *testing.T) {
 	if err := heldOnce(r.history("without the killed shard", without, op.TID), without, replayVersion(reply)); err != nil {
 		t.Fatal(err)
 	}
+	r.heldThrough("the answer and the log read without the killed shard", r.object, without)
 
 	r.start(lost)
 	r.clean()
@@ -737,9 +767,40 @@ func TestCephOSDErasureOptimizedK2M2SubWriteShardLostIntegration(t *testing.T) {
 	if err := heldOnce(r.history("with the shard back", *back.After, op.TID), *back.After, replayVersion(reply)); err != nil {
 		t.Fatal(err)
 	}
+	r.heldThrough("the log read with the shard back", r.object, *back.After)
 	if extra := newDials(r.dialed, r.fc.dialSnapshot(), r.endpoint); len(extra) != 0 {
 		t.Fatal("the client opened connections the caller did not ask for:", extra)
 	}
+}
+
+// TestCephOSDErasureOptimizedK2M2SubWriteShardLostIntegration is erasureSubWriteShardLostScenario on optimized isa
+// k=2,m=2 (four OSDs).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2subwriteshardlost key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses and kills an OSD; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK2M2SubWriteShardLostIntegration(t *testing.T) {
+	erasureSubWriteShardLostScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1SubWriteShardLostIntegration is erasureSubWriteShardLostScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1subwriteshardlost key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses and kills an OSD; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK3M1SubWriteShardLostIntegration(t *testing.T) {
+	erasureSubWriteShardLostScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2SubWriteShardLostIntegration is erasureSubWriteShardLostScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2subwriteshardlost key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses and kills an OSD; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK4M2SubWriteShardLostIntegration(t *testing.T) {
+	erasureSubWriteShardLostScenario(t, erasureK4M2)
 }
 
 // peeredWithout requires one read-only observation to show the PG peered
@@ -788,18 +849,19 @@ func (o pgIntervalObservation) peeredWithout(origin osdFixtureOracle, holes, non
 	return nil
 }
 
-// TestCephOSDErasureOptimizedK2M2SubWriteRollbackIntegration: the primary
+// erasureSubWriteRollbackScenario: the primary
 // dies, then the held shard. The write is held as in
-// TestCephOSDErasureOptimizedK2M2SubWriteHoldIntegration, with the two other
-// remote shards' sub-writes committed. The primary's OSD is SIGKILLed, then
+// erasureSubWriteHoldScenario, with the other remote shards' sub-writes
+// committed. The primary's OSD is SIGKILLed, then
 // the paused one while still frozen, so it never reads its sub-write. The
 // call must end with an OutcomeUnknownError that keeps its original
-// identity, and the client must open no further OSD connection. With two
-// shards left the PG must be peered and not active, so nothing rolls the
-// entry forward. The killed shard's OSD is started first: it returns with
+// identity, and the client must open no further OSD connection. With the
+// two OSDs gone the PG is below min_size and must be peered and not active
+// under the next primary-eligible shard, so nothing rolls the entry forward. The killed shard's OSD is started first: it returns with
 // the older last_update on a primary-eligible shard, so its log is the
-// authoritative one and the entry that the two other shards committed must
-// be rolled back. Under the replacement primary (primary-first pg_temp) the
+// authoritative one and the entry that the other shards committed must be
+// rolled back. Every claim after a fault is judged on the observed placement
+// and must be followed by that interval still holding (heldThrough). Under the replacement primary (primary-first pg_temp) the
 // PG must be active, the native object unchanged, and the replacement's log
 // must not hold the held identity. After the original primary's start and
 // clean PGs, the same holds for the returned primary's log. The caller then
@@ -809,14 +871,14 @@ func (o pgIntervalObservation) peeredWithout(origin osdFixtureOracle, holes, non
 //
 // Not verified: the other shards' own logs after the rollback (only the
 // primary's log and the object are read), a held write whose entry reaches
-// k primary-eligible shards before the primary dies, and other widths and
-// plugins.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2subwriterollback key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
-//scenario:covers CLIENT to OSD
-//fixture:isolated pauses and kills OSDs; restart waits osd-ready clean
-func TestCephOSDErasureOptimizedK2M2SubWriteRollbackIntegration(t *testing.T) {
-	r := startSubWriteRun(t, "ec-subwrite-rollback", 93, 1700016000, 1700016002)
+// k primary-eligible shards before the primary dies, and other plugins and
+// wider codes. There is no k=3,m=1 row: with shards 0 and 3 gone only the
+// nonprimary shards 1 and 2 remain, and peering excludes nonprimary shards
+// from the authoritative log (src/osd/PeeringState.cc:2513-2531
+// choose_acting, find_best_info with exclude_nonprimary_shards), so the
+// peered state this control needs does not exist on that width.
+func erasureSubWriteRollbackScenario(t *testing.T, width erasureWidth) {
+	r := startSubWriteRun(t, width, "ec-subwrite-rollback", 93, 1700016000, 1700016002)
 	p, call, op, _ := r.pauseAndHold()
 	primary := r.kill(r.route.ID)
 	r.checkHeld(p, "the kill of the primary's OSD")
@@ -875,6 +937,7 @@ func TestCephOSDErasureOptimizedK2M2SubWriteRollbackIntegration(t *testing.T) {
 	if got := r.history("under the replacement", replaced, op.TID); len(got) != 0 {
 		t.Fatalf("the replacement's log holds the held identity after the rollback: %+v", got)
 	}
+	r.heldThrough("the native read and the log read under the replacement", r.object, replaced)
 
 	back, _ := r.primaryBack(r.object, r.route, primary, seen.Query.SameIntervalSince)
 	t.Logf("restored: epoch %d primary osd.%d shard %d acting %v at %s (was %s)", back.Epoch, back.ID, back.Shard, back.Acting, back.Address, r.route.Address)
@@ -912,7 +975,28 @@ func TestCephOSDErasureOptimizedK2M2SubWriteRollbackIntegration(t *testing.T) {
 	if err := checkOneDial(r.dialed, r.fc.dialSnapshot(), r.endpoint, osdEndpoint(t, back.Address)); err != nil {
 		t.Fatal("the resubmission did not open exactly its one connection:", err)
 	}
+	r.heldThrough("the log reads and the resubmission at the returned primary", r.object, back)
 	t.Logf("applied once by the resubmission at %s, version %d -> %d; the original outcome stays unknown", replayVersion(reply), r.pre.Version, reply.UserVersion)
+}
+
+// TestCephOSDErasureOptimizedK2M2SubWriteRollbackIntegration is erasureSubWriteRollbackScenario on optimized isa
+// k=2,m=2 (four OSDs).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2subwriterollback key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses and kills OSDs; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK2M2SubWriteRollbackIntegration(t *testing.T) {
+	erasureSubWriteRollbackScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK4M2SubWriteRollbackIntegration is erasureSubWriteRollbackScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2subwriterollback key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses and kills OSDs; restart waits osd-ready clean
+func TestCephOSDErasureOptimizedK4M2SubWriteRollbackIntegration(t *testing.T) {
+	erasureSubWriteRollbackScenario(t, erasureK4M2)
 }
 
 // subWriteHoldSnapshot builds one synthetic receipt of PG 3.7's primary
