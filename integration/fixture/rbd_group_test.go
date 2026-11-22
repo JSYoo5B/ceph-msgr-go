@@ -23,6 +23,10 @@ func TestRBDGroupPlanAndRequests(t *testing.T) {
 		"layering-only members":         func(p *rbdGroupPlan) { p.Features = 1 },
 		"refused snapshot as the first": func(p *rbdGroupPlan) { p.RefusedSnapshot = p.GroupSnapshot },
 		"successful quiesce answer":     func(p *rbdGroupPlan) { p.QuiesceRefusal = 0 },
+		"default quiesce attempts":      func(p *rbdGroupPlan) { p.QuiesceAttempts = rbdGroupDefaultQuiesceAttempts },
+		"single quiesce attempt":        func(p *rbdGroupPlan) { p.QuiesceAttempts = 1 },
+		"retried as the timed-out":      func(p *rbdGroupPlan) { p.RetriedSnapshot = p.TimedOutSnapshot },
+		"foreign over-limit snapshot":   func(p *rbdGroupPlan) { p.OverLimitSnapshot = "ceph-msgr-gsnap-overlimit" },
 	} {
 		foreign := rbdGroupPlanFor(token)
 		foreign.Images = slices.Clone(foreign.Images)
@@ -56,7 +60,14 @@ func TestRBDGroupPlanAndRequests(t *testing.T) {
 	if _, _, err := parseRBDGroupRequest([]string{"4", token, "accepted"}, token, 3, 2); err == nil {
 		t.Fatal("RBD group accepted creation admitted before the refused one")
 	}
-	if _, _, err := parseRBDGroupRequest([]string{"7", token, "cleanup"}, token, 6, 6); err == nil {
+	if _, _, err := parseRBDGroupRequest([]string{"6", token, "retried"}, token, 5, 4); err == nil {
+		t.Fatal("RBD group retried creation admitted before the timed-out one")
+	}
+	if _, _, err := parseRBDGroupRequest([]string{"8", token, "rollback"}, token, 7, 6); err == nil {
+		t.Fatal("RBD group rollback admitted before the over-limit creation")
+	}
+	n := len(rbdGroupActions)
+	if _, _, err := parseRBDGroupRequest([]string{fmt.Sprint(n + 1), token, "cleanup"}, token, int64(n), n); err == nil {
 		t.Fatal("RBD group action admitted after the sequence ended")
 	}
 }
@@ -72,7 +83,7 @@ func rbdGroupSample(action, token string, plan rbdGroupPlan) rbdGroupNative {
 		directory := call("rbd_group_directory", "rbd", "dir_get_id")
 		directory.Code = -2
 		n.Removed = &rbdGroupRemoval{GroupID: "g1", GroupHeader: "rbd_group_header.g1", GroupHeaderErrno: 2, DirectoryCall: &directory,
-			GroupSnapshotsAfter: [][]rbdGroupSnap{{}, {}}, MembersAfter: []rbdGroupMember{}}
+			GroupSnapshotsAfter: [][]rbdGroupSnap{{}, {}, {}}, MembersAfter: []rbdGroupMember{}}
 		for i, image := range plan.Images {
 			id := fmt.Sprint("i", i)
 			n.Removed.Images = append(n.Removed.Images, rbdGroupRemovedImage{Key: image.Key, Name: image.Name, Pool: image.Pool, ImageID: id, Prefix: "rbd_data." + id, Objects: plan.Size >> plan.Order,
@@ -80,9 +91,9 @@ func rbdGroupSample(action, token string, plan rbdGroupPlan) rbdGroupNative {
 		}
 		return n
 	}
-	snapshots := 1
-	if action == "accepted" || action == "rollback" {
-		snapshots = 2
+	snapshots := map[string]int{"accepted": 2, "timed-out": 2, "retried": 3, "over-limit": 3, "rollback": 3}[action]
+	if snapshots == 0 {
+		snapshots = 1
 	}
 	directory := call("rbd_group_directory", "rbd", "dir_get_id")
 	n.Group = &rbdGroupView{Name: plan.Group, ID: "g1", HeaderObject: "rbd_group_header.g1", DirectoryCall: &directory}
@@ -95,22 +106,30 @@ func rbdGroupSample(action, token string, plan rbdGroupPlan) rbdGroupNative {
 		n.Group.ListCalls = append(n.Group.ListCalls, call("rbd_group_header.g1", "rbd", "group_snap_list"))
 	}
 	if slices.Contains(rbdGroupCreating, action) {
-		c := &rbdGroupCreation{Snapshot: map[string]string{"refused": plan.RefusedSnapshot, "accepted": plan.SecondSnapshot}[action], GroupID: "g1",
-			ImageIDs: map[string]string{"a": "i0", "b": "i1"}, Errno: 16, ElapsedNS: 5}
-		phases := []string{"incomplete-observed"}
-		if action == "accepted" {
-			phases, c.Errno = append(phases, "complete-observed"), 0
+		c := &rbdGroupCreation{Snapshot: plan.createdSnapshot(action), GroupID: "g1", ImageIDs: map[string]string{"a": "i0", "b": "i1"},
+			QuiesceAttempts: rbdGroupDefaultQuiesceAttempts, Errno: map[string]int{"refused": 16, "timed-out": 110, "over-limit": 122}[action], ElapsedNS: 5}
+		if action == "timed-out" || action == "retried" {
+			c.QuiesceAttempts = plan.QuiesceAttempts
 		}
-		for i, label := range phases {
+		if action == "over-limit" {
+			set, removed := call("rbd_header.i0", "rbd", "snapshot_get_limit"), call("rbd_header.i0", "rbd", "snapshot_get_limit")
+			c.SnapLimit = &rbdGroupSnapLimit{Image: "a", Snapshots: 3, Limit: 3, SetCall: &set, RemovedLimit: ^uint64(0), RemovedCall: &removed}
+		}
+		for i, label := range rbdGroupCreationPhases[action] {
 			list := call("rbd_group_header.g1", "rbd", "group_snap_list")
 			p := rbdGroupCreationPhase{Phase: label, AfterNS: int64(i + 1), ListCall: &list}
 			if i == 0 {
 				rollback := 22
 				p.RollbackErrno = &rollback
 			}
+			if label == "member-snapshot-observed" {
+				member := call("rbd_header.i1", "rbd", "snapshot_get")
+				p.MemberSnapshotCall = &member
+			}
 			for j, image := range plan.Images {
-				snapc, lock := call(fmt.Sprintf("rbd_header.i%d", j), "rbd", "get_snapcontext"), call(fmt.Sprintf("rbd_header.i%d", j), "lock", "get_info")
-				p.Images = append(p.Images, rbdGroupCreationImage{Key: image.Key, SnapContextCall: &snapc, LockCall: &lock})
+				object := fmt.Sprintf("rbd_header.i%d", j)
+				snapc, lock, limit := call(object, "rbd", "get_snapcontext"), call(object, "lock", "get_info"), call(object, "rbd", "snapshot_get_limit")
+				p.Images = append(p.Images, rbdGroupCreationImage{Key: image.Key, SnapContextCall: &snapc, LockCall: &lock, LimitCall: &limit})
 			}
 			c.Phases = append(c.Phases, p)
 		}
@@ -242,21 +261,50 @@ func TestRBDGroupNativeOutputShape(t *testing.T) {
 			"refused snapshot":     func(n *rbdGroupNative) { n.Creation.Snapshot = plan.RefusedSnapshot },
 			"unrecorded elapsed":   func(n *rbdGroupNative) { n.Creation.ElapsedNS = 0 },
 			"snapshot views short": func(n *rbdGroupNative) { n.Images[0].Views = n.Images[0].Views[:2] },
+			"retried attempts":     func(n *rbdGroupNative) { n.Creation.QuiesceAttempts = 2 },
+			"snapshot limit":       func(n *rbdGroupNative) { n.Creation.SnapLimit = &rbdGroupSnapLimit{} },
+		},
+		"timed-out": {
+			"default attempts":   func(n *rbdGroupNative) { n.Creation.QuiesceAttempts = rbdGroupDefaultQuiesceAttempts },
+			"complete observed":  func(n *rbdGroupNative) { n.Creation.Phases = append(n.Creation.Phases, n.Creation.Phases[0]) },
+			"refused snapshot":   func(n *rbdGroupNative) { n.Creation.Snapshot = plan.RefusedSnapshot },
+			"member limit call":  func(n *rbdGroupNative) { n.Creation.Phases[0].Images[0].LimitCall = nil },
+			"limit call method":  func(n *rbdGroupNative) { n.Creation.Phases[0].Images[1].LimitCall.Method = "snapshot_set_limit" },
+			"limit call foreign": func(n *rbdGroupNative) { n.Creation.Phases[0].Images[1].LimitCall.Object = "rbd_header.i0" },
+		},
+		"retried": {
+			"one observation":  func(n *rbdGroupNative) { n.Creation.Phases = n.Creation.Phases[:1] },
+			"default attempts": func(n *rbdGroupNative) { n.Creation.QuiesceAttempts = rbdGroupDefaultQuiesceAttempts },
+			"second snapshot":  func(n *rbdGroupNative) { n.Creation.Snapshot = plan.SecondSnapshot },
+		},
+		"over-limit": {
+			"no snapshot limit":   func(n *rbdGroupNative) { n.Creation.SnapLimit = nil },
+			"limit on member b":   func(n *rbdGroupNative) { n.Creation.SnapLimit.Image = "b" },
+			"limit set call":      func(n *rbdGroupNative) { n.Creation.SnapLimit.SetCall.Object = "rbd_header.i1" },
+			"limit removal call":  func(n *rbdGroupNative) { n.Creation.SnapLimit.RemovedCall = nil },
+			"complete observed":   func(n *rbdGroupNative) { n.Creation.Phases[1].Phase = "complete-observed" },
+			"retried attempts":    func(n *rbdGroupNative) { n.Creation.QuiesceAttempts = 2 },
+			"four observed views": func(n *rbdGroupNative) { n.Images[1].Views = n.Images[1].Views[:3] },
+			"no member snapshot":  func(n *rbdGroupNative) { n.Creation.Phases[1].MemberSnapshotCall = nil },
+			"member a snapshot":   func(n *rbdGroupNative) { n.Creation.Phases[1].MemberSnapshotCall.Object = "rbd_header.i0" },
+			"early member call": func(n *rbdGroupNative) {
+				n.Creation.Phases[0].MemberSnapshotCall = n.Creation.Phases[1].MemberSnapshotCall
+			},
 		},
 		"rollback": {
 			"other target": func(n *rbdGroupNative) { n.RolledBackTo = plan.SecondSnapshot },
 			"no target":    func(n *rbdGroupNative) { n.RolledBackTo = "" },
 		},
 		"cleanup": {
-			"group header":         func(n *rbdGroupNative) { n.Removed.GroupHeader = "rbd_group_header.g2" },
-			"errno":                func(n *rbdGroupNative) { n.Removed.Images[0].DataErrno[1] = 5 },
-			"object map errno":     func(n *rbdGroupNative) { n.Removed.Images[1].ObjectMapErrno = 5 },
-			"object count":         func(n *rbdGroupNative) { n.Removed.Images[1].DataErrno = n.Removed.Images[1].DataErrno[1:] },
-			"directory call":       func(n *rbdGroupNative) { n.Removed.DirectoryCall.Object = "rbd_directory" },
-			"prefix":               func(n *rbdGroupNative) { n.Removed.Images[0].Prefix = "rbd_data.i1" },
-			"pool":                 func(n *rbdGroupNative) { n.Removed.Images[1].Pool = plan.Pool },
-			"one snapshot removal": func(n *rbdGroupNative) { n.Removed.GroupSnapshotsAfter = n.Removed.GroupSnapshotsAfter[:1] },
-			"group view":           func(n *rbdGroupNative) { n.Group = &rbdGroupView{} },
+			"group header":          func(n *rbdGroupNative) { n.Removed.GroupHeader = "rbd_group_header.g2" },
+			"errno":                 func(n *rbdGroupNative) { n.Removed.Images[0].DataErrno[1] = 5 },
+			"object map errno":      func(n *rbdGroupNative) { n.Removed.Images[1].ObjectMapErrno = 5 },
+			"object count":          func(n *rbdGroupNative) { n.Removed.Images[1].DataErrno = n.Removed.Images[1].DataErrno[1:] },
+			"directory call":        func(n *rbdGroupNative) { n.Removed.DirectoryCall.Object = "rbd_directory" },
+			"prefix":                func(n *rbdGroupNative) { n.Removed.Images[0].Prefix = "rbd_data.i1" },
+			"pool":                  func(n *rbdGroupNative) { n.Removed.Images[1].Pool = plan.Pool },
+			"two snapshot removals": func(n *rbdGroupNative) { n.Removed.GroupSnapshotsAfter = n.Removed.GroupSnapshotsAfter[:2] },
+			"group view":            func(n *rbdGroupNative) { n.Group = &rbdGroupView{} },
 		},
 	} {
 		for name, mutate := range cases {
@@ -279,7 +327,7 @@ func TestRBDGroupNativeDriverCompiles(t *testing.T) {
 	if strings.Contains(script, ".keyring") || strings.Contains(script, "'keyring'") || !strings.Contains(script, "NATIVE_KEY") {
 		t.Fatal("RBD group driver names a keyring path")
 	}
-	for _, method := range []string{"'group_snap_list'", "'snapshot_get'", "'dir_get_id'", "'get_snapcontext'", "'get_info'"} {
+	for _, method := range []string{"'group_snap_list'", "'snapshot_get'", "'dir_get_id'", "'get_snapcontext'", "'get_info'", "'snapshot_get_limit'"} {
 		if !strings.Contains(script, method) {
 			t.Fatal("RBD group driver lacks its read call", method)
 		}
@@ -287,7 +335,7 @@ func TestRBDGroupNativeDriverCompiles(t *testing.T) {
 	// Every exec names one of the read methods above.
 	calls := strings.Count(script, "call(")
 	reads := 0
-	for _, method := range []string{"'group_snap_list'", "'snapshot_get'", "'dir_get_id'", "'get_snapcontext'", "'get_info'"} {
+	for _, method := range []string{"'group_snap_list'", "'snapshot_get'", "'dir_get_id'", "'get_snapcontext'", "'get_info'", "'snapshot_get_limit'"} {
 		reads += strings.Count(script, method)
 	}
 	if strings.Contains(script, "group_snap_set") || strings.Contains(script, "write_full") || strings.Contains(script, "'lock', 'lock'") || calls-1 > reads {

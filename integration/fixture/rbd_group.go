@@ -36,12 +36,23 @@ import (
 //   - refused: a second group snapshot whose quiesce the Go watcher refuses,
 //     so native librbd compensates;
 //   - accepted: a second group snapshot whose quiesce the Go watcher accepts;
+//   - timed-out: a group snapshot created with plan.QuiesceAttempts quiesce
+//     attempts, none of which the Go watcher answers, so every attempt times
+//     out at the OSD and native librbd compensates;
+//   - retried: a third group snapshot with the same attempt count, whose
+//     first quiesce the Go watcher leaves to time out, whose retry it accepts
+//     and whose unquiesce it never answers;
+//   - over-limit: a group snapshot creation after native librbd set member
+//     a's snapshot limit to its current snapshot count, so cls_rbd refuses
+//     member a's snapshot with EDQUOT after member b's exists and native
+//     librbd removes member b's snapshot and the record; the limit is then
+//     removed natively;
 //   - rollback: the group rolled back to the first group snapshot;
-//   - cleanup: both group snapshots, the membership, the group and both
+//   - cleanup: the three group snapshots, the membership, the group and both
 //     images removed natively, each removal followed by a native absence
 //     read.
 //
-// During refused and accepted the native driver creates the group snapshot
+// During every creation the native driver creates the group snapshot
 // on a second thread while its main thread independently reads the group
 // header and the member headers through librados exec of read methods, tries
 // a rollback to the snapshot being created, and publishes what it saw before
@@ -52,11 +63,14 @@ import (
 // consumer (integration/rbd_group_test.go). Native behavior relied upon, at
 // rbdBaseSource: librbd/api/Group.cc (membership, snapshot creation with its
 // INCOMPLETE record, quiesce, exclusive locks, COMPLETE record, unquiesce and
-// compensation; rollback, snapshot removal, the
+// both compensations; rollback, snapshot removal, the
 // ".group.<pool>_<group id>_<snapshot id>" member snapshot name),
-// librbd/ImageWatcher.cc (quiesce notification and its responses),
-// cls/rbd/cls_rbd.cc (group_snap_list, snapshot_get, get_snapcontext,
-// dir_get_id), cls/lock/cls_lock.cc (get_info), cls/rbd/cls_rbd_types.cc,
+// librbd/ImageWatcher.cc (quiesce notification, its responses and its
+// retry after a timeout), librbd/watcher/Notifier.cc (the 5 s notify
+// timeout), common/options/rbd.yaml.in (rbd_quiesce_notification_attempts),
+// cls/rbd/cls_rbd.cc (group_snap_list, snapshot_get, snapshot_add and its
+// snapshot limit, snapshot_get_limit, get_snapcontext, dir_get_id),
+// cls/lock/cls_lock.cc (get_info), cls/rbd/cls_rbd_types.cc,
 // pybind/rbd/rbd.pyx and pybind/rados/rados.pyx (LGPL-2.1 references; no
 // code copied).
 
@@ -69,15 +83,42 @@ var capRBDGroupSnapshot = defineExclusiveCapability(fixtureRBD, "rbd-group-snaps
 
 // rbdGroupActions is the closed, ordered action sequence of the group
 // control. Each action runs at most once and only after its predecessors.
-var rbdGroupActions = []string{"setup", "modify", "refused", "accepted", "rollback", "cleanup"}
+var rbdGroupActions = []string{"setup", "modify", "refused", "accepted", "timed-out", "retried", "over-limit", "rollback", "cleanup"}
 
 // rbdGroupObserved are the actions whose output carries a group and image
 // observation; rbdGroupCreating are those that create a group snapshot under
 // a Go-answered quiesce.
 var (
-	rbdGroupObserved = []string{"setup", "modify", "refused", "accepted", "rollback"}
-	rbdGroupCreating = []string{"refused", "accepted"}
+	rbdGroupObserved = []string{"setup", "modify", "refused", "accepted", "timed-out", "retried", "over-limit", "rollback"}
+	rbdGroupCreating = []string{"refused", "accepted", "timed-out", "retried", "over-limit"}
 )
+
+// rbdGroupCreationPhases are the native observations each creation publishes
+// while the creating thread waits on the Go watcher: the INCOMPLETE record
+// (with the rollback attempt), the COMPLETE record of an accepted creation,
+// and member b's snapshot while the over-limit creation compensates.
+var rbdGroupCreationPhases = map[string][]string{
+	"refused":    {"incomplete-observed"},
+	"accepted":   {"incomplete-observed", "complete-observed"},
+	"timed-out":  {"incomplete-observed"},
+	"retried":    {"incomplete-observed", "complete-observed"},
+	"over-limit": {"incomplete-observed", "member-snapshot-observed"},
+}
+
+// rbdGroupQuiesceAttempts is the rbd_quiesce_notification_attempts the
+// native creating client sets for the timed-out and retried creations; the
+// others keep librbd's default, rbdGroupDefaultQuiesceAttempts
+// (ceph/ceph/blob/v20.2.4/src/common/options/rbd.yaml.in).
+const (
+	rbdGroupQuiesceAttempts        = 2
+	rbdGroupDefaultQuiesceAttempts = 10
+)
+
+// createdSnapshot names the group snapshot a creating action creates.
+func (p rbdGroupPlan) createdSnapshot(action string) string {
+	return map[string]string{"refused": p.RefusedSnapshot, "accepted": p.SecondSnapshot, "timed-out": p.TimedOutSnapshot, "retried": p.RetriedSnapshot,
+		"over-limit": p.OverLimitSnapshot}[action]
+}
 
 // rbdGroupQuiesceRefusal is the result the Go watcher answers the refused
 // creation's quiesce with: -EBUSY in a ResponseMessage.
@@ -104,22 +145,28 @@ type rbdGroupImagePlan struct {
 // group, the base image and image a; SecondPool holds image b. ListPage is
 // the page size of the paged group_snap_list calls, PollPage that of the
 // single-call listings during creation. QuiesceRefusal is the Go watcher's
-// answer to the refused creation's quiesce.
+// answer to the refused creation's quiesce; QuiesceAttempts is the native
+// creating client's rbd_quiesce_notification_attempts for the timed-out and
+// retried creations. The over-limit creation limits member a (Images[0]).
 type rbdGroupPlan struct {
-	Pool            string              `json:"pool"`
-	SecondPool      string              `json:"second_pool"`
-	BaseImage       string              `json:"base_image"`
-	Group           string              `json:"group"`
-	GroupSnapshot   string              `json:"group_snapshot"`
-	RefusedSnapshot string              `json:"refused_snapshot"`
-	SecondSnapshot  string              `json:"second_snapshot"`
-	Order           int                 `json:"order"`
-	Size            uint64              `json:"size"`
-	Features        uint64              `json:"features"`
-	ListPage        uint64              `json:"list_page"`
-	PollPage        uint64              `json:"poll_page"`
-	QuiesceRefusal  int                 `json:"quiesce_refusal"`
-	Images          []rbdGroupImagePlan `json:"images"`
+	Pool              string              `json:"pool"`
+	SecondPool        string              `json:"second_pool"`
+	BaseImage         string              `json:"base_image"`
+	Group             string              `json:"group"`
+	GroupSnapshot     string              `json:"group_snapshot"`
+	RefusedSnapshot   string              `json:"refused_snapshot"`
+	SecondSnapshot    string              `json:"second_snapshot"`
+	TimedOutSnapshot  string              `json:"timed_out_snapshot"`
+	RetriedSnapshot   string              `json:"retried_snapshot"`
+	OverLimitSnapshot string              `json:"over_limit_snapshot"`
+	Order             int                 `json:"order"`
+	Size              uint64              `json:"size"`
+	Features          uint64              `json:"features"`
+	ListPage          uint64              `json:"list_page"`
+	PollPage          uint64              `json:"poll_page"`
+	QuiesceRefusal    int                 `json:"quiesce_refusal"`
+	QuiesceAttempts   int                 `json:"quiesce_attempts"`
+	Images            []rbdGroupImagePlan `json:"images"`
 }
 
 // rbdGroupFeatures is layering, exclusive-lock, object-map and fast-diff
@@ -142,7 +189,8 @@ func rbdGroupPlanFor(token string) rbdGroupPlan {
 	}
 	return rbdGroupPlan{Pool: "ceph-msgr-rbd-" + token, SecondPool: rbdGroupSecondPoolName(token), BaseImage: "ceph-msgr-image-" + token, Group: "ceph-msgr-group-" + token,
 		GroupSnapshot: "ceph-msgr-gsnap" + short, RefusedSnapshot: "ceph-msgr-gsnap-refused" + short, SecondSnapshot: "ceph-msgr-gsnap-second" + short,
-		Order: 16, Size: 192 * k, Features: rbdGroupFeatures, ListPage: 1, PollPage: 16, QuiesceRefusal: rbdGroupQuiesceRefusal,
+		TimedOutSnapshot: "ceph-msgr-gsnap-timedout" + short, RetriedSnapshot: "ceph-msgr-gsnap-retried" + short, OverLimitSnapshot: "ceph-msgr-gsnap-overlimit" + short,
+		Order: 16, Size: 192 * k, Features: rbdGroupFeatures, ListPage: 1, PollPage: 16, QuiesceRefusal: rbdGroupQuiesceRefusal, QuiesceAttempts: rbdGroupQuiesceAttempts,
 		Images: []rbdGroupImagePlan{
 			{Key: "a", Name: "ceph-msgr-gimage-a-" + token, Pool: "ceph-msgr-rbd-" + token, PreWrites: []rbdBaseExtent{{0, 48 * k}, {80 * k, 16 * k}}, PostWrites: []rbdBaseExtent{{16 * k, 16 * k}, {128 * k, 8 * k}}},
 			{Key: "b", Name: "ceph-msgr-gimage-b-" + token, Pool: rbdGroupSecondPoolName(token), PreWrites: []rbdBaseExtent{{8 * k, 24 * k}, {136 * k, 32 * k}}, PostWrites: []rbdBaseExtent{{64 * k, 12 * k}, {144 * k, 8 * k}}},
@@ -158,7 +206,9 @@ func (p rbdGroupPlan) owned(token string) bool {
 	short := "-" + token[:8]
 	return p.Pool == "ceph-msgr-rbd-"+token && p.SecondPool == rbdGroupSecondPoolName(token) && p.BaseImage == "ceph-msgr-image-"+token && p.Group == "ceph-msgr-group-"+token &&
 		p.GroupSnapshot == "ceph-msgr-gsnap"+short && p.RefusedSnapshot == "ceph-msgr-gsnap-refused"+short && p.SecondSnapshot == "ceph-msgr-gsnap-second"+short &&
-		p.Order == 16 && p.Size == 192<<10 && p.Features == rbdGroupFeatures && p.ListPage == 1 && p.PollPage == 16 && p.QuiesceRefusal == rbdGroupQuiesceRefusal && len(p.Images) == 2 &&
+		p.TimedOutSnapshot == "ceph-msgr-gsnap-timedout"+short && p.RetriedSnapshot == "ceph-msgr-gsnap-retried"+short && p.OverLimitSnapshot == "ceph-msgr-gsnap-overlimit"+short &&
+		p.Order == 16 && p.Size == 192<<10 && p.Features == rbdGroupFeatures && p.ListPage == 1 && p.PollPage == 16 && p.QuiesceRefusal == rbdGroupQuiesceRefusal &&
+		p.QuiesceAttempts == rbdGroupQuiesceAttempts && len(p.Images) == 2 &&
 		p.Images[0].Key == "a" && p.Images[0].Name == "ceph-msgr-gimage-a-"+token && p.Images[0].Pool == p.Pool &&
 		p.Images[1].Key == "b" && p.Images[1].Name == "ceph-msgr-gimage-b-"+token && p.Images[1].Pool == p.SecondPool &&
 		!slices.ContainsFunc(p.Images, func(i rbdGroupImagePlan) bool { return len(i.PreWrites) == 0 || len(i.PostWrites) == 0 })
@@ -256,11 +306,14 @@ func (c *fixtureCluster) removeRBDGroupPool(ctx context.Context, receipt *rbdBas
 // The fixed native group driver. The fixture passes only the token-bound plan
 // and a closed action; the driver re-checks every name. librbd runs without
 // its cache and with error-level stderr only. Every native class call is a
-// librados exec of a read method, so it changes nothing. During refused and
-// accepted the group snapshot is created on a second thread with its own
+// librados exec of a read method, so it changes nothing. During every
+// creation the group snapshot is created on a second thread with its own
 // ioctx; the main thread only reads, tries the rollback that librbd must
 // refuse for an INCOMPLETE snapshot, and publishes rbd-group-<action>-state.json
-// before the Go watcher answers the quiesce. Sources: pybind/rbd/rbd.pyx and
+// before the Go watcher answers the quiesce. Before the timed-out and retried
+// creations the process sets rbd_quiesce_notification_attempts to the plan's
+// count; around the over-limit creation it sets member a's snapshot limit
+// through librbd and removes it afterwards. Sources: pybind/rbd/rbd.pyx and
 // pybind/rados/rados.pyx at rbdBaseSource; independent driver, no code
 // copied.
 const rbdGroupNativePython = `
@@ -268,13 +321,17 @@ import hashlib, json, os, struct, sys, threading, time
 import rados, rbd
 identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
-ACTIONS = ('setup', 'modify', 'refused', 'accepted', 'rollback', 'cleanup')
+ACTIONS = ('setup', 'modify', 'refused', 'accepted', 'timed-out', 'retried', 'over-limit', 'rollback', 'cleanup')
 short = '-' + token[:8]
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('second_pool') != 'ceph-msgr-rbd2-' + token
         or plan.get('base_image') != 'ceph-msgr-image-' + token or plan.get('group') != 'ceph-msgr-group-' + token
         or plan.get('group_snapshot') != 'ceph-msgr-gsnap' + short or plan.get('refused_snapshot') != 'ceph-msgr-gsnap-refused' + short
         or plan.get('second_snapshot') != 'ceph-msgr-gsnap-second' + short
+        or plan.get('timed_out_snapshot') != 'ceph-msgr-gsnap-timedout' + short
+        or plan.get('retried_snapshot') != 'ceph-msgr-gsnap-retried' + short
+        or plan.get('over_limit_snapshot') != 'ceph-msgr-gsnap-overlimit' + short
+        or plan.get('quiesce_attempts') != 2
         or [i.get('key') for i in plan.get('images', [])] != ['a', 'b']
         or [i.get('name') for i in plan['images']] != ['ceph-msgr-gimage-a-' + token, 'ceph-msgr-gimage-b-' + token]
         or [i.get('pool') for i in plan['images']] != [plan['pool'], plan['second_pool']]
@@ -282,7 +339,10 @@ if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or ident
     raise ValueError('native RBD group driver scope is not owned')
 OUT = '/out'
 pool, group_name, page, poll_page = plan['pool'], plan['group'], plan['list_page'], plan['poll_page']
-CREATED = {'refused': plan['refused_snapshot'], 'accepted': plan['second_snapshot']}
+CREATED = {'refused': plan['refused_snapshot'], 'accepted': plan['second_snapshot'], 'timed-out': plan['timed_out_snapshot'],
+           'retried': plan['retried_snapshot'], 'over-limit': plan['over_limit_snapshot']}
+# The creations that retry a timed-out quiesce with the plan's attempt count.
+RETRYING = ('timed-out', 'retried')
 # group_snap_list input: cls::rbd::GroupSnapshot (ENCODE_START(1, 1), empty id
 # and name, state INCOMPLETE, no member snapshots) and the page size.
 START = b'\x01\x01' + struct.pack('<I', 13) + struct.pack('<IIBI', 0, 0, 0, 0)
@@ -455,6 +515,29 @@ def create_under_quiesce(out):
         with rbd.Image(ioctxs[entry['pool']], entry['name'], read_only=True) as image:
             image_ids[entry['key']] = text(image.id())
     creation = {'snapshot': name, 'group_id': group_id, 'image_ids': image_ids, 'phases': []}
+    headers = {entry['key']: (ioctxs[entry['pool']], 'rbd_header.' + image_ids[entry['key']]) for entry in plan['images']}
+    if action in RETRYING:
+        cluster.conf_set('rbd_quiesce_notification_attempts', str(plan['quiesce_attempts']))
+    creation['quiesce_attempts'] = int(cluster.conf_get('rbd_quiesce_notification_attempts'))
+    limited = plan['images'][0]
+    if action == 'over-limit':
+        # cls_rbd's snapshot_add refuses a snapshot once the image holds
+        # snap_limit snapshots: member a's next snapshot gets EDQUOT.
+        with rbd.Image(ioctxs[limited['pool']], limited['name']) as image:
+            count = len(list(image.list_snaps()))
+            image.set_snap_limit(count)
+            limit = image.get_snap_limit()
+        creation['snap_limit'] = {'image': limited['key'], 'snapshots': count, 'limit': limit,
+                                  'set_call': call(*headers[limited['key']], 'rbd', 'snapshot_get_limit', b'')}
+    def snapshot_ids(key):
+        # get_snapcontext output: the u64 snap_seq and the snapshot IDs.
+        entry = call(*headers[key], 'rbd', 'get_snapcontext', b'')
+        if entry['code'] != 0:
+            raise ValueError('native get_snapcontext failed')
+        output = bytes.fromhex(entry['output_hex'])
+        count = struct.unpack_from('<I', output, 8)[0]
+        return list(struct.unpack_from('<%dQ' % count, output, 12))
+    member_before = len(snapshot_ids('b'))
     result = {}
     creator_ioctx = cluster.open_ioctx(pool)
     def create():
@@ -487,12 +570,25 @@ def create_under_quiesce(out):
             if time.monotonic() > deadline:
                 raise TimeoutError('group snapshot record did not reach state %d' % want)
             time.sleep(0.005)
+    def wait_member_snapshot():
+        # Member b's group-namespace snapshot exists before the over-limit
+        # creation's unquiesce, which the Go watcher holds.
+        deadline = time.monotonic() + 30
+        while len(snapshot_ids('b')) <= member_before:
+            if not worker.is_alive():
+                raise ValueError('group snapshot creation returned before member b held its snapshot')
+            if time.monotonic() > deadline:
+                raise TimeoutError('member b did not hold its group snapshot')
+            time.sleep(0.005)
     def observe(label, rollback):
         phase = {'phase': label, 'after_ns': time.monotonic_ns() - started, 'list_call': listing(), 'images': []}
         for entry in plan['images']:
-            io, header_object = ioctxs[entry['pool']], 'rbd_header.' + image_ids[entry['key']]
+            io, header_object = headers[entry['key']]
             phase['images'].append({'key': entry['key'], 'snapcontext_call': call(io, header_object, 'rbd', 'get_snapcontext', b''),
-                                    'lock_call': call(io, header_object, 'lock', 'get_info', LOCK_INFO)})
+                                    'lock_call': call(io, header_object, 'lock', 'get_info', LOCK_INFO),
+                                    'limit_call': call(io, header_object, 'rbd', 'snapshot_get_limit', b'')})
+        if label == 'member-snapshot-observed':
+            phase['member_snapshot_call'] = call(*headers['b'], 'rbd', 'snapshot_get', struct.pack('<Q', max(snapshot_ids('b'))))
         if rollback:
             try:
                 with rbd.Group(ioctx, group_name) as group:
@@ -510,14 +606,22 @@ def create_under_quiesce(out):
         # answer to each until this thread has published.
         wait_record(0)
         observe('incomplete-observed', True)
-        if action == 'accepted':
+        if action in ('accepted', 'retried'):
             wait_record(1)
             observe('complete-observed', False)
+        elif action == 'over-limit':
+            wait_member_snapshot()
+            observe('member-snapshot-observed', False)
     finally:
         worker.join(60)
         if worker.is_alive():
             raise TimeoutError('group snapshot creation did not return')
         creator_ioctx.close()
+    if action == 'over-limit':
+        with rbd.Image(ioctxs[limited['pool']], limited['name']) as image:
+            image.remove_snap_limit()
+            creation['snap_limit']['removed_limit'] = image.get_snap_limit()
+        creation['snap_limit']['removed_call'] = call(*headers[limited['key']], 'rbd', 'snapshot_get_limit', b'')
     if 'error' in result:
         raise ValueError('group snapshot creation raised without an errno: ' + result['error'])
     creation['errno'], creation['elapsed_ns'] = result['errno'], result['elapsed_ns']
@@ -580,7 +684,7 @@ try:
                 removal['images'].append({'key': entry['key'], 'name': entry['name'], 'pool': entry['pool'], 'image_id': text(image.id()),
                                           'prefix': text(stat['block_name_prefix']), 'objects': stat['num_objs']})
         with rbd.Group(group_ioctx, group_name) as group:
-            for snap_name in (plan['second_snapshot'], plan['group_snapshot']):
+            for snap_name in (plan['retried_snapshot'], plan['second_snapshot'], plan['group_snapshot']):
                 group.remove_snap(snap_name)
                 removal['group_snapshots_after'].append([group_snap(s) for s in group.list_snaps()])
             for image in removal['images']:
@@ -706,6 +810,20 @@ type rbdGroupCreationImage struct {
 	Key             string             `json:"key"`
 	SnapContextCall *rbdWriteClassCall `json:"snapcontext_call"`
 	LockCall        *rbdWriteClassCall `json:"lock_call"`
+	LimitCall       *rbdWriteClassCall `json:"limit_call"`
+}
+
+// rbdGroupSnapLimit is the over-limit creation's native snapshot limit on
+// one member: its snapshot count when librbd set the limit to it, the limit
+// librbd read back, and the native snapshot_get_limit after the set and after
+// the removal.
+type rbdGroupSnapLimit struct {
+	Image        string             `json:"image"`
+	Snapshots    uint64             `json:"snapshots"`
+	Limit        uint64             `json:"limit"`
+	SetCall      *rbdWriteClassCall `json:"set_call"`
+	RemovedLimit uint64             `json:"removed_limit"`
+	RemovedCall  *rbdWriteClassCall `json:"removed_call"`
 }
 
 // rbdGroupCreationPhase is one independent native observation while the
@@ -716,17 +834,23 @@ type rbdGroupCreationPhase struct {
 	ListCall      *rbdWriteClassCall      `json:"list_call"`
 	Images        []rbdGroupCreationImage `json:"images"`
 	RollbackErrno *int                    `json:"rollback_errno,omitempty"`
+	// MemberSnapshotCall is the over-limit creation's snapshot_get of
+	// member b's newest snapshot while librbd compensates.
+	MemberSnapshotCall *rbdWriteClassCall `json:"member_snapshot_call,omitempty"`
 }
 
-// rbdGroupCreation is a refused or accepted creation: the snapshot name, the
-// creating call's errno (0 for success) and the observations.
+// rbdGroupCreation is one creation: the snapshot name, the creating
+// client's quiesce attempt count, the creating call's errno (0 for success),
+// the observations and, for over-limit, the member snapshot limit.
 type rbdGroupCreation struct {
-	Snapshot  string                  `json:"snapshot"`
-	GroupID   string                  `json:"group_id"`
-	ImageIDs  map[string]string       `json:"image_ids"`
-	Phases    []rbdGroupCreationPhase `json:"phases"`
-	Errno     int                     `json:"errno"`
-	ElapsedNS int64                   `json:"elapsed_ns"`
+	Snapshot        string                  `json:"snapshot"`
+	GroupID         string                  `json:"group_id"`
+	ImageIDs        map[string]string       `json:"image_ids"`
+	QuiesceAttempts int                     `json:"quiesce_attempts"`
+	Phases          []rbdGroupCreationPhase `json:"phases"`
+	SnapLimit       *rbdGroupSnapLimit      `json:"snap_limit,omitempty"`
+	Errno           int                     `json:"errno"`
+	ElapsedNS       int64                   `json:"elapsed_ns"`
 }
 
 type rbdGroupRemovedImage struct {
@@ -828,35 +952,45 @@ func rbdGroupImageViewValid(action string, v rbdGroupImageView, want rbdGroupIma
 	return ok && v.Views[0].Label == "head"
 }
 
-// rbdGroupCreationValid checks the structure of a refused or accepted
-// creation record: one observation, or two for the accepted one, each with
-// both member headers, and the rollback attempt on the first only.
+// rbdGroupCreationValid checks the structure of a creation record: the
+// action's observations (rbdGroupCreationPhases), each with both member
+// headers, the rollback attempt on the first only, the attempt count the
+// action runs with and, for over-limit only, member a's snapshot limit.
 func rbdGroupCreationValid(action string, c *rbdGroupCreation, plan rbdGroupPlan, header string) bool {
 	if c == nil {
 		return false
 	}
-	want := map[string]string{"refused": plan.RefusedSnapshot, "accepted": plan.SecondSnapshot}[action]
-	phases := []string{"incomplete-observed"}
-	if action == "accepted" {
-		phases = append(phases, "complete-observed")
+	phases := rbdGroupCreationPhases[action]
+	attempts := rbdGroupDefaultQuiesceAttempts
+	if action == "timed-out" || action == "retried" {
+		attempts = plan.QuiesceAttempts
 	}
-	ok := c.Snapshot == want && rbdGroupIDValid(c.GroupID) && header == "rbd_group_header."+c.GroupID && len(c.ImageIDs) == len(plan.Images) &&
-		len(c.Phases) == len(phases) && c.Errno >= 0 && c.Errno < 4096 && c.ElapsedNS > 0
+	ok := c.Snapshot == plan.createdSnapshot(action) && c.Snapshot != "" && rbdGroupIDValid(c.GroupID) && header == "rbd_group_header."+c.GroupID && len(c.ImageIDs) == len(plan.Images) &&
+		c.QuiesceAttempts == attempts && len(c.Phases) == len(phases) && c.Errno >= 0 && c.Errno < 4096 && c.ElapsedNS > 0
 	for _, image := range plan.Images {
 		ok = ok && rbdGroupIDValid(c.ImageIDs[image.Key])
+	}
+	if l := c.SnapLimit; (action == "over-limit") != (l != nil) {
+		return false
+	} else if l != nil {
+		limited := "rbd_header." + c.ImageIDs[plan.Images[0].Key]
+		ok = ok && l.Image == plan.Images[0].Key && l.Snapshots <= 4 && rbdGroupCallValid(l.SetCall, limited, "rbd", "snapshot_get_limit") &&
+			rbdGroupCallValid(l.RemovedCall, limited, "rbd", "snapshot_get_limit")
 	}
 	for i, p := range c.Phases {
 		if i >= len(phases) || !ok {
 			return false
 		}
 		ok = p.Phase == phases[i] && p.AfterNS > 0 && rbdGroupCallValid(p.ListCall, header, "rbd", "group_snap_list") && len(p.Images) == len(plan.Images) &&
-			(i == 0) == (p.RollbackErrno != nil)
+			(i == 0) == (p.RollbackErrno != nil) && (p.Phase == "member-snapshot-observed") == (p.MemberSnapshotCall != nil) &&
+			(p.MemberSnapshotCall == nil || rbdGroupCallValid(p.MemberSnapshotCall, "rbd_header."+c.ImageIDs[plan.Images[1].Key], "rbd", "snapshot_get"))
 		for j, image := range p.Images {
 			if j >= len(plan.Images) {
 				return false
 			}
 			object := "rbd_header." + c.ImageIDs[plan.Images[j].Key]
-			ok = ok && image.Key == plan.Images[j].Key && rbdGroupCallValid(image.SnapContextCall, object, "rbd", "get_snapcontext") && rbdGroupCallValid(image.LockCall, object, "lock", "get_info")
+			ok = ok && image.Key == plan.Images[j].Key && rbdGroupCallValid(image.SnapContextCall, object, "rbd", "get_snapcontext") && rbdGroupCallValid(image.LockCall, object, "lock", "get_info") &&
+				rbdGroupCallValid(image.LimitCall, object, "rbd", "snapshot_get_limit")
 		}
 	}
 	return ok
@@ -922,7 +1056,7 @@ func decodeRBDGroupNative(action, token string, request int64, plan rbdGroupPlan
 	} else if action == "cleanup" {
 		r := result.Removed
 		ok = ok && result.Group == nil && result.Images == nil && result.Writes == nil && result.Creation == nil && result.RolledBackTo == "" && r != nil && rbdGroupIDValid(r.GroupID) &&
-			r.GroupHeader == "rbd_group_header."+r.GroupID && len(r.Images) == len(plan.Images) && len(r.GroupSnapshotsAfter) == 2 && len(r.MembersAfter) <= 16 &&
+			r.GroupHeader == "rbd_group_header."+r.GroupID && len(r.Images) == len(plan.Images) && len(r.GroupSnapshotsAfter) == 3 && len(r.MembersAfter) <= 16 &&
 			(r.GroupHeaderErrno == 0 || r.GroupHeaderErrno == 2) && rbdGroupCallValid(r.DirectoryCall, "rbd_group_directory", "rbd", "dir_get_id")
 		if r != nil {
 			for _, after := range r.GroupSnapshotsAfter {
@@ -1030,10 +1164,16 @@ func rbdGroupTarget(plan rbdGroupPlan, action string) string {
 		return images + ":" + plan.Group + "@" + plan.RefusedSnapshot
 	case "accepted":
 		return images + ":" + plan.Group + "@" + plan.SecondSnapshot
+	case "timed-out":
+		return images + ":" + plan.Group + "@" + plan.TimedOutSnapshot
+	case "retried":
+		return images + ":" + plan.Group + "@" + plan.RetriedSnapshot
+	case "over-limit":
+		return images + ":" + plan.Group + "@" + plan.OverLimitSnapshot + "," + plan.Images[0].Pool + "/" + plan.Images[0].Name + ":snap_limit"
 	case "rollback":
 		return images + ":head<-" + plan.Group + "@" + plan.GroupSnapshot
 	}
-	return plan.Group + "@" + plan.SecondSnapshot + "," + plan.GroupSnapshot + ":" + images + ":removed"
+	return plan.Group + "@" + plan.RetriedSnapshot + "," + plan.SecondSnapshot + "," + plan.GroupSnapshot + ":" + images + ":removed"
 }
 
 // rbdGroupControl runs one native action of the closed group sequence, only
@@ -1106,9 +1246,15 @@ var _ = collectDiagnosticFiles(
 	"rbd-group-accepted.json",
 	"rbd-group-cleanup.json",
 	"rbd-group-modify.json",
+	"rbd-group-over-limit-state.json",
+	"rbd-group-over-limit.json",
 	"rbd-group-refused-state.json",
 	"rbd-group-refused.json",
 	"rbd-group-results.json",
+	"rbd-group-retried-state.json",
+	"rbd-group-retried.json",
 	"rbd-group-rollback.json",
 	"rbd-group-setup.json",
+	"rbd-group-timed-out-state.json",
+	"rbd-group-timed-out.json",
 )
