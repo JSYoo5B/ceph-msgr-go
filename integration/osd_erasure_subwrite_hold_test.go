@@ -915,7 +915,7 @@ func erasureSubWriteRollbackScenario(t *testing.T, width erasureWidth) {
 	if !slices.Equal(away.Acting, holedSet(r.route.Acting, holes...)) {
 		t.Fatal("the placement does not show both killed OSDs gone within 30 s", away)
 	}
-	peered := r.waitState("peered on the two remaining shards", r.object, func(o pgIntervalObservation) error {
+	peered := r.waitState("peered without the primary and the held shard", r.object, func(o pgIntervalObservation) error {
 		return o.peeredWithout(r.route, holes, r.facts.nonprimary, r.since)
 	})
 
