@@ -29,10 +29,15 @@ import (
 //
 // First a Go client (the zombie) takes the managed lock as librbd does and
 // then stops renewing its header watch: it sends nothing, but keeps its
-// connection and releases nothing. Native librbd, asked to write, requests
-// the lock from that owner while its watch is still listed, and once the OSD
-// has expired the watch it blocklists the owner's address through the MON,
-// breaks the header and object-map locks and writes. The zombie then tries
+// connection and releases nothing. Native librbd, asked to write, sends a
+// RequestLock, and right after it the zombie's watch is still listed. Once
+// the OSD has expired the watch, the owner's address is blocklisted and
+// native librbd holds the header and object-map locks and writes. That
+// librbd asked because it found the watch listed, and blocklisted the
+// address before it broke the locks, is consistent with v20.2.4
+// managed_lock/BreakRequest.cc and is not observed step by step (a
+// RequestLock also follows an incompatible lock or a locker that changed
+// on the recheck). The zombie then tries
 // three mutations on its lock-bearing connection; each must come back as the
 // OSD's raw blocklisted error and change nothing native clients read.
 //
@@ -1145,6 +1150,20 @@ func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 	// contradiction is never followed by the next step of a handoff.
 	judge := func(t *testing.T, stage string) {
 		t.Helper()
+		// The claims count the observer's and the breaker's notifications.
+		// Each responder records one only after its acknowledgement
+		// returned: settle on every notify ID received so far, so that
+		// neither an in-flight notification nor its acknowledgement error
+		// is missed. A responder failure is the claims' to judge.
+		for _, r := range []*rbdLockResponder{observerResponder, breakerResponder} {
+			if r == nil {
+				continue
+			}
+			if _, _, err := r.settleSince(ctx, 0); errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				snapshot()
+				t.Fatalf("claims at %s: %v", stage, err)
+			}
+		}
 		snapshot()
 		record.ClaimsStage, record.Problems = stage, rbdLockOwnerLossClaims(&record, stage)
 		if len(record.Problems) != 0 {
@@ -1784,7 +1803,9 @@ func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 		controlErr = testcluster.RequestControl(ctx, dir, "rbd-lock", "rbd-lock-completed", token, "takeover")
 		close(controlDone)
 	}()
-	// librbd finds the lock held, the owner's watch listed, and asks.
+	// librbd asks for the lock; the view right after it shows whether the
+	// owner's watch was still listed. The RequestLock alone does not name
+	// the branch of librbd's acquisition that sent it.
 	goGIDs := []uint64{zombie.gid, observer.gid}
 	first := seen(t, 1, "native RequestLock", 60*time.Second, func(n rbdLockNotification) bool {
 		return n.Op == rbdNotifyRequestLock && !slices.Contains(goGIDs, n.NotifierGlobalID)
@@ -1792,7 +1813,8 @@ func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 	goView(t, "request-while-listed")
 	done("request_while_listed")
 	// The OSD expires the zombie's watch a timeout after its registration;
-	// librbd then blocklists, breaks and announces its lock.
+	// librbd then announces its lock, consistent with BreakRequest's
+	// blocklist and break once no watcher matches (not observed separately).
 	acquiredNote := seen(t, first.Index+1, "native AcquiredLock", time.Duration(rbdLockOwnerLossWatchTimeout+60)*time.Second, func(n rbdLockNotification) bool {
 		return n.Op == rbdNotifyAcquiredLock && n.NotifierGlobalID == first.NotifierGlobalID
 	})
