@@ -223,6 +223,19 @@ type rbdJournalLostAppendView struct {
 	// Blocklist is the OSDMap blocklist the action read, nil when it read
 	// none.
 	Blocklist []rbdLockOwnerLossBlock
+	// The journal header as `rbd journal status` shows it: the minimum and
+	// active object sets and every registered client with its commit
+	// position, in the order listed.
+	MinimumSet, ActiveSet uint64
+	Clients               []rbdJournalClientView
+}
+
+// rbdJournalClientView is one registered journal client and its commit
+// position.
+type rbdJournalClientView struct {
+	ID        string
+	State     string
+	Positions []rbdJournalPosition
 }
 
 type rbdJournalLostAppendOutcome struct {
@@ -285,12 +298,17 @@ type rbdJournalLostAppendRecord struct {
 	PrimaryChange *rbdJournalPrimaryChange
 	// OwnerLoss is set in the owner-loss and forced-break variants only.
 	OwnerLoss *rbdJournalOwnerLoss
+	// ForcedPending is set in the forced-break variant with held appends
+	// (rbd_journal_forced_break_pending_test.go) only.
+	ForcedPending *rbdJournalForcedPending
 }
 
 // rbdJournalLostAppendPlan returns the stages and the step order of the
 // variant the record belongs to.
 func rbdJournalLostAppendPlan(r *rbdJournalLostAppendRecord) (stages, order []string) {
 	switch {
+	case r.ForcedPending != nil:
+		return rbdJournalForcedPendingStages, rbdJournalForcedPendingOrder
 	case r.PrimaryChange != nil:
 		return rbdJournalPrimaryChangeStages, rbdJournalPrimaryChangeOrder
 	case r.OwnerLoss != nil && r.OwnerLoss.Forced:
@@ -317,6 +335,9 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 	fail := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	// Records hold optional fields as pointers; print them as their JSON.
 	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+	if r.ForcedPending != nil {
+		return rbdJournalForcedPendingClaims(r, stage)
+	}
 	if r.OwnerLoss != nil && r.OwnerLoss.Forced {
 		return rbdJournalForcedBreakClaims(r, stage)
 	}
@@ -663,7 +684,13 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 		return nil, errors.New("native rbd journal status missing")
 	}
 	found := false
+	v.MinimumSet, v.ActiveSet, v.Clients = status.MinimumSet, status.ActiveSet, []rbdJournalClientView{}
 	for _, client := range status.Clients {
+		listed := rbdJournalClientView{ID: client.ID, State: client.State, Positions: []rbdJournalPosition{}}
+		for _, p := range client.CommitPosition.Positions {
+			listed.Positions = append(listed.Positions, rbdJournalPosition{p.Object, p.Tag, p.Entry})
+		}
+		v.Clients = append(v.Clients, listed)
 		if client.ID == "" {
 			found = true
 			v.ImageCommit = []rbdJournalPosition{}
@@ -773,10 +800,12 @@ func TestCephRBDJournalPrimaryChangeIntegration(t *testing.T) {
 }
 
 // runRBDJournalLostAppend runs one variant: rbdJournalVariantLostAppend,
-// PrimaryChange, OwnerLoss (rbd_journal_owner_loss_test.go) or ForcedBreak,
-// which withholds no reply.
+// PrimaryChange, OwnerLoss (rbd_journal_owner_loss_test.go), ForcedBreak or
+// ForcedBreakPending (rbd_journal_forced_break_pending_test.go); the last two
+// withhold no reply.
 func runRBDJournalLostAppend(t *testing.T, variant string) {
 	primaryChange, ownerLoss, forced := variant == rbdJournalVariantPrimaryChange, variant == rbdJournalVariantOwnerLoss, variant == rbdJournalVariantForcedBreak
+	forcedPending := variant == rbdJournalVariantForcedBreakPending
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
 		t.Skip("requires the opt-in disposable RBD fixture (CEPH_MSGR_TEST_RBD=1) under its exact selector")
@@ -819,6 +848,8 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		results, outcomeFile = "rbd-journal-owner-loss-results.json", "rbd-journal-owner-loss-outcome.json"
 	case rbdJournalVariantForcedBreak:
 		results = "rbd-journal-forced-break-results.json"
+	case rbdJournalVariantForcedBreakPending:
+		results = "rbd-journal-forced-break-pending-results.json"
 	}
 
 	// The observer is a second Go client with its own connections. It
@@ -866,8 +897,11 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	if primaryChange {
 		record.PrimaryChange = &rbdJournalPrimaryChange{}
 	}
-	if ownerLoss || forced {
-		record.OwnerLoss = &rbdJournalOwnerLoss{Forced: forced}
+	if ownerLoss || forced || forcedPending {
+		record.OwnerLoss = &rbdJournalOwnerLoss{Forced: forced || forcedPending}
+	}
+	if forcedPending {
+		record.ForcedPending = &rbdJournalForcedPending{}
 	}
 	publish := func() error {
 		record.Timings["total"] = time.Since(started).String()
@@ -1233,10 +1267,16 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	if s := gate.State(); s.LargeWrites != 0 || s.Bound || s.Connections != len(conns) {
 		t.Fatal("the subject already wrote a frame of the append's size, so the gate cannot single out the append", s)
 	}
-	if forced {
-		runRBDJournalForcedBreak(t, rbdJournalForcedBreakSteps{ctx: ctx, record: &record, entry: entry, header: header, plan: plan, token: token, gid: gid, w: w, conn: first,
+	if forced || forcedPending {
+		steps := rbdJournalForcedBreakSteps{ctx: ctx, record: &record, entry: entry, header: header, plan: plan, token: token, gid: gid, w: w, conn: first,
 			appendInput: append(rbdLE64(1<<order), rbdJournalBL(entryBytes)...), splay: uint64(splay), locked: lockedNative, route: route, request: request, keep: keep,
-			now: now, send: send, native: native, judge: judge, done: done, released: func() { unlocked = true }})
+			now: now, send: send, native: native, judge: judge, done: done, released: func() { unlocked = true }}
+		if forced {
+			runRBDJournalForcedBreak(t, steps)
+			return
+		}
+		runRBDJournalForcedBreakPending(t, rbdJournalForcedPendingSteps{rbdJournalForcedBreakSteps: steps, dir: dir, closeAll: closeAll, connect: connect,
+			dials: func() int { return int(osdDials.Load()) }, after: after, timings: record.Timings})
 		return
 	}
 	if err := gate.Arm(entryBytes); err != nil {

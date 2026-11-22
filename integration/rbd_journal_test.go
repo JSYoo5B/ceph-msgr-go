@@ -221,6 +221,22 @@ type nativeRBDJournal struct {
 		Lockers  nativeRBDWriteLockers `json:"lockers"`
 		Watchers []nativeRBDWatcher    `json:"watchers"`
 	} `json:"boundary"`
+	// LockLog is the lock state machines' part of librbd's debug log of the
+	// force-break and takeover actions (rbd_journal.go lock_log).
+	LockLog *nativeRBDJournalLockLog `json:"lock_log"`
+}
+
+// nativeRBDJournalLockLog is the driver's filtered librbd debug log at level
+// 10, with pointers replaced by per-run ordinals.
+type nativeRBDJournalLockLog struct {
+	Present   bool `json:"present"`
+	Matched   int  `json:"matched"`
+	Truncated bool `json:"truncated"`
+	Lines     []struct {
+		Level     int    `json:"level"`
+		Component string `json:"component"`
+		Text      string `json:"text"`
+	} `json:"lines"`
 }
 
 // nativeRBDJournalForceBreak is the force-break action's own output.

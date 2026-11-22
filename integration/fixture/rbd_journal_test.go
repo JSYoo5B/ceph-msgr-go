@@ -92,7 +92,8 @@ func TestRBDJournalPlanIsTokenBound(t *testing.T) {
 
 func TestRBDJournalRequestIsClosedAndOrdered(t *testing.T) {
 	token := strings.Repeat("a1", 16)
-	for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions, rbdJournalPrimaryChangeActions, rbdJournalOwnerLossActions, rbdJournalForcedBreakActions} {
+	for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions, rbdJournalPrimaryChangeActions, rbdJournalOwnerLossActions, rbdJournalForcedBreakActions,
+		rbdJournalForcedBreakPendingActions} {
 		for next := range actions {
 			for i, action := range actions {
 				id, got, err := parseRBDJournalRequest(actions, []string{"7", token, action}, token, 6, next)
@@ -142,6 +143,7 @@ const (
 	rbdLockOwnerLossPendingSelector = "^TestCephRBDLockOwnerLossPendingIntegration$"
 	rbdJournalOwnerLossSelector     = "^TestCephRBDJournalOwnerLossIntegration$"
 	rbdJournalForcedBreakSelector   = "^TestCephRBDJournalForcedBreakIntegration$"
+	rbdJournalForcedPendingSelector = "^TestCephRBDJournalForcedBreakPendingIntegration$"
 )
 
 // rbdSelectionProfile is the profile of the RBD catalog row that selects
@@ -304,7 +306,8 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 			return base[key]
 		})
 	}
-	for selector, want := range map[string][]string{rbdJournalOwnerLossSelector: rbdJournalOwnerLossActions, rbdJournalForcedBreakSelector: rbdJournalForcedBreakActions} {
+	for selector, want := range map[string][]string{rbdJournalOwnerLossSelector: rbdJournalOwnerLossActions, rbdJournalForcedBreakSelector: rbdJournalForcedBreakActions,
+		rbdJournalForcedPendingSelector: rbdJournalForcedBreakPendingActions} {
 		p, err := load(selector)
 		if err != nil || p.testRun != selector || p.rbdReplicas() != "1" || !slices.Equal(rbdJournalActionsFor(p), want) || !slices.Equal(rbdLockActionsFor(p), rbdLockActions) {
 			t.Fatal("journal owner-loss selector admission differs", selector, p.testRun, err)
@@ -312,15 +315,16 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 		if row := rbdSelectionProfile(t, selector); !slices.Equal(rbdJournalActionsFor(row), want) {
 			t.Fatal("catalog row of", selector, "selects another sequence")
 		}
-		for _, widened := range []string{strings.TrimSuffix(selector, "$"), strings.TrimPrefix(selector, "^"), "^TestCephRBDJournal(OwnerLoss|ForcedBreak)Integration$"} {
+		for _, widened := range []string{strings.TrimSuffix(selector, "$"), strings.TrimPrefix(selector, "^"), "^TestCephRBDJournal(OwnerLoss|ForcedBreak|ForcedBreakPending)Integration$"} {
 			if _, err := load(widened); err == nil {
 				t.Fatal("unanchored or widened journal owner-loss selector admitted", widened)
 			}
 		}
 	}
-	for _, selector := range []string{"", rbdJournalLostAppendSelector, rbdLockOwnerLossSelector} {
+	for _, selector := range []string{"", rbdJournalLostAppendSelector, rbdLockOwnerLossSelector, rbdLockOwnerLossPendingSelector} {
 		p, err := load(selector)
-		if err != nil || slices.Equal(rbdJournalActionsFor(p), rbdJournalOwnerLossActions) || slices.Equal(rbdJournalActionsFor(p), rbdJournalForcedBreakActions) {
+		if err != nil || slices.Equal(rbdJournalActionsFor(p), rbdJournalOwnerLossActions) || slices.Equal(rbdJournalActionsFor(p), rbdJournalForcedBreakActions) ||
+			slices.Equal(rbdJournalActionsFor(p), rbdJournalForcedBreakPendingActions) {
 			t.Fatal("another RBD selection runs a journal owner-loss sequence", selector, err)
 		}
 	}
@@ -330,7 +334,7 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 	}
 	token := strings.Repeat("a1", 16)
 	for next := 0; next <= len(rbdJournalLostAppendActions); next++ {
-		for _, action := range []string{"observe-appended", "force-break", "observe-fenced", "takeover"} {
+		for _, action := range []string{"observe-appended", "observe-pending", "force-break", "advance-map", "observe-fenced", "observe-new-connection", "takeover"} {
 			for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions, rbdJournalPrimaryChangeActions} {
 				if _, _, err := parseRBDJournalRequest(actions, []string{"7", token, action}, token, 6, next); err == nil {
 					t.Fatal("owner-loss action admitted in another sequence", action, next)
@@ -341,7 +345,7 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 			t.Fatal("replay admitted in the owner-loss sequence", next)
 		}
 	}
-	for _, action := range slices.Concat(rbdJournalOwnerLossActions, rbdJournalForcedBreakActions) {
+	for _, action := range slices.Concat(rbdJournalOwnerLossActions, rbdJournalForcedBreakActions, slices.DeleteFunc(slices.Clone(rbdJournalForcedBreakPendingActions), func(a string) bool { return a == "advance-map" })) {
 		if !strings.Contains(rbdJournalNativePython, "'"+action+"'") {
 			t.Fatal("native journal driver does not admit", action)
 		}
@@ -353,7 +357,23 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 		rbdJournalTarget(plan, "force-break") != "i:exclusive-lock-break,osd-blocklist" || rbdJournalTarget(plan, "takeover") != "i:exclusive-lock-break,osd-blocklist,journal-replay,native-write" {
 		t.Fatal("owner-loss action classification or target differs")
 	}
+	// The pending variant: its two observations read the blocklist and
+	// change nothing, the advance is the fixture's own mutation of the pool
+	// and runs no driver, and the lock log belongs to the break and the
+	// takeover only.
+	if !rbdJournalReadOnly("observe-pending") || !rbdJournalReadOnly("observe-new-connection") || rbdJournalReadOnly("advance-map") ||
+		!rbdJournalBlocklisted("observe-pending") || !rbdJournalBlocklisted("observe-new-connection") || rbdJournalInspected("observe-new-connection") ||
+		!rbdJournalLockLogged("force-break") || !rbdJournalLockLogged("takeover") || rbdJournalLockLogged("observe-fenced") || rbdJournalLockLogged("replay") ||
+		rbdJournalTarget(rbdJournalPlan{Pool: "p"}, "advance-map") != "p:pool-flag-"+rbdLockAdvanceFlag+",osdmap-epoch" ||
+		strings.Contains(rbdJournalNativePython, "'advance-map'") {
+		t.Fatal("pending forced-break action classification or target differs")
+	}
+	want = append(slices.Clone(rbdJournalForcedBreakActions[:3]), "observe-pending", "force-break", "advance-map", "observe-fenced", "observe-new-connection", "takeover")
+	if !slices.Equal(rbdJournalForcedBreakPendingActions, want) {
+		t.Fatal("pending forced-break sequence differs from the forced-break sequence", rbdJournalForcedBreakPendingActions)
+	}
 	for _, field := range []string{"image.lock_break(rbd.RBD_LOCK_MODE_EXCLUSIVE, listed[0]['owner'])", "plan['takeover_events']", "'osd blocklist ls'",
+		"conf.update(debug_rbd='10/10', log_to_file='true', log_file=LOCK_LOG)", "    cluster.shutdown()\nif action in ('force-break', 'takeover'):\n    out['lock_log'] = lock_log()",
 		"out['boundary'] = {'lockers': lockers(image), 'watchers': watchers(image)}\n                started = time.monotonic_ns()\n                out['events'] = [apply(image, 'takeover', e)"} {
 		if !strings.Contains(rbdJournalNativePython, field) {
 			t.Fatal("native journal driver lacks", field)
@@ -547,6 +567,11 @@ func rbdJournalOutput(token string, plan rbdJournalPlan, action string) map[stri
 	if action == "takeover" {
 		value["blocklist_before"] = []map[string]any{}
 	}
+	if rbdJournalLockLogged(action) {
+		value["lock_log"] = map[string]any{"present": true, "matched": 2, "truncated": false, "over_cap": false, "lines": []map[string]any{
+			{"level": 10, "component": "librbd::managed_lock::AcquireRequest", "text": "@0 handle_get_locker: r=-2"},
+			{"level": 10, "component": "librbd::managed_lock::AcquireRequest", "text": "@0 handle_lock: r=0"}}}
+	}
 	events := func(phase string, planned []rbdJournalEvent) []map[string]any {
 		result := []map[string]any{}
 		for _, e := range planned {
@@ -605,7 +630,9 @@ func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 		return data
 	}
 	fb := func(v map[string]any) map[string]any { return v["force_break"].(map[string]any) }
-	for _, action := range slices.Concat(rbdJournalActions, rbdJournalLostAppendActions, []string{"change-primary", "observe-resubmitted"}, rbdJournalOwnerLossActions, rbdJournalForcedBreakActions) {
+	pendingDriven := slices.DeleteFunc(slices.Clone(rbdJournalForcedBreakPendingActions), func(a string) bool { return a == "advance-map" })
+	for _, action := range slices.Concat(rbdJournalActions, rbdJournalLostAppendActions, []string{"change-primary", "observe-resubmitted"}, rbdJournalOwnerLossActions, rbdJournalForcedBreakActions,
+		pendingDriven) {
 		if _, err := decodeRBDJournalNative(action, token, 9, plan, encode(rbdJournalOutput(token, plan, action))); err != nil {
 			t.Fatal("well-formed journal output refused", action, err)
 		}
@@ -719,6 +746,31 @@ func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 		"locked observation with a blocklist":  {"observe-locked", func(v map[string]any) { v["blocklist"] = []map[string]any{} }},
 		"replay with a blocklist":              {"replay", func(v map[string]any) { v["blocklist"] = []map[string]any{} }},
 		"replay with a write time":             {"replay", func(v map[string]any) { v["write_ns"] = 3 }},
+		"takeover without its lock log":        {"takeover", func(v map[string]any) { delete(v, "lock_log") }},
+		"break without its lock log":           {"force-break", func(v map[string]any) { delete(v, "lock_log") }},
+		"observation with a lock log":          {"observe-fenced", func(v map[string]any) { v["lock_log"] = rbdJournalOutput(token, plan, "takeover")["lock_log"] }},
+		"lock log miscounted": {"takeover", func(v map[string]any) {
+			v["lock_log"].(map[string]any)["matched"] = 1
+		}},
+		"lock log truncation unstated": {"takeover", func(v map[string]any) {
+			v["lock_log"].(map[string]any)["matched"] = 3
+		}},
+		"lock log over its byte cap unstated": {"takeover", func(v map[string]any) {
+			v["lock_log"].(map[string]any)["over_cap"] = true
+		}},
+		"missing lock log over its byte cap": {"takeover", func(v map[string]any) {
+			v["lock_log"] = map[string]any{"present": false, "matched": 0, "truncated": true, "over_cap": true, "lines": []map[string]any{}}
+		}},
+		"lock log line of another library": {"takeover", func(v map[string]any) {
+			v["lock_log"].(map[string]any)["lines"].([]map[string]any)[0]["component"] = "osdc::Objecter"
+		}},
+		"lock log line too long": {"takeover", func(v map[string]any) {
+			v["lock_log"].(map[string]any)["lines"].([]map[string]any)[0]["text"] = strings.Repeat("x", rbdJournalLockLogText+1)
+		}},
+		"pending observation without blocklist": {"observe-pending", func(v map[string]any) { delete(v, "blocklist") }},
+		"new connection observation with inspect": {"observe-new-connection", func(v map[string]any) {
+			v["inspect"] = rbdJournalOutput(token, plan, "checkpoint")["inspect"]
+		}},
 	} {
 		value := rbdJournalOutput(token, plan, change.action)
 		change.change(value)
@@ -748,5 +800,25 @@ func TestRBDJournalNativeDriverParses(t *testing.T) {
 	cmd.Stdin = strings.NewReader(rbdJournalNativePython)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatal("native RBD journal driver is not valid Python", err, string(output))
+	}
+}
+
+// TestRBDJournalLockLogOverCap: a lock log the driver read only up to its
+// byte cap is valid evidence only as a truncated one, whatever the read
+// prefix matched.
+func TestRBDJournalLockLogOverCap(t *testing.T) {
+	line := rbdJournalLockLogLine{Level: 10, Component: "librbd::managed_lock::AcquireRequest", Text: "@0 handle_lock: r=0"}
+	for name, c := range map[string]struct {
+		log   rbdJournalLockLog
+		valid bool
+	}{
+		"complete":                  {rbdJournalLockLog{Present: true, Matched: 1, Lines: []rbdJournalLockLogLine{line}}, true},
+		"over the cap, truncated":   {rbdJournalLockLog{Present: true, Matched: 1, Truncated: true, OverCap: true, Lines: []rbdJournalLockLogLine{line}}, true},
+		"over the cap, untruncated": {rbdJournalLockLog{Present: true, Matched: 1, OverCap: true, Lines: []rbdJournalLockLogLine{line}}, false},
+		"absent over the cap":       {rbdJournalLockLog{Truncated: true, OverCap: true, Lines: []rbdJournalLockLogLine{}}, false},
+	} {
+		if got := c.log.valid(); got != c.valid {
+			t.Errorf("%s: valid() = %v, want %v", name, got, c.valid)
+		}
 	}
 }
