@@ -171,6 +171,8 @@ type mdsCephFSCompletionPlan struct {
 	FencedPayloadHex string   `json:"fenced_payload_hex"`
 	ReconnectTimeout string   `json:"reconnect_timeout"`
 	SplitFiles       []string `json:"split_files"`
+	// Charmap is used only by the charmap acceptance (mds_cephfs_charmap.go).
+	Charmap mdsCephFSCharmapPlan `json:"charmap"`
 }
 
 func mdsCephFSCompletionPlanFor(token string) mdsCephFSCompletionPlan {
@@ -181,7 +183,8 @@ func mdsCephFSCompletionPlanFor(token string) mdsCephFSCompletionPlan {
 		block = sha256.Sum256(block[:])
 	}
 	return mdsCephFSCompletionPlan{Directory: "ceph-msgr-completion-" + token, Children: slices.Clone(mdsCephFSCompletionChildren), Grandchildren: slices.Clone(mdsCephFSCompletionGrandchildren),
-		Snapshot: "completion-" + token[:8], FencedPayloadHex: hex.EncodeToString(payload[:mdsCephFSCompletionFencedBytes]), ReconnectTimeout: mdsCephFSCompletionWindow, SplitFiles: mdsCephFSMultiReconnectNames()}
+		Snapshot: "completion-" + token[:8], FencedPayloadHex: hex.EncodeToString(payload[:mdsCephFSCompletionFencedBytes]), ReconnectTimeout: mdsCephFSCompletionWindow, SplitFiles: mdsCephFSMultiReconnectNames(),
+		Charmap: mdsCephFSCharmapPlanFor()}
 }
 
 // mdsCephFSMultiReconnectNames are actual owned files whose retained cap state
@@ -756,7 +759,7 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 		"log-pause", "log-resume", "early-reply-off", "early-reply-on", "blackhole-on", "blackhole-off", "debug-on", "debug-off",
 		"deny-on", "deny-off", "window-on", "window-off", "restart-arm", "restart-fire", "restart-status", "restart-adopt",
 		"debug-caps-on", "debug-caps-off", "split-flock-ex-nb", "split-final-flock-ex-nb",
-		"deleg-zero-on", "deleg-zero-off", "async-dirops-off", "async-dirops-on":
+		"deleg-zero-on", "deleg-zero-off", "async-dirops-off", "async-dirops-on", "charmap-set", "charmap-names", "charmap-create":
 		if len(args) != 0 {
 			return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion action takes no caller argument")
 		}
@@ -767,6 +770,8 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 			action.target = "fenced"
 		case "snapshot-create", "snapshot-remove":
 			action.target = "snapshot"
+		case "charmap-set", "charmap-names", "charmap-create":
+			action.target = plan.Charmap.Dir
 		case "split-flock-ex-nb", "split-final-flock-ex-nb":
 			// The lock target is fixed by the plan, never chosen by the caller.
 			if action.target = plan.splitLockTargets()[action.name]; action.target == "" {
@@ -806,6 +811,7 @@ type mdsCephFSCompletionResult struct {
 	Completed       []mdsCephFSCompletionCompleted   `json:"completed"`
 	Blocklist       []mdsSessionsBlock               `json:"blocklist,omitempty"`
 	Native          *mdsCephFSNative                 `json:"native,omitempty"`
+	Charmap         *mdsCephFSCharmapNative          `json:"charmap_native,omitempty"`
 	Process         *ceph.NativeCommandResult        `json:"native_process,omitempty"`
 	Mutation        *mdsCephFSMutation               `json:"mutation,omitempty"`
 	Runtime         *mdsCephFSCompletionRuntime      `json:"runtime,omitempty"`
@@ -1048,7 +1054,7 @@ func (c *fixtureCluster) prepareMDSCephFSCompletion(ctx context.Context, out str
 	if err := c.mdsCephFSCompletionJournal(); err != nil {
 		return err
 	}
-	if x.native, err = c.cluster.CreateClient(ctx, "mds-cephfs-completion-native-"+s.token, mdsCephFSCompletionNativeCaps(s.name)); err != nil {
+	if x.native, err = c.cluster.CreateClient(ctx, "mds-cephfs-completion-native-"+s.token, mdsCephFSCompletionNativeCapsFor(c.profile, s.name)); err != nil {
 		return fmt.Errorf("create dedicated native CephFS completion identity: %w", err)
 	}
 	nativeKeyring, err := connectionKeyring(x.native.ConnectionConfig())
@@ -1064,7 +1070,7 @@ func (c *fixtureCluster) prepareMDSCephFSCompletion(ctx context.Context, out str
 	if err := errors.Join(c.mdsCephFSCompletionJournal(), c.mdsCephFSCompletionWriteTarget()); err != nil {
 		return err
 	}
-	goCaps, nativeCaps := mdsCephFSCompletionGoCaps(s.name), mdsCephFSCompletionNativeCaps(s.name)
+	goCaps, nativeCaps := mdsCephFSCompletionGoCaps(s.name), mdsCephFSCompletionNativeCapsFor(c.profile, s.name)
 	return writeMDSFreshJSON(out, "mds-cephfs-completion-oracle.json", map[string]any{
 		"source_commit": mdsFreshSource, "token": s.token, "fsid": s.oracle.FSID, "fscid": s.oracle.FSCID, "fs_name": s.name, "mds_gid": s.oracle.MDS.GID,
 		"client_identity": c.profile.mdsCephFSCompletionIdentity, "native_identity": "client.mds-cephfs-completion-native-" + s.token,
@@ -1108,7 +1114,7 @@ func (c *fixtureCluster) mdsCephFSCompletionControl(ctx context.Context, out str
 	if err != nil {
 		return err
 	}
-	if err := admitMDSCephFSHeldFlockSplit(action.name, c.profile); err != nil {
+	if err := errors.Join(admitMDSCephFSHeldFlockSplit(action.name, c.profile), admitMDSCephFSCharmap(action.name, c.profile)); err != nil {
 		return err
 	}
 	x.lastRequestID = id
@@ -1252,6 +1258,8 @@ func (c *fixtureCluster) mdsCephFSCompletionAct(ctx context.Context, id int64, a
 		return err
 	case "stat", "list", "write-fenced", "snapshot-create", "snapshot-remove", "split-flock-ex-nb", "split-final-flock-ex-nb":
 		return c.mdsCephFSCompletionNative(ctx, id, action, result)
+	case "charmap-set", "charmap-names", "charmap-create":
+		return c.mdsCephFSCharmapAct(ctx, id, action, result)
 	case "flush-journal":
 		data, err := c.mdsCephFSCompletionAsok(ctx, 60*time.Second, "flush", "journal")
 		if err != nil {

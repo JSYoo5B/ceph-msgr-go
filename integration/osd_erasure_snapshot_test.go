@@ -142,9 +142,6 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 		t.Logf("placement epoch %d pg %s acting %v primary osd.%d shard %d; killing osd.%d on shard %d",
 			route.Epoch, route.PGID, route.Acting, route.ID, route.Shard, victim, slices.Index(route.Acting, victim))
 		name := strconv.FormatInt(int64(victim), 10)
-		if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
-			t.Fatal(err)
-		}
 		restarted := false
 		defer func() {
 			if !restarted {
@@ -154,6 +151,9 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 				waitOSDFixtureClean(t, recover, base)
 			}
 		}()
+		if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
+			t.Fatal(err)
+		}
 		deadline := time.Now().Add(120 * time.Second)
 		for slicesContains(poolPlace(t, ctx, 1, object, "").Acting, victim) {
 			if time.Now().After(deadline) {
@@ -193,15 +193,15 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 		}
 		if other >= 0 {
 			otherName := strconv.FormatInt(int64(other), 10)
-			if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", otherName); err != nil {
-				t.Fatal(err)
-			}
 			defer func() {
 				recover, stop := context.WithTimeout(context.Background(), 120*time.Second)
 				defer stop()
 				testcluster.ControlDaemon(recover, dir, "start", "osd", otherName)
 				waitOSDFixtureClean(t, recover, base)
 			}()
+			if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", otherName); err != nil {
+				t.Fatal(err)
+			}
 			for slicesContains(poolPlace(t, ctx, 1, object, "").Acting, other) {
 				if time.Now().After(deadline.Add(120 * time.Second)) {
 					t.Fatal("second victim never left the acting set")

@@ -36,16 +36,21 @@ func TestCephPausedManagerIntegration(t *testing.T) {
 	c.mu.Lock()
 	old, name, id := c.mgr, c.mgrMap.Name, c.mgrMap.GlobalID
 	c.mu.Unlock()
-	if err := testcluster.ControlDaemon(ctx, control, "pause", "mgr", name); err != nil {
-		t.Fatal(err)
-	}
+	// A fixture-owned lease that ends with the test's context; its end is
+	// deferred before the pause is published, so the fixture refuses a
+	// pause it claims after that end.
+	deadline, _ := ctx.Deadline()
+	lease := testcluster.NewDaemonLease(control, "mgr", name, deadline)
 	defer func() {
 		resume, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		if err := testcluster.ControlDaemon(resume, control, "resume", "mgr", name); err != nil {
+		if _, err := lease.End(resume, "cleanup"); err != nil {
 			t.Error("resume paused fixture MGR", err)
 		}
 	}()
+	if _, err := lease.Pause(ctx); err != nil {
+		t.Fatal(err)
+	}
 	// SIGSTOP leaves the daemon's kernel TCP socket open, but no Messenger
 	// reply or keepalive acknowledgment can be produced by the process.
 	_, err = c.MgrCommand(ctx, command)
@@ -120,16 +125,21 @@ func TestCephPausedMonitorIntegration(t *testing.T) {
 		t.Fatal("unexpected fixture MON endpoint", old.RemoteAddr())
 	}
 	blockReconnect.Store(true)
-	if err := testcluster.ControlDaemon(ctx, control, "pause", "mon", name); err != nil {
-		t.Fatal(err)
-	}
+	// A fixture-owned lease that ends with the test's context; its end is
+	// deferred before the pause is published, so the fixture refuses a
+	// pause it claims after that end.
+	deadline, _ := ctx.Deadline()
+	lease := testcluster.NewDaemonLease(control, "mon", name, deadline)
 	defer func() {
 		resume, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		if err := testcluster.ControlDaemon(resume, control, "resume", "mon", name); err != nil {
+		if _, err := lease.End(resume, "cleanup"); err != nil {
 			t.Error("resume paused fixture MON", err)
 		}
 	}()
+	if _, err := lease.Pause(ctx); err != nil {
+		t.Fatal(err)
+	}
 	_, err = c.MonCommand(ctx, Command{JSON: []byte(`{"prefix":"status","format":"json"}`)})
 	var unknown *OutcomeUnknownError
 	if !errors.Is(err, ErrKeepaliveTimeout) || !errors.As(err, &unknown) {

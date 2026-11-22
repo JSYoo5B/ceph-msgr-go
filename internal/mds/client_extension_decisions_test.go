@@ -22,6 +22,10 @@ const (
 	// interpretation). The bit stays withheld and the raw wire data stays
 	// available.
 	consumerOwned
+	// optIn: the bit promises a policy the caller states it applies; the
+	// CephFS profile declares it only with that explicit opt-in
+	// (CephFSCharmapClientFeatures), never by default.
+	optIn
 )
 
 // tentacleCephFSFeatures is the closed CephFS client feature list of Ceph
@@ -87,11 +91,15 @@ var tentacleCephFSFeatures = []struct {
 	// decodes it (TestDecodeOptionalMetadataMatchesFreshNative; the charmap
 	// leaf of TestCephMDSCephFSPushIntegration reads it with a session that
 	// lacks the bit). Entry creation in a charmap directory answers -EPERM
-	// without the bit, which that leaf also checks. Declaring the bit needs
-	// an explicit CephFS opt-in in which the caller states it validates,
-	// normalizes and folds names (never a default), with a native comparison
-	// of transformed names and their alternate names.
-	{"charmap", implement},
+	// without the bit. The bit names no message format: it is the client's
+	// promise to validate, normalize and fold names and send the original as
+	// the alternate name, which the MDS does not check. Options
+	// EnableCephFSCharmap is that explicit caller statement and declares it
+	// (TestCephMDSCephFSCharmapIntegration compares the transformed names and
+	// alternate names with a stock client across a restart;
+	// TestCephMDSSessionsIntegration admits it to a filesystem that requires
+	// the bit).
+	{"charmap", optIn},
 	// blockdiff: CEPH_MDS_OP_FILE_BLOCKDIFF can travel through raw Submit
 	// with caller-built arguments; snapshot selection, paging and block
 	// mapping are the consumer's. No exported constant or native evidence.
@@ -100,7 +108,8 @@ var tentacleCephFSFeatures = []struct {
 
 // TestClientExtensionDecisionsCoverEveryPinnedFeature binds the decision
 // table to the declared bitsets: a declared bit is baseline, a withheld bit
-// has a decision, the CephFS profile includes every session-profile bit, no
+// has a decision, the CephFS profile includes every session-profile bit, the
+// opt-in profile adds exactly the opt-in bits to the CephFS profile, no
 // declared bit lies beyond the pinned list, and codec constants named after
 // a feature agree with the pinned bit.
 func TestClientExtensionDecisionsCoverEveryPinnedFeature(t *testing.T) {
@@ -112,11 +121,14 @@ func TestClientExtensionDecisionsCoverEveryPinnedFeature(t *testing.T) {
 		if cephfs != (feature.decision == baseline) {
 			t.Errorf("bit %d (%s): declared %v, but decision %d", bit, feature.name, cephfs, feature.decision)
 		}
-		if feature.decision < baseline || feature.decision > consumerOwned {
+		if charmap := FeatureBitsetHas(CephFSCharmapClientFeatures, uint(bit)); charmap != (cephfs || feature.decision == optIn) {
+			t.Errorf("bit %d (%s): the opt-in profile must be the CephFS profile plus the opt-in bits, declared %v", bit, feature.name, charmap)
+		}
+		if feature.decision < baseline || feature.decision > optIn {
 			t.Errorf("bit %d (%s): no decision", bit, feature.name)
 		}
 	}
-	for _, profile := range [][]byte{ClientFeatures, CephFSClientFeatures} {
+	for _, profile := range [][]byte{ClientFeatures, CephFSClientFeatures, CephFSCharmapClientFeatures} {
 		for bit := uint(len(tentacleCephFSFeatures)); bit < uint(len(profile))*8; bit++ {
 			if FeatureBitsetHas(profile, bit) {
 				t.Errorf("declared bit %d is beyond the pinned feature list", bit)
@@ -125,7 +137,7 @@ func TestClientExtensionDecisionsCoverEveryPinnedFeature(t *testing.T) {
 	}
 	for name, bit := range map[string]int{"reply_encoding": FeatureReplyEncoding, "reclaim_client": FeatureReclaimClient,
 		"multi_reconnect": FeatureMultiReconnect, "deleg_ino": FeatureDelegIno, "32bits_retry_fwd": Feature32BitsRetryFwd,
-		"new_snaprealm_info": FeatureNewSnaprealmInfo, "has_owner_uidgid": FeatureHasOwnerUIDGID} {
+		"new_snaprealm_info": FeatureNewSnaprealmInfo, "has_owner_uidgid": FeatureHasOwnerUIDGID, "charmap": FeatureCharmap} {
 		if tentacleCephFSFeatures[bit].name != name {
 			t.Errorf("Go feature constant for %s is bit %d (%s)", name, bit, tentacleCephFSFeatures[bit].name)
 		}

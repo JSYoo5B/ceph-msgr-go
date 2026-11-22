@@ -293,9 +293,11 @@ type copyPrimaryRecovery struct {
 	dir     string
 	out     map[int32]bool
 	pauserd bool
-	// frozen OSDs are paused (docker pause); killed ones are SIGKILLed and
-	// not started yet; restarted says routing must be republished.
+	// frozen OSDs are paused (docker pause), each under its lease in
+	// leases; killed ones are SIGKILLed and not started yet; restarted says
+	// routing must be republished.
 	frozen    map[int32]bool
+	leases    map[int32]*testcluster.DaemonLease
 	killed    map[int32]bool
 	restarted bool
 }
@@ -314,40 +316,50 @@ func (r *copyPrimaryRecovery) markOut(t *testing.T, ctx context.Context, osd int
 	}
 }
 
-// freeze pauses one OSD through the fixture's daemon control. It is recorded
-// first, so an uncertain pause is still resumed.
-func (r *copyPrimaryRecovery) freeze(t *testing.T, ctx context.Context, osd int32) {
+// freeze pauses one OSD under a fixture-owned lease that ends by deadline
+// (leaseDaemon), the pause request under ctx. The OSD and its lease are
+// recorded before the pause is published, so an uncertain pause is still
+// ended and the OSD restarted (restore); the fixture resumes it at the
+// deadline even while an observation of the paused cluster is outstanding.
+func (r *copyPrimaryRecovery) freeze(t *testing.T, ctx context.Context, osd int32, deadline time.Time) {
 	t.Helper()
 	r.frozen[osd] = true
-	if err := testcluster.ControlDaemon(ctx, r.dir, "pause", "osd", strconv.Itoa(int(osd))); err != nil {
+	if r.leases == nil {
+		r.leases = map[int32]*testcluster.DaemonLease{}
+	}
+	lease := leaseDaemon(t, r.dir, "osd", strconv.Itoa(int(osd)), deadline)
+	r.leases[osd] = lease
+	if _, err := lease.Pause(ctx); err != nil {
 		t.Fatal("pause", osd, err)
 	}
 }
 
 // thaw resumes a paused OSD in place, which the tests do while it is well
-// inside its heartbeat grace.
-func (r *copyPrimaryRecovery) thaw(ctx context.Context, osd int32, deadline time.Time) error {
-	thaw, cancel := context.WithDeadline(ctx, deadline)
-	defer cancel()
-	if err := thaw.Err(); err != nil {
-		return err
+// inside its heartbeat grace. It fails unless this resume ended the lease
+// before its deadline; the OSD then stays recorded as frozen, so restore
+// restarts it.
+func (r *copyPrimaryRecovery) thaw(osd int32) error {
+	lease := r.leases[osd]
+	if lease == nil {
+		return fmt.Errorf("osd.%d has no pause lease", osd)
 	}
-	if err := testcluster.ControlDaemon(thaw, r.dir, "resume", "osd", strconv.Itoa(int(osd))); err != nil {
+	if _, err := resumeDaemon(context.Background(), lease); err != nil {
 		return err
-	}
-	if !time.Now().Before(deadline) {
-		return context.DeadlineExceeded
 	}
 	delete(r.frozen, osd)
 	return nil
 }
 
-// recoverFrozen asks the controller to settle the original pause and resume
-// before killing the replica. Its original resume may already have applied.
+// recoverFrozen ends the OSD's lease, whatever ended it already, and waits
+// for the fixture's ended acknowledgement before it kills the OSD, so no
+// pause of that lease can run after the kill. A thaw that was not
+// acknowledged may already have resumed it.
 func (r *copyPrimaryRecovery) recoverFrozen(ctx context.Context, osd int32) error {
 	name := strconv.Itoa(int(osd))
-	if err := testcluster.RequestControl(ctx, r.dir, "recover-paused-osd", "osd-pause-recovered", name); err != nil {
-		return fmt.Errorf("recover pause of osd.%d: %w", osd, err)
+	if lease := r.leases[osd]; lease != nil {
+		if err := endDaemonLease(ctx, lease); err != nil {
+			return err
+		}
 	}
 	delete(r.frozen, osd)
 	r.killed[osd] = true

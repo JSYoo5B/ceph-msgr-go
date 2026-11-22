@@ -62,10 +62,10 @@ func TestCephOSDReplicasIntegration(t *testing.T) {
 		t.Fatal("ONDISK replicated write", err)
 	}
 	checkOSDMetadata(t, reply, oracle)
+	stopped = true
 	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
 		t.Fatal("kill original primary", err)
 	}
-	stopped = true
 	if err := o.Close(); err != nil {
 		t.Fatal("close killed primary connection", err)
 	}

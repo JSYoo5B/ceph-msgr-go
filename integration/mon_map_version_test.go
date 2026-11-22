@@ -115,9 +115,6 @@ func TestCephMonMapVersionLeaderStopIntegration(t *testing.T) {
 	t.Logf("leader-stop subject seed=%s endpoint=%s GID=%d setup/drain budget=%s; operation context remains 240s",
 		peon.Seed, subjectBefore.Monitor.Endpoint, subjectBefore.GlobalID, leaderStopMONDrainBudget)
 	monState := c.Snapshot().Monitor
-	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", status.Leader); err != nil {
-		t.Fatal("stop leader", err)
-	}
 	stopped := true
 	defer func() {
 		if !stopped {
@@ -133,6 +130,9 @@ func TestCephMonMapVersionLeaderStopIntegration(t *testing.T) {
 			markFixtureUnusable(t, control, "election did not settle after the leader restart")
 		}
 	}()
+	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", status.Leader); err != nil {
+		t.Fatal("stop leader", err)
+	}
 	started := time.Now()
 	version, err := peon.MapVersion(ctx, cephmsgr.OSDMapKind)
 	assertLeaderStopClientIdentity(t, peon.Client, subjectBefore, "map version during election")

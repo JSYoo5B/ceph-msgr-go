@@ -127,9 +127,6 @@ func TestCephOSDIOAcrossMonLeaderStopIntegration(t *testing.T) {
 		}
 	}()
 	time.Sleep(2 * time.Second)
-	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", status.Leader); err != nil {
-		t.Fatal("stop leader", err)
-	}
 	stopped := true
 	defer func() {
 		if !stopped {
@@ -145,6 +142,9 @@ func TestCephOSDIOAcrossMonLeaderStopIntegration(t *testing.T) {
 			markFixtureUnusable(t, control, "election did not settle after the leader restart")
 		}
 	}()
+	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", status.Leader); err != nil {
+		t.Fatal("stop leader", err)
+	}
 	atStop := writes.Load()
 	// The MON session recovers to another member while writes continue.
 	recovered := waitClientState(t, c, ctx, func(s cephmsgr.State) bool {

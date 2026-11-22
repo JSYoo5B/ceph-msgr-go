@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/cephfs"
-	"github.com/JSYoo5B/ceph-testcontainers-go/fault"
 	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 )
@@ -60,8 +61,8 @@ func (c *fixtureCluster) daemon(ctx context.Context, kind, name string) (testcon
 	return nil, errors.New("fixture daemon not found")
 }
 
-// daemonControlKinds are the daemon kinds a pause, resume, stop, start or
-// kill request may name.
+// daemonControlKinds are the daemon kinds a stop, start or kill request, or
+// a pause lease (daemon_lease.go), may name.
 var daemonControlKinds = []string{"mon", "mgr", "osd", "mds"}
 
 // daemonControlAdmitted is the closed admission of the daemon controls. MON,
@@ -76,25 +77,29 @@ func (p profile) daemonControlAdmitted(kind, action string) bool {
 	return action == "stop" && p.mdsCommands == "1" && p.mdsFresh == "1" && !p.admits(capMDSAppliedCommand)
 }
 
+// controlDaemonRequests serves the stop, start and kill requests of the
+// daemons: per kind, every pending request of the three actions, in
+// request-ID order, from one snapshot of the directory. A pause is a lease
+// and has its own loop (daemon_lease.go).
 func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) error {
-	// Cleanup publishes this separate request after abandoning a timed-out
-	// pause or resume. Claim it before reading those original requests,
-	// then reconcile the lease after the ordinary actions have run.
-	recovery, err := c.request(out, "recover-paused-osd")
-	if err != nil {
-		return err
-	}
-	if recovery != nil && len(recovery) != 2 {
-		return errors.New("invalid OSD pause recovery request")
-	}
 	for _, kind := range daemonControlKinds {
-		for _, action := range []string{"pause", "resume", "stop", "start", "kill"} {
-			fields, err := c.request(out, action+"-"+kind)
+		// The pending requests of the three actions of a kind run in
+		// request-ID order, the order of their publication: a start that a
+		// cleanup published after a kill or stop whose wait the test
+		// abandoned runs after it, never before. The three names are read
+		// in one snapshot (scanRequests), so a stop and its start published
+		// while the directory is read are served both in order, or neither
+		// in this poll.
+		actions := map[string]string{"stop-" + kind: "stop", "start-" + kind: "start", "kill-" + kind: "kill"}
+		pending, err := pendingRequests(out, slices.Sorted(maps.Keys(actions))...)
+		if err != nil {
+			return err
+		}
+		for _, r := range pending {
+			action := actions[r.name]
+			fields, err := claim(out, r)
 			if err != nil {
 				return err
-			}
-			if fields == nil {
-				continue
 			}
 			if len(fields) != 2 {
 				return errors.New("invalid daemon control request")
@@ -102,51 +107,7 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 			if !c.profile.daemonControlAdmitted(kind, action) {
 				return errors.New("MDS daemon control is restricted to stopping the owned daemon of the public MDS command acceptance")
 			}
-			name := fields[1]
-			daemon, err := c.daemon(ctx, kind, name)
-			if err != nil {
-				return err
-			}
-			key := kind + "." + name
-			switch action {
-			case "pause":
-				if c.pauses[key] != nil {
-					return errors.New("daemon already paused")
-				}
-				c.pauses[key], err = fault.Pause(ctx, c.cluster, daemon)
-			case "resume":
-				if c.pauses[key] == nil {
-					return errors.New("daemon is not paused")
-				}
-				err = c.pauses[key].Resume(ctx)
-				if err == nil {
-					delete(c.pauses, key)
-				}
-			case "kill":
-				if !c.profile.forcedKillAdmitted(kind) {
-					return errors.New("forced crash is restricted to disposable OSDs and the selected MON forced-kill cells")
-				}
-				// Docker stop sends SIGTERM first even with a zero timeout,
-				// and an OSD with osd_fast_shutdown may then exit 0 before the
-				// SIGKILL; a MON would shut down in order. Send SIGKILL itself
-				// so the 137 receipt holds.
-				var state *container.State
-				state, err = forceKill(ctx, dockerKill(daemon.GetContainerID()), daemon.State, forcedKillTimeout)
-				if err == nil {
-					data, encodeErr := json.Marshal(map[string]any{"daemon": key, "id": daemon.GetContainerID(), "exit_code": state.ExitCode, "oom_killed": state.OOMKilled})
-					if encodeErr != nil {
-						return encodeErr
-					}
-					if err = os.WriteFile(filepath.Join(out, kind+"-crash-state.json"), data, 0644); err != nil {
-						return err
-					}
-				}
-			case "stop":
-				err = daemon.Stop(ctx, nil)
-			case "start":
-				err = daemon.Start(ctx)
-			}
-			if err != nil {
+			if err = c.runDaemonAction(ctx, out, kind, action, fields[1]); err != nil {
 				return err
 			}
 			if err = publishAck(out, kind+"-"+action+"."+fields[0]); err != nil {
@@ -154,17 +115,47 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 			}
 		}
 	}
-	if recovery != nil {
-		key := "osd." + recovery[1]
-		if lease := c.pauses[key]; lease != nil {
-			if err := lease.Resume(ctx); err != nil {
+	return nil
+}
+
+// runDaemonAction runs one stop, start or kill of daemon kind.name, the
+// lookup included, bounded by fixtureStartupTimeout. The control loop serves
+// every control one request at a time, so an unbounded Docker call would
+// hold the undo request of every other control behind it.
+func (c *fixtureCluster) runDaemonAction(ctx context.Context, out, kind, action, name string) error {
+	ctx, cancel := context.WithTimeout(ctx, fixtureStartupTimeout)
+	defer cancel()
+	daemon, err := c.daemon(ctx, kind, name)
+	if err != nil {
+		return err
+	}
+	key := kind + "." + name
+	switch action {
+	case "kill":
+		if !c.profile.forcedKillAdmitted(kind) {
+			return errors.New("forced crash is restricted to disposable OSDs and the selected MON forced-kill cells")
+		}
+		// Docker stop sends SIGTERM first even with a zero timeout,
+		// and an OSD with osd_fast_shutdown may then exit 0 before the
+		// SIGKILL; a MON would shut down in order. Send SIGKILL itself
+		// so the 137 receipt holds.
+		var state *container.State
+		state, err = forceKill(ctx, dockerKill(daemon.GetContainerID()), daemon.State, forcedKillTimeout)
+		if err == nil {
+			data, encodeErr := json.Marshal(map[string]any{"daemon": key, "id": daemon.GetContainerID(), "exit_code": state.ExitCode, "oom_killed": state.OOMKilled})
+			if encodeErr != nil {
+				return encodeErr
+			}
+			if err = os.WriteFile(filepath.Join(out, kind+"-crash-state.json"), data, 0644); err != nil {
 				return err
 			}
-			delete(c.pauses, key)
 		}
-		return publishAck(out, "osd-pause-recovered."+recovery[0])
+	case "stop":
+		err = daemon.Stop(ctx, nil)
+	case "start":
+		err = daemon.Start(ctx)
 	}
-	return nil
+	return err
 }
 
 var _ = defineControl("daemon", frozenControlRank(18), (*fixtureCluster).controlDaemonRequests)

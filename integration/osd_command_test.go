@@ -51,13 +51,10 @@ func nativeOSDCommand(t *testing.T, ctx context.Context, input osdCommandNativeI
 	if err != nil || len(data) > 4<<20 {
 		t.Fatal("bounded native OSD command input", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "osd-command-input.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(filepath.Join(dir, "osd-command-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-command", "run"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-command", "run", testcluster.ControlInput{Name: "osd-command-input.json", Data: data, Private: true}); err != nil {
 		t.Fatal("native OSD command oracle", err)
 	}
 	f, err := os.Open(filepath.Join(dir, "osd-command-result.json"))
@@ -488,15 +485,7 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 			t.Fatal("command before the pause", err)
 		}
 		name := strconv.FormatInt(int64(primary), 10)
-		if err := testcluster.ControlDaemon(ctx, dir, "pause", "osd", name); err != nil {
-			t.Fatal("pause primary OSD", err)
-		}
-		resumed := false
-		defer func() {
-			if !resumed {
-				_ = testcluster.ControlDaemon(context.Background(), dir, "resume", "osd", name)
-			}
-		}()
+		lease := pauseDaemon(t, ctx, dir, "osd", name, leaseUntil(ctx))
 		// The commands to the paused primary are padded, so each local write
 		// is counted on the connection without decoding a frame. The hold is
 		// never armed: it withholds nothing here, the paused daemon answers
@@ -563,10 +552,9 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 				t.Fatalf("%s on the closed OSD handle was not a known-unsent refusal: %+v %v", name, result.Submission, err)
 			}
 		}
-		if err := testcluster.ControlDaemon(ctx, dir, "resume", "osd", name); err != nil {
+		if _, err := resumeDaemon(ctx, lease); err != nil {
 			t.Fatal("resume primary OSD", err)
 		}
-		resumed = true
 		// Until here the client wrote each padded command once and dialed
 		// the OSD once: nothing was resent and nothing reconnected.
 		if dials, large, _ := observed.counts(); dials != 1 || large != 3 {

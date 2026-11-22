@@ -31,10 +31,12 @@ type nativeNotifyReceipt struct {
 	} `json:"missed"`
 }
 
-func notifyOracle(t *testing.T, ctx context.Context, action string) nativeNotifyReceipt {
+// notifyOracle runs one action of the native notifier; start carries its
+// request-scoped input (testcluster.ControlInput).
+func notifyOracle(t *testing.T, ctx context.Context, action string, inputs ...testcluster.ControlInput) nativeNotifyReceipt {
 	t.Helper()
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-watch-notify", action); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-watch-notify", action, inputs...); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "osd-watch-notify-result.json"))
@@ -98,8 +100,10 @@ func TestCephOSDWatchNotifyIntegration(t *testing.T) {
 	request := osdObjectRequest(route)
 	request.Operations = nil
 	epoch = request.MapEpoch
-	native := watcherOracle(t, ctx, "start")
+	// Recorded first: a start whose wait failed may still run, and
+	// the cleanup stops it after it.
 	watching = true
+	native := watcherOracle(t, ctx, "start")
 	if native.Object != name || native.GlobalID == 0 || len(native.Cookies) != 2 {
 		t.Fatal("native watchers do not own object", native)
 	}
@@ -177,10 +181,7 @@ func TestCephOSDWatchNotifyIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := testcluster.WritePublicEvidence(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-watch-notify-input.json"), input); err != nil {
-			t.Fatal(err)
-		}
-		started := notifyOracle(t, ctx, "start")
+		started := notifyOracle(t, ctx, "start", testcluster.ControlInput{Name: "osd-watch-notify-input.json", Data: input})
 		notifying = true
 		if started.Object != name || started.GlobalID == 0 {
 			t.Fatal("native notifier scope differs", started)

@@ -102,7 +102,7 @@ func TestCopyPurgedPhase(t *testing.T) {
 // on_active_advmap). filter_snapc removes a snapshot that is in the
 // snap_trimq or purged_snaps (src/osd/PG.cc), so the two later states differ:
 //
-//   - purged: both MGRs are paused through the fixture's daemon control
+//   - purged: both MGRs are paused under fixture-owned leases (pauseDaemon)
 //     before the removal, so no digest can report the trim. The state is
 //     reached when the native `pg query` shows the snapshot in purged_snaps
 //     and not in the snap_trimq while `osd dump` still queues it, and the same
@@ -244,33 +244,24 @@ func TestCephOSDCopyFromPurgedSnapContextIntegration(t *testing.T) {
 	for _, s := range dump.Standbys {
 		managers = append(managers, s.Name)
 	}
-	paused := map[string]bool{}
+	// Each MGR is paused under its own lease; a lease's cleanup resumes it
+	// after a failure.
+	leases := map[string]*testcluster.DaemonLease{}
 	resume := func(ctx context.Context) error {
 		var errs []error
 		for _, name := range managers {
-			if paused[name] {
-				if err := testcluster.ControlDaemon(ctx, control, "resume", "mgr", name); err != nil {
+			if lease := leases[name]; lease != nil {
+				if _, err := resumeDaemon(ctx, lease); err != nil {
 					errs = append(errs, err)
 				} else {
-					delete(paused, name)
+					delete(leases, name)
 				}
 			}
 		}
 		return errors.Join(errs...)
 	}
-	t.Cleanup(func() {
-		restore, stop := context.WithTimeout(context.Background(), 30*time.Second)
-		defer stop()
-		if err := resume(restore); err != nil {
-			t.Error("resume the paused MGRs", err)
-		}
-	})
 	for _, name := range managers {
-		// Recorded first: an uncertain pause is still resumed.
-		paused[name] = true
-		if err := testcluster.ControlDaemon(ctx, control, "pause", "mgr", name); err != nil {
-			t.Fatal("pause mgr", name, err)
-		}
+		leases[name] = pauseDaemon(t, ctx, control, "mgr", name, leaseUntil(ctx))
 	}
 	receipt.Managers = managers
 	receipt.Removal, err = c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: uint32(receipt.Pool), Op: cephmsgr.SelfManagedSnapshotRemove, Snapshot: removed})

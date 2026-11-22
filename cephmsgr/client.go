@@ -149,6 +149,9 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	if options.EnableCephFS && !options.EnableMDS {
 		return nil, errors.New("ceph: EnableCephFS requires EnableMDS")
 	}
+	if options.EnableCephFSCharmap && !options.EnableCephFS {
+		return nil, errors.New("ceph: EnableCephFSCharmap requires EnableCephFS")
+	}
 	if options.MaxMDSConnections == 0 {
 		options.MaxMDSConnections = 16
 	}

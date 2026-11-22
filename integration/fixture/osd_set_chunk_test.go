@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -12,7 +10,7 @@ func TestSetChunkControlIsClosedAndSelectedOnce(t *testing.T) {
 	out := t.TempDir()
 	request := func(body string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(out, "verify-osd-set-chunk"), []byte(body), 0o600); err != nil {
+		if err := writeRequestFile(out, "verify-osd-set-chunk", body); err != nil {
 			t.Fatal(err)
 		}
 	}

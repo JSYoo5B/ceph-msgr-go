@@ -77,10 +77,10 @@ func TestCephOSDCopyFromCrashIntegration(t *testing.T) {
 	if before.Code != 0 || !bytes.Equal(before.Data, baseline) || !reflect.DeepEqual(before.Attributes, attrs) || !equalOmapModel(omapWriteInventory(t, before), model) || before.Version != reply.UserVersion {
 		t.Fatal("native destination before the crash differs from the source", before.Code, before.Version, reply.UserVersion)
 	}
+	stopped = true
 	if err = testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
 		t.Fatal("force OSD termination", err)
 	}
-	stopped = true
 	if err = o.Close(); err != nil {
 		t.Fatal("close pre-crash OSD session", err)
 	}

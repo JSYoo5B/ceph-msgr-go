@@ -110,13 +110,10 @@ func nativeXattrCompare(t *testing.T, ctx context.Context, oracle osdFixtureOrac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "osd-xattr-input.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(filepath.Join(dir, "osd-xattr-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-xattr", "compare"); err != nil {
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-xattr", "compare", testcluster.ControlInput{Name: "osd-xattr-input.json", Data: data, Private: true}); err != nil {
 		t.Fatal("native xattr comparison", err)
 	}
 	f, err := os.Open(filepath.Join(dir, "osd-xattr-result.json"))

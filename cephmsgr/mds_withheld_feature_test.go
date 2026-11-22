@@ -41,6 +41,16 @@ func TestMDSWithheldFeatureRequirementIsRejectedExplicitly(t *testing.T) {
 			}
 			return m, <-peers, ctx
 		}},
+		// The opt-in profile withholds every other bit the CephFS profile
+		// withholds and declares only CHARMAP in addition.
+		"cephfs-charmap": {mds.CephFSCharmapClientFeatures, func(t *testing.T) (*MDSConnection, *mdsTestPeer, context.Context) {
+			c, peers, ctx := cephfsTestClientOptions(t, func(*mdsTestPeer, int) {}, func(o *Options) { o.EnableCephFSCharmap = true })
+			m, err := c.OpenMDS(ctx, MDSTarget{FilesystemID: 7, Rank: 0, Address: "v2:192.0.2.1:6805/17"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return m, <-peers, ctx
+		}},
 	}
 	for name, profile := range profiles {
 		t.Run(name, func(t *testing.T) {

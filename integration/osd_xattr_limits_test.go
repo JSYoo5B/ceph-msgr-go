@@ -104,10 +104,12 @@ func TestCephOSDXattrServerLimitsIntegration(t *testing.T) {
 			t.Error("limit test cleanup changed original bytes/attrs/mtime")
 		}
 	}()
+	// Recorded first: an apply whose wait failed may still run, and the
+	// cleanup's restore runs after it in the same control.
+	active = true
 	if err := testcluster.ControlDaemon(ctx, dir, "limit", "osd-xattr", "apply"); err != nil {
 		t.Fatal("apply effective server limits", err)
 	}
-	active = true
 	readReceipt := func() xattrLimitNativeReceipt {
 		t.Helper()
 		var result xattrLimitNativeReceipt

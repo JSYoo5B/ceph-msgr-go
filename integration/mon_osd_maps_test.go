@@ -57,12 +57,9 @@ func verifyNativeMonMaps(t *testing.T, ctx context.Context, control string, batc
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(control, "osd-map-manifest.json"), manifest, 0644); err != nil {
-		t.Fatal(err)
-	}
 	verify, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
-	if err := testcluster.ControlDaemon(verify, control, "verify", "osd-maps", "received"); err != nil {
+	if err := testcluster.ControlDaemonInput(verify, control, "verify", "osd-maps", "received", testcluster.ControlInput{Name: "osd-map-manifest.json", Data: manifest}); err != nil {
 		t.Fatal("native MON map decoder and negotiated-feature encoder", err)
 	}
 }

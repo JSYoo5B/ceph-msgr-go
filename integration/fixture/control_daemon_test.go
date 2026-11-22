@@ -2,16 +2,21 @@ package main
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+	"time"
+
+	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	"github.com/testcontainers/testcontainers-go"
 )
 
-// The daemon controls keep every action for MON, MGR and OSD. An MDS may only
-// be stopped, and only by the public MDS command acceptance: not by the
-// applied-command cell on the same fixture, not by any other MDS profile and
-// not with any other action.
+// The daemon controls and the pause leases (daemon_lease.go, action "pause")
+// keep every action for MON, MGR and OSD. An MDS may only be stopped, and
+// only by the public MDS command acceptance: not by the applied-command cell
+// on the same fixture, not by any other MDS profile and not with any other
+// action.
 func TestDaemonControlAdmitsOnlyStoppingTheCommandFixtureMDS(t *testing.T) {
 	load := func(change map[string]string) profile {
 		t.Helper()
@@ -29,7 +34,7 @@ func TestDaemonControlAdmitsOnlyStoppingTheCommandFixtureMDS(t *testing.T) {
 	if commands.mdsCommands != "1" || !commands.daemonControlAdmitted("mds", "stop") {
 		t.Fatal("the public MDS command acceptance cannot stop its MDS")
 	}
-	for _, action := range []string{"pause", "resume", "start", "kill", ""} {
+	for _, action := range []string{"pause", "start", "kill", ""} {
 		if commands.daemonControlAdmitted("mds", action) {
 			t.Fatal("an MDS action other than stop was admitted", action)
 		}
@@ -45,7 +50,7 @@ func TestDaemonControlAdmitsOnlyStoppingTheCommandFixtureMDS(t *testing.T) {
 	}
 	for _, p := range []profile{commands, {}} {
 		for _, kind := range []string{"mon", "mgr", "osd"} {
-			for _, action := range []string{"pause", "resume", "stop", "start", "kill"} {
+			for _, action := range []string{"pause", "stop", "start", "kill"} {
 				if !p.daemonControlAdmitted(kind, action) {
 					t.Fatal("an existing daemon control lost its admission", kind, action)
 				}
@@ -60,28 +65,146 @@ func TestDaemonControlAdmitsOnlyStoppingTheCommandFixtureMDS(t *testing.T) {
 	}
 }
 
-// An already released pause lease needs no second daemon resume. An earlier
-// invalid daemon request must still fail before the recovery acknowledgement.
-func TestRecoverPausedOSDOrdersPendingDaemonControl(t *testing.T) {
-	for _, pending := range []bool{false, true} {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "recover-paused-osd"), []byte("42 2"), 0600); err != nil {
-			t.Fatal(err)
+// orderedDaemon records the daemon actions in the order they ran.
+type orderedDaemon struct {
+	testcontainers.Container
+	actions []string
+	// bounds are the time left before each action's context deadline,
+	// zero for an action without one.
+	bounds []time.Duration
+}
+
+func (d *orderedDaemon) record(ctx context.Context, action string) {
+	d.actions = append(d.actions, action)
+	var bound time.Duration
+	if deadline, ok := ctx.Deadline(); ok {
+		bound = time.Until(deadline)
+	}
+	d.bounds = append(d.bounds, bound)
+}
+
+func (d *orderedDaemon) Stop(ctx context.Context, _ *time.Duration) error {
+	d.record(ctx, "stop")
+	return nil
+}
+
+func (d *orderedDaemon) Start(ctx context.Context) error {
+	d.record(ctx, "start")
+	return nil
+}
+
+// The pending actions of one daemon kind run in publication order, whatever
+// their action names, so a start that a cleanup published after a kill or
+// stop the test abandoned runs after it and restarts the daemon. (Before,
+// each poll ran the oldest stop, then the oldest start, then the oldest
+// kill, so such a start ran first and the late kill left the daemon down.)
+func TestDaemonControlRunsTheActionsOfAKindInPublicationOrder(t *testing.T) {
+	out := t.TempDir()
+	d := &orderedDaemon{}
+	c := &fixtureCluster{cluster: &ceph.Container{Container: d}}
+	writeControlRequest(t, out, "start-mon", "11 a")
+	writeControlRequest(t, out, "stop-mon", "10 a")
+	writeControlRequest(t, out, "start-mon", "9 a")
+	if err := c.controls(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(d.actions, []string{"start", "stop", "start"}) {
+		t.Fatal("the daemon actions ran out of publication order", d.actions)
+	}
+	for _, ack := range []string{"mon-start.9", "mon-stop.10", "mon-start.11"} {
+		if !fileExists(filepath.Join(out, ack)) {
+			t.Fatal("not acknowledged:", ack)
 		}
-		if pending {
-			if err := os.WriteFile(filepath.Join(dir, "resume-osd"), []byte("41"), 0600); err != nil {
-				t.Fatal(err)
-			}
+	}
+}
+
+// Each daemon action runs under its own bound, so a stuck Docker call fails
+// the fixture instead of holding every other control's requests behind it.
+func TestDaemonControlBoundsEachAction(t *testing.T) {
+	out := t.TempDir()
+	d := &orderedDaemon{}
+	c := &fixtureCluster{cluster: &ceph.Container{Container: d}}
+	writeControlRequest(t, out, "stop-mon", "21 a")
+	writeControlRequest(t, out, "start-mon", "22 a")
+	if err := c.controls(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.bounds) != 2 {
+		t.Fatal("the daemon actions did not run", d.actions)
+	}
+	for i, bound := range d.bounds {
+		if bound <= 0 || bound > fixtureStartupTimeout {
+			t.Fatal("daemon action", d.actions[i], "ran without its bound", bound)
 		}
-		var c fixtureCluster
-		err := c.controlDaemonRequests(context.Background(), dir)
-		_, ack := os.Stat(filepath.Join(dir, "osd-pause-recovered.42"))
-		if pending {
-			if err == nil || !errors.Is(ack, os.ErrNotExist) {
-				t.Fatal("recovery acknowledged before pending resume", err, ack)
-			}
-		} else if err != nil || ack != nil {
-			t.Fatal("recovery of an already resumed OSD", err, ack)
+	}
+}
+
+// A stop and the start a cleanup published after it, both published while
+// the daemon control reads the directory, run in publication order: the
+// three actions of a kind are read in one snapshot. (With one read per
+// action, a start published just after the stop read ran first, and the
+// stop of the next poll left the daemon stopped.) Each order of the two
+// requests is published after the first and after the second read of a
+// poll, so one read per action fails whichever action it reads first; and
+// one read may miss the earlier request while it returns the later one.
+func TestDaemonControlOrdersRequestsPublishedWhileItReads(t *testing.T) {
+	for _, first := range []string{"stop", "start"} {
+		second := map[string]string{"stop": "start", "start": "stop"}[first]
+		for _, interleaving := range []string{"published after read 1", "published after read 2", "one read misses the earlier request"} {
+			t.Run(first+" then "+second+", "+interleaving, func(t *testing.T) {
+				out := t.TempDir()
+				d := &orderedDaemon{}
+				c := &fixtureCluster{cluster: &ceph.Container{Container: d}}
+				publish := func() {
+					writeControlRequest(t, out, first+"-mon", "10 a")
+					writeControlRequest(t, out, second+"-mon", "11 a")
+				}
+				after := map[string]int{"published after read 1": 1, "published after read 2": 2}[interleaving]
+				if after == 0 {
+					publish()
+				}
+				hookRequestReads(t, func(n int, entries []os.DirEntry) []os.DirEntry {
+					switch {
+					case n == after:
+						publish()
+					case after == 0 && n == 1:
+						return withoutEntry(entries, requestEnvelopeName(first+"-mon", "10"))
+					}
+					return entries
+				})
+				for poll := 0; poll < 2; poll++ {
+					if err := c.controlDaemonRequests(context.Background(), out); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if !slices.Equal(d.actions, []string{first, second}) {
+					t.Fatal("the daemon actions ran out of publication order", d.actions)
+				}
+			})
 		}
+	}
+}
+
+// The MON quorum control reads its stop and start requests in one snapshot
+// too: of a stop and a later start, the stop is claimed first, also when one
+// read of the directory misses it. (The fake cluster has no MON b, so the
+// claimed request fails at its first lookup; the request still pending shows
+// which one ran.)
+func TestMonitorQuorumControlOrdersRequestsFromOneSnapshot(t *testing.T) {
+	out := t.TempDir()
+	c := &fixtureCluster{cluster: &ceph.Container{Container: &orderedDaemon{}}}
+	writeControlRequest(t, out, "stop-mons", "10")
+	writeControlRequest(t, out, "start-mons", "11")
+	hookRequestReads(t, func(n int, entries []os.DirEntry) []os.DirEntry {
+		if n == 1 {
+			return withoutEntry(entries, requestEnvelopeName("stop-mons", "10"))
+		}
+		return entries
+	})
+	if err := c.controlMonitorQuorumRequests(context.Background(), out); err == nil {
+		t.Fatal("the fake cluster served a MON b")
+	}
+	if requestPending(t, out, "stop-mons") || !requestPending(t, out, "start-mons") {
+		t.Fatal("the start was claimed before the earlier stop")
 	}
 }

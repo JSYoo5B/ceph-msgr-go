@@ -115,8 +115,10 @@ func TestCephOSDListWatchersIntegration(t *testing.T) {
 			t.Fatal("absent watcher listing", reply, err)
 		}
 	})
-	native := watcherOracle(t, ctx, "start")
+	// Recorded first: a start whose wait failed may still run, and
+	// the cleanup stops it after it.
 	watching = true
+	native := watcherOracle(t, ctx, "start")
 	if native.GlobalID == 0 || len(native.Cookies) != 2 || len(native.Native.Entries) != 2 {
 		t.Fatal("native watch registration receipt", native)
 	}
@@ -192,8 +194,10 @@ func TestCephOSDListWatchersIntegration(t *testing.T) {
 		}
 	})
 	t.Run("completed native scope can start again", func(t *testing.T) {
-		second := watcherOracle(t, ctx, "start")
+		// Recorded first: a start whose wait failed may still run, and
+		// the cleanup stops it after it.
 		watching = true
+		second := watcherOracle(t, ctx, "start")
 		if second.GlobalID == 0 || len(second.Cookies) != 2 {
 			t.Fatal("second scope lacks native registrations")
 		}
