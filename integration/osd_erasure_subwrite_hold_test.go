@@ -25,9 +25,13 @@ import (
 // it waits for its sub-write commits, and what an epoch change does to it.
 // The OSD of the last parity shard is paused through the fixture's daemon
 // control (heldPause, daemon_lease_test.go) before one
-// Go APPEND of a full stripe plus SETXATTR is sent, so every shard is in the
-// write plan. The pinned source (Ceph v20.2.4) gives the expected native
-// behaviour:
+// Go APPEND of a full stripe plus SETXATTR is sent. An APPEND changes the
+// object's size, and on a size change the pinned optimized-EC transaction
+// marks every shard written to update the object info
+// (src/osd/ECTransaction.cc:580-603), so every shard gets a sub-write
+// whatever the byte plan; the full stripe only keeps the data shards' chunks
+// in the plan as well. The pinned source (Ceph v20.2.4) gives the expected
+// native behaviour:
 //
 //   - do_op marks the op started and executes it (src/osd/PrimaryLogPG.cc:2541);
 //     the EC write pipeline applies the primary's own shard and sends every
@@ -78,7 +82,9 @@ var subWriteLocalCommit = []string{"sub_op_started", "sub_op_committed"}
 
 // subWriteStripe is one full stripe of a pool of k data chunks of chunk
 // bytes (chunk from the native stripe_width): an APPEND of that length at a
-// stripe boundary writes every shard.
+// stripe boundary puts every data chunk in the byte plan. Every shard gets
+// a sub-write because the APPEND changes the size, not because of the
+// length (src/osd/ECTransaction.cc:580-603).
 func subWriteStripe(k, chunk int) int {
 	return k * chunk
 }
