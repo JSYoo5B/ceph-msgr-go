@@ -330,11 +330,12 @@ type copyChunkLossReceipt struct {
 // write's user version, the complete copy natively, the copy once in the PG
 // log bound to the source write, and nothing beyond it on a fresh session.
 //
-// Not verified: a loss before the primary's local commit of the final copy
-// transaction (no stock control holds a BlueStore commit; see #7), more than
-// two chunks, OMAP sources, versioned or snapshot sources, EC destinations,
-// a replica lost between chunks and the legacy one-PG pools when their
-// primaries coincide.
+// Three-chunk OMAP sources, the third OSD lost between chunks and versioned
+// or snapshot sources changed between chunks are in
+// osd_copyfrom_multichunk_sources_test.go. Not verified: a loss before the
+// primary's local commit of the final copy transaction (no stock control
+// holds a BlueStore commit; see #7), EC destinations and the legacy one-PG
+// pools when their primaries coincide.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfrommultichunkloss key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfrommultichunkloss key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
@@ -377,33 +378,7 @@ func TestCephOSDCopyFromMultiChunkPrimaryLossIntegration(t *testing.T) {
 func copyChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, cell copyChunkLossCell, receipt *copyChunkLossReceipt) {
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("chunk-%d-%s", cell.code, cell.lost))
 	primary := r.dstRoute.ID
-	if r.srcRoute.ID == primary {
-		// The paused replica must be neither primary, so they must differ.
-		if !isReplicatedPGFixtureProfile() {
-			t.Skipf("the one-PG legacy owned pools put the source and the destination on osd.%d", primary)
-		}
-		found := false
-		for i := 0; i < 64 && !found; i++ {
-			name := fmt.Sprintf("%s-%d", r.source, i)
-			route := poolPlace(t, ctx, 1, name, "")
-			if route.ID != primary && route.PrimaryID == route.ID && poolObserve(t, ctx, 1, name, "", "").Code == -2 {
-				r.source, r.srcRoute, found = name, route, true
-			}
-		}
-		if !found {
-			t.Fatalf("no fresh source name in 64 has a primary other than osd.%d", primary)
-		}
-	}
-	sourcePrimary := r.srcRoute.ID
-	var paused int32 = -1
-	for _, osd := range r.dstRoute.Acting {
-		if osd != primary && osd != sourcePrimary {
-			paused = osd
-		}
-	}
-	if paused < 0 || len(r.srcRoute.Acting) != 3 || !slices.Contains(r.srcRoute.Acting, paused) || !slices.Contains(r.dstRoute.Acting, sourcePrimary) {
-		t.Fatalf("no third OSD replicates both PGs: source %v (primary osd.%d), destination %v (primary osd.%d)", r.srcRoute.Acting, sourcePrimary, r.dstRoute.Acting, primary)
-	}
+	sourcePrimary, paused := r.separatePrimaries()
 	receipt.SourcePrimary, receipt.Primary, receipt.Paused = sourcePrimary, primary, paused
 
 	// Cleanups run in reverse: the cluster is restored first, so the chunk
@@ -455,7 +430,7 @@ func copyChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery
 	if cell.lost == "destination" {
 		r.loseDestinationBetweenChunks(held, cell.code, seeded, copyKey, writeKey, data, receipt)
 	} else {
-		r.loseSourceBetweenChunks(held, copyKey, writeKey, data, receipt)
+		r.loseReplicaBetweenChunks(held, held.source.ID, copyKey, writeKey, data, receipt)
 	}
 	// The restarted OSD cleared every temporary object when it started; the
 	// others removed theirs at the interval change or the final rename.
@@ -465,6 +440,44 @@ func copyChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery
 		}
 		receipt.TempAfter = append(receipt.TempAfter, osd)
 	}
+}
+
+// separatePrimaries gives the source a fresh name whose primary is not the
+// destination primary, when the first one shares it, and returns that source
+// primary and the third OSD, which replicates both PGs. The one-PG legacy
+// owned pools cannot separate them, so the subtest is skipped there.
+func (r *copyPrimaryChangeRun) separatePrimaries() (int32, int32) {
+	t, ctx := r.t, r.ctx
+	t.Helper()
+	primary := r.dstRoute.ID
+	if r.srcRoute.ID == primary {
+		// The paused replica must be neither primary, so they must differ.
+		if !isReplicatedPGFixtureProfile() {
+			t.Skipf("the one-PG legacy owned pools put the source and the destination on osd.%d", primary)
+		}
+		found := false
+		for i := 0; i < 64 && !found; i++ {
+			name := fmt.Sprintf("%s-%d", r.source, i)
+			route := poolPlace(t, ctx, 1, name, "")
+			if route.ID != primary && route.PrimaryID == route.ID && poolObserve(t, ctx, 1, name, "", "").Code == -2 {
+				r.source, r.srcRoute, found = name, route, true
+			}
+		}
+		if !found {
+			t.Fatalf("no fresh source name in 64 has a primary other than osd.%d", primary)
+		}
+	}
+	sourcePrimary := r.srcRoute.ID
+	var paused int32 = -1
+	for _, osd := range r.dstRoute.Acting {
+		if osd != primary && osd != sourcePrimary {
+			paused = osd
+		}
+	}
+	if paused < 0 || len(r.srcRoute.Acting) != 3 || !slices.Contains(r.srcRoute.Acting, paused) || !slices.Contains(r.dstRoute.Acting, sourcePrimary) {
+		t.Fatalf("no third OSD replicates both PGs: source %v (primary osd.%d), destination %v (primary osd.%d)", r.srcRoute.Acting, sourcePrimary, r.dstRoute.Acting, primary)
+	}
+	return sourcePrimary, paused
 }
 
 // copyChunkHold is the state of a copy held between its chunks.
@@ -477,6 +490,8 @@ type copyChunkHold struct {
 	op     opsInFlightOp
 	read   objecterRequestsOp
 	first  objecterRequestsOp
+	// served are the copy-gets sent before the barrier, oldest first.
+	served []uint64
 	temp   string
 }
 
@@ -577,6 +592,7 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 	}
 	receipt.PausedFor = time.Since(frozen).Round(10 * time.Millisecond).String()
 	receipt.FirstChunkTID = h.first.TID
+	h.served = []uint64{h.first.TID}
 	t.Logf("osd.%d paused for %s: source write %s held on osd.%d, first copy-get tid %d sent to osd.%d and paused after its send",
 		paused, receipt.PausedFor, writeOp.Reqid, source.ID, h.first.TID, source.ID)
 	if flags := nativePool(t, ctx, "osdflags", map[string]any{"action": "show"}); !slices.Contains(flags.OSDMapFlags, "pauserd") || !slices.Contains(flags.OSDMapFlags, "pausewr") {
@@ -600,7 +616,7 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 		ops := copyOpsInFlight(t, ctx, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
 		objecter := copyObjecterRequests(t, ctx, 2, r.dest, nil, r.pools.ids[1], r.source)
 		var err error
-		if h.op, h.read, err = checkChunkHeld(ops, objecter, route, r.gid, copyPrimaryCopyIncarnation, h.write.UserVersion, []uint64{h.first.TID}); err == nil {
+		if h.op, h.read, err = checkChunkHeld(ops, objecter, route, r.gid, copyPrimaryCopyIncarnation, h.write.UserVersion, h.served); err == nil {
 			receipt.BarrierEpoch, receipt.BarrierReqid, receipt.BarrierPoint, receipt.BarrierEvents = ops.Before.Epoch, h.op.Reqid, h.op.FlagPoint, h.op.Events
 			receipt.HeldChunk, receipt.HeldTID = h.read.OSDOps, h.read.TID
 			break
@@ -749,13 +765,13 @@ func (r *copyPrimaryChangeRun) loseDestinationBetweenChunks(h *copyChunkHold, co
 	receipt.Final = nativeDigest(after)
 }
 
-// loseSourceBetweenChunks SIGKILLs the source primary at the barrier and
-// checks that the copy restarts from its first chunk under the same client
-// op and is answered once.
-func (r *copyPrimaryChangeRun) loseSourceBetweenChunks(h *copyChunkHold, copyKey, writeKey pgHistoryTarget, data []byte, receipt *copyChunkLossReceipt) {
+// loseReplicaBetweenChunks SIGKILLs lost, a replica of the destination PG
+// (the source primary, or the third OSD), at the barrier and checks that the
+// copy restarts from its first chunk under the same client op and is
+// answered once.
+func (r *copyPrimaryChangeRun) loseReplicaBetweenChunks(h *copyChunkHold, lost int32, copyKey, writeKey pgHistoryTarget, data []byte, receipt *copyChunkLossReceipt) {
 	t, ctx := r.t, r.ctx
 	t.Helper()
-	lost := h.source.ID
 	receipt.KillExit = r.recovery.kill(t, ctx, lost)
 	r.recovery.markDown(t, ctx, lost)
 	var now, last osdFixtureOracle
@@ -776,10 +792,10 @@ func (r *copyPrimaryChangeRun) loseSourceBetweenChunks(h *copyChunkHold, copyKey
 	at := now
 	at.Epoch = h.route.Epoch
 	for deadline := time.Now().Add(60 * time.Second); ; {
-		h.pending(t, "after the source primary was lost")
+		h.pending(t, fmt.Sprintf("after osd.%d was lost", lost))
 		ops := copyOpsInFlight(t, ctx, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
 		objecter := copyObjecterRequests(t, ctx, 2, r.dest, nil, r.pools.ids[1], r.source)
-		op, read, err := checkChunkHeld(ops, objecter, at, r.gid, copyPrimaryCopyIncarnation, 0, []uint64{h.first.TID, h.read.TID})
+		op, read, err := checkChunkHeld(ops, objecter, at, r.gid, copyPrimaryCopyIncarnation, 0, append(slices.Clone(h.served), h.read.TID))
 		if err == nil && op.TID != h.op.TID {
 			err = fmt.Errorf("the held client op is %s, not the barrier's %s", op.Reqid, h.op.Reqid)
 		}
