@@ -6,9 +6,9 @@ Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964) through ctypes
 and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
 Go client. create also makes an erasure-coded pool of a closed width: k2m1
-(profile ceph-msgr-owned-ec) or k2m2 (its own ceph-msgr-owned-ec-k2m2 profile,
-isa, never overwritten, optionally optimized with its nonprimary shards read
-back); cleanup removes only what create recorded as created in this run
+(profile ceph-msgr-owned-ec) or k2m2 (isa or jerasure), k3m1 or k4m2 (isa),
+each with its own ceph-msgr-owned-ec-<width> profile that is never
+overwritten, optionally optimized with its nonprimary shards read back); cleanup removes only what create recorded as created in this run
 (osd-pool-claims.json in the output directory): the pools, the CRUSH rule the
 MON made with an owned erasure-coded pool and the profiles.
 
@@ -220,7 +220,9 @@ EC_PROFILE = "ceph-msgr-owned-ec"
 # nonprimary_shards are read back against the pinned derivation.
 EC_WIDTHS = {
     "k2m1": {"profile": EC_PROFILE, "k": 2, "m": 1, "plugins": ("", "jerasure", "isa"), "optimized": True, "force": True},
-    "k2m2": {"profile": "ceph-msgr-owned-ec-k2m2", "k": 2, "m": 2, "plugins": ("isa",), "optimized": True, "force": False},
+    "k2m2": {"profile": "ceph-msgr-owned-ec-k2m2", "k": 2, "m": 2, "plugins": ("isa", "jerasure"), "optimized": True, "force": False},
+    "k3m1": {"profile": "ceph-msgr-owned-ec-k3m1", "k": 3, "m": 1, "plugins": ("isa",), "optimized": True, "force": False},
+    "k4m2": {"profile": "ceph-msgr-owned-ec-k4m2", "k": 4, "m": 2, "plugins": ("isa",), "optimized": True, "force": False},
 }
 EC_PROFILES = tuple(width["profile"] for width in EC_WIDTHS.values())
 # Pinned OSDMonitor::prepare_pool_size: an EC pool's MON-derived min_size.
@@ -292,7 +294,7 @@ def mode_create(rados, cluster, request, out):
         raise ValueError("erasure must be boolean")
     width_name = request.get("width", "k2m1" if erasure else "")
     if erasure and width_name not in EC_WIDTHS or not erasure and width_name != "":
-        raise ValueError("width must be k2m1 or k2m2 and needs erasure")
+        raise ValueError("width must be one of %s and needs erasure" % ", ".join(sorted(EC_WIDTHS)))
     width = EC_WIDTHS.get(width_name)
     optimized = request.get("optimized", False)
     if type(optimized) is not bool or optimized and not (erasure and width["optimized"]):
