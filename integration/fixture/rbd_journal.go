@@ -105,13 +105,15 @@ var capRBDJournalOwnerLoss = defineExclusiveCapability(fixtureRBD, "rbd-journal-
 // rbdJournalOwnerLossActions is the lost-append-reply sequence up to the
 // observation after the recorded unknown outcome, followed by `takeover`
 // instead of the replay. The Go owner never releases the lock and its watch
-// is no longer renewed: the takeover's librbd writes ask that owner for the
-// lock while its watch is listed, blocklist its address and break the lock
-// once the watch is gone (managed_lock/AcquireRequest.cc send_break_lock,
-// managed_lock/BreakRequest.cc), acquire it, replay the journal and journal
-// and apply their own writes. Native behavior relied upon in addition to
-// the list above: osd/Watch.cc (a watch is kept for its timeout after the
-// last ping) at rbdBaseSource.
+// is no longer renewed. The takeover lists the lock record and the header
+// watchers right before its first write (its boundary); its librbd writes
+// then ask a listed owner for the lock (RequestLock, which the Go test's
+// observer watch receives), blocklist the owner's address and break the
+// lock once no watcher matches the record (managed_lock/AcquireRequest.cc
+// send_break_lock, managed_lock/BreakRequest.cc), acquire it, replay the
+// journal and journal and apply their own writes. Native behavior relied
+// upon in addition to the list above: osd/Watch.cc (a watch is kept for its
+// timeout after the last ping) at rbdBaseSource.
 var rbdJournalOwnerLossActions = []string{"setup", "observe-locked", "checkpoint", "observe-recorded", "takeover"}
 
 // capRBDJournalForcedBreak admits the forced-break sequence: its test runs
@@ -834,10 +836,14 @@ try:
             # owner whose watch is gone (blocklist, then break_lock) or
             # takes a free lock, opens the journal and replays every entry
             # after the image client's commit position, then journals and
-            # applies its own writes. Closing commits their positions.
+            # applies its own writes. Closing commits their positions. The
+            # boundary is the lock record and the header watchers this
+            # instance lists after its open and right before its first
+            # write, which is when its lock acquisition starts.
             before = blocklist()
             image = rbd.Image(ioctx, name)
             try:
+                out['boundary'] = {'lockers': lockers(image), 'watchers': watchers(image)}
                 started = time.monotonic_ns()
                 out['events'] = [apply(image, 'takeover', e) for e in plan['takeover_events']]
                 out['write_ns'] = time.monotonic_ns() - started
@@ -967,6 +973,23 @@ type rbdJournalNative struct {
 	// break a lock also before it.
 	BlocklistBefore *[]rbdLockBlocklistEntry `json:"blocklist_before,omitempty"`
 	Blocklist       *[]rbdLockBlocklistEntry `json:"blocklist,omitempty"`
+	// Boundary is the takeover's lock record and header watchers, listed
+	// right before its first write.
+	Boundary *rbdJournalBoundary `json:"boundary,omitempty"`
+}
+
+// rbdJournalBoundary is what the takeover action lists after its open and
+// before its first write: the lock record and the header watchers, its own
+// watch included.
+type rbdJournalBoundary struct {
+	Lockers  *rbdWriteLockers `json:"lockers"`
+	Watchers []rbdBaseWatcher `json:"watchers"`
+}
+
+// valid checks the boundary's shape: a lock record (possibly empty) and the
+// listed watchers, among them at least the takeover's own.
+func (b *rbdJournalBoundary) valid() bool {
+	return b != nil && rbdLockLockersValid(b.Lockers) && b.Watchers != nil && len(b.Watchers) > 0 && rbdWriteWatchersValid(b.Watchers)
 }
 
 // rbdJournalForceBreak is the force-break action's own output: the lock
@@ -1097,6 +1120,7 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 	ok = ok && (action == "takeover") == (result.WriteNS > 0) && (action == "force-break") == (result.ForceBreak != nil) && (action != "force-break" || result.ForceBreak.valid())
 	ok = ok && rbdJournalBlocklisted(action) == (result.Blocklist != nil) && (!rbdJournalBlocklisted(action) || rbdLockBlocklistValid(result.Blocklist))
 	ok = ok && (action == "takeover") == (result.BlocklistBefore != nil) && (action != "takeover" || rbdLockBlocklistValid(result.BlocklistBefore))
+	ok = ok && (action == "takeover") == (result.Boundary != nil) && (action != "takeover" || result.Boundary.valid())
 	if result.OracleRegister != nil {
 		ok = ok && rbdLockCallValid(result.OracleRegister, result.JournalHeader, "journal", "client_register") && result.OracleRegister.Code == 0
 	}

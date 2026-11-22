@@ -353,7 +353,8 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 		rbdJournalTarget(plan, "force-break") != "i:exclusive-lock-break,osd-blocklist" || rbdJournalTarget(plan, "takeover") != "i:exclusive-lock-break,osd-blocklist,journal-replay,native-write" {
 		t.Fatal("owner-loss action classification or target differs")
 	}
-	for _, field := range []string{"image.lock_break(rbd.RBD_LOCK_MODE_EXCLUSIVE, listed[0]['owner'])", "plan['takeover_events']", "'osd blocklist ls'"} {
+	for _, field := range []string{"image.lock_break(rbd.RBD_LOCK_MODE_EXCLUSIVE, listed[0]['owner'])", "plan['takeover_events']", "'osd blocklist ls'",
+		"out['boundary'] = {'lockers': lockers(image), 'watchers': watchers(image)}\n                started = time.monotonic_ns()\n                out['events'] = [apply(image, 'takeover', e)"} {
 		if !strings.Contains(rbdJournalNativePython, field) {
 			t.Fatal("native journal driver lacks", field)
 		}
@@ -567,6 +568,9 @@ func rbdJournalOutput(token string, plan rbdJournalPlan, action string) map[stri
 		value["acquire_ns"], value["owner"], value["close_ns"] = 7, true, 5
 	case "takeover":
 		value["events"], value["write_ns"], value["owner"], value["close_ns"] = events("takeover", plan.TakeoverEvents), 8, true, 5
+		value["boundary"] = map[string]any{
+			"lockers":  map[string]any{"empty": false, "tag": "internal", "exclusive": true, "lockers": []map[string]any{{"client": "client.4321", "cookie": "auto 77", "addr": "10.0.0.9:0/11"}}},
+			"watchers": []map[string]any{{"addr": "10.0.0.9:0/11", "id": 4321, "cookie": 77}, {"addr": "10.0.0.3:0/3", "id": 4400, "cookie": 88}}}
 	case "force-break":
 		owner := "10.0.0.9:0/11"
 		value["force_break"] = map[string]any{"owners": []map[string]any{{"mode": 0, "owner": owner}}, "watchers_before": []map[string]any{{"addr": owner, "id": 4321, "cookie": 77}},
@@ -685,7 +689,23 @@ func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 		"takeover without a blocklist":        {"takeover", func(v map[string]any) { delete(v, "blocklist") }},
 		"takeover without inspect":            {"takeover", func(v map[string]any) { delete(v, "inspect") }},
 		"takeover without write time":         {"takeover", func(v map[string]any) { delete(v, "write_ns") }},
-		"break without its output":            {"force-break", func(v map[string]any) { delete(v, "force_break") }},
+		"takeover without its boundary":       {"takeover", func(v map[string]any) { delete(v, "boundary") }},
+		"boundary without its lock record": {"takeover", func(v map[string]any) {
+			delete(v["boundary"].(map[string]any), "lockers")
+		}},
+		"boundary lock record inconsistent": {"takeover", func(v map[string]any) {
+			v["boundary"].(map[string]any)["lockers"].(map[string]any)["empty"] = true
+		}},
+		"boundary without watchers": {"takeover", func(v map[string]any) {
+			v["boundary"].(map[string]any)["watchers"] = []map[string]any{}
+		}},
+		"boundary watcher without address": {"takeover", func(v map[string]any) {
+			v["boundary"].(map[string]any)["watchers"].([]map[string]any)[0]["addr"] = ""
+		}},
+		"replay with a boundary": {"replay", func(v map[string]any) {
+			v["boundary"] = rbdJournalOutput(token, plan, "takeover")["boundary"]
+		}},
+		"break without its output": {"force-break", func(v map[string]any) { delete(v, "force_break") }},
 		"break of two owners": {"force-break", func(v map[string]any) {
 			fb(v)["owners"] = append(fb(v)["owners"].([]map[string]any), fb(v)["owners"].([]map[string]any)[0])
 		}},
