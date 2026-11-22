@@ -42,7 +42,10 @@ var lastRequestID struct {
 // increasing: the publication time in nanoseconds, or one more than the last
 // identity when two requests are published within the same nanosecond. The
 // identity names the acknowledgement and, with an input, the input file, so
-// two concurrent requests never share either.
+// two concurrent requests never share either. It is taken when the request
+// is published, so a request published after the publication of another
+// has returned has the higher identity: the fixture runs an action and its
+// undo in that order (integration/fixture/control.go scanRequests).
 func nextRequestID() int64 {
 	lastRequestID.Lock()
 	defer lastRequestID.Unlock()
@@ -58,8 +61,10 @@ func nextRequestID() int64 {
 // request name, the request ID and ".request". Each publication has its own
 // envelope, so two publishers of one control never replace each other's
 // request; the fixture claims a control's pending envelopes in request-ID
-// order, each atomically (integration/fixture/control.go pendingRequests, and
-// integration/cluster.sh pending for the requests its loop serves).
+// order, from one snapshot of the directory that also covers the other
+// controls it orders them against, each atomically
+// (integration/fixture/control.go scanRequests, and integration/cluster.sh
+// pending for the requests its loop serves).
 func RequestEnvelope(request string, id int64) string {
 	return fmt.Sprintf("%s.%d.request", request, id)
 }
