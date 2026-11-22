@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -135,5 +136,75 @@ func TestDaemonControlBoundsEachAction(t *testing.T) {
 		if bound <= 0 || bound > fixtureStartupTimeout {
 			t.Fatal("daemon action", d.actions[i], "ran without its bound", bound)
 		}
+	}
+}
+
+// A stop and the start a cleanup published after it, both published while
+// the daemon control reads the directory, run in publication order: the
+// three actions of a kind are read in one snapshot. (With one read per
+// action, a start published just after the stop read ran first, and the
+// stop of the next poll left the daemon stopped.) Each order of the two
+// requests is published after the first and after the second read of a
+// poll, so one read per action fails whichever action it reads first; and
+// one read may miss the earlier request while it returns the later one.
+func TestDaemonControlOrdersRequestsPublishedWhileItReads(t *testing.T) {
+	for _, first := range []string{"stop", "start"} {
+		second := map[string]string{"stop": "start", "start": "stop"}[first]
+		for _, interleaving := range []string{"published after read 1", "published after read 2", "one read misses the earlier request"} {
+			t.Run(first+" then "+second+", "+interleaving, func(t *testing.T) {
+				out := t.TempDir()
+				d := &orderedDaemon{}
+				c := &fixtureCluster{cluster: &ceph.Container{Container: d}}
+				publish := func() {
+					writeControlRequest(t, out, first+"-mon", "10 a")
+					writeControlRequest(t, out, second+"-mon", "11 a")
+				}
+				after := map[string]int{"published after read 1": 1, "published after read 2": 2}[interleaving]
+				if after == 0 {
+					publish()
+				}
+				hookRequestReads(t, func(n int, entries []os.DirEntry) []os.DirEntry {
+					switch {
+					case n == after:
+						publish()
+					case after == 0 && n == 1:
+						return withoutEntry(entries, requestEnvelopeName(first+"-mon", "10"))
+					}
+					return entries
+				})
+				for poll := 0; poll < 2; poll++ {
+					if err := c.controlDaemonRequests(context.Background(), out); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if !slices.Equal(d.actions, []string{first, second}) {
+					t.Fatal("the daemon actions ran out of publication order", d.actions)
+				}
+			})
+		}
+	}
+}
+
+// The MON quorum control reads its stop and start requests in one snapshot
+// too: of a stop and a later start, the stop is claimed first, also when one
+// read of the directory misses it. (The fake cluster has no MON b, so the
+// claimed request fails at its first lookup; the request still pending shows
+// which one ran.)
+func TestMonitorQuorumControlOrdersRequestsFromOneSnapshot(t *testing.T) {
+	out := t.TempDir()
+	c := &fixtureCluster{cluster: &ceph.Container{Container: &orderedDaemon{}}}
+	writeControlRequest(t, out, "stop-mons", "10")
+	writeControlRequest(t, out, "start-mons", "11")
+	hookRequestReads(t, func(n int, entries []os.DirEntry) []os.DirEntry {
+		if n == 1 {
+			return withoutEntry(entries, requestEnvelopeName("stop-mons", "10"))
+		}
+		return entries
+	})
+	if err := c.controlMonitorQuorumRequests(context.Background(), out); err == nil {
+		t.Fatal("the fake cluster served a MON b")
+	}
+	if requestPending(t, out, "stop-mons") || !requestPending(t, out, "start-mons") {
+		t.Fatal("the start was claimed before the earlier stop")
 	}
 }

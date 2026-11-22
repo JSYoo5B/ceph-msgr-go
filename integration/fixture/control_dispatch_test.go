@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -129,5 +130,77 @@ func TestControllerDoesNotReplayConsumedUncertainMutation(t *testing.T) {
 	}
 	if fileExists(filepath.Join(out, "mon-stop.1")) {
 		t.Fatal("uncertain mutation acquired a later success acknowledgement")
+	}
+}
+
+// hookRequestReads replaces the fixture's reads of the control directory for
+// the rest of the test. read is told the number of each read, from 1, and
+// the directory's entries, and returns what that read returns; it may also
+// publish requests, which a later read sees.
+func hookRequestReads(t *testing.T, read func(n int, entries []os.DirEntry) []os.DirEntry) {
+	t.Helper()
+	n := 0
+	readRequestDir = func(dir string) ([]os.DirEntry, error) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		n++
+		return read(n, entries), nil
+	}
+	t.Cleanup(func() { readRequestDir = os.ReadDir })
+}
+
+// withoutEntry is entries without the file name.
+func withoutEntry(entries []os.DirEntry, name string) []os.DirEntry {
+	var kept []os.DirEntry
+	for _, entry := range entries {
+		if entry.Name() != name {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
+}
+
+// A request and its undo published one after the other are ordered by their
+// request IDs whatever the moment of their publication: between the
+// fixture's reads of the control directory, or during one read that misses
+// the earlier request and returns the later one.
+func TestPendingRequestsOfSeveralControlsComeFromOneSnapshot(t *testing.T) {
+	for _, interleaving := range []string{"published after the first read", "one read misses the earlier request"} {
+		t.Run(interleaving, func(t *testing.T) {
+			out := t.TempDir()
+			if interleaving == "one read misses the earlier request" {
+				writeControlRequest(t, out, "stop-osd", "10 1")
+				writeControlRequest(t, out, "start-osd", "11 1")
+			}
+			hookRequestReads(t, func(n int, entries []os.DirEntry) []os.DirEntry {
+				if n != 1 {
+					return entries
+				}
+				if interleaving == "published after the first read" {
+					writeControlRequest(t, out, "stop-osd", "10 1")
+					writeControlRequest(t, out, "start-osd", "11 1")
+					return entries
+				}
+				return withoutEntry(entries, requestEnvelopeName("stop-osd", "10"))
+			})
+			var served []string
+			for poll := 0; poll < 2; poll++ {
+				pending, err := pendingRequests(out, "start-osd", "stop-osd")
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, r := range pending {
+					if _, err := claim(out, r); err != nil {
+						t.Fatal(err)
+					}
+					served = append(served, r.name)
+				}
+			}
+			if !slices.Equal(served, []string{"stop-osd", "start-osd"}) {
+				t.Fatal("the requests were served out of publication order", served)
+			}
+		})
 	}
 }

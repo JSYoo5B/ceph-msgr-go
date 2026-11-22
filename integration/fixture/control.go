@@ -64,6 +64,8 @@ func (c *fixtureCluster) controlLoop(ctx context.Context, out string) {
 // pendingRequest is one published, unclaimed request envelope of a control:
 // "<name>.<request ID>.request" (internal/testcluster RequestEnvelope).
 type pendingRequest struct {
+	// name is the control name the envelope was published under.
+	name   string
 	path   string
 	id     int64
 	fields []string
@@ -73,15 +75,20 @@ type pendingRequest struct {
 // requestEnvelope is the shape of an envelope name after its control's name.
 var requestEnvelope = regexp.MustCompile(`^\.([1-9][0-9]{0,18})\.request$`)
 
-// pendingRequests returns the pending envelopes of the control name in
-// request-ID order, the order of their publication. Each publication has
-// its own envelope, so two publishers of one control never replace each
-// other's request. An envelope's first line is "<request ID> <arguments>",
-// with the ID of its file name; a request that carries input files has one
-// more line "input <file name>" per input, each name once (internal/
-// testcluster RequestControlInput). A malformed envelope fails the fixture.
-func pendingRequests(out, name string) ([]pendingRequest, error) {
-	pending, rejected, err := scanRequests(out, name)
+// readRequestDir reads the control directory. The tests replace it to
+// publish requests between or during the fixture's reads.
+var readRequestDir = os.ReadDir
+
+// pendingRequests returns the pending envelopes of the controls names, all
+// together in request-ID order, the order of their publication, from one
+// snapshot of the directory (scanRequests). Each publication has its own
+// envelope, so two publishers of one control never replace each other's
+// request. An envelope's first line is "<request ID> <arguments>", with the
+// ID of its file name; a request that carries input files has one more line
+// "input <file name>" per input, each name once (internal/testcluster
+// RequestControlInput). A malformed envelope fails the fixture.
+func pendingRequests(out string, names ...string) ([]pendingRequest, error) {
+	pending, rejected, err := scanRequests(out, names...)
 	if err != nil {
 		return nil, err
 	}
@@ -94,35 +101,88 @@ func pendingRequests(out, name string) ([]pendingRequest, error) {
 // rejectedRequest is a pending envelope that is not a well-formed request:
 // id is the request ID of its file name.
 type rejectedRequest struct {
+	name string
 	path string
 	id   string
 	err  error
 }
 
-// scanRequests returns the well-formed pending envelopes of the control
-// name in request-ID order, and every malformed one apart, so that a caller
+// requestEntry says whether the directory entry file is a request envelope
+// of one of the controls names, and returns that name and the request ID of
+// the file name.
+func requestEntry(file string, names []string) (string, string, bool) {
+	for _, name := range names {
+		rest, ok := strings.CutPrefix(file, name)
+		if match := requestEnvelope.FindStringSubmatch(rest); ok && match != nil {
+			return name, match[1], true
+		}
+	}
+	return "", "", false
+}
+
+// scanRequests returns the well-formed pending envelopes of the controls
+// names in request-ID order, and every malformed one apart, so that a caller
 // that must keep serving its other requests (the lease loop) can reject one
 // envelope without stopping at it. err is set only when the directory
 // itself cannot be read.
-func scanRequests(out, name string) ([]pendingRequest, []rejectedRequest, error) {
-	entries, err := os.ReadDir(out)
+//
+// All the names come from one snapshot, so a control that orders an action
+// and its undo by request ID (a stop and its start, a pause and its end)
+// sees both or neither of two requests published one after the other; one
+// read per name would see only the later one when both are published
+// between the reads, and run the undo first. One directory read is not a
+// snapshot either: a request renamed into the directory while it is read
+// may be missed while a later one is returned. So the directory is read
+// twice. A test publishes a request after the publication of every request
+// it has to follow has returned, and takes its ID only then, so the IDs of
+// such requests increase in that order (internal/testcluster
+// nextRequestID). When the first read returns a request, the publication of
+// every request before it had returned before that read ended, and the
+// second read, which starts later, returns them. The scan serves what the
+// second read returns up to the highest ID of the first read; a later
+// request is left for the next poll, since a request before it may still be
+// missing from the second read.
+func scanRequests(out string, names ...string) ([]pendingRequest, []rejectedRequest, error) {
+	first, err := readRequestDir(out)
+	if err != nil {
+		return nil, nil, err
+	}
+	seen := map[string]bool{}
+	var cutoff int64
+	for _, entry := range first {
+		if _, id, ok := requestEntry(entry.Name(), names); ok {
+			seen[entry.Name()] = true
+			if n, err := strconv.ParseInt(id, 10, 64); err == nil && n > cutoff {
+				cutoff = n
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return nil, nil, nil
+	}
+	second, err := readRequestDir(out)
 	if err != nil {
 		return nil, nil, err
 	}
 	var pending []pendingRequest
 	var rejected []rejectedRequest
-	for _, entry := range entries {
-		rest, ok := strings.CutPrefix(entry.Name(), name)
-		match := requestEnvelope.FindStringSubmatch(rest)
-		if !ok || match == nil {
+	for _, entry := range second {
+		name, id, ok := requestEntry(entry.Name(), names)
+		if !ok {
 			continue
+		}
+		if !seen[entry.Name()] {
+			if n, err := strconv.ParseInt(id, 10, 64); err != nil || n > cutoff {
+				continue
+			}
 		}
 		path := filepath.Join(out, entry.Name())
-		r, err := parseRequest(path, match[1])
+		r, err := parseRequest(path, id)
 		if err != nil {
-			rejected = append(rejected, rejectedRequest{path: path, id: match[1], err: err})
+			rejected = append(rejected, rejectedRequest{name: name, path: path, id: id, err: err})
 			continue
 		}
+		r.name = name
 		pending = append(pending, r)
 	}
 	slices.SortFunc(pending, func(a, b pendingRequest) int { return cmp.Compare(a.id, b.id) })

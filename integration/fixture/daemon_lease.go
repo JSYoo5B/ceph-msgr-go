@@ -53,7 +53,8 @@ import (
 // The leases are served by their own loop (leaseLoop), beside the control
 // loop, so a control or owned-pool oracle request that is still running does
 // not delay a lease's end or its deadline. Within one poll the pending ends
-// run before the pending pauses, and expiry runs last.
+// run before the pending pauses, both read in one snapshot of the
+// directory, and expiry runs last.
 //
 // A poll never waits for a daemon. Each pause and each resume runs on its
 // own goroutine, and the poll only records what each one settled, so a slow
@@ -242,8 +243,8 @@ func invalidLeaseRequest(format string, args ...any) error {
 	return &leaseRequestError{fmt.Errorf(format, args...)}
 }
 
-// poll claims every pending end and then every pending pause, each in
-// publication order, starts the daemon calls they need, and then starts the
+// poll claims every pending end and then every pending pause of one
+// snapshot of the directory, each in publication order, starts the daemon calls they need, and then starts the
 // resume of every held lease that is due. It waits for no daemon call. It
 // returns the failures of this poll and of the daemon calls that settled
 // since the last one; every failure is also the leases' failure.
@@ -260,13 +261,19 @@ func (s *daemonLeases) poll(ctx context.Context, out string) error {
 			errs = append(errs, err)
 		}
 	}
+	// The ends and the pauses come from one snapshot (scanRequests), so an
+	// end published before a pause is never missed by a poll that serves
+	// that pause.
+	pending, rejected, err := scanRequests(out, "end-daemon-lease", "pause-daemon")
+	add(err)
+	for _, r := range rejected {
+		add(s.reject(out, r.id, r.path, r.err))
+	}
 	for _, control := range []string{"end-daemon-lease", "pause-daemon"} {
-		pending, rejected, err := scanRequests(out, control)
-		add(err)
-		for _, r := range rejected {
-			add(s.reject(out, r.id, r.path, r.err))
-		}
 		for _, r := range pending {
+			if r.name != control {
+				continue
+			}
 			if len(r.inputs) != 0 {
 				add(s.reject(out, r.fields[0], r.path, errors.New("a daemon lease request carries no input")))
 				continue
