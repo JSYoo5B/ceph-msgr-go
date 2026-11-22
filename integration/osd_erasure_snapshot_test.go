@@ -3,6 +3,8 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strconv"
@@ -16,7 +18,8 @@ import (
 // Self-managed snapshots on an EC pool use an id allocated through MPoolOp and
 // a write SnapContext. A write accepted while one shard's OSD is down still
 // reads back natively after that OSD returns, the PGs are clean and another
-// OSD is down.
+// OSD is down. The degraded write and the later read each count only in the
+// interval of the PG observed around them.
 //
 //scenario:covers CLIENT to OSD
 //fixture:isolated kills two OSDs; restart waits osd-ready clean (second start unchecked), no pg_temp proof
@@ -35,7 +38,8 @@ func TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration(t *testing.T
 // The same on the optimized isa k=2,m=2 pool over four OSDs: one killed OSD
 // leaves exactly min_size 3 shards, so the PG stays active and accepts the
 // degraded write. After clean recovery a different OSD is killed and the
-// native object bytes must still match. Three shards then remain, and k=2
+// native object bytes must still match in the interval observed around the
+// read. Three shards then remain, and k=2
 // of them suffice to decode, so this read does not show which bytes the
 // returned shard holds.
 //
@@ -53,8 +57,11 @@ func TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration(t *testi
 // including the returned one, so the native full-object read cannot be
 // answered without the returned shard's chunk: the object spans all three
 // data chunks, and with one shard missing a k=3,m=1 code needs every
-// remaining shard. This shows the returned shard's participation by
-// arithmetic, not its bytes on disk.
+// remaining shard. The read counts only between two observations of the
+// PG that show it active under the unchanged primary in one interval with
+// exactly k=3 distinct owned live members, the returned shard's OSD among
+// them and the second one's absent. This shows the returned shard's
+// participation by arithmetic, not its bytes on disk.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1snapshotanddegradedwrite key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
@@ -110,9 +117,8 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 	}
 	facts := erasurePoolMapFacts(t, ctx, c, created, width, optimized)
 	t.Logf("EC pool %d %s optimized=%v size=%d min_size=%d nonprimary shards %v", created.PoolID, width, optimized, facts.size, facts.minSize, facts.nonprimary)
-	write := func(t *testing.T, object string, data []byte, snap uint64) cephmsgr.OSDReply {
+	writeOn := func(t *testing.T, route osdFixtureOracle, data []byte, snap uint64) cephmsgr.OSDReply {
 		t.Helper()
-		route := poolPlace(t, ctx, 1, object, "")
 		o := mutationConnection(t, c, ctx, route)
 		defer o.Close()
 		r := request(route, cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(data)), Data: data})
@@ -122,9 +128,13 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 		}
 		reply, err := o.Request(ctx, r)
 		if err != nil {
-			t.Fatal("write", object, err)
+			t.Fatal("write", route.Name, err)
 		}
 		return reply
+	}
+	write := func(t *testing.T, object string, data []byte, snap uint64) cephmsgr.OSDReply {
+		t.Helper()
+		return writeOn(t, poolPlace(t, ctx, 1, object, ""), data, snap)
 	}
 
 	t.Run("self-managed snapshot", func(t *testing.T) {
@@ -160,8 +170,7 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 	t.Run("write while a shard is down is recovered", func(t *testing.T) {
 		object := "ec-degraded-write"
 		write(t, object, []byte("before"), 0)
-		route := poolPlace(t, ctx, 1, object, "")
-		facts.checkPlacement(t, route)
+		route, since := erasureCleanPG(t, ctx, object, facts)
 		var victim int32 = -1
 		for _, id := range route.Acting {
 			if id != route.ID {
@@ -169,8 +178,9 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 				break
 			}
 		}
-		t.Logf("placement epoch %d pg %s acting %v primary osd.%d shard %d; killing osd.%d on shard %d",
-			route.Epoch, route.PGID, route.Acting, route.ID, route.Shard, victim, slices.Index(route.Acting, victim))
+		position := slices.Index(route.Acting, victim)
+		t.Logf("placement epoch %d pg %s acting %v primary osd.%d shard %d, interval since %d; killing osd.%d on shard %d",
+			route.Epoch, route.PGID, route.Acting, route.ID, route.Shard, since, victim, position)
 		name := strconv.FormatInt(int64(victim), 10)
 		restarted := false
 		defer func() {
@@ -184,23 +194,34 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 		if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
 			t.Fatal(err)
 		}
-		deadline := time.Now().Add(120 * time.Second)
-		for slicesContains(poolPlace(t, ctx, 1, object, "").Acting, victim) {
-			if time.Now().After(deadline) {
-				t.Fatal("victim never left the acting set")
-			}
-			time.Sleep(2 * time.Second)
-		}
+		// The write is sent on a placement judged active under the
+		// unchanged primary with the victim's position alone empty, and it
+		// counts as a degraded write only if that interval held around it.
+		// It is never resent.
 		payload := bytes.Repeat([]byte{0x5a, 0, 0xff, 0x11}, 3000)
-		reply := write(t, object, payload, 0)
+		var reply cephmsgr.OSDReply
+		degraded, _, err := erasureHeldRequests(1, func() (osdFixtureOracle, error) {
+			o, err := erasureAwaitPG(t, ctx, object, fmt.Sprintf("PG without osd.%d", victim), func(o pgIntervalObservation) error {
+				return o.activeWithout(route, []int{position}, since)
+			})
+			if err != nil {
+				return osdFixtureOracle{}, err
+			}
+			return *o.Before, nil
+		}, func(r osdFixtureOracle) error {
+			reply = writeOn(t, r, payload, 0)
+			return nil
+		}, func() pgIntervalObservation { return erasurePGState(t, ctx, object) })
+		if err != nil {
+			t.Fatal("degraded write:", err)
+		}
 		if reply.Flags&cephmsgr.OSDReplyOnDisk == 0 {
 			t.Fatal("degraded write lacks ONDISK")
 		}
-		degraded := poolPlace(t, ctx, 1, object, "")
 		if n := poolObserve(t, ctx, 1, object, "", ""); !bytes.Equal(n.Data, payload) || n.Version != reply.UserVersion {
 			t.Fatal("native state while degraded differs", n.Version, reply.UserVersion)
 		}
-		t.Logf("degraded write at epoch %d acting %v primary osd.%d shard %d: user version %d", degraded.Epoch, degraded.Acting, degraded.ID, degraded.Shard, reply.UserVersion)
+		t.Logf("degraded write at epoch %d acting %v primary osd.%d shard %d, interval held: user version %d", degraded.Epoch, degraded.Acting, degraded.ID, degraded.Shard, reply.UserVersion)
 		if err := testcluster.ControlDaemon(ctx, dir, "start", "osd", name); err != nil {
 			t.Fatal(err)
 		}
@@ -210,55 +231,74 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 		if !bytes.Equal(after.Data, payload) || after.Version != reply.UserVersion {
 			t.Fatal("native state after recovery differs", after.Version, reply.UserVersion)
 		}
-		// With the PG clean again, kill a different shard's OSD and read
-		// natively. Whether the decode uses the returned shard depends on
-		// the width (k of the remaining shards suffice), so this checks only
-		// the object bytes, not the returned shard's chunk.
-		fresh := poolPlace(t, ctx, 1, object, "")
+		// With the PG clean again, the returned victim's shard is complete.
+		// Kill the OSD of another member and read natively. The read counts
+		// only on a placement judged active under the unchanged primary
+		// with that member's position alone empty, and only if that
+		// interval held around it; its live acting members are then the
+		// ones the read could use.
+		clean, cleanSince := erasureCleanPG(t, ctx, object, facts)
+		if !slices.Contains(clean.Acting, victim) {
+			t.Fatalf("the returned osd.%d is not in the clean acting set %v", victim, clean.Acting)
+		}
 		var other int32 = -1
-		for _, id := range fresh.Acting {
-			if id != fresh.ID && id != victim {
+		for _, id := range clean.Acting {
+			if id != clean.ID && id != victim {
 				other = id
 			}
 		}
-		if other >= 0 {
-			otherName := strconv.FormatInt(int64(other), 10)
-			defer func() {
-				recover, stop := context.WithTimeout(context.Background(), 120*time.Second)
-				defer stop()
-				testcluster.ControlDaemon(recover, dir, "start", "osd", otherName)
-				waitOSDFixtureClean(t, recover, base)
-			}()
-			if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", otherName); err != nil {
-				t.Fatal(err)
+		if other < 0 {
+			t.Fatalf("the clean acting set %v has no member other than the primary osd.%d and the returned osd.%d", clean.Acting, clean.ID, victim)
+		}
+		hole := slices.Index(clean.Acting, other)
+		otherName := strconv.FormatInt(int64(other), 10)
+		defer func() {
+			recover, stop := context.WithTimeout(context.Background(), 120*time.Second)
+			defer stop()
+			testcluster.ControlDaemon(recover, dir, "start", "osd", otherName)
+			waitOSDFixtureClean(t, recover, base)
+		}()
+		if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", otherName); err != nil {
+			t.Fatal(err)
+		}
+		var before, held pgIntervalObservation
+		_, changed, err := erasureHeldRequests(3, func() (osdFixtureOracle, error) {
+			o, err := erasureAwaitPG(t, ctx, object, fmt.Sprintf("PG without osd.%d", other), func(o pgIntervalObservation) error {
+				return o.activeWithout(clean, []int{hole}, cleanSince)
+			})
+			before = o
+			if err != nil {
+				return osdFixtureOracle{}, err
 			}
-			for slicesContains(poolPlace(t, ctx, 1, object, "").Acting, other) {
-				if time.Now().After(deadline.Add(120 * time.Second)) {
-					t.Fatal("second victim never left the acting set")
-				}
-				time.Sleep(2 * time.Second)
-			}
+			return *o.Before, nil
+		}, func(osdFixtureOracle) error {
 			if n := poolObserve(t, ctx, 1, object, "", ""); !bytes.Equal(n.Data, payload) {
-				t.Fatal("native object bytes after clean recovery and a second single-OSD outage differ")
+				return errors.New("native object bytes after clean recovery and a second single-OSD outage differ")
 			}
-			// With exactly k shards left every one of them, the returned
-			// one included, is needed to answer a read of all k data chunks.
-			// The payload must reach the last data chunk of its first stripe
-			// for that to cover every data shard.
-			needed := erasureReadNeedsEveryShard(facts, width, len(payload))
-			t.Logf("native object bytes matched with osd.%d down after clean recovery of osd.%d (%d shards left, k=%d, chunk %d, returned shard needed: %v)",
-				other, victim, facts.size-1, width.k, facts.chunk, needed)
-			if width == erasureK3M1 && !needed {
-				t.Fatal("the k=3,m=1 read does not need every remaining shard", len(payload), facts.chunk)
-			}
+			return nil
+		}, func() pgIntervalObservation {
+			held = erasurePGState(t, ctx, object)
+			return held
+		})
+		for _, c := range changed {
+			t.Log("interval changed around the native read, not attributed:", c)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		live, err := erasureOutageWitness(facts, clean, cleanSince, victim, other, before, held)
+		if err != nil {
+			t.Fatal("the PG of the native read:", err)
+		}
+		// With exactly k live shards every one of them, the returned one
+		// included, is needed to answer a read of all k data chunks. The
+		// payload must reach the last data chunk of its first stripe for
+		// that to cover every data shard.
+		needed := erasureReadNeedsEveryShard(len(live), width.k, facts.chunk, len(payload))
+		t.Logf("native object bytes matched with osd.%d down after clean recovery of osd.%d: pg %s epoch %d, interval since %d held, live acting %v (%d of k=%d), chunk %d, returned shard needed: %v",
+			other, victim, before.Before.PGID, before.Before.Epoch, before.Query.SameIntervalSince, live, len(live), width.k, facts.chunk, needed)
+		if width == erasureK3M1 && !needed {
+			t.Fatal("the k=3,m=1 read does not need every live shard", live, len(payload), facts.chunk)
 		}
 	})
-}
-
-// erasureReadNeedsEveryShard reports whether a full read of an object of
-// size bytes, during an outage of one shard of a clean pool, needs every
-// remaining shard: exactly k shards remain, and the object reaches the last
-// data chunk of its single stripe, so every data shard holds part of it.
-func erasureReadNeedsEveryShard(facts erasureFacts, width erasureWidth, size int) bool {
-	return facts.size-1 == width.k && facts.chunk > 0 && size > (width.k-1)*facts.chunk && size <= width.k*facts.chunk
 }

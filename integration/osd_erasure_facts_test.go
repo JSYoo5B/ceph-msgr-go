@@ -207,8 +207,8 @@ func TestErasureFactsOfTheWiderWidths(t *testing.T) {
 	}
 }
 
-// The failover lead and the k=3,m=1 read-participation arithmetic, on
-// synthetic facts.
+// The failover lead and the read-participation arithmetic over the live
+// shard count, on synthetic facts.
 func TestErasureLeadAndReadParticipation(t *testing.T) {
 	for _, c := range []struct {
 		width erasureWidth
@@ -226,22 +226,18 @@ func TestErasureLeadAndReadParticipation(t *testing.T) {
 			t.Fatal(c.width, "a pool without nonprimary shards leads on shard 1", got)
 		}
 	}
-	k3m1 := erasureFacts{size: 4, chunk: 4096}
-	if !erasureReadNeedsEveryShard(k3m1, erasureK3M1, 12000) {
-		t.Fatal("a 12000-byte k=3,m=1 object with one shard down needs every remaining shard")
+	if !erasureReadNeedsEveryShard(3, 3, 4096, 12000) {
+		t.Fatal("a 12000-byte k=3,m=1 object on three live shards needs every one of them")
 	}
-	for name, c := range map[string]struct {
-		facts erasureFacts
-		width erasureWidth
-		size  int
-	}{
-		"two data chunks only": {k3m1, erasureK3M1, 8192},
-		"past one stripe":      {k3m1, erasureK3M1, 12289},
-		"unknown chunk":        {erasureFacts{size: 4}, erasureK3M1, 12000},
-		"more than k left":     {erasureFacts{size: 4, chunk: 4096}, erasureK2M2, 8000},
-		"k=4,m=2":              {erasureFacts{size: 6, chunk: 4096}, erasureK4M2, 16000},
+	for name, c := range map[string]struct{ live, k, chunk, size int }{
+		"two data chunks only": {3, 3, 4096, 8192},
+		"past one stripe":      {3, 3, 4096, 12289},
+		"unknown chunk":        {3, 3, 0, 12000},
+		"more than k live":     {4, 3, 4096, 12000},
+		"k=2,m=2 outage":       {3, 2, 4096, 8000},
+		"k=4,m=2 outage":       {5, 4, 4096, 16000},
 	} {
-		if erasureReadNeedsEveryShard(c.facts, c.width, c.size) {
+		if erasureReadNeedsEveryShard(c.live, c.k, c.chunk, c.size) {
 			t.Fatal("read participation claimed:", name)
 		}
 	}

@@ -188,6 +188,50 @@ func erasureReadShard(route osdFixtureOracle, k, chunk, size int) int {
 	return -1
 }
 
+// erasureOutageWitness checks the two observations around a native read made
+// during the outage of other's OSD, after the clean recovery of victim's:
+// origin is the clean placement after the recovery and since the epoch at
+// which its interval started. The observation before the read must show
+// the PG active under origin's primary with other's position alone empty
+// (activeWithout), the one after it that interval still holding
+// (heldSince). It returns the live acting members of that interval: the
+// distinct owned OSDs of origin but other, victim among them.
+func erasureOutageWitness(facts erasureFacts, origin osdFixtureOracle, since uint32, victim, other int32, before, after pgIntervalObservation) ([]int32, error) {
+	vi, oi := slices.Index(origin.Acting, victim), slices.Index(origin.Acting, other)
+	if vi < 0 || oi < 0 || vi == oi || victim == origin.ID || other == origin.ID {
+		return nil, fmt.Errorf("osd.%d and osd.%d are not two members of %v other than the primary osd.%d", victim, other, origin.Acting, origin.ID)
+	}
+	if err := before.activeWithout(origin, []int{oi}, since); err != nil {
+		return nil, fmt.Errorf("before the read: %w", err)
+	}
+	if err := after.heldSince(*before.Before); err != nil {
+		return nil, fmt.Errorf("after the read: %w", err)
+	}
+	var live []int32
+	for _, osd := range before.Before.Acting {
+		if osd == crushItemNone {
+			continue
+		}
+		if slices.Contains(live, osd) || !slices.Contains(facts.owned, osd) {
+			return nil, fmt.Errorf("the acting set %v is not distinct owned OSDs %v", before.Before.Acting, facts.owned)
+		}
+		live = append(live, osd)
+	}
+	if len(live) != len(origin.Acting)-1 || slices.Contains(live, other) || !slices.Contains(live, victim) {
+		return nil, fmt.Errorf("the live members %v are not those of %v without osd.%d and with osd.%d", live, origin.Acting, other, victim)
+	}
+	return live, nil
+}
+
+// erasureReadNeedsEveryShard reports whether a full read of an object of
+// size bytes needs every one of live shards of a k-data-shard code: exactly
+// k shards are live, and the object reaches the last data chunk of its
+// single stripe, so every data shard holds part of it and any missing data
+// chunk must be decoded from all the others.
+func erasureReadNeedsEveryShard(live, k, chunk, size int) bool {
+	return live == k && chunk > 0 && size > (k-1)*chunk && size <= k*chunk
+}
+
 // heldAt is a copy of the observation at the given epoch, with the
 // primary's map at that epoch and the given interval start. No daemon
 // produced it.
@@ -377,6 +421,52 @@ func TestErasureHeldRequests(t *testing.T) {
 	if _, _, err := erasureHeldRequests(3, func() (osdFixtureOracle, error) { return osdFixtureOracle{}, errors.New("not replaced") },
 		func(osdFixtureOracle) error { t.Fatal("requests sent without a judged placement"); return nil }, func() pgIntervalObservation { return held(first, 27) }); err == nil {
 		t.Fatal("no judged placement accepted")
+	}
+}
+
+func TestErasureOutageWitness(t *testing.T) {
+	_, origin := pgIntervalChange() // acting [3 2 1 0], interval since 24
+	facts := erasureFacts{size: 4, owned: []int32{0, 1, 2, 3}, chunk: 4096}
+	const victim, other = 2, 1 // positions 1 and 2
+	before, _ := pgStateObservation(30, "active+undersized+degraded", 2)
+	after := heldAt(before, 31, 29)
+	live, err := erasureOutageWitness(facts, origin, 24, victim, other, before, after)
+	if err != nil || !slices.Equal(live, []int32{3, 2, 0}) {
+		t.Fatal("the outage of osd.1 refused:", live, err)
+	}
+	if !erasureReadNeedsEveryShard(len(live), 3, facts.chunk, 12000) {
+		t.Fatal("three live shards of k=3 do not need every shard")
+	}
+	victimOut, _ := pgStateObservation(30, "active+undersized+degraded", 1)
+	stillLive, _ := pgStateObservation(30, "active+clean")
+	twoOut, _ := pgStateObservation(30, "active+undersized+degraded", 2, 3)
+	moved := heldAt(before, 30, 29)
+	moved.Before.ID, moved.After.ID, moved.Before.PrimaryID, moved.After.PrimaryID = 0, 0, 0, 0
+	if _, err := erasureOutageWitness(facts, origin, 24, victim, other, heldAt(before, 30, 29), heldAt(before, 31, 29)); err != nil {
+		t.Fatal("the unedited copies of the outage refused:", err)
+	}
+	for name, c := range map[string]struct {
+		facts         erasureFacts
+		victim, other int32
+		before, after pgIntervalObservation
+	}{
+		"victim out instead":     {facts, victim, other, victimOut, heldAt(victimOut, 31, 29)},
+		"other still live":       {facts, victim, other, stillLive, heldAt(stillLive, 31, 29)},
+		"two members out":        {facts, victim, other, twoOut, heldAt(twoOut, 31, 29)},
+		"interval changed after": {facts, victim, other, before, heldAt(before, 31, 31)},
+		"records after differ":   {facts, victim, other, before, func() pgIntervalObservation { o := heldAt(before, 31, 29); o.After.Epoch = 32; return o }()},
+		"primary moved":          {facts, victim, other, moved, heldAt(moved, 31, 29)},
+		"victim not a member":    {facts, 7, other, before, after},
+		"victim is other":        {facts, other, other, before, after},
+		"other is the primary":   {facts, victim, 3, before, after},
+		"unowned member":         {erasureFacts{size: 4, owned: []int32{1, 2, 3}, chunk: 4096}, victim, other, before, after},
+	} {
+		if live, err := erasureOutageWitness(c.facts, origin, 24, c.victim, c.other, c.before, c.after); err == nil {
+			t.Fatal("outage witness accepted:", name, live)
+		}
+	}
+	if _, err := erasureOutageWitness(facts, origin, 30, victim, other, before, after); err == nil {
+		t.Fatal("an interval that did not start after the clean one accepted")
 	}
 }
 
