@@ -209,7 +209,12 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 			}
 			return *o.Before, nil
 		}, func(r osdFixtureOracle) error {
+			// The native read is made before the observation that must show
+			// the interval still holding, so it is attributed to it too.
 			reply = writeOn(t, r, payload, 0)
+			if n := poolObserve(t, ctx, 1, object, "", ""); !bytes.Equal(n.Data, payload) || n.Version != reply.UserVersion {
+				return fmt.Errorf("native state while degraded differs: version %d, reply %d", n.Version, reply.UserVersion)
+			}
 			return nil
 		}, func() pgIntervalObservation { return erasurePGState(t, ctx, object) })
 		if err != nil {
@@ -217,9 +222,6 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 		}
 		if reply.Flags&cephmsgr.OSDReplyOnDisk == 0 {
 			t.Fatal("degraded write lacks ONDISK")
-		}
-		if n := poolObserve(t, ctx, 1, object, "", ""); !bytes.Equal(n.Data, payload) || n.Version != reply.UserVersion {
-			t.Fatal("native state while degraded differs", n.Version, reply.UserVersion)
 		}
 		t.Logf("degraded write at epoch %d acting %v primary osd.%d shard %d, interval held: user version %d", degraded.Epoch, degraded.Acting, degraded.ID, degraded.Shard, reply.UserVersion)
 		if err := testcluster.ControlDaemon(ctx, dir, "start", "osd", name); err != nil {

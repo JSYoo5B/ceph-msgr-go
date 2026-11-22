@@ -208,30 +208,6 @@ func erasureKillOSD(t *testing.T, ctx context.Context, base osdFixtureOracle, id
 	return restore
 }
 
-// erasureSettledPrimary waits until the native map names a primary other
-// than old's on a primary-eligible shard. An optimized pool's first map
-// after the loss may still name the nonprimary shard's OSD (pure CRUSH
-// order); that OSD then has the MON set a primary-first pg_temp and a later
-// map names a parity shard.
-func erasureSettledPrimary(t *testing.T, ctx context.Context, object string, old osdFixtureOracle, facts erasureFacts) osdFixtureOracle {
-	t.Helper()
-	deadline := time.Now().Add(120 * time.Second)
-	for {
-		fresh := poolPlace(t, ctx, 1, object, "")
-		nonprimary := slices.Contains(facts.nonprimary, int(fresh.Shard))
-		if fresh.ID != old.ID && fresh.ID >= 0 && !nonprimary {
-			return fresh
-		}
-		if fresh.ID >= 0 && nonprimary {
-			t.Logf("transient: epoch %d names osd.%d on nonprimary shard %d (acting %v)", fresh.Epoch, fresh.ID, fresh.Shard, fresh.Acting)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no new primary was chosen")
-		}
-		time.Sleep(2 * time.Second)
-	}
-}
-
 func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, plugin string, resubmitApplied bool) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
@@ -528,12 +504,14 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 
 		// Restart the killed OSD and wait for clean PGs: the returned shard
 		// must not change what the native observer reads.
+		// The read counts for the clean placement only if a judged clean
+		// observation precedes it and that interval held through it.
 		restore()
-		recovered := poolObserve(t, ctx, 1, object, "", "")
+		back, _ := erasureCleanPG(t, ctx, object, facts)
+		recovered := erasureReadThrough(t, ctx, "the native read on the clean placement after recovery", object, back)
 		if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || recovered.Seconds != final.Seconds || recovered.Nanos != final.Nanos || !maps.Equal(xattrInventory(recovered), xattrInventory(final)) {
 			t.Fatal("native state after recovery differs", recovered.Version, final.Version)
 		}
-		back := poolPlace(t, ctx, 1, object, "")
 		t.Logf("after recovery: epoch %d primary osd.%d shard %d acting %v version %d", back.Epoch, back.ID, back.Shard, back.Acting, recovered.Version)
 	}
 

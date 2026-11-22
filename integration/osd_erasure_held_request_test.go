@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
-	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
 // opsInFlightOp is one in-flight client op of the observed entity
@@ -192,101 +190,66 @@ func checkHeldRequest(s opsInFlightSnapshot, route osdFixtureOracle, gid uint64,
 	return op, nil
 }
 
-// The Go client's APPEND+SETXATTR on the optimized isa k=2,m=2 pool reaches
-// the acting primary and is held there unapplied when that primary's OSD is
+// The Go client's APPEND+SETXATTR on an optimized isa pool reaches the
+// acting primary and is held there unapplied when that primary's OSD is
 // killed. The request names a map epoch the cluster has not published, so the
 // pinned PrimaryLogPG::do_request queues it in waiting_for_map before any
 // execution stage (src/osd/PrimaryLogPG.cc:1845-1862), and only a map of that
 // epoch would requeue it (src/osd/PG.cc:1225-1250). A bracketed native
 // snapshot of the primary's op tracker must show exactly that op, delayed on
-// the hold event. The primary's OSD is then killed through the fixture's
-// forced kill; the call must end with an OutcomeUnknownError that keeps its
+// the hold event, and an observation of the PG after the snapshots must show
+// the interval of the clean placement that the request carried still
+// holding. The primary's OSD is then killed through the fixture's forced
+// kill; the call must end with an OutcomeUnknownError that keeps its
 // original identity, and the client must open no further OSD connection.
-// After the OSD's restart and clean PGs the native object must be unchanged
-// and the returned primary's PG log must hold the seed write's identity but
-// not the held one. The caller then resubmits the same operations once under
-// the original transaction, which must apply once and appear once in that log.
+//
+// Every later claim is judged on the placement and interval it used, never
+// on the first map after a fault: the replacement is the judged observation
+// of the PG active under the first parity shard (k) with a primary-first
+// pg_temp (awaitReplacement), and the native state read under it must be
+// followed by that interval still holding; the return is the judged
+// observation of the PG active+clean on the original placement under the
+// restarted primary in a newer interval (primaryBack). There the native
+// object must be unchanged and the returned primary's PG log must hold the
+// seed write's identity but not the held one. The caller then resubmits the
+// same operations once under the original transaction, which must apply
+// once and appear once in that log, and the interval must have held through
+// the log reads and the resubmission. A changed interval is reported as
+// unattributed and fails the test as unverified; nothing is resent.
 //
 // A PG below min_size cannot hold this client's request: the replicated-PG
 // profiles advertise RADOS_BACKOFF, so a peered, inactive PG installs a
 // PG-wide backoff and drops the op (PrimaryLogPG.cc:1868-1893) instead of
 // queueing it in waiting_for_active. Not verified: the other PG wait queues,
-// an op held inside the EC backend after do_op, a genuinely lagging primary,
-// an orderly stop or partition, other shards' logs, and a primary-first
-// renumbered held request (the held op is on shard 0).
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2requestheldatdyingprimary key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
-//scenario:covers CLIENT to OSD
-//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
-func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *testing.T) {
-	width := erasureK2M2
-	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
-		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
-	}
-	fixture, request, hash := osdFixture, osdObjectRequest, false
-	if isReplicatedPGFixtureProfile() {
-		fixture, request, hash = replicatedPGFixture, replicatedPGRequest, true
-	}
-	c, _, base, _ := fixture(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 720*time.Second)
-	defer cancel()
-	t.Cleanup(func() {
-		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
-		defer stop()
-		r := nativePool(t, cleanup, "cleanup", nil)
-		if !r.PoolsRemoved {
-			t.Error("owned erasure-coded pool was not removed")
-		}
-		if slices.Contains(r.ECProfilesRemaining, width.profile) {
-			t.Error("owned erasure-code profile was not removed", width.profile)
-		}
-	})
-	pg := 1
-	if hash {
-		pg = 8
-	}
-	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true, "width": width.name, "optimized": true, "plugin": "isa"})
-	if created.PoolType != 3 || !created.ECOptimized || created.Width != width.name || created.ErasureCodeProfile != width.profile {
-		t.Fatal("pool is not the requested erasure-coded shape", created.PoolType, created.ECOptimized, created.Width, created.ErasureCodeProfile)
-	}
-	facts := erasurePoolMapFacts(t, ctx, c, created, width, true)
-	t.Logf("EC pool %d %s optimized size=%d min_size=%d nonprimary shards %v owned OSDs %v", created.PoolID, width, facts.size, facts.minSize, facts.nonprimary, facts.owned)
-
+// a genuinely lagging primary, an orderly stop or partition, other shards'
+// logs, and a primary-first renumbered held request (the held op is on
+// shard 0).
+func erasureRequestHeldScenario(t *testing.T, width erasureWidth) {
+	r := startECEpochRun(t, width, 720*time.Second)
 	const (
 		object          = "ec-held-request"
 		attr            = "ec-held"
-		seedIncarnation = 20
 		heldIncarnation = 21
 		seeded          = 1700006000
 		mutated         = 1700006001
 	)
 	seed := bytes.Repeat([]byte{0x5a, 0, 0xff, 'H'}, 1500)
-	route := poolPlace(t, ctx, 1, object, "")
-	facts.checkPlacement(t, route)
-	if route.PGTemp || route.ID != route.PrimaryID || int(route.Shard) >= len(route.Acting) || route.Acting[route.Shard] != route.ID {
-		t.Fatalf("the placement %+v is not led by its own primary", route)
-	}
-	so := mutationConnection(t, c, ctx, route)
-	seedRequest := request(route, cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(seed)), Data: seed})
-	seedRequest.ClientIncarnation = seedIncarnation
-	seedRequest.ModificationTime = cephmsgr.OSDTime{Seconds: seeded}
-	seedReply, err := so.Request(ctx, seedRequest)
-	so.Close()
-	if err != nil || seedReply.Code != 0 || seedReply.Flags&cephmsgr.OSDReplyOnDisk == 0 {
-		t.Fatal("seed", err, seedReply.Code)
-	}
-	seedKey := pgHistoryTarget{Type: "client", Num: c.Snapshot().GlobalID, Inc: seedIncarnation, TID: seedReply.Transaction}
-	pre := poolObserve(t, ctx, 1, object, "", "")
+	route, _ := r.healthy(object)
+	seedReply := r.write("seed", route, seed, seeded, cephmsgr.OSDSnapContext{})
+	seedSub := seedReply.Submission
+	seedKey := pgHistoryTarget{Type: "client", Num: seedSub.GlobalID, Inc: int32(seedSub.ClientIncarnation), TID: seedSub.Transaction}
+	route, since := r.healthy(object)
+	pre := poolObserve(t, r.ctx, 1, object, "", "")
 	if pre.Code != 0 || !bytes.Equal(pre.Data, seed) || pre.Seconds != seeded || pre.Version != seedReply.UserVersion || xattrInventory(pre)[attr] != "" {
 		t.Fatal("native pre-state differs", pre.Code, pre.Version, seedReply.UserVersion, pre.Seconds)
 	}
-	t.Logf("pre-state: version %d, seed %s, placement epoch %d pg %s acting %v primary osd.%d shard %d", pre.Version, seedKey, route.Epoch, route.PGID, route.Acting, route.ID, route.Shard)
+	t.Logf("pre-state: version %d, seed %s, placement epoch %d pg %s acting %v primary osd.%d shard %d, interval since %d", pre.Version, seedKey, route.Epoch, route.PGID, route.Acting, route.ID, route.Shard, since)
 
 	endpoint := osdEndpoint(t, route.Address)
-	fc := dialErasureFaultClient(t, ctx, hash, endpoint)
+	fc := dialErasureFaultClient(t, r.ctx, r.hash, endpoint)
 	defer fc.Close()
 	gid := fc.Snapshot().GlobalID
-	o := mutationConnection(t, fc.Client, ctx, route)
+	o := mutationConnection(t, fc.Client, r.ctx, route)
 	dialed := fc.dialSnapshot()
 	if dialed[endpoint] != 1 {
 		t.Fatal("the held request's connection was not dialed exactly once", dialed)
@@ -297,7 +260,7 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 		{Code: cephmsgr.OSDAppend, Length: uint64(len(tail)), Data: tail},
 		{Code: cephmsgr.OSDSetXattr, Xattr: cephmsgr.OSDXattrInput{Name: attr}, Data: value},
 	}
-	held := request(route, ops...)
+	held := r.request(route, ops...)
 	held.ClientIncarnation = heldIncarnation
 	held.ModificationTime = cephmsgr.OSDTime{Seconds: mutated}
 	held.MapEpoch = route.Epoch + heldRequestEpochLead
@@ -318,7 +281,7 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 		err   error
 	}
 	finished := make(chan result, 1)
-	callCtx, cancelCall := context.WithCancel(ctx)
+	callCtx, cancelCall := context.WithCancel(r.ctx)
 	defer cancelCall()
 	go func() {
 		reply, err := o.Request(callCtx, held)
@@ -328,9 +291,9 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 	// The primary's op tracker must hold the request, delayed for the map,
 	// within a bounded number of snapshots.
 	var hold opsInFlightOp
-	err = errors.New("no snapshot taken")
+	err := errors.New("no snapshot taken")
 	for attempt := 1; attempt <= 20; attempt++ {
-		s := primaryOpsInFlight(t, ctx, 1, object, gid, heldIncarnation)
+		s := primaryOpsInFlight(t, r.ctx, 1, object, gid, heldIncarnation)
 		if hold, err = checkHeldRequest(s, route, gid, heldIncarnation, held.MapEpoch); err == nil {
 			t.Logf("held at osd.%d (snapshot %d, %d ops in flight): %s, flag point %s, events %q", s.OSD, attempt, s.NumOps, hold.Description, hold.FlagPoint, hold.Events)
 			break
@@ -347,16 +310,16 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 	default:
 	}
 	// A second snapshot: the same op is still held and the object unchanged.
-	again, err := checkHeldRequest(primaryOpsInFlight(t, ctx, 1, object, gid, heldIncarnation), route, gid, heldIncarnation, held.MapEpoch)
+	again, err := checkHeldRequest(primaryOpsInFlight(t, r.ctx, 1, object, gid, heldIncarnation), route, gid, heldIncarnation, held.MapEpoch)
 	if err != nil || again.TID != hold.TID {
 		t.Fatal("the hold did not persist:", err, again.TID, hold.TID)
 	}
-	if n := poolObserve(t, ctx, 1, object, "", ""); n.Version != pre.Version || !bytes.Equal(n.Data, seed) || xattrInventory(n)[attr] != "" {
+	if n := poolObserve(t, r.ctx, 1, object, "", ""); n.Version != pre.Version || !bytes.Equal(n.Data, seed) || xattrInventory(n)[attr] != "" {
 		t.Fatal("native state changed while the request was held", n.Version, len(n.Data))
 	}
+	r.heldThrough("the hold at the original primary", object, route)
 
-	restore := erasureKillOSD(t, ctx, base, route.ID)
-	defer restore()
+	outage := r.kill(route.ID)
 	// The killed daemon's socket closes, so the session ends the call; the
 	// caller's context stays live.
 	lost, ended, late := endWithin(finished, 30*time.Second, 5*time.Second, cancelCall)
@@ -381,14 +344,14 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 	o.Close()
 	fc.disarm()
 
-	fresh := erasureSettledPrimary(t, ctx, object, route, facts)
+	fresh, replacedSince := r.awaitReplacement(object, route, since)
 	freshEndpoint := osdEndpoint(t, fresh.Address)
-	t.Logf("epoch %d -> %d: primary osd.%d shard %d -> osd.%d shard %d, acting %v -> %v, pg_temp %v",
-		route.Epoch, fresh.Epoch, route.ID, route.Shard, fresh.ID, fresh.Shard, route.Acting, fresh.Acting, fresh.PGTemp)
-	if fresh.Epoch <= route.Epoch || fresh.Epoch >= held.MapEpoch || slicesContains(fresh.Acting, route.ID) {
+	t.Logf("epoch %d -> %d: primary osd.%d shard %d -> osd.%d shard %d, acting %v -> %v, pg_temp %v primary-first %+v, interval since %d",
+		route.Epoch, fresh.Epoch, route.ID, route.Shard, fresh.ID, fresh.Shard, route.Acting, fresh.Acting, fresh.PGTemp, routePrimaryFirst(fresh), replacedSince)
+	if fresh.Epoch <= route.Epoch || fresh.Epoch >= held.MapEpoch || slices.Contains(fresh.Acting, route.ID) {
 		t.Fatal("new placement does not reflect the killed primary or reached the held epoch", fresh)
 	}
-	away := poolObserve(t, ctx, 1, object, "", "")
+	away := poolObserve(t, r.ctx, 1, object, "", "")
 	t.Logf("native under the replacement: version %d (pre %d) mtime %d xattr %q", away.Version, pre.Version, away.Seconds, xattrInventory(away)[attr])
 	if away.Code != 0 || away.Version != pre.Version || !bytes.Equal(away.Data, seed) || away.Seconds != seeded || xattrInventory(away)[attr] != "" {
 		t.Fatal("native state under the replacement differs from the pre-state", away.Version, len(away.Data), away.Seconds)
@@ -396,20 +359,16 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 	if extra := newDials(dialed, fc.dialSnapshot(), endpoint); len(extra) != 0 || fc.dialsTo(freshEndpoint) != 0 {
 		t.Fatal("the client reconnected or resent after the unknown outcome:", extra)
 	}
+	r.heldThrough("the native read under the replacement", object, fresh)
 
-	// Restart the killed OSD and wait for every PG to be clean.
-	restore()
-	if err := testcluster.ControlDaemon(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "verify", "osd-ready", "clean"); err != nil {
-		t.Fatal("the fixture did not return to every OSD up and every PG clean:", err)
+	// Restart the killed OSD and wait for every PG to be clean and for the
+	// PG on its original placement under the restarted primary.
+	back, _ := r.primaryBack(object, route, outage, replacedSince)
+	if back.Epoch >= held.MapEpoch {
+		t.Fatalf("the PG is back at epoch %d, at or past the held epoch %d", back.Epoch, held.MapEpoch)
 	}
-	seen := poolPlace(t, ctx, 1, object, "")
-	back, ok := restarted(route, seen)
-	if !ok || !samePlacement(seen, back) || seen.Epoch <= fresh.Epoch || seen.Epoch >= held.MapEpoch {
-		t.Fatalf("the PG is not back on its original placement under the restarted primary below the held epoch: %+v vs %+v", seen, route)
-	}
-	back.Epoch = seen.Epoch
 	t.Logf("restored: epoch %d primary osd.%d shard %d acting %v at %s (was %s)", back.Epoch, back.ID, back.Shard, back.Acting, back.Address, route.Address)
-	n := poolObserve(t, ctx, 1, object, "", "")
+	n := poolObserve(t, r.ctx, 1, object, "", "")
 	if n.Code != 0 || n.Version != pre.Version || !bytes.Equal(n.Data, seed) || n.Seconds != seeded || n.Nanos != pre.Nanos || !maps.Equal(xattrInventory(n), xattrInventory(pre)) {
 		t.Fatal("native state after the return differs from the pre-state", n.Version, pre.Version, len(n.Data), n.Seconds)
 	}
@@ -417,8 +376,11 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 		t.Fatal("the client connected again before the caller's decision:", extra)
 	}
 	heldKey := pgHistoryTarget{Type: "client", Num: gid, Inc: heldIncarnation, TID: sub.Transaction}
-	nearMiss := pgHistoryTarget{Type: "client", Num: gid, Inc: seedIncarnation, TID: sub.Transaction}
-	history := primaryPGHistory(t, ctx, 1, object, []pgHistoryTarget{seedKey, heldKey, nearMiss})
+	nearMiss := pgHistoryTarget{Type: "client", Num: gid, Inc: int32(seedSub.ClientIncarnation), TID: sub.Transaction}
+	if nearMiss.Inc == heldIncarnation {
+		nearMiss.Inc++
+	}
+	history := primaryPGHistory(t, r.ctx, 1, object, []pgHistoryTarget{seedKey, heldKey, nearMiss})
 	requirePGHistoryOnRoute(t, history, back)
 	if got := history.Targets[0].Locations; len(got) != 1 || got[0].Tier != "log" || got[0].Object != hobjectHead(back) || got[0].Version != replayVersion(seedReply) {
 		t.Fatalf("the returned primary's log does not hold the seed write once at %s: %+v", replayVersion(seedReply), got)
@@ -429,16 +391,16 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 
 	// The caller's explicit decision: resubmit the same operations once
 	// under the original identity to the returned primary.
-	ro := mutationConnection(t, fc.Client, ctx, back)
+	ro := mutationConnection(t, fc.Client, r.ctx, back)
 	defer ro.Close()
-	retry := request(back, ops...)
+	retry := r.request(back, ops...)
 	retry.ClientIncarnation = heldIncarnation
 	retry.ModificationTime = held.ModificationTime
 	retry.Resubmit, retry.RetryAttempt = &sub, 1
 	if fingerprint(retry) != originalFingerprint {
 		t.Fatal("explicit retry changed the semantic request fingerprint")
 	}
-	retryCtx, stop := context.WithTimeout(ctx, 30*time.Second)
+	retryCtx, stop := context.WithTimeout(r.ctx, 30*time.Second)
 	reply, err := ro.Request(retryCtx, retry)
 	stop()
 	if err != nil {
@@ -449,12 +411,12 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 		reply.Submission.Transaction != sub.Transaction || reply.Submission.MapEpoch != back.Epoch || reply.Submission.GlobalID != gid || reply.Submission.ClientIncarnation != heldIncarnation {
 		t.Fatal("resubmission receipt differs", reply.Transaction, reply.Code, reply.Flags, reply.RetryAttempt, reply.UserVersion)
 	}
-	final := poolObserve(t, ctx, 1, object, "", "")
+	final := poolObserve(t, r.ctx, 1, object, "", "")
 	if final.Code != 0 || !bytes.Equal(final.Data, append(bytes.Clone(seed), tail...)) || bytes.Count(final.Data, tail) != 1 || final.Version != reply.UserVersion ||
 		final.Seconds != mutated || xattrInventory(final)[attr] != string(value) {
 		t.Fatal("native state after the resubmission differs", len(final.Data), final.Version, reply.UserVersion, final.Seconds)
 	}
-	after := primaryPGHistory(t, ctx, 1, object, []pgHistoryTarget{seedKey, heldKey, nearMiss})
+	after := primaryPGHistory(t, r.ctx, 1, object, []pgHistoryTarget{seedKey, heldKey, nearMiss})
 	requirePGHistoryOnRoute(t, after, back)
 	if got := after.Targets[1].Locations; len(got) != 1 || got[0].Tier != "log" || got[0].Version != replayVersion(reply) || got[0].Object != hobjectHead(back) ||
 		len(after.Targets[0].Locations) != 1 || len(after.Targets[2].Locations) != 0 {
@@ -468,7 +430,40 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 	if err := checkOneDial(dialed, fc.dialSnapshot(), endpoint, osdEndpoint(t, back.Address)); err != nil {
 		t.Fatal("the resubmission did not open exactly its one connection:", err)
 	}
+	r.heldThrough("the log reads and the resubmission at the returned primary", object, back)
 	t.Logf("applied once by the resubmission at %s, version %d -> %d, tail count %d; the original outcome stays unknown", replayVersion(reply), pre.Version, final.Version, bytes.Count(final.Data, tail))
+}
+
+// TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration is
+// erasureRequestHeldScenario on optimized isa k=2,m=2 (four OSDs).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2requestheldatdyingprimary key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *testing.T) {
+	erasureRequestHeldScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1RequestHeldAtDyingPrimaryIntegration is
+// erasureRequestHeldScenario on optimized isa k=3,m=1 (four OSDs; nonprimary
+// shards {1,2}, so parity shard 3 leads after the loss of shard 0).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1requestheldatdyingprimary key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK3M1RequestHeldAtDyingPrimaryIntegration(t *testing.T) {
+	erasureRequestHeldScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2RequestHeldAtDyingPrimaryIntegration is
+// erasureRequestHeldScenario on optimized isa k=4,m=2 (six OSDs; nonprimary
+// shards {1,2,3}, so parity shard 4 leads after the loss of shard 0).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2requestheldatdyingprimary key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK4M2RequestHeldAtDyingPrimaryIntegration(t *testing.T) {
+	erasureRequestHeldScenario(t, erasureK4M2)
 }
 
 // heldSnapshot builds one synthetic receipt of PG 3.7's primary osd.3 holding

@@ -329,7 +329,7 @@ func refusedLocally(t *testing.T, ctx context.Context, o *cephmsgr.OSDConnection
 //scenario:covers CLIENT to OSD
 //fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2ReplacementPGBackoffIntegration(t *testing.T) {
-	r := startECEpochRun(t, 900*time.Second)
+	r := startECEpochRun(t, erasureK2M2, 900*time.Second)
 	const (
 		object          = "ec-replaced-pg-backoff"
 		attr            = "ec-backoff"
@@ -350,10 +350,11 @@ func TestCephOSDErasureOptimizedK2M2ReplacementPGBackoffIntegration(t *testing.T
 	if route.Shard != 0 || !slices.Equal(r.facts.nonprimary, []int{1}) {
 		t.Fatalf("the placement %+v with nonprimary shards %v is not led by shard 0 with nonprimary shard 1", route, r.facts.nonprimary)
 	}
+	r.heldThrough("the pre-state read", object, route)
 
-	fresh, primary := r.replacePrimary(object, route, since)
-	replaced := r.state(object).Query
-	if replaced == nil || fresh.Shard != int8(r.facts.size-erasureK2M2.m) || routePrimaryFirst(fresh) == nil {
+	primary := r.kill(route.ID)
+	fresh, replacedSince := r.awaitReplacement(object, route, since)
+	if fresh.Shard != int8(r.facts.size-erasureK2M2.m) || routePrimaryFirst(fresh) == nil {
 		t.Fatalf("the replacement %+v is not the first parity shard's OSD under a primary-first pg_temp", fresh)
 	}
 	// The request's wire shard is the actual shard's position in the
@@ -362,7 +363,7 @@ func TestCephOSDErasureOptimizedK2M2ReplacementPGBackoffIntegration(t *testing.T
 	if wire < 0 || wire == int(fresh.Shard) {
 		t.Fatalf("actual shard %d has wire shard %d in %v", fresh.Shard, wire, primaryFirstOrder(r.facts.size, r.facts.nonprimary))
 	}
-	t.Logf("replacement osd.%d on actual shard %d, wire shard %d under %+v, epoch %d, interval since %d", fresh.ID, fresh.Shard, wire, routePrimaryFirst(fresh), fresh.Epoch, replaced.SameIntervalSince)
+	t.Logf("replacement osd.%d on actual shard %d, wire shard %d under %+v, epoch %d, interval since %d", fresh.ID, fresh.Shard, wire, routePrimaryFirst(fresh), fresh.Epoch, replacedSince)
 
 	client := dialErasureFaultClient(t, r.ctx, r.hash, "")
 	defer client.Close()
@@ -374,10 +375,11 @@ func TestCephOSDErasureOptimizedK2M2ReplacementPGBackoffIntegration(t *testing.T
 	if reply, err := o.Request(r.ctx, probe); err != nil || reply.Code != 0 {
 		t.Fatal("STAT through the replacement before the second outage", err, reply.Code)
 	}
+	r.heldThrough("the STAT through the replacement", object, fresh)
 
 	parity := r.kill(route.Acting[last])
 	peered := r.waitState("peered under the replacement", object, func(o pgIntervalObservation) error {
-		return o.peeredUnder(fresh, []int{last}, replaced.SameIntervalSince)
+		return o.peeredUnder(fresh, []int{last}, replacedSince)
 	})
 	now := *peered.After
 
@@ -420,6 +422,7 @@ func TestCephOSDErasureOptimizedK2M2ReplacementPGBackoffIntegration(t *testing.T
 	if ack.Shard != int(fresh.Shard) || ack.ReachedPG || !ack.Done || !slices.Contains(ack.Events, "queued_for_pg") {
 		t.Fatalf("the ACK in the replacement's op history %+v is not the received ACK of shard %d that never reached the PG", ack, fresh.Shard)
 	}
+	r.heldThrough("the BLOCK, the refusals and the ACK in the peered interval", object, now)
 
 	r.start(parity)
 	releaseCtx, stopRelease := context.WithTimeout(r.ctx, 180*time.Second)
@@ -494,9 +497,10 @@ func TestCephOSDErasureOptimizedK2M2ReplacementPGBackoffIntegration(t *testing.T
 	if final.Code != 0 || !bytes.Equal(final.Data, want) || bytes.Count(final.Data, tail) != 1 || final.Version != reply.UserVersion || final.Seconds != mutated || xattrInventory(final)[attr] != string(value) {
 		t.Fatal("native state after the resubmission differs", len(final.Data), final.Version, reply.UserVersion, final.Seconds)
 	}
+	r.heldThrough("the unanswered STAT and the resubmission in the active interval under the replacement", object, current)
 
 	back, _ := r.primaryBack(object, route, primary, active.Query.SameIntervalSince)
-	recovered := poolObserve(t, r.ctx, 1, object, "", "")
+	recovered := r.observeIn("the native read at the returned primary", object, back)
 	if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || recovered.Seconds != final.Seconds || !maps.Equal(xattrInventory(recovered), xattrInventory(final)) {
 		t.Fatal("native state after the return differs", recovered.Version, final.Version)
 	}
@@ -523,7 +527,7 @@ func TestCephOSDErasureOptimizedK2M2ReplacementPGBackoffIntegration(t *testing.T
 //scenario:covers CLIENT to OSD
 //fixture:isolated kills an OSD, sets norecover/nobackfill and osd_backoff_on_degraded; restart waits osd-ready clean
 func TestCephOSDErasureOptimizedK2M2ObjectBackoffIntegration(t *testing.T) {
-	r := startECEpochRun(t, 900*time.Second)
+	r := startECEpochRun(t, erasureK2M2, 900*time.Second)
 	const (
 		object          = "ec-object-backoff"
 		attr            = "ec-object-backoff"
@@ -587,6 +591,7 @@ func TestCephOSDErasureOptimizedK2M2ObjectBackoffIntegration(t *testing.T) {
 	absent := r.waitState("active without the last parity shard", object, func(o pgIntervalObservation) error { return o.activeWithout(route, []int{last}, since) })
 	degraded := bytes.Repeat([]byte("written while shard 3 is away\x01"), 120)
 	written := r.write("overwrite while the shard is away", *absent.After, degraded, degradedAt, cephmsgr.OSDSnapContext{})
+	r.heldThrough("the overwrite while the shard is away", object, *absent.After)
 
 	flagged := false
 	// Registered after the run's own cleanups, so it runs before their
@@ -694,7 +699,7 @@ func TestCephOSDErasureOptimizedK2M2ObjectBackoffIntegration(t *testing.T) {
 	flagged = false
 	r.clean()
 	// The primary never stopped and recovery ends no interval.
-	r.waitState("clean again", object, func(o pgIntervalObservation) error {
+	clean := r.waitState("clean again", object, func(o pgIntervalObservation) error {
 		if err := o.cleanOn(); err != nil {
 			return err
 		}
@@ -703,7 +708,7 @@ func TestCephOSDErasureOptimizedK2M2ObjectBackoffIntegration(t *testing.T) {
 		}
 		return nil
 	})
-	recovered := poolObserve(t, r.ctx, 1, object, "", "")
+	recovered := r.observeIn("the native read on the clean placement", object, *clean.After)
 	if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || !maps.Equal(xattrInventory(recovered), xattrInventory(final)) {
 		t.Fatal("native state after recovery differs", recovered.Version, final.Version)
 	}

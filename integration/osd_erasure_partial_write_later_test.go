@@ -327,11 +327,18 @@ func (r *partialWriteRun) showInterval() pgIntervalReceipt {
 // exactly the partial-write records, within a bounded number of
 // observations. The primary writes them when it rolls the entry forward,
 // which no client reply waits for; the interval change below relies on them.
-func (r *partialWriteRun) waitPrimaryRecords(records []shardPartialWrite) {
+// Every observation must report the interval since started, in which the
+// writes, reads and captures before it were made: the accepted one shows
+// that interval held through them.
+func (r *partialWriteRun) waitPrimaryRecords(records []shardPartialWrite, started uint32) {
 	r.t.Helper()
 	var got []shardPartialWrite
 	for attempt := 1; attempt <= 15; attempt++ {
-		if got = r.showInterval().Observation.Query.Info.PartialWrites; slices.Equal(got, records) {
+		q := r.showInterval().Observation.Query
+		if q.SameIntervalSince != started {
+			r.t.Fatalf("unattributed: the PG's interval started at epoch %d before the writes and at epoch %d at observation %d of the partial-write records", started, q.SameIntervalSince, attempt)
+		}
+		if got = q.Info.PartialWrites; slices.Equal(got, records) {
 			r.t.Logf("the live primary's info holds the partial-write records %+v (observation %d)", got, attempt)
 			return
 		}
@@ -555,7 +562,7 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegrati
 		records = append(records, shardPartialWrite{Shard: left, From: state.want.full, To: state.want.patch})
 	}
 	// The interval change applies the range only if the primary recorded it.
-	run.waitPrimaryRecords(records)
+	run.waitPrimaryRecords(records, started)
 	changed := run.changeInterval()
 	if before := changed.OriginObservation.Query; before.SameIntervalSince != started || !slices.Equal(before.Info.PartialWrites, records) {
 		t.Fatalf("before the command the interval had started at epoch %d (%d at the first observation) and the primary's info held %+v", before.SameIntervalSince, started, before.Info.PartialWrites)

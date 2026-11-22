@@ -238,7 +238,8 @@ func checkOSDDials(snapshot, now map[string]int, osds []string, at string) error
 	return nil
 }
 
-// ecEpochRun is one control on its own owned optimized isa k=2,m=2 pool.
+// ecEpochRun is one control on its own owned optimized isa pool of one
+// width.
 type ecEpochRun struct {
 	t       *testing.T
 	ctx     context.Context
@@ -247,6 +248,7 @@ type ecEpochRun struct {
 	hash    bool
 	pgNum   int
 	request func(osdFixtureOracle, ...cephmsgr.OSDOperation) cephmsgr.OSDRequest
+	width   erasureWidth
 	facts   erasureFacts
 	// control runs one fixture daemon control (action, daemon, name).
 	control func(ctx context.Context, action, daemon, name string) error
@@ -260,12 +262,11 @@ func fixtureControl(ctx context.Context, action, daemon, name string) error {
 	return testcluster.ControlDaemon(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), action, daemon, name)
 }
 
-func startECEpochRun(t *testing.T, timeout time.Duration) *ecEpochRun {
-	width := erasureK2M2
+func startECEpochRun(t *testing.T, width erasureWidth, timeout time.Duration) *ecEpochRun {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
 	}
-	r := &ecEpochRun{t: t, request: osdObjectRequest, pgNum: 1, control: fixtureControl}
+	r := &ecEpochRun{t: t, request: osdObjectRequest, pgNum: 1, width: width, control: fixtureControl}
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {
 		fixture, r.request, r.hash, r.pgNum = replicatedPGFixture, replicatedPGRequest, true, 8
@@ -309,16 +310,16 @@ func (r *ecEpochRun) state(object string) pgIntervalObservation {
 	return nativePool(r.t, r.ctx, "pgstate", map[string]any{"slot": 1, "object": object}).PGState
 }
 
-// healthy reads the object's placement and one observation of its PG and
-// requires the PG active+clean under a primary on its own primary-eligible
-// shard without a pg_temp. It returns the placement and the epoch at which
-// the PG's interval started.
+// healthy observes the object's PG, within a bounded number of
+// observations, until one shows it active+clean on its placement, and
+// requires a primary on its own primary-eligible shard without a pg_temp.
+// A write or a snapshot allocation just before may leave the primary
+// behind the newest map for a moment, which one observation cannot tell
+// from a PG that is not clean. It returns the placement and the epoch at
+// which the PG's interval started.
 func (r *ecEpochRun) healthy(object string) (osdFixtureOracle, uint32) {
 	r.t.Helper()
-	seen := r.state(object)
-	if err := seen.cleanOn(); err != nil {
-		r.t.Fatalf("the PG of %s is not active+clean on its placement: %v", object, err)
-	}
+	seen := r.waitState("active+clean on its placement", object, func(o pgIntervalObservation) error { return o.cleanOn() })
 	route := *seen.Before
 	r.facts.checkPlacement(r.t, route)
 	if route.Name != object || route.PGTemp {
@@ -350,6 +351,54 @@ func (r *ecEpochRun) waitState(label, object string, judge func(pgIntervalObserv
 	}
 	r.t.Fatalf("%s was not observed: %v (seen %v)", label, err, seen)
 	return pgIntervalObservation{}
+}
+
+// heldThrough observes the object's PG after requests that carried route
+// and requires their interval to have held (heldThrough of the
+// observation), re-observing an incomplete observation within a bounded
+// number. An interval that changed is reported as such: the requests'
+// results are then not attributed to route, and the test fails as
+// unverified without resending anything.
+func (r *ecEpochRun) heldThrough(label, object string, route osdFixtureOracle) pgIntervalObservation {
+	r.t.Helper()
+	o, n, err := erasureAwaitHeldThrough(func() pgIntervalObservation { return r.state(object) }, route, shardOutageObservations, func() { time.Sleep(shardOutagePause) })
+	requireHeldThrough(r.t, label, route, o, n, err)
+	return o
+}
+
+// observeIn reads the object natively and requires the interval of route,
+// the placement of a judged observation, to have held through the read
+// (erasureObserveThrough), as heldThrough does for requests.
+func (r *ecEpochRun) observeIn(label, object string, route osdFixtureOracle) nativeXattrSnapshot {
+	r.t.Helper()
+	return erasureReadThrough(r.t, r.ctx, label, object, route)
+}
+
+// erasureReadThrough reads the object of the owned pool in slot 1 natively
+// and requires the interval of route, the placement of a judged
+// observation, to have held through the read (erasureObserveThrough).
+func erasureReadThrough(t *testing.T, ctx context.Context, label, object string, route osdFixtureOracle) nativeXattrSnapshot {
+	t.Helper()
+	var n nativeXattrSnapshot
+	o, k, err := erasureObserveThrough(func() { n = poolObserve(t, ctx, 1, object, "", "") }, func() pgIntervalObservation { return erasurePGState(t, ctx, object) },
+		route, shardOutageObservations, func() { time.Sleep(shardOutagePause) })
+	requireHeldThrough(t, label, route, o, k, err)
+	return n
+}
+
+// requireHeldThrough fails the test unless the result of
+// erasureAwaitHeldThrough for route shows its interval held: a changed
+// interval leaves the requests unattributed, and no complete observation
+// leaves them unverified. Nothing is resent either way.
+func requireHeldThrough(t *testing.T, label string, route osdFixtureOracle, o pgIntervalObservation, n int, err error) {
+	t.Helper()
+	if errors.Is(err, errIntervalChanged) {
+		t.Fatalf("%s: unattributed, the interval of osd.%d shard %d at epoch %d changed around the requests (observation %d): %v", label, route.ID, route.Shard, route.Epoch, n, err)
+	}
+	if err != nil {
+		t.Fatalf("%s: no complete observation of the interval of osd.%d shard %d at epoch %d after the requests: %v", label, route.ID, route.Shard, route.Epoch, err)
+	}
+	t.Logf("%s: osd.%d shard %d at epoch %d held its interval since %d through the requests (observation %d at epoch %d)", label, route.ID, route.Shard, route.Epoch, o.Query.SameIntervalSince, n, o.Before.Epoch)
 }
 
 // ecOutage is one owned forced kill of an OSD that the run restores.
@@ -465,10 +514,25 @@ func (r *ecEpochRun) clean() {
 // replacePrimary kills the OSD of the healthy route's primary and waits until
 // the PG is active under the member the map makes primary, with the
 // primary's position empty under a primary-first pg_temp, in an interval
-// after since (replacedOn). It returns that placement and the outage.
+// after since (awaitReplacement). It returns that placement and the outage.
 func (r *ecEpochRun) replacePrimary(object string, route osdFixtureOracle, since uint32) (osdFixtureOracle, *ecOutage) {
 	r.t.Helper()
 	outage := r.kill(route.ID)
+	fresh, _ := r.awaitReplacement(object, route, since)
+	return fresh, outage
+}
+
+// awaitReplacement waits, after the loss of the healthy route's primary,
+// until one observation shows the PG active under the first member of the
+// primary-first order, with the primary's position empty under a
+// primary-first pg_temp, in an interval after since (replacedOn; for a lost
+// shard 0 that is the first parity shard, k). A later placement record
+// must name the same placement with primary-first numbering. It returns
+// the judged observation's placement, which the requests carry and every
+// later interval check is made against (erasureReplacementWitness), and the
+// epoch at which its interval started.
+func (r *ecEpochRun) awaitReplacement(object string, route osdFixtureOracle, since uint32) (osdFixtureOracle, uint32) {
+	r.t.Helper()
 	lead := -1
 	seen := r.waitState("under the replacement primary", object, func(o pgIntervalObservation) error {
 		var err error
@@ -480,11 +544,11 @@ func (r *ecEpochRun) replacePrimary(object string, route osdFixtureOracle, since
 		}
 		return err
 	})
-	fresh := r.place(object)
-	if !samePlacement(fresh, *seen.After) || fresh.Epoch < seen.After.Epoch || routePrimaryFirst(fresh) == nil || int(fresh.Shard) != lead {
-		r.t.Fatalf("placement moved after the PG became active under the replacement, or gives no primary-first numbering: %+v vs %+v", fresh, *seen.After)
+	witness, err := erasureReplacementWitness(seen, r.place(object), lead)
+	if err != nil {
+		r.t.Fatal(err)
 	}
-	return fresh, outage
+	return witness, seen.Query.SameIntervalSince
 }
 
 // primaryBack starts the outage's OSD, waits for every PG to be clean and for
@@ -638,7 +702,7 @@ func checkECClones(t *testing.T, label string, list cephmsgr.OSDSnapshotList, si
 //scenario:covers CLIENT to OSD
 //fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
-	r := startECEpochRun(t, 900*time.Second)
+	r := startECEpochRun(t, erasureK2M2, 900*time.Second)
 	const (
 		object      = "ec-watch-failover"
 		incarnation = 31
@@ -690,6 +754,7 @@ func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
 	notify("at the original primary", route, watch, []byte{0, 0xff, 'o'}, []byte{1, 'o'})
 	dialed := watcher.dialSnapshot()
 	t.Logf("watch cookie %d of client.%d at osd.%d shard %d, epoch %d pg %s, generation %d", cookie, gid, route.ID, route.Shard, route.Epoch, route.PGID, initial.Operations[0].Watch.Generation)
+	r.heldThrough("the watch, the listing and the notify at the original primary", object, route)
 
 	fresh, outage := r.replacePrimary(object, route, since)
 	o.Close()
@@ -718,10 +783,7 @@ func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
 	t.Logf("cookie %d moved osd.%d (shard %d) -> osd.%d (shard %d, wire shard under %+v), epoch %d -> %d, generation %d",
 		cookie, route.ID, route.Shard, fresh.ID, fresh.Shard, routePrimaryFirst(fresh), route.Epoch, fresh.Epoch, reconnect.Operations[0].Watch.Generation)
 
-	replaced := r.state(object).Query
-	if replaced == nil {
-		t.Fatal("no pg query under the replacement before the return")
-	}
+	replaced := r.heldThrough("the RECONNECT and the notify through the replacement", object, fresh).Query
 	dialed = watcher.dialSnapshot()
 	back, _ := r.primaryBack(object, route, outage, replaced.SameIntervalSince)
 	ro.Close()
@@ -750,6 +812,7 @@ func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
 		t.Fatal("unwatch", err)
 	}
 	listed("after the UNWATCH", 0)
+	r.heldThrough("the RECONNECT, the notify and the UNWATCH at the returned primary", object, back)
 	t.Logf("cookie %d back at osd.%d (shard %d) at %s (was %s), epoch %d, generation %d; unwatched", cookie, back.ID, back.Shard, back.Address, route.Address, back.Epoch,
 		rereconnect.Operations[0].Watch.Generation)
 }
@@ -773,7 +836,7 @@ func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
 //scenario:covers CLIENT to OSD
 //fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
-	r := startECEpochRun(t, 900*time.Second)
+	r := startECEpochRun(t, erasureK2M2, 900*time.Second)
 	const object = "ec-snapshot-failover"
 	first := bytes.Repeat([]byte("ec-snap-first\x00\xff"), 400)
 	second := bytes.Repeat([]byte("ec-snap-second\x01"), 300)
@@ -796,6 +859,7 @@ func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 	}
 	before := read("before the outage", route, map[uint64][]byte{s1: first, cephmsgr.OSDHeadSnapshot: second}, cloned.UserVersion)
 	clones("before the outage", before.list, map[uint64]int{s1: len(first)}, s1)
+	r.heldThrough("the reads before the outage", object, route)
 
 	fresh, outage := r.replacePrimary(object, route, since)
 	away := read("under the replacement", fresh, map[uint64][]byte{s1: first, cephmsgr.OSDHeadSnapshot: second}, cloned.UserVersion)
@@ -815,15 +879,13 @@ func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 	written := read("after the write through the replacement", fresh, want, degraded.UserVersion)
 	clones("after the write through the replacement", written.list, sizes, s2)
 
-	replaced := r.state(object).Query
-	if replaced == nil {
-		t.Fatal("no pg query under the replacement before the return")
-	}
+	replaced := r.heldThrough("the reads and the write through the replacement", object, fresh).Query
 	back, _ := r.primaryBack(object, route, outage, replaced.SameIntervalSince)
 	returned := read("after the return", back, want, degraded.UserVersion)
 	if !reflect.DeepEqual(returned.list, written.list) {
 		t.Fatalf("LIST_SNAPS after the return %+v differs from the one under the replacement %+v", returned.list, written.list)
 	}
+	r.heldThrough("the reads at the returned primary", object, back)
 	t.Logf("snapshots %d and %d: clones of %d and %d bytes, head %d bytes at version %d, unchanged across the primary's outage and return", s1, s2, len(first), len(second), len(third), degraded.UserVersion)
 }
 
@@ -851,7 +913,7 @@ func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 //scenario:covers CLIENT to OSD
 //fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2PGBackoffIntegration(t *testing.T) {
-	r := startECEpochRun(t, 900*time.Second)
+	r := startECEpochRun(t, erasureK2M2, 900*time.Second)
 	const (
 		object          = "ec-pg-backoff"
 		attr            = "ec-backoff"
@@ -897,6 +959,7 @@ func TestCephOSDErasureOptimizedK2M2PGBackoffIntegration(t *testing.T) {
 	}
 	endpoint := osdEndpoint(t, route.Address)
 	dialed := client.dialSnapshot()
+	r.heldThrough("the pre-state read and the STAT before the outage", object, route)
 
 	// The last parity shard first, then the nonprimary data shard.
 	outages := []*ecOutage{r.kill(route.Acting[holes[1]]), r.kill(route.Acting[holes[0]])}
@@ -969,6 +1032,7 @@ func TestCephOSDErasureOptimizedK2M2PGBackoffIntegration(t *testing.T) {
 	renumbered.Placement.Shard = uint8(parity)
 	renumbered.Placement.PrimaryFirst = &cephmsgr.OSDPrimaryFirst{PoolSize: uint8(r.facts.size), NonprimaryShards: uint8(len(r.facts.nonprimary))}
 	refused("STAT naming the parity shard with primary-first numbering", renumbered)
+	r.heldThrough("the BLOCK and the local refusals in the peered interval", object, *peered.After)
 
 	// The parity shard's OSD returns: a new interval with three shards.
 	r.start(outages[0])
@@ -1032,6 +1096,7 @@ func TestCephOSDErasureOptimizedK2M2PGBackoffIntegration(t *testing.T) {
 		t.Fatal("the client opened another connection:", extra)
 	}
 	t.Logf("resubmission tid %d at epoch %d applied once: version %d -> %d, replay %s", reply.Transaction, reply.MapEpoch, pre.Version, final.Version, replayVersion(reply))
+	r.heldThrough("the resubmission in the active interval without the nonprimary shard", object, now)
 
 	// The last OSD returns; the PG is clean on its original placement.
 	r.start(outages[1])
@@ -1043,7 +1108,7 @@ func TestCephOSDErasureOptimizedK2M2PGBackoffIntegration(t *testing.T) {
 	if back.Before.Address != route.Address {
 		t.Fatalf("the primary osd.%d moved from %s to %s although it never stopped", route.ID, route.Address, back.Before.Address)
 	}
-	recovered := poolObserve(t, r.ctx, 1, object, "", "")
+	recovered := r.observeIn("the native read on the clean placement", object, *back.After)
 	if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || recovered.Seconds != final.Seconds || recovered.Nanos != final.Nanos ||
 		!maps.Equal(xattrInventory(recovered), xattrInventory(final)) {
 		t.Fatal("native state after recovery differs", recovered.Version, final.Version)

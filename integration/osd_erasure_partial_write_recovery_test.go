@@ -416,7 +416,7 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegrati
 	left := run.leftOutShard(state)
 	records := []shardPartialWrite{{Shard: left, From: state.want.full, To: state.want.patch}}
 	// Both peerings below apply the range only if the primary recorded it.
-	run.waitPrimaryRecords(records)
+	run.waitPrimaryRecords(records, started)
 
 	outage := run.leave(left, started)
 	if got := outage.absent.Observation.Query.Info; !slices.Equal(got.PartialWrites, records) || got.LastUpdate != state.want.patch {
@@ -538,7 +538,7 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegra
 	state := run.partialOverwrite()
 	left := run.leftOutShard(state)
 	records := []shardPartialWrite{{Shard: left, From: state.want.full, To: state.want.patch}}
-	run.waitPrimaryRecords(records)
+	run.waitPrimaryRecords(records, started)
 
 	outage := run.leave(left, started)
 	absent := outage.absent.Observation.Query.SameIntervalSince

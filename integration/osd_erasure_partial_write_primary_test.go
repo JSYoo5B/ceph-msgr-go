@@ -416,7 +416,7 @@ func TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIn
 	records := []shardPartialWrite{{Shard: left, From: state.want.full, To: state.want.patch}}
 	// The replacement's peering applies the range only if the primary that
 	// can lead recorded it; every shard that can be primary records it.
-	run.waitPrimaryRecords(records)
+	run.waitPrimaryRecords(records, started)
 
 	outage := run.replacePrimary(started)
 	if slices.Contains(run.facts.nonprimary, outage.lead) || outage.lead == int(outage.origin.Shard) {
