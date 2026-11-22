@@ -94,6 +94,47 @@ var capRBDJournalPrimaryChange = defineExclusiveCapability(fixtureRBD, "rbd-jour
 // does not advertise, so every OSD would refuse its next connection.
 var rbdJournalPrimaryChangeActions = []string{"setup", "observe-locked", "checkpoint", "observe-recorded", "change-primary", "observe-resubmitted", "replay"}
 
+// capRBDJournalOwnerLoss admits the lost-append-reply sequence ending in
+// the death of the lock owner whose append is uncertain: its test runs alone
+// on a fresh RBD fixture, and the journal control replaces the ordinary
+// sequence with rbdJournalOwnerLossActions.
+var capRBDJournalOwnerLoss = defineExclusiveCapability(fixtureRBD, "rbd-journal-owner-loss",
+	"run one test alone on a fresh RBD fixture with the journal owner-loss sequence (native lock break and blocklist)",
+	"RBD=1", nil)
+
+// rbdJournalOwnerLossActions is the lost-append-reply sequence up to the
+// observation after the recorded unknown outcome, followed by `takeover`
+// instead of the replay. The Go owner never releases the lock and its watch
+// is no longer renewed: the takeover's librbd writes ask that owner for the
+// lock while its watch is listed, blocklist its address and break the lock
+// once the watch is gone (managed_lock/AcquireRequest.cc send_break_lock,
+// managed_lock/BreakRequest.cc), acquire it, replay the journal and journal
+// and apply their own writes. Native behavior relied upon in addition to
+// the list above: osd/Watch.cc (a watch is kept for its timeout after the
+// last ping) at rbdBaseSource.
+var rbdJournalOwnerLossActions = []string{"setup", "observe-locked", "checkpoint", "observe-recorded", "takeover"}
+
+// capRBDJournalForcedBreak admits the forced-break sequence: its test runs
+// alone on a fresh RBD fixture, and the journal control replaces the
+// ordinary sequence with rbdJournalForcedBreakActions.
+var capRBDJournalForcedBreak = defineExclusiveCapability(fixtureRBD, "rbd-journal-forced-break",
+	"run one test alone on a fresh RBD fixture with the journal forced-break sequence (native lock break and blocklist)",
+	"RBD=1", nil)
+
+// rbdJournalForcedBreakActions is the forced-break sequence. After the setup
+// the Go test takes the image's exclusive lock and appends one journal entry
+// with a known answer, which it neither applies nor commits.
+// `observe-appended` is the read-only observation of that entry while the
+// Go owner's watch is live. `force-break` lets a native librbd instance that
+// does not own the lock break it with librbd's lock_break, which blocklists
+// the owner's address and removes the lock without asking whether the
+// owner is alive (internal.cc lock_break, ManagedLock.cc break_lock,
+// managed_lock/BreakRequest.cc with force_break_lock). `observe-fenced` is
+// the read-only observation after the Go owner's fenced requests, and
+// `takeover` the native writes that acquire the free lock, replay the
+// journal and journal their own writes.
+var rbdJournalForcedBreakActions = []string{"setup", "observe-locked", "observe-appended", "force-break", "observe-fenced", "takeover"}
+
 // rbdJournalActionsFor returns the action sequence the profile admits.
 func rbdJournalActionsFor(p profile) []string {
 	switch {
@@ -101,8 +142,19 @@ func rbdJournalActionsFor(p profile) []string {
 		return rbdJournalLostAppendActions
 	case p.admits(capRBDJournalPrimaryChange):
 		return rbdJournalPrimaryChangeActions
+	case p.admits(capRBDJournalOwnerLoss):
+		return rbdJournalOwnerLossActions
+	case p.admits(capRBDJournalForcedBreak):
+		return rbdJournalForcedBreakActions
 	}
 	return rbdJournalActions
+}
+
+// rbdJournalBlocklisted names the actions that read the OSDMap blocklist:
+// the observations and actions of the owner-loss and forced-break sequences
+// from the moment a lock break can have happened.
+func rbdJournalBlocklisted(action string) bool {
+	return action == "observe-appended" || action == "force-break" || action == "observe-fenced" || action == "takeover"
 }
 
 // rbdJournalPlacement is the MON's placement of one object as `ceph osd map`
@@ -324,7 +376,7 @@ func (c *fixtureCluster) rbdJournalMarkInOps() (in func(context.Context, int) er
 
 // rbdJournalInspected names the actions that run `rbd journal inspect`.
 func rbdJournalInspected(action string) bool {
-	return action == "setup" || action == "inspect" || action == "replay" || action == "concurrent" || action == "checkpoint"
+	return action == "setup" || action == "inspect" || action == "replay" || action == "concurrent" || action == "checkpoint" || action == "takeover"
 }
 
 // rbdJournalPhases is the ordered phase list the concurrent action publishes
@@ -379,6 +431,8 @@ type rbdJournalEvent struct {
 // concurrent session (native owner), GoConcurrentWrites the AioWrite events
 // the Go test appends and applies while it owns the lock, and
 // ConcurrentEvents the librbd aio writes issued while Go owns the lock.
+// TakeoverEvents are the librbd writes of the takeover action of the
+// owner-loss and forced-break sequences.
 type rbdJournalPlan struct {
 	Pool         string            `json:"pool"`
 	BaseImage    string            `json:"base_image"`
@@ -395,6 +449,7 @@ type rbdJournalPlan struct {
 	ConcurrentOwnerEvents []rbdJournalEvent `json:"concurrent_owner_events"`
 	GoConcurrentWrites    []rbdBaseExtent   `json:"go_concurrent_writes"`
 	ConcurrentEvents      []rbdJournalEvent `json:"concurrent_events"`
+	TakeoverEvents        []rbdJournalEvent `json:"takeover_events"`
 }
 
 // rbdJournalPlanFor places a 256 KiB, four-object image: setup writes
@@ -407,7 +462,9 @@ type rbdJournalPlan struct {
 // 0 and 2 as the native owner, then Go writes objects 0 to 2 (three entries,
 // one per splay offset 0 to 2), and the native aio writes issued while Go
 // owns the lock cover objects 0 and 3; the first overlaps the second half of
-// Go's first extent, so the image shows which owner wrote last.
+// Go's first extent, so the image shows which owner wrote last. The
+// takeover write covers the first half of Go's first appended extent, so
+// the image shows that the replay of that entry came before it.
 func rbdJournalPlanFor(token string) rbdJournalPlan {
 	const k = 1 << 10
 	return rbdJournalPlan{Pool: "ceph-msgr-rbd-" + token, BaseImage: "ceph-msgr-image-" + token, Image: "ceph-msgr-journal-" + token,
@@ -418,7 +475,8 @@ func rbdJournalPlanFor(token string) rbdJournalPlan {
 		GoWrites:              []rbdBaseExtent{{40 * k, 4 * k}, {100 * k, 4 * k}},
 		ConcurrentOwnerEvents: []rbdJournalEvent{{"write", 24 * k, 4 * k}, {"write", 152 * k, 4 * k}},
 		GoConcurrentWrites:    []rbdBaseExtent{{48 * k, 8 * k}, {112 * k, 4 * k}, {176 * k, 4 * k}},
-		ConcurrentEvents:      []rbdJournalEvent{{"write", 52 * k, 4 * k}, {"write", 200 * k, 4 * k}, {"write", 232 * k, 4 * k}}}
+		ConcurrentEvents:      []rbdJournalEvent{{"write", 52 * k, 4 * k}, {"write", 200 * k, 4 * k}, {"write", 232 * k, 4 * k}},
+		TakeoverEvents:        []rbdJournalEvent{{"write", 40 * k, 2 * k}}}
 }
 
 func (p rbdJournalPlan) owned(token string) bool {
@@ -427,7 +485,8 @@ func (p rbdJournalPlan) owned(token string) bool {
 		p.GoClient == "ceph-msgr-mirror-"+token[:8] && len(p.SetupEvents) > 0 && len(p.WriteEvents) > 0 && len(p.GoWrites) > 0 &&
 		len(p.ConcurrentOwnerEvents) > 0 && len(p.GoConcurrentWrites) > 0 && len(p.ConcurrentEvents) > 0 &&
 		!slices.ContainsFunc(p.ConcurrentOwnerEvents, func(e rbdJournalEvent) bool { return e.Kind != "write" }) &&
-		!slices.ContainsFunc(p.ConcurrentEvents, func(e rbdJournalEvent) bool { return e.Kind != "write" })
+		!slices.ContainsFunc(p.ConcurrentEvents, func(e rbdJournalEvent) bool { return e.Kind != "write" }) &&
+		len(p.TakeoverEvents) > 0 && !slices.ContainsFunc(p.TakeoverEvents, func(e rbdJournalEvent) bool { return e.Kind != "write" })
 }
 
 // The fixed native journal driver. The fixture passes only the token-bound
@@ -444,7 +503,8 @@ import rados, rbd
 identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
 ACTIONS = ('setup', 'observe-registered', 'write', 'observe-committed', 'inspect', 'replay', 'concurrent',
-           'observe-locked', 'checkpoint', 'observe-recorded', 'change-primary', 'observe-resubmitted')
+           'observe-locked', 'checkpoint', 'observe-recorded', 'change-primary', 'observe-resubmitted',
+           'observe-appended', 'force-break', 'observe-fenced', 'takeover')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('image') != 'ceph-msgr-journal-' + token or plan.get('features') != 69
@@ -592,8 +652,10 @@ def observe(ioctx, out):
     spec = pool + '/' + image_id
     out['info'] = cli(['journal', 'info', '--format', 'json', spec], json.loads)
     out['status'] = cli(['journal', 'status', '--format', 'json', spec], json.loads)
-    if action in ('setup', 'inspect', 'replay', 'concurrent', 'checkpoint'):
+    if action in ('setup', 'inspect', 'replay', 'concurrent', 'checkpoint', 'takeover'):
         out['inspect'] = cli(['journal', 'inspect', '--verbose', spec], parse_inspect)
+    if action in ('observe-appended', 'force-break', 'observe-fenced', 'takeover'):
+        out['blocklist'] = blocklist()
     out['blobs'] = {'image_head': publish(PREFIX + 'image-head.bin', head), 'journal_objects': publish(PREFIX + 'journal-objects.bin', view)}
 
 def apply(image, phase, event):
@@ -613,6 +675,27 @@ def apply(image, phase, event):
 
 def watchers(image):
     return [{'addr': text(w['addr']), 'id': w['id'], 'cookie': w['cookie']} for w in image.watchers_list()]
+
+def owners(image):
+    return [{'mode': o['mode'], 'owner': text(o['owner'])} for o in image.lock_get_owners()]
+
+def blocklist():
+    # The OSDMap blocklist as the MON reports it to this identity. librbd
+    # adds a lock owner's address here before it breaks the lock. The MON
+    # flushes two JSON arrays one after the other: exact entries, then
+    # ranges.
+    code, output, status = cluster.mon_command(json.dumps({'prefix': 'osd blocklist ls', 'format': 'json'}), b'', timeout=30)
+    if code != 0:
+        raise ValueError('native osd blocklist ls failed: %d' % code)
+    document, decoder, sections = text(output).strip(), json.JSONDecoder(), []
+    while document:
+        section, consumed = decoder.raw_decode(document)
+        sections.append(section)
+        document = document[consumed:].lstrip()
+    if len(sections) > 2 or any(not isinstance(s, list) for s in sections) or sum(len(s) for s in sections) > 64:
+        raise ValueError('native osd blocklist ls output differs or exceeds its bound')
+    entries = [{'addr': ('range:' if index else '') + e['addr'], 'until': e['until']} for index, s in enumerate(sections) for e in s]
+    return sorted(entries, key=lambda e: e['addr'])
 
 def wait_proceed(step):
     path, expected = os.path.join(OUT, 'rbd-journal-proceed-%d' % step), '%s %s %d' % (token, request_id, step)
@@ -727,6 +810,43 @@ try:
                 started = time.monotonic_ns()
                 image.close()
                 out['close_ns'] = time.monotonic_ns() - started
+        elif action == 'force-break':
+            # A read-write instance that does not own the lock breaks it
+            # with lock_break, naming the one owner it lists: librbd
+            # blocklists that address and removes the lock without checking
+            # whether the owner's watch is still listed. The instance takes
+            # no lock itself (no write), and its close releases nothing.
+            image = rbd.Image(ioctx, name)
+            try:
+                listed, live, held = owners(image), watchers(image), lockers(image)
+                before = blocklist()
+                if len(listed) != 1:
+                    raise ValueError('the image does not have exactly one lock owner to break')
+                started = time.monotonic_ns()
+                image.lock_break(rbd.RBD_LOCK_MODE_EXCLUSIVE, listed[0]['owner'])
+                out['force_break'] = {'owners': listed, 'watchers_before': live, 'lockers_before': held, 'blocklist_before': before,
+                                      'break_ns': time.monotonic_ns() - started, 'owners_after': owners(image), 'is_owner': image.is_exclusive_lock_owner()}
+            finally:
+                image.close()
+        elif action == 'takeover':
+            # The takeover's writes take the exclusive lock (automatic
+            # policy): librbd asks a listed owner, breaks the lock of an
+            # owner whose watch is gone (blocklist, then break_lock) or
+            # takes a free lock, opens the journal and replays every entry
+            # after the image client's commit position, then journals and
+            # applies its own writes. Closing commits their positions.
+            before = blocklist()
+            image = rbd.Image(ioctx, name)
+            try:
+                started = time.monotonic_ns()
+                out['events'] = [apply(image, 'takeover', e) for e in plan['takeover_events']]
+                out['write_ns'] = time.monotonic_ns() - started
+                out['owner'] = image.is_exclusive_lock_owner()
+            finally:
+                started = time.monotonic_ns()
+                image.close()
+                out['close_ns'] = time.monotonic_ns() - started
+            out['blocklist_before'] = before
         elif action == 'replay':
             # Acquiring the exclusive lock opens the journal, which replays
             # every entry after the image client's commit position.
@@ -841,6 +961,33 @@ type rbdJournalNative struct {
 	Phases         []rbdJournalPhase      `json:"phases,omitempty"`
 	AioReturns     []int64                `json:"aio_return_values,omitempty"`
 	FinalWaitNS    int64                  `json:"final_wait_ns,omitempty"`
+	WriteNS        int64                  `json:"write_ns,omitempty"`
+	ForceBreak     *rbdJournalForceBreak  `json:"force_break,omitempty"`
+	// The OSDMap blocklist after the action, and for the actions that may
+	// break a lock also before it.
+	BlocklistBefore *[]rbdLockBlocklistEntry `json:"blocklist_before,omitempty"`
+	Blocklist       *[]rbdLockBlocklistEntry `json:"blocklist,omitempty"`
+}
+
+// rbdJournalForceBreak is the force-break action's own output: the lock
+// owners, header watchers, lockers and blocklist it saw before lock_break,
+// how long lock_break took, and the owners it lists afterwards.
+type rbdJournalForceBreak struct {
+	Owners          []rbdJournalOwner        `json:"owners"`
+	WatchersBefore  []rbdBaseWatcher         `json:"watchers_before"`
+	LockersBefore   *rbdWriteLockers         `json:"lockers_before"`
+	BlocklistBefore *[]rbdLockBlocklistEntry `json:"blocklist_before"`
+	BreakNS         int64                    `json:"break_ns"`
+	OwnersAfter     []rbdJournalOwner        `json:"owners_after"`
+	IsOwner         bool                     `json:"is_owner"`
+}
+
+// valid checks the force-break output: one owner, the lock record that
+// names it, and no owner afterwards in the instance that broke it.
+func (f *rbdJournalForceBreak) valid() bool {
+	return f != nil && len(f.Owners) == 1 && f.Owners[0].Owner != "" && len(f.Owners[0].Owner) <= 128 && rbdWriteWatchersValid(f.WatchersBefore) &&
+		rbdLockLockersValid(f.LockersBefore) && !f.LockersBefore.Empty && len(f.LockersBefore.Lockers) == 1 && f.LockersBefore.Lockers[0].Address == f.Owners[0].Owner &&
+		rbdLockBlocklistValid(f.BlocklistBefore) && f.BreakNS > 0 && f.OwnersAfter != nil && len(f.OwnersAfter) == 0 && !f.IsOwner
 }
 
 // rbdJournalPhasesValid checks the concurrent action's phase list: every
@@ -946,7 +1093,10 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 		ok = ok && result.Inspect == nil
 	}
 	ok = ok && (action == "concurrent") == (result.Phases != nil) && (action == "concurrent") == (result.AioReturns != nil) && (action == "concurrent") == (result.FinalWaitNS > 0)
-	ok = ok && (action == "setup") == (result.OracleRegister != nil) && (action == "replay") == (result.Owner != nil) && (action == "replay") == (result.AcquireNS > 0)
+	ok = ok && (action == "setup") == (result.OracleRegister != nil) && (action == "replay" || action == "takeover") == (result.Owner != nil) && (action == "replay") == (result.AcquireNS > 0)
+	ok = ok && (action == "takeover") == (result.WriteNS > 0) && (action == "force-break") == (result.ForceBreak != nil) && (action != "force-break" || result.ForceBreak.valid())
+	ok = ok && rbdJournalBlocklisted(action) == (result.Blocklist != nil) && (!rbdJournalBlocklisted(action) || rbdLockBlocklistValid(result.Blocklist))
+	ok = ok && (action == "takeover") == (result.BlocklistBefore != nil) && (action != "takeover" || rbdLockBlocklistValid(result.BlocklistBefore))
 	if result.OracleRegister != nil {
 		ok = ok && rbdLockCallValid(result.OracleRegister, result.JournalHeader, "journal", "client_register") && result.OracleRegister.Code == 0
 	}
@@ -957,6 +1107,8 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 		ok = ok && rbdJournalEventsValid(result.Events, "write", plan.WriteEvents) && result.CloseNS > 0
 	case "replay":
 		ok = ok && result.Events == nil && result.CloseNS > 0
+	case "takeover":
+		ok = ok && rbdJournalEventsValid(result.Events, "takeover", plan.TakeoverEvents) && result.CloseNS > 0
 	case "concurrent":
 		owner := min(len(plan.ConcurrentOwnerEvents), len(result.Events))
 		ok = ok && rbdJournalEventsValid(result.Events[:owner], "concurrent-owner", plan.ConcurrentOwnerEvents) &&
@@ -1055,6 +1207,10 @@ func rbdJournalTarget(plan rbdJournalPlan, action string) string {
 		return plan.Image + ":exclusive-lock-handoff,native-write,journal-replay"
 	case "change-primary":
 		return plan.Image + ":osd-out,acting-primary"
+	case "force-break":
+		return plan.Image + ":exclusive-lock-break,osd-blocklist"
+	case "takeover":
+		return plan.Image + ":exclusive-lock-break,osd-blocklist,journal-replay,native-write"
 	}
 	return plan.Image
 }
@@ -1124,6 +1280,14 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	if action == "setup" {
 		x.journalImageID = native.ImageID
 	}
+	// The Go lock owner of the owner-loss and forced-break sequences is
+	// blocklisted by whoever breaks its lock; the cleanup removes that
+	// entry.
+	if action == "observe-locked" && (c.profile.admits(capRBDJournalOwnerLoss) || c.profile.admits(capRBDJournalForcedBreak)) && native.Lockers != nil {
+		for _, l := range native.Lockers.Lockers {
+			x.lockOwnerAddresses = append(x.lockOwnerAddresses, l.Address)
+		}
+	}
 	return c.rbdBaseFinish(m, nil)
 }
 
@@ -1134,18 +1298,25 @@ var _ = defineRequestControl("rbd-journal", frozenControlRank(15), (*fixtureClus
 var _ = collectDiagnosticFiles(
 	"rbd-journal-change-primary.json",
 	"rbd-journal-checkpoint.json",
+	"rbd-journal-force-break.json",
+	"rbd-journal-forced-break-results.json",
 	"rbd-journal-inspect.json",
 	"rbd-journal-lost-append-outcome.json",
 	"rbd-journal-lost-append-results.json",
+	"rbd-journal-observe-appended.json",
 	"rbd-journal-observe-committed.json",
+	"rbd-journal-observe-fenced.json",
 	"rbd-journal-observe-locked.json",
 	"rbd-journal-observe-recorded.json",
 	"rbd-journal-observe-registered.json",
 	"rbd-journal-observe-resubmitted.json",
+	"rbd-journal-owner-loss-outcome.json",
+	"rbd-journal-owner-loss-results.json",
 	"rbd-journal-primary-change-outcome.json",
 	"rbd-journal-primary-change-results.json",
 	"rbd-journal-replay.json",
 	"rbd-journal-results.json",
 	"rbd-journal-setup.json",
+	"rbd-journal-takeover.json",
 	"rbd-journal-write.json",
 )
