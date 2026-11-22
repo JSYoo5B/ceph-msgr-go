@@ -170,6 +170,9 @@ type rbdBaseScope struct {
 	// recorded before the command; the cleanup marks them in again.
 	journalImageID string
 	osdsMarkedOut  []int
+	// The RBD group-snapshot acceptance's group and two images in the same
+	// owned pool (rbd_group.go).
+	group rbdGroupState
 }
 
 func (x *rbdBaseScope) mutated(kind string) bool {
