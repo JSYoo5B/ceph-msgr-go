@@ -208,30 +208,6 @@ func erasureKillOSD(t *testing.T, ctx context.Context, base osdFixtureOracle, id
 	return restore
 }
 
-// erasureSettledPrimary waits until the native map names a primary other
-// than old's on a primary-eligible shard. An optimized pool's first map
-// after the loss may still name the nonprimary shard's OSD (pure CRUSH
-// order); that OSD then has the MON set a primary-first pg_temp and a later
-// map names a parity shard.
-func erasureSettledPrimary(t *testing.T, ctx context.Context, object string, old osdFixtureOracle, facts erasureFacts) osdFixtureOracle {
-	t.Helper()
-	deadline := time.Now().Add(120 * time.Second)
-	for {
-		fresh := poolPlace(t, ctx, 1, object, "")
-		nonprimary := slices.Contains(facts.nonprimary, int(fresh.Shard))
-		if fresh.ID != old.ID && fresh.ID >= 0 && !nonprimary {
-			return fresh
-		}
-		if fresh.ID >= 0 && nonprimary {
-			t.Logf("transient: epoch %d names osd.%d on nonprimary shard %d (acting %v)", fresh.Epoch, fresh.ID, fresh.Shard, fresh.Acting)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no new primary was chosen")
-		}
-		time.Sleep(2 * time.Second)
-	}
-}
-
 func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, plugin string, resubmitApplied bool) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
