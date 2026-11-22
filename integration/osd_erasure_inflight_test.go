@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net"
 	"net/netip"
@@ -273,15 +274,19 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 	)
 	phase := func(t *testing.T, object string, dropRequest, retryApplied bool) {
 		seed := bytes.Repeat([]byte{0x3c, 0, 0xff, byte(len(object))}, 1500)
-		route := poolPlace(t, ctx, 1, object, "")
-		facts.checkPlacement(t, route)
-		so := mutationConnection(t, c, ctx, route)
-		r := request(route, cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(seed)), Data: seed})
+		seedRoute := poolPlace(t, ctx, 1, object, "")
+		facts.checkPlacement(t, seedRoute)
+		so := mutationConnection(t, c, ctx, seedRoute)
+		r := request(seedRoute, cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(seed)), Data: seed})
 		r.ModificationTime = cephmsgr.OSDTime{Seconds: seeded}
 		if _, err := so.Request(ctx, r); err != nil {
 			t.Fatal("seed", err)
 		}
 		so.Close()
+		// The first attempt carries a clean placement and the epoch at
+		// which its interval started, which the replacement is judged
+		// against.
+		route, since := erasureCleanPG(t, ctx, object, facts)
 		pre := poolObserve(t, ctx, 1, object, "", "")
 		if pre.Code != 0 || !bytes.Equal(pre.Data, seed) || pre.Seconds != seeded || xattrInventory(pre)[attr] != "" {
 			t.Fatal("native pre-state differs", pre.Code, pre.Seconds)
@@ -400,7 +405,22 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 		o.Close()
 		fc.disarm()
 
-		fresh := erasureSettledPrimary(t, ctx, object, route, facts)
+		// The replacement is judged on one observation of the PG: for an
+		// optimized pool the first member of the primary-first order leads
+		// under a pg_temp (with shard 0 lost, parity shard k), and the new
+		// primary reports the PG active in a newer interval.
+		lead := erasureLeadAfterLoss(facts, int(route.Shard))
+		replaced, err := erasureAwaitPG(t, ctx, object, "PG under the replacement primary", func(o pgIntervalObservation) error {
+			shard, err := o.failedOverOn(route, facts.nonprimary, since)
+			if err == nil && optimized && route.Shard == 0 && (shard != lead || !o.Before.PGTemp) {
+				err = fmt.Errorf("after the loss of shard 0 the primary holds shard %d (pg_temp %v), expected shard %d", shard, o.Before.PGTemp, lead)
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fresh := *replaced.Before
 		freshEndpoint := osdEndpoint(t, fresh.Address)
 		t.Logf("epoch %d -> %d: primary osd.%d shard %d -> osd.%d shard %d, acting %v -> %v, pg_temp %v primary-first %+v",
 			route.Epoch, fresh.Epoch, route.ID, route.Shard, fresh.ID, fresh.Shard, route.Acting, fresh.Acting, fresh.PGTemp, routePrimaryFirst(fresh))
@@ -496,6 +516,14 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 				t.Logf("fresh-transaction control: tid %d (original %d), version %d -> %d, tail count %d", controlReply.Transaction, sub.Transaction, final.Version, controlState.Version, bytes.Count(controlState.Data, tail))
 				final = controlState
 			}
+			// The replies count as the judged replacement's only if its
+			// interval held around every request sent on it. A changed
+			// interval leaves the route that answered unverified; nothing
+			// is resent.
+			if err := erasurePGState(t, ctx, object).heldSince(fresh); err != nil {
+				t.Fatalf("the interval of the replacement osd.%d shard %d at epoch %d did not hold around the resubmission, so the route that answered is unverified: %v", fresh.ID, fresh.Shard, fresh.Epoch, err)
+			}
+			t.Logf("the replacement osd.%d shard %d primary-first %+v at epoch %d held its interval since %d around the resubmission", fresh.ID, fresh.Shard, routePrimaryFirst(fresh), fresh.Epoch, replaced.Query.SameIntervalSince)
 		}
 
 		// Restart the killed OSD and wait for clean PGs: the returned shard
