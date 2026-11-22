@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -240,91 +241,116 @@ func erasureFailoverScenario(t *testing.T, width erasureWidth, optimized bool, p
 	}
 
 	t.Run("degraded read reconstructs the object", func(t *testing.T) {
-		var victim int32 = -1
-		for _, id := range route.Acting {
-			if id != route.ID {
-				victim = id
-				break
-			}
+		// Take out the OSD of the first data shard other than the primary's
+		// that the full read needs. The reads count only on a placement
+		// judged active under the unchanged primary with that shard's
+		// position alone empty, and only if that interval held around them:
+		// the primary then has to decode the missing chunk from the others.
+		origin, since := erasureCleanPG(t, ctx, subject, facts)
+		shard := erasureReadShard(origin, width.k, facts.chunk, len(payloads[subject]))
+		if shard < 0 {
+			t.Fatal("the subject reaches no data shard other than the primary's", origin.Shard, facts.chunk, len(payloads[subject]))
 		}
+		victim := origin.Acting[shard]
 		restore := kill(t, victim)
 		defer restore()
-		// Read only once the map has dropped the victim from the acting set, so
-		// the primary must reconstruct the missing shard from the others.
-		var degraded osdFixtureOracle
-		deadline := time.Now().Add(120 * time.Second)
-		for {
-			degraded = poolPlace(t, ctx, 1, subject, "")
-			if degraded.Acting[route.Shard] == route.ID && !slicesContains(degraded.Acting, victim) {
-				break
+		degraded, changed, err := erasureHeldRequests(3, func() (osdFixtureOracle, error) {
+			o, err := erasureAwaitPG(t, ctx, subject, fmt.Sprintf("PG without osd.%d on shard %d", victim, shard), func(o pgIntervalObservation) error {
+				return o.activeWithout(origin, []int{shard}, since)
+			})
+			if err != nil {
+				return osdFixtureOracle{}, err
 			}
-			if time.Now().After(deadline) {
-				t.Fatal("the map never marked the victim down", degraded.Acting)
+			return *o.Before, nil
+		}, func(r osdFixtureOracle) error {
+			data, err := read(t, r, nil, 60*time.Second)
+			if err != nil || !bytes.Equal(data, payloads[subject]) {
+				return fmt.Errorf("degraded read: %v", err)
 			}
-			time.Sleep(2 * time.Second)
+			if n := poolObserve(t, ctx, 1, subject, "", ""); !bytes.Equal(n.Data, payloads[subject]) {
+				return errors.New("native degraded read differs")
+			}
+			return nil
+		}, func() pgIntervalObservation { return erasurePGState(t, ctx, subject) })
+		for _, c := range changed {
+			t.Log("interval changed around the degraded reads, not attributed:", c)
 		}
-		data, err := read(t, degraded, nil, 60*time.Second)
-		if err != nil || !bytes.Equal(data, payloads[subject]) {
-			t.Fatal("degraded read", err)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if n := poolObserve(t, ctx, 1, subject, "", ""); !bytes.Equal(n.Data, payloads[subject]) {
-			t.Fatal("native degraded read differs")
-		}
-		t.Logf("read with osd.%d down: primary osd.%d shard %d acting %v", victim, degraded.ID, degraded.Shard, degraded.Acting)
+		t.Logf("read with osd.%d (data shard %d, chunk %d) down: primary osd.%d shard %d acting %v at epoch %d, interval held",
+			victim, shard, facts.chunk, degraded.ID, degraded.Shard, degraded.Acting, degraded.Epoch)
 	})
 
 	t.Run("primary failover changes the shard", func(t *testing.T) {
-		old := poolPlace(t, ctx, 1, subject, "")
-		restore := kill(t, old.ID)
-		defer restore()
-		fresh := erasureSettledPrimary(t, ctx, subject, old, facts)
-		t.Logf("primary osd.%d shard %d -> osd.%d shard %d at epoch %d pg_temp %v primary-first %+v (acting %v -> %v)", old.ID, old.Shard, fresh.ID, fresh.Shard, fresh.Epoch, fresh.PGTemp, routePrimaryFirst(fresh), old.Acting, fresh.Acting)
+		old, since := erasureCleanPG(t, ctx, subject, facts)
 		if slices.Contains(facts.nonprimary, int(old.Shard)) {
 			t.Fatal("an optimized EC pool started with a nonprimary shard as primary", old.Shard, facts.nonprimary)
 		}
-		if fresh.Replicas != facts.size || fresh.Nonprimary != len(facts.nonprimary) {
-			t.Fatal("placement after failover changed the pool facts", fresh.Replicas, fresh.Nonprimary)
-		}
+		restore := kill(t, old.ID)
+		defer restore()
 		// The primary-first order is shard 0, the primary-eligible parity
 		// shards, then the nonprimary shards, and a pg_temp's primary is its
 		// first live member (OSDMap::_get_temp_osds, v20.2.4). With only shard
 		// 0 lost, the first parity shard, k, must lead an optimized pool.
-		if lead := erasureLeadAfterLoss(facts, int(old.Shard)); optimized && old.Shard == 0 && (int(fresh.Shard) != lead || !fresh.PGTemp) {
-			t.Fatalf("after the loss of shard 0 the primary holds shard %d (pg_temp %v), expected shard %d", fresh.Shard, fresh.PGTemp, lead)
-		}
-		// The OSD silently discards a request older than its PG's current
-		// interval, and the map may still move while peering settles. Like
-		// Objecter on a new map, the caller resends with the newer placement;
-		// a request is never resent under the same epoch.
-		var data []byte
-		var err error
-		for attempt := 0; ; attempt++ {
-			data, err = read(t, fresh, nil, 15*time.Second)
-			if err == nil {
-				break
+		lead := erasureLeadAfterLoss(facts, int(old.Shard))
+		judged := func() (osdFixtureOracle, error) {
+			o, err := erasureAwaitPG(t, ctx, subject, fmt.Sprintf("PG after the loss of osd.%d", old.ID), func(o pgIntervalObservation) error {
+				shard, err := o.failedOverOn(old, facts.nonprimary, since)
+				if err == nil && optimized && old.Shard == 0 && (shard != lead || !o.Before.PGTemp) {
+					err = fmt.Errorf("after the loss of shard 0 the primary holds shard %d (pg_temp %v), expected shard %d", shard, o.Before.PGTemp, lead)
+				}
+				return err
+			})
+			if err != nil {
+				return osdFixtureOracle{}, err
 			}
-			now := poolPlace(t, ctx, 1, subject, "")
-			t.Logf("attempt %d at epoch %d (osd.%d shard %d pg_temp %v): %v; placement now epoch %d osd.%d shard %d acting %v", attempt, fresh.Epoch, fresh.ID, fresh.Shard, fresh.PGTemp, err, now.Epoch, now.ID, now.Shard, now.Acting)
-			if now.Epoch == fresh.Epoch || attempt == 4 {
-				n := poolObserve(t, ctx, 1, subject, "", "")
-				t.Fatalf("read through the new primary: %v (native code %d equal=%v)", err, n.Code, bytes.Equal(n.Data, payloads[subject]))
-			}
-			fresh = now
+			return *o.Before, nil
 		}
-		if !bytes.Equal(data, payloads[subject]) {
-			t.Fatal("read through the new primary differs")
-		}
-		if hash && optimized && fresh.PGTemp && fresh.Shard != 0 {
-			// Control: sent in the actual numbering, the shard reaches another
-			// shard's PG on this OSD after the OSD's pre-Tentacle conversion.
-			if _, err := read(t, fresh, func(r *cephmsgr.OSDRequest) { r.Placement.PrimaryFirst = nil }, 5*time.Second); err == nil {
-				t.Fatal("the OSD answered an optimized pool's shard sent without primary-first numbering")
+		// Every request below carries the judged placement, and they count
+		// only if its interval held around them: the read, the unconverted
+		// shard and the old shard are all judged on the route that answered.
+		// An OSD silently discards a request older than its PG's interval,
+		// so a refusal in a changed interval shows nothing; such an attempt
+		// is reported and the requests go again on a newly judged placement.
+		send := func(r osdFixtureOracle) error {
+			data, err := read(t, r, nil, 15*time.Second)
+			if err != nil {
+				return fmt.Errorf("read through the new primary: %w", err)
 			}
-		}
-		if hash && fresh.Shard != old.Shard {
-			if _, err := read(t, fresh, func(r *cephmsgr.OSDRequest) { r.Placement.Shard = uint8(old.Shard) }, 5*time.Second); err == nil {
-				t.Fatal("the new primary answered a request carrying the old shard")
+			if !bytes.Equal(data, payloads[subject]) {
+				return errors.New("read through the new primary differs")
 			}
+			if hash && optimized {
+				// Control: sent in the actual numbering, the shard reaches
+				// another shard's PG on this OSD after the OSD's pre-Tentacle
+				// conversion.
+				if !r.PGTemp || r.Shard == 0 || routePrimaryFirst(r) == nil {
+					return fmt.Errorf("the answering placement osd.%d shard %d pg_temp %v has no primary-first numbering to control", r.ID, r.Shard, r.PGTemp)
+				}
+				if _, err := read(t, r, func(q *cephmsgr.OSDRequest) { q.Placement.PrimaryFirst = nil }, 5*time.Second); err == nil {
+					return errors.New("the OSD answered an optimized pool's shard sent without primary-first numbering")
+				}
+			}
+			if hash {
+				if _, err := read(t, r, func(q *cephmsgr.OSDRequest) { q.Placement.Shard = uint8(old.Shard) }, 5*time.Second); err == nil {
+					return errors.New("the new primary answered a request carrying the old shard")
+				}
+			}
+			return nil
+		}
+		fresh, changed, err := erasureHeldRequests(5, judged, send, func() pgIntervalObservation { return erasurePGState(t, ctx, subject) })
+		for _, c := range changed {
+			t.Log("interval changed around the failover requests, not attributed:", c)
+		}
+		if err != nil {
+			n := poolObserve(t, ctx, 1, subject, "", "")
+			t.Fatalf("%v (native code %d equal=%v)", err, n.Code, bytes.Equal(n.Data, payloads[subject]))
+		}
+		t.Logf("primary osd.%d shard %d -> osd.%d shard %d at epoch %d pg_temp %v primary-first %+v (acting %v -> %v); answered in that interval after %d unattributed attempts",
+			old.ID, old.Shard, fresh.ID, fresh.Shard, fresh.Epoch, fresh.PGTemp, routePrimaryFirst(fresh), old.Acting, fresh.Acting, len(changed))
+		if fresh.Replicas != facts.size || fresh.Nonprimary != len(facts.nonprimary) {
+			t.Fatal("placement after failover changed the pool facts", fresh.Replicas, fresh.Nonprimary)
 		}
 	})
 }
