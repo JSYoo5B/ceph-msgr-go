@@ -157,6 +157,7 @@ func (r *ecEpochRun) degradedObject(object string, seeded, degradedAt uint32) de
 	absent := r.waitState("active without the last parity shard", object, func(o pgIntervalObservation) error { return o.activeWithout(route, []int{last}, since) })
 	d.data = bytes.Repeat([]byte("written while the parity shard is away\x02"), 100)
 	d.written = r.write("overwrite while the shard is away", *absent.After, d.data, degradedAt, cephmsgr.OSDSnapContext{})
+	r.heldThrough("the overwrite while the shard is away", object, *absent.After)
 
 	// Registered after the run's own cleanups, so it runs before their
 	// recovery, which waits for clean PGs.
@@ -184,6 +185,7 @@ func (r *ecEpochRun) degradedObject(object string, seeded, degradedAt uint32) de
 	if d.other.PGID != d.now.PGID || d.other.ID != d.now.ID || d.other.Shard != d.now.Shard {
 		t.Fatal("the other object left the PG or its primary", d.other, d.now)
 	}
+	r.heldThrough("the pre-state read on the degraded PG", object, d.now)
 	return d
 }
 
@@ -253,11 +255,12 @@ func (r *ecEpochRun) waitDegraded(d degradedObject, p *heldPause, call heldCall,
 
 // cleanInInterval unsets nothing; it waits for every PG to be clean and for
 // one observation of the PG active+clean on route's placement in the
-// interval that started at since: no OSD was marked down in between.
-func (r *ecEpochRun) cleanInInterval(object string, route osdFixtureOracle, since uint32) {
+// interval that started at since: no OSD was marked down in between. It
+// returns the placement of that observation.
+func (r *ecEpochRun) cleanInInterval(object string, route osdFixtureOracle, since uint32) osdFixtureOracle {
 	r.t.Helper()
 	r.clean()
-	r.waitState("clean in the same interval", object, func(o pgIntervalObservation) error {
+	seen := r.waitState("clean in the same interval", object, func(o pgIntervalObservation) error {
 		if err := o.cleanOn(); err != nil {
 			return err
 		}
@@ -266,6 +269,7 @@ func (r *ecEpochRun) cleanInInterval(object string, route osdFixtureOracle, sinc
 		}
 		return nil
 	})
+	return *seen.After
 }
 
 // osdMapState is one OSD's entry of one native osd dump (oracle mode
@@ -412,8 +416,8 @@ func erasureDegradedWriteWaitScenario(t *testing.T, width erasureWidth) {
 	t.Logf("applied once after the object's recovery: version %d -> %d", d.pre.Version, final.Version)
 
 	r.unsetFlags(d)
-	r.cleanInInterval(object, d.route, d.nowSince)
-	recovered := poolObserve(t, r.ctx, 1, object, "", "")
+	clean := r.cleanInInterval(object, d.route, d.nowSince)
+	recovered := r.observeIn("the native read on the clean placement", object, clean)
 	if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || recovered.Seconds != final.Seconds || !maps.Equal(xattrInventory(recovered), xattrInventory(final)) {
 		t.Fatal("native state after recovery differs", recovered.Version, final.Version)
 	}

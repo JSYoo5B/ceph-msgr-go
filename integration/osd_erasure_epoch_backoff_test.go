@@ -350,6 +350,7 @@ func TestCephOSDErasureOptimizedK2M2ReplacementPGBackoffIntegration(t *testing.T
 	if route.Shard != 0 || !slices.Equal(r.facts.nonprimary, []int{1}) {
 		t.Fatalf("the placement %+v with nonprimary shards %v is not led by shard 0 with nonprimary shard 1", route, r.facts.nonprimary)
 	}
+	r.heldThrough("the pre-state read", object, route)
 
 	primary := r.kill(route.ID)
 	fresh, replacedSince := r.awaitReplacement(object, route, since)
@@ -499,7 +500,7 @@ func TestCephOSDErasureOptimizedK2M2ReplacementPGBackoffIntegration(t *testing.T
 	r.heldThrough("the unanswered STAT and the resubmission in the active interval under the replacement", object, current)
 
 	back, _ := r.primaryBack(object, route, primary, active.Query.SameIntervalSince)
-	recovered := poolObserve(t, r.ctx, 1, object, "", "")
+	recovered := r.observeIn("the native read at the returned primary", object, back)
 	if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || recovered.Seconds != final.Seconds || !maps.Equal(xattrInventory(recovered), xattrInventory(final)) {
 		t.Fatal("native state after the return differs", recovered.Version, final.Version)
 	}
@@ -590,6 +591,7 @@ func TestCephOSDErasureOptimizedK2M2ObjectBackoffIntegration(t *testing.T) {
 	absent := r.waitState("active without the last parity shard", object, func(o pgIntervalObservation) error { return o.activeWithout(route, []int{last}, since) })
 	degraded := bytes.Repeat([]byte("written while shard 3 is away\x01"), 120)
 	written := r.write("overwrite while the shard is away", *absent.After, degraded, degradedAt, cephmsgr.OSDSnapContext{})
+	r.heldThrough("the overwrite while the shard is away", object, *absent.After)
 
 	flagged := false
 	// Registered after the run's own cleanups, so it runs before their
@@ -697,7 +699,7 @@ func TestCephOSDErasureOptimizedK2M2ObjectBackoffIntegration(t *testing.T) {
 	flagged = false
 	r.clean()
 	// The primary never stopped and recovery ends no interval.
-	r.waitState("clean again", object, func(o pgIntervalObservation) error {
+	clean := r.waitState("clean again", object, func(o pgIntervalObservation) error {
 		if err := o.cleanOn(); err != nil {
 			return err
 		}
@@ -706,7 +708,7 @@ func TestCephOSDErasureOptimizedK2M2ObjectBackoffIntegration(t *testing.T) {
 		}
 		return nil
 	})
-	recovered := poolObserve(t, r.ctx, 1, object, "", "")
+	recovered := r.observeIn("the native read on the clean placement", object, *clean.After)
 	if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || !maps.Equal(xattrInventory(recovered), xattrInventory(final)) {
 		t.Fatal("native state after recovery differs", recovered.Version, final.Version)
 	}

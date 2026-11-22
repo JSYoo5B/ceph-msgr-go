@@ -54,6 +54,7 @@ func TestCephOSDErasureOptimizedK2M2DisconnectedNotifyIntegration(t *testing.T) 
 	}
 	cookie := watch.Cookie()
 	r.watchers("at the original primary", object, 1, gid, cookie)
+	r.heldThrough("the watch and the listing at the original primary", object, route)
 
 	fresh, outage := r.replacePrimary(object, route, since)
 	o.Close()
@@ -183,6 +184,7 @@ func TestCephOSDErasureOptimizedK2M2SnapTrimFailoverIntegration(t *testing.T) {
 	if s := trim(); copyPurgedPhase(s, s1) != "pruned" || s.State != "active+clean" {
 		t.Fatalf("before the outage the first snapshot is %q in %+v", copyPurgedPhase(s, s1), s)
 	}
+	r.heldThrough("the trim state before the outage", object, route)
 
 	fresh, outage := r.replacePrimary(object, route, since)
 	s2 := r.allocateSnap()
