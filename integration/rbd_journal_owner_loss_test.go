@@ -5,10 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,24 +30,29 @@ import (
 // its silent connection and never sends anything again, so it releases
 // nothing, does not unwatch and does not renew its watch, which the OSD
 // keeps for its timeout after the registration. A native librbd write (the
-// takeover) then takes the lock. Two observations bound how it found the
-// lock. Right before its first write the takeover lists the subject's lock
-// record (client, cookie and address) and the subject's watch with that
-// cookie at that address. The observer receives from the takeover's
-// instance and watch handle at least one RequestLock, then only its
-// AcquiredLock and its ReleasedLock. A RequestLock says who asked and when,
-// not why: at v20.2.4 ExclusiveLock.cc post_acquire_lock_handler sends it
-// when the acquisition ends with -EBUSY (AcquireRequest.cc handle_get_locker)
-// or -EAGAIN, and BreakRequest.cc returns -EAGAIN when a watcher matches the
-// locker's address and handle (handle_get_watchers) or when the locker
-// changed on its recheck (handle_get_locker), all in
-// ceph/ceph/blob/v20.2.4/src/librbd/. The two observations are consistent
-// with the live-watcher branch, which the run is set up to reach, but do not
-// single it out. After the takeover the address of the subject's lock
-// record is blocklisted and the lock was taken; that is consistent with
-// BreakRequest.cc, which blocklists that address and then breaks the lock
-// once no watcher matches the record, and neither that check nor that order
-// is observed. The takeover acquires the lock, opens the journal, replays the owned entry and
+// takeover) then takes the lock. Right before its first write the takeover
+// lists the subject's lock record (client, cookie and address) and the
+// subject's watch with that cookie at that address. The observer receives
+// from the takeover's instance and watch handle at least one RequestLock,
+// then only its AcquiredLock and its ReleasedLock. A RequestLock says who
+// asked and when, not why: at v20.2.4 ExclusiveLock.cc
+// post_acquire_lock_handler sends it when the acquisition ends with -EBUSY
+// (AcquireRequest.cc handle_get_locker) or -EAGAIN, and BreakRequest.cc
+// returns -EAGAIN when a watcher matches the locker's address and handle
+// (handle_get_watchers) or when the locker changed on its recheck
+// (handle_get_locker), all in ceph/ceph/blob/v20.2.4/src/librbd/. librbd's
+// own debug log of the takeover (level 10, the lines of those files and of
+// ImageWatcher.cc) names the branch: for each RequestLock the observer
+// received, one attempt found the lock held (handle_lock -EBUSY),
+// BreakRequest found a watcher with the locker's address and handle ("lock
+// owner is still alive") and ended with -EAGAIN, and
+// post_acquire_lock_handler requested the lock. In the last attempt
+// BreakRequest found no such watcher, reread the locker, blocklisted its
+// address, waited for the latest OSDMap and broke the lock, which the
+// attempt then took. The log is librbd's report of its own steps, not an
+// observation of the wire; the observation after the takeover shows the
+// address of the subject's lock record blocklisted, which it was not before.
+// The takeover opens the journal, replays the owned entry and
 // journals and applies its own write, which covers the first half of the
 // owned extent. The takeover's native
 // observation shows the owned entry exactly once in the journal, followed
@@ -87,22 +95,25 @@ func TestCephRBDJournalOwnerLossIntegration(t *testing.T) {
 // owner's address and breaks the lock (internal.cc lock_break,
 // ManagedLock.cc break_lock and managed_lock/BreakRequest.cc at
 // ceph/ceph/blob/v20.2.4/src/librbd/). After lock_break the instance lists
-// no owner and the address blocklisted; the order of the two is
-// BreakRequest's and is not observed separately. The subject then sends, once each on
+// no owner and the address blocklisted. librbd's debug log of lock_break
+// (level 10) shows the order: BreakRequest reports the owner's watch ("lock
+// owner is still alive") and goes on, rereads the locker, blocklists its
+// address, waits for the latest OSDMap and breaks the lock. The subject then sends, once each on
 // the connection that sent lock.lock and naming the OSDMap epoch it read
 // after the break, a watch ping, the append of its second entry and the
 // unlock. The OSD answers each with -108 (EBLOCKLISTED), a known refusal,
 // and none is sent again. A native observation shows every journal object
 // unchanged since the append, the lock free and the subject's watch gone.
 // Finally a native librbd write, which lists no lock record and not the
-// subject's watch right before its first write, takes the free lock,
+// subject's watch right before its first write and whose debug log shows the
+// locker missing and the lock taken at once, takes the free lock,
 // replays the subject's entry and journals and applies its own write over the first half of that
 // extent: the same postconditions as in the owner-loss variant, except that
 // the subject's address was already blocklisted before the takeover. Not
-// covered: a fenced owner's requests on a connection whose address the lock
-// record does not name (each OSD connection of a client without
-// EnableCephFS has its own address nonce), requests in flight at the break,
-// and a break by a client that is not librbd.
+// covered here: a fenced owner's requests on a connection whose address the
+// lock record does not name and requests in flight at the break (both in
+// TestCephRBDJournalForcedBreakPendingIntegration), and a break by a client
+// that is not librbd.
 //
 //scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournalforcedbreak key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-forced-break
 //scenario:row rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournalforcedbreak key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-forced-break
@@ -202,6 +213,100 @@ type rbdJournalTakeover struct {
 	// observer responder's failure, if any.
 	Notes       []rbdLockNotification
 	NoteFailure string
+	// LockPath is the takeover's lock acquisition as librbd's debug log
+	// shows it.
+	LockPath *rbdJournalLockPath
+}
+
+// rbdJournalLockPath is one native action's lock steps as librbd's debug log
+// at level 10 shows them: each kept line of managed_lock/AcquireRequest.cc,
+// managed_lock/BreakRequest.cc and ExclusiveLock.cc post_acquire_lock_handler
+// as "<request>.<function> <result>", and ImageWatcher.cc notify_request_lock
+// as "watcher.notify_request_lock", in the order logged (all at
+// ceph/ceph/blob/v20.2.4/src/librbd/). Present, Matched and Truncated are
+// the driver's: a missing log file, or more lines than it keeps, leaves the
+// path unjudgeable.
+type rbdJournalLockPath struct {
+	Present, Truncated bool
+	Matched            int
+	Steps              []string
+}
+
+// rbdJournalLockStep is one kept line: an optional object ordinal, the
+// function and its result, or BreakRequest's verdict on a matching watcher.
+var rbdJournalLockStep = regexp.MustCompile(`^(?:@[0-9]+ )?([a-z_]+): (r=-?[0-9]+|lock owner is still alive)$`)
+
+// rbdJournalLockSteps are the functions a path keeps. Every one logs "r=" on
+// entry at level 10; BreakRequest's handle_get_watchers also logs "lock
+// owner is still alive" for a watcher whose address and handle match the
+// locker's.
+var rbdJournalLockSteps = map[string]bool{
+	"acquire.handle_get_locker": true, "acquire.handle_lock": true, "acquire.handle_break_lock": true,
+	"break.handle_get_watchers": true, "break.handle_get_locker": true, "break.handle_blocklist": true, "break.handle_wait_for_osd_map": true,
+	"break.handle_break_lock": true, "break.finish": true, "exclusive.post_acquire_lock_handler": true,
+}
+
+// rbdJournalLockPathOf projects the driver's lock log, nil without one.
+func rbdJournalLockPathOf(l *nativeRBDJournalLockLog) *rbdJournalLockPath {
+	if l == nil {
+		return nil
+	}
+	p := &rbdJournalLockPath{Present: l.Present, Truncated: l.Truncated, Matched: l.Matched, Steps: []string{}}
+	short := map[string]string{"librbd::managed_lock::AcquireRequest": "acquire", "librbd::managed_lock::BreakRequest": "break", "librbd::ExclusiveLock": "exclusive"}
+	for _, line := range l.Lines {
+		if line.Component == "librbd::ImageWatcher" {
+			if strings.HasSuffix(line.Text, " notify request lock") {
+				p.Steps = append(p.Steps, "watcher.notify_request_lock")
+			}
+			continue
+		}
+		m := rbdJournalLockStep.FindStringSubmatch(line.Text)
+		if short[line.Component] == "" || m == nil {
+			continue
+		}
+		step := short[line.Component] + "." + m[1]
+		if rbdJournalLockSteps[step] && (strings.HasPrefix(m[2], "r=") || step == "break.handle_get_watchers") {
+			p.Steps = append(p.Steps, step+" "+m[2])
+		}
+	}
+	return p
+}
+
+// The lock paths the claims expect. A free lock is locked at once
+// (AcquireRequest.cc handle_get_locker -ENOENT, send_lock).
+var rbdJournalFreeLockPath = []string{"acquire.handle_get_locker r=-2", "acquire.handle_lock r=0", "exclusive.post_acquire_lock_handler r=0"}
+
+// rbdJournalForcedBreakLockPath is lock_break's BreakRequest with
+// force_break_lock: it reports the live owner's watch and goes on, rereads
+// the locker, blocklists its address, waits for the latest OSDMap and then
+// breaks the lock.
+var rbdJournalForcedBreakLockPath = []string{"break.handle_get_watchers r=0", "break.handle_get_watchers lock owner is still alive", "break.handle_get_locker r=0",
+	"break.handle_blocklist r=0", "break.handle_wait_for_osd_map r=0", "break.handle_break_lock r=0", "break.finish r=0"}
+
+// rbdJournalOwnerLossLockPath is the takeover of a lock whose owner's watch
+// is listed for the first requests attempts. Each such attempt finds the
+// lock held (-EBUSY), and BreakRequest finds the locker's address and handle
+// among the watchers and ends with -EAGAIN, so post_acquire_lock_handler
+// sends a RequestLock. The last attempt finds no such watcher, rereads the
+// locker, blocklists its address, waits for the latest OSDMap, breaks the
+// lock and locks it.
+func rbdJournalOwnerLossLockPath(requests int) []string {
+	var path []string
+	for range requests {
+		path = append(path, "acquire.handle_get_locker r=0", "acquire.handle_lock r=-16", "break.handle_get_watchers r=0", "break.handle_get_watchers lock owner is still alive",
+			"break.finish r=-11", "acquire.handle_break_lock r=-11", "exclusive.post_acquire_lock_handler r=-11", "watcher.notify_request_lock")
+	}
+	return append(path, "acquire.handle_get_locker r=0", "acquire.handle_lock r=-16", "break.handle_get_watchers r=0", "break.handle_get_locker r=0",
+		"break.handle_blocklist r=0", "break.handle_wait_for_osd_map r=0", "break.handle_break_lock r=0", "break.finish r=0", "acquire.handle_break_lock r=0",
+		"acquire.handle_lock r=0", "exclusive.post_acquire_lock_handler r=0")
+}
+
+// rbdJournalLockPathClaims checks one action's lock path against want.
+func rbdJournalLockPathClaims(name string, p *rbdJournalLockPath, want []string, fail func(string, ...any)) {
+	if p == nil || !p.Present || p.Truncated || p.Matched == 0 || !slices.Equal(p.Steps, want) {
+		text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+		fail("%s: librbd's lock log does not show the expected lock path %v: %s", name, want, text(p))
+	}
 }
 
 // rbdJournalLockRecord is one locker of the image header's lock record.
@@ -223,6 +328,8 @@ type rbdJournalBreak struct {
 	LockerBefore, LockerCookieBefore, LockerAddressBefore string
 	WatchersBefore                                        []rbdJournalWatch
 	BlocklistBefore, Blocklist                            []rbdLockOwnerLossBlock
+	// LockPath is lock_break as librbd's debug log shows it.
+	LockPath *rbdJournalLockPath
 }
 
 // rbdJournalBlocked says whether address has an exact blocklist entry.
@@ -317,16 +424,17 @@ func rbdJournalTakeoverClaims(r *rbdJournalLostAppendRecord, v, before, locked, 
 // incompatible lock) and for -EAGAIN, which managed_lock/BreakRequest.cc
 // returns from handle_get_watchers (a watcher matches the locker's address
 // and handle) and from handle_get_locker (the locker changed on the
-// recheck). The record is consistent with the live-watcher branch the run
-// is set up to reach. That librbd blocklisted the address and broke the
-// lock once no watcher matched is likewise consistent with BreakRequest's
-// order and is not observed: the observation shows the address
-// blocklisted, the lock taken and the watch gone after the takeover.
+// recheck). librbd's debug log of the same acquisition names the branch:
+// one blocked attempt per RequestLock the observer received, each ended by
+// the live-watcher branch, then an attempt that finds no matching watcher,
+// blocklists the address, waits for the latest OSDMap, breaks the lock and
+// takes it (rbdJournalOwnerLossLockPath). The observation after the
+// takeover shows the address blocklisted, the lock free and the watch gone.
 //
 // Forced-break variant: the boundary lists no lock record and not the
-// subject's watch, which is consistent with the takeover taking a free lock
-// (AcquireRequest.cc handle_get_locker -ENOENT, then send_lock). The variant keeps no
-// observer watch and judges no notification.
+// subject's watch, and librbd's debug log shows the takeover taking a free
+// lock (AcquireRequest.cc handle_get_locker -ENOENT, then send_lock). The
+// variant keeps no observer watch and judges no notification.
 func rbdJournalTakeoverBoundaryClaims(r *rbdJournalLostAppendRecord, fail func(string, ...any)) {
 	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
 	ol := r.OwnerLoss
@@ -345,6 +453,7 @@ func rbdJournalTakeoverBoundaryClaims(r *rbdJournalLostAppendRecord, fail func(s
 		if tk.Notes != nil || tk.NoteFailure != "" || ol.ObserverWatchCookie != 0 {
 			fail("takeover notifications: the forced-break variant keeps no observer watch")
 		}
+		rbdJournalLockPathClaims("takeover lock path", tk.LockPath, rbdJournalFreeLockPath, fail)
 		return
 	}
 	locker := rbdJournalLockRecord{fmt.Sprintf("client.%d", r.SubjectGlobalID), r.LockCookie, ol.LockerAddress}
@@ -364,6 +473,10 @@ func rbdJournalTakeoverBoundaryClaims(r *rbdJournalLostAppendRecord, fail func(s
 		fail("takeover notifications: the observer did not receive at least one RequestLock from the takeover %s, then only its AcquiredLock and its ReleasedLock, each acknowledged empty (failure %q): %s",
 			text(native), tk.NoteFailure, text(notes))
 	}
+	// librbd's own log of the same acquisition: one blocked attempt per
+	// RequestLock the observer received, each ended by the live-watcher
+	// branch, then the break and the lock.
+	rbdJournalLockPathClaims("takeover lock path", tk.LockPath, rbdJournalOwnerLossLockPath(requests), fail)
 }
 
 // rbdJournalRequestLocks counts the RequestLock notifications that open the
@@ -480,6 +593,7 @@ func rbdJournalForcedBreakClaims(r *rbdJournalLostAppendRecord, stage string) []
 	} else {
 		blocked("force-break (before)", b.BlocklistBefore, false)
 		blocked("force-break (after)", b.Blocklist, true)
+		rbdJournalLockPathClaims("force-break lock path", b.LockPath, rbdJournalForcedBreakLockPath, fail)
 	}
 	entryAt("force-break", broke)
 	unmoved("force-break", broke)
@@ -518,7 +632,8 @@ func rbdJournalForcedBreakClaims(r *rbdJournalLostAppendRecord, stage string) []
 
 // rbdJournalTakeoverOf projects the takeover action's own output.
 func rbdJournalTakeoverOf(n *nativeRBDJournal) *rbdJournalTakeover {
-	tk := &rbdJournalTakeover{Owner: n.Owner != nil && *n.Owner, WriteNS: n.WriteNS, Events: []rbdJournalLostAppendEvent{}, NativeGlobalID: n.NativeGlobalID}
+	tk := &rbdJournalTakeover{Owner: n.Owner != nil && *n.Owner, WriteNS: n.WriteNS, Events: []rbdJournalLostAppendEvent{}, NativeGlobalID: n.NativeGlobalID,
+		LockPath: rbdJournalLockPathOf(n.LockLog)}
 	if b := n.Boundary; b != nil {
 		tk.BoundaryLockers, tk.BoundaryWatchers = []rbdJournalLockRecord{}, []rbdJournalWatch{}
 		tk.BoundaryTag, tk.BoundaryExclusive = b.Lockers.Tag, b.Lockers.Exclusive
@@ -607,30 +722,10 @@ func runRBDJournalForcedBreak(t *testing.T, s rbdJournalForcedBreakSteps) {
 	// Native librbd breaks the lock of the live owner; the subject's
 	// compensating unlock of a failed run would no longer name its lock.
 	s.released()
-	broke := s.native(t, "force-break")
-	fb := broke.ForceBreak
-	if fb == nil {
-		t.Fatal("native force-break output missing")
-	}
-	b := &rbdJournalBreak{IsOwner: fb.IsOwner, BreakNS: fb.BreakNS, Owners: []string{}, OwnersAfter: []string{}}
-	for _, o := range fb.Owners {
-		b.Owners = append(b.Owners, o.Owner)
-	}
-	for _, o := range fb.OwnersAfter {
-		b.OwnersAfter = append(b.OwnersAfter, o.Owner)
-	}
-	if len(fb.LockersBefore.Lockers) == 1 {
-		l := fb.LockersBefore.Lockers[0]
-		b.LockerBefore, b.LockerCookieBefore, b.LockerAddressBefore = l.Client, l.Cookie, l.Address
-	}
-	b.WatchersBefore = []rbdJournalWatch{}
-	for _, w := range fb.WatchersBefore {
-		b.WatchersBefore = append(b.WatchersBefore, rbdJournalWatch{w.ID, w.Cookie, w.Address})
-	}
-	if b.BlocklistBefore, err = rbdLockOwnerLossBlocks(fb.BlocklistBefore); err != nil {
+	b, err := rbdJournalBreakOf(s.native(t, "force-break"), r.Views["force-break"])
+	if err != nil {
 		t.Fatal(err)
 	}
-	b.Blocklist = r.Views["force-break"].Blocklist
 	ol.Break = b
 
 	// The fenced owner: a ping, the append of its next entry and the
@@ -674,6 +769,33 @@ func runRBDJournalForcedBreak(t *testing.T, s rbdJournalForcedBreakSteps) {
 	s.judge(t, "takeover")
 	t.Logf("go journal forced break tag=%d entry=0 object=%s locker=%s break=%v fenced=%v epoch=%d takeover_write=%v",
 		e.Tag, e.ObjectName, ol.LockerAddress, time.Duration(b.BreakNS), ol.Fenced, ol.FencedEpoch, time.Duration(taken.WriteNS))
+}
+
+// rbdJournalBreakOf projects the force-break action's own output and the
+// blocklist its observation read.
+func rbdJournalBreakOf(broke *nativeRBDJournal, view *rbdJournalLostAppendView) (*rbdJournalBreak, error) {
+	fb := broke.ForceBreak
+	if fb == nil {
+		return nil, errors.New("native force-break output missing")
+	}
+	b := &rbdJournalBreak{IsOwner: fb.IsOwner, BreakNS: fb.BreakNS, Owners: []string{}, OwnersAfter: []string{}, WatchersBefore: []rbdJournalWatch{}, Blocklist: view.Blocklist,
+		LockPath: rbdJournalLockPathOf(broke.LockLog)}
+	for _, o := range fb.Owners {
+		b.Owners = append(b.Owners, o.Owner)
+	}
+	for _, o := range fb.OwnersAfter {
+		b.OwnersAfter = append(b.OwnersAfter, o.Owner)
+	}
+	if len(fb.LockersBefore.Lockers) == 1 {
+		l := fb.LockersBefore.Lockers[0]
+		b.LockerBefore, b.LockerCookieBefore, b.LockerAddressBefore = l.Client, l.Cookie, l.Address
+	}
+	for _, w := range fb.WatchersBefore {
+		b.WatchersBefore = append(b.WatchersBefore, rbdJournalWatch{w.ID, w.Cookie, w.Address})
+	}
+	var err error
+	b.BlocklistBefore, err = rbdLockOwnerLossBlocks(fb.BlocklistBefore)
+	return b, err
 }
 
 // rbdJournalDigest is the hex SHA-256 of data.

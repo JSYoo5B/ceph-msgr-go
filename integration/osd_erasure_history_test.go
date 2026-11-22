@@ -128,20 +128,16 @@ func hobjectHead(route osdFixtureOracle) string {
 	return fmt.Sprintf("%d:%08x:::%s:head", route.Pool, bits.Reverse32(route.Hash), route.Name)
 }
 
-// The Go client issues a seed WRITEFULL and a known APPEND under client
-// incarnation 7 to an optimized isa k=2,m=2 pool. One bracketed snapshot of
-// the primary's native PG log must contain each request exactly once, as an
+// erasurePrimaryHistoryCalibrationScenario: the Go client issues a seed
+// WRITEFULL and a known APPEND under client incarnation 7 to an optimized
+// isa pool. One bracketed snapshot of the primary's native PG log must
+// contain each request exactly once, as an
 // ordinary log entry for that object at the reply's replay version, keyed by
 // the full entity/incarnation/TID identity. Near-miss identities, including
 // a real TID under the other request's incarnation, must not match. This
 // calibrates presence detection only: it claims nothing about absence,
 // replica or shard-local history, trimming or replay.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2primaryhistorycalibration key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
-//scenario:covers CLIENT to OSD
-//fixture:shareable I/O in its own EC pool only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
-func TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration(t *testing.T) {
-	width := erasureK2M2
+func erasurePrimaryHistoryCalibrationScenario(t *testing.T, width erasureWidth) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
 	}
@@ -243,4 +239,34 @@ func TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration(t *test
 			t.Fatalf("near-miss identity %s matched %+v", got.Reqid, got.Locations)
 		}
 	}
+}
+
+// TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration is
+// erasurePrimaryHistoryCalibrationScenario on optimized isa k=2,m=2 (four OSDs).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2primaryhistorycalibration key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:shareable I/O in its own EC pool only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
+func TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration(t *testing.T) {
+	erasurePrimaryHistoryCalibrationScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1PrimaryHistoryCalibrationIntegration is erasurePrimaryHistoryCalibrationScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1primaryhistorycalibration key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:shareable I/O in its own EC pool only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
+func TestCephOSDErasureOptimizedK3M1PrimaryHistoryCalibrationIntegration(t *testing.T) {
+	erasurePrimaryHistoryCalibrationScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2PrimaryHistoryCalibrationIntegration is erasurePrimaryHistoryCalibrationScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2primaryhistorycalibration key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:shareable I/O in its own EC pool only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
+func TestCephOSDErasureOptimizedK4M2PrimaryHistoryCalibrationIntegration(t *testing.T) {
+	erasurePrimaryHistoryCalibrationScenario(t, erasureK4M2)
 }

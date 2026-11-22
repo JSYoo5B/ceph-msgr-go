@@ -774,18 +774,18 @@ func rbdLockOwnerLossClaims(r *rbdLockOwnerLossRecord, stage string) []string {
 		// the fixture began, and holds none of the zombie's afterwards.
 		c, w := pending.Requests[0], pending.Requests[1]
 		goOwnerAt, ownerErr := time.Parse(time.RFC3339Nano, view("go-owner").ObservedUTC)
-		for _, request := range []rbdLockOwnerLossAttempt{c, w} {
-			i := slices.IndexFunc(a.OpsBefore, func(o rbdLockOwnerLossOp) bool {
-				return o.Client == entity(z) && o.Transaction == request.Submission.Transaction && request.Submission.Transaction != 0
-			})
-			if i < 0 {
-				fail("advance: the OSD did not report the zombie's %s (transaction %d) in flight before the epoch was raised: %s", request.Label, request.Submission.Transaction, text(a.OpsBefore))
+		ops, opProblems := rbdLockOwnerLossHeld(a.OpsBefore, entity(z), c.Submission.Transaction, w.Submission.Transaction)
+		for _, p := range opProblems {
+			fail("advance: before the epoch was raised, %s: %s", p, text(a.OpsBefore))
+		}
+		for i, request := range []rbdLockOwnerLossAttempt{c, w} {
+			if ops[i] == nil {
 				continue
 			}
-			initiated, err := rbdLockOwnerLossUntil(a.OpsBefore[i].InitiatedAt)
+			initiated, err := rbdLockOwnerLossUntil(ops[i].InitiatedAt)
 			at, parseErr := time.Parse(time.RFC3339Nano, initiated)
 			if err != nil || parseErr != nil || ownerErr != nil || !at.Before(goOwnerAt) {
-				fail("advance: the OSD did not have the zombie's %s before the go-owner observation (initiated %q, observed %q)", request.Label, a.OpsBefore[i].InitiatedAt, view("go-owner").ObservedUTC)
+				fail("advance: the OSD did not have the zombie's %s before the go-owner observation (initiated %q, observed %q)", request.Label, ops[i].InitiatedAt, view("go-owner").ObservedUTC)
 			}
 		}
 		if slices.ContainsFunc(a.OpsAfter, func(o rbdLockOwnerLossOp) bool { return o.Client == entity(z) }) {
@@ -883,6 +883,35 @@ func rbdLockBreakInput(locker rbdLockOwnerLossLocker) ([]byte, error) {
 	}
 	p := append(rbdString(rbdLockName), rbdEntityClient)
 	return rbdEnvelope(append(append(p, rbdLE64(uint64(number))...), rbdString(locker.Cookie)...)), nil
+}
+
+// rbdLockOwnerLossHeld finds the one record the OSD lists in flight for each
+// of a client's transactions, in order. A transaction it does not list, one it
+// lists more than once, and any other record of that client are problems: the
+// count of caller invocations alone cannot show that a request reached the OSD
+// only once.
+func rbdLockOwnerLossHeld(ops []rbdLockOwnerLossOp, client string, tids ...uint64) ([]*rbdLockOwnerLossOp, []string) {
+	var problems []string
+	held := make([]*rbdLockOwnerLossOp, len(tids))
+	for i, tid := range tids {
+		n := 0
+		for j := range ops {
+			if ops[j].Client == client && ops[j].Transaction == tid && tid != 0 {
+				n++
+				held[i] = &ops[j]
+			}
+		}
+		if n != 1 {
+			held[i] = nil
+			problems = append(problems, fmt.Sprintf("the OSD lists %d record(s) of %s transaction %d in flight, want one", n, client, tid))
+		}
+	}
+	for _, o := range ops {
+		if o.Client == client && !slices.Contains(tids, o.Transaction) {
+			problems = append(problems, fmt.Sprintf("the OSD lists another operation of %s in flight: %+v", client, o))
+		}
+	}
+	return held, problems
 }
 
 // rbdLockOwnerLossUntil normalizes a blocklist expiry as the MON prints it.
@@ -1753,7 +1782,8 @@ func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 	if pendingVariant {
 		// Two requests that the OSD holds: they name an epoch the cluster has
 		// not reached, so the OSD waits for that map before it looks at them.
-		// Each is sent once, from its own goroutine, and never again.
+		// The test invokes each once, from its own goroutine, and never
+		// again; the OSD's in-flight list shows what reached it.
 		p := record.Pending
 		p.SentAtEpoch, _ = blocklist(t, observer, "pending_epoch")
 		p.NamedEpoch = p.SentAtEpoch + rbdLockOwnerLossPendingEpochs
@@ -2188,7 +2218,7 @@ func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 		}
 		record.Pending.Advance = advance.Advance
 		done("advance-map")
-		// The OSD now has the named map and answers. Nothing was resent.
+		// The OSD now has the named map and answers. The test invokes nothing again.
 		settle(t, 1, 30*time.Second)
 		record.Pending.AnsweredUTC = time.Now().UTC().Format(time.RFC3339Nano)
 		done("pending_answered")
