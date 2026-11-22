@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 )
 
 func (c *fixtureCluster) controlMonitorElectionRequest(ctx context.Context, out string) error {
@@ -60,16 +61,20 @@ func (c *fixtureCluster) controlMonitorRestartRequest(ctx context.Context, out s
 
 var _ = defineControl("mon-restart", frozenControlRank(55), (*fixtureCluster).controlMonitorRestartRequest)
 
+// controlMonitorQuorumRequests serves the requests that stop and start all
+// MONs, in request-ID order, from one snapshot of the directory
+// (scanRequests): a start that a cleanup published after a stop whose wait
+// the test abandoned runs after it, never before.
 func (c *fixtureCluster) controlMonitorQuorumRequests(ctx context.Context, out string) error {
-	var fields []string
-	var err error
-	for _, action := range []string{"stop", "start"} {
-		fields, err = c.request(out, action+"-mons")
+	pending, err := pendingRequests(out, "start-mons", "stop-mons")
+	if err != nil {
+		return err
+	}
+	for _, r := range pending {
+		action := strings.TrimSuffix(r.name, "-mons")
+		fields, err := claim(out, r)
 		if err != nil {
 			return err
-		}
-		if fields == nil {
-			continue
 		}
 		if len(fields) != 1 {
 			return errors.New("invalid quorum request")

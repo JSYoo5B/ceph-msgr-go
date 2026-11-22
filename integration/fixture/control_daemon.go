@@ -1,10 +1,10 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -79,32 +79,25 @@ func (p profile) daemonControlAdmitted(kind, action string) bool {
 
 // controlDaemonRequests serves the stop, start and kill requests of the
 // daemons: per kind, every pending request of the three actions, in
-// request-ID order. A pause is a lease and has its own loop
-// (daemon_lease.go).
+// request-ID order, from one snapshot of the directory. A pause is a lease
+// and has its own loop (daemon_lease.go).
 func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) error {
 	for _, kind := range daemonControlKinds {
 		// The pending requests of the three actions of a kind run in
 		// request-ID order, the order of their publication: a start that a
 		// cleanup published after a kill or stop whose wait the test
-		// abandoned runs after it, never before.
-		type pendingAction struct {
-			action string
-			r      pendingRequest
+		// abandoned runs after it, never before. The three names are read
+		// in one snapshot (scanRequests), so a stop and its start published
+		// while the directory is read are served both in order, or neither
+		// in this poll.
+		actions := map[string]string{"stop-" + kind: "stop", "start-" + kind: "start", "kill-" + kind: "kill"}
+		pending, err := pendingRequests(out, slices.Sorted(maps.Keys(actions))...)
+		if err != nil {
+			return err
 		}
-		var pending []pendingAction
-		for _, action := range []string{"stop", "start", "kill"} {
-			requests, err := pendingRequests(out, action+"-"+kind)
-			if err != nil {
-				return err
-			}
-			for _, r := range requests {
-				pending = append(pending, pendingAction{action, r})
-			}
-		}
-		slices.SortFunc(pending, func(a, b pendingAction) int { return cmp.Compare(a.r.id, b.r.id) })
-		for _, p := range pending {
-			action := p.action
-			fields, err := claim(out, p.r)
+		for _, r := range pending {
+			action := actions[r.name]
+			fields, err := claim(out, r)
 			if err != nil {
 				return err
 			}
