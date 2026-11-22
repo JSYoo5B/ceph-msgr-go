@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -238,6 +239,80 @@ func TestRBDGroupTestOnlyEncodings(t *testing.T) {
 	}
 }
 
+// rbdAsyncRequestID is librbd's AsyncRequestId: the requester's ClientId and
+// its u64 request ID, without an envelope.
+type rbdAsyncRequestID struct {
+	Client  rbdClientID
+	Request uint64
+}
+
+// decodeRBDQuiesceNotify restates NotifyMessage::decode for QuiescePayload
+// and UnquiescePayload (ceph/ceph/blob/v20.2.4/src/librbd/WatchNotifyTypes.cc):
+// ENCODE_START(7, 1), the u32 op and the AsyncRequestId.
+func decodeRBDQuiesceNotify(data []byte) (uint32, rbdAsyncRequestID, error) {
+	var id rbdAsyncRequestID
+	d := &rbdDecoder{data: data}
+	version, body := d.header(1)
+	op := body.u32()
+	if d.err == nil && version != 7 {
+		d.err = fmt.Errorf("NotifyMessage version %d differs", version)
+	}
+	if d.err == nil && op != rbdNotifyQuiesce && op != rbdNotifyUnquiesce {
+		d.err = fmt.Errorf("notify op %d is not a quiesce request", op)
+	}
+	id.Client = rbdClientID{GID: body.u64(), Handle: body.u64()}
+	id.Request = body.u64()
+	d.adopt(body)
+	return op, id, d.done()
+}
+
+func TestRBDGroupQuiesceEncodings(t *testing.T) {
+	id := rbdAsyncRequestID{Client: rbdClientID{GID: 4100, Handle: 93}, Request: 2}
+	payload := binary.LittleEndian.AppendUint64(id.Client.encode(), id.Request)
+	for _, op := range []uint32{rbdNotifyQuiesce, rbdNotifyUnquiesce} {
+		message := rbdNotifyMessage(op, payload)
+		if len(message) != 6+4+24 || message[0] != 7 || message[1] != 1 {
+			t.Fatalf("quiesce NotifyMessage envelope %x", message)
+		}
+		got, decoded, err := decodeRBDQuiesceNotify(message)
+		if err != nil || got != op || decoded != id {
+			t.Fatal("quiesce NotifyMessage decoding", got, decoded, err)
+		}
+		for cut := 0; cut < len(message); cut++ {
+			if _, _, err := decodeRBDQuiesceNotify(message[:cut]); err == nil {
+				t.Fatal("truncated quiesce notification admitted", cut)
+			}
+		}
+		older := bytes.Clone(message)
+		older[0] = 6
+		if _, _, err := decodeRBDQuiesceNotify(older); err == nil {
+			t.Fatal("quiesce notification of another version admitted")
+		}
+	}
+	if _, _, err := decodeRBDQuiesceNotify(rbdLockNotify(rbdNotifyAcquiredLock, id.Client)); err == nil {
+		t.Fatal("AcquiredLock admitted as a quiesce request")
+	}
+	// The answers: librbd decodes a ResponseMessage and takes any result
+	// other than -EOPNOTSUPP (ImageWatcher::notify_quiesce).
+	if r, err := decodeRBDResponseMessage(rbdResponseMessage(rbdGroupQuiesceRefusal)); err != nil || r != -16 {
+		t.Fatal("quiesce refusal ResponseMessage", r, err)
+	}
+	incomplete := rbdGroupSnapRecord{ID: "s2", Name: "snap", State: rbdGroupSnapStateIncomplete, Snaps: []rbdGroupImageSnapSpec{{Pool: 3, ImageID: "i0"}, {Pool: 4, ImageID: "i1"}}}
+	list := append(binary.LittleEndian.AppendUint32(nil, 1), encodeRBDGroupSnapRecord(incomplete)...)
+	if records, err := decodeRBDGroupSnapList(list); err != nil || len(records) != 1 || !reflect.DeepEqual(records[0], incomplete) {
+		t.Fatal("INCOMPLETE group record decoding", records, err)
+	}
+}
+
+const (
+	rbdNotifyQuiesce   = 18 // librbd NOTIFY_OP_QUIESCE
+	rbdNotifyUnquiesce = 19 // librbd NOTIFY_OP_UNQUIESCE
+	// rbdGroupQuiesceRefusal is the Go watcher's answer to the refused
+	// creation's quiesce: -EBUSY (the fixture plan's quiesce_refusal).
+	rbdGroupQuiesceRefusal      = -16
+	rbdGroupSnapStateIncomplete = 0 // cls::rbd::GROUP_SNAPSHOT_STATE_INCOMPLETE
+)
+
 type nativeRBDGroupCall struct {
 	Object    string `json:"object"`
 	Class     string `json:"class"`
@@ -250,20 +325,26 @@ type nativeRBDGroupCall struct {
 type nativeRBDGroupImagePlan struct {
 	Key        string            `json:"key"`
 	Name       string            `json:"name"`
+	Pool       string            `json:"pool"`
 	PreWrites  []nativeRBDExtent `json:"pre_snapshot_writes"`
 	PostWrites []nativeRBDExtent `json:"post_snapshot_writes"`
 }
 
 type nativeRBDGroupPlan struct {
-	Pool          string                    `json:"pool"`
-	BaseImage     string                    `json:"base_image"`
-	Group         string                    `json:"group"`
-	GroupSnapshot string                    `json:"group_snapshot"`
-	Order         int                       `json:"order"`
-	Size          uint64                    `json:"size"`
-	Features      uint64                    `json:"features"`
-	ListPage      uint64                    `json:"list_page"`
-	Images        []nativeRBDGroupImagePlan `json:"images"`
+	Pool            string                    `json:"pool"`
+	SecondPool      string                    `json:"second_pool"`
+	BaseImage       string                    `json:"base_image"`
+	Group           string                    `json:"group"`
+	GroupSnapshot   string                    `json:"group_snapshot"`
+	RefusedSnapshot string                    `json:"refused_snapshot"`
+	SecondSnapshot  string                    `json:"second_snapshot"`
+	Order           int                       `json:"order"`
+	Size            uint64                    `json:"size"`
+	Features        uint64                    `json:"features"`
+	ListPage        uint64                    `json:"list_page"`
+	PollPage        uint64                    `json:"poll_page"`
+	QuiesceRefusal  int32                     `json:"quiesce_refusal"`
+	Images          []nativeRBDGroupImagePlan `json:"images"`
 }
 
 type nativeRBDGroupMember struct {
@@ -297,9 +378,26 @@ type nativeRBDGroupImageSnapshot struct {
 	} `json:"group"`
 }
 
+type nativeRBDGroupDataView struct {
+	Label   string `json:"label"`
+	SnapID  uint64 `json:"snap_id"`
+	Objects []struct {
+		Index  uint64 `json:"index"`
+		Exists bool   `json:"exists"`
+		Errno  int    `json:"errno"`
+		Size   uint64 `json:"size"`
+		Offset uint64 `json:"offset"`
+		SHA256 string `json:"sha256"`
+	} `json:"objects"`
+	Image       nativeRBDBlob `json:"image"`
+	ObjectBytes nativeRBDBlob `json:"object_bytes"`
+}
+
 type nativeRBDGroupImage struct {
 	Key          string `json:"key"`
 	Name         string `json:"name"`
+	Pool         string `json:"pool"`
+	PoolID       int64  `json:"pool_id"`
 	ImageID      string `json:"image_id"`
 	HeaderObject string `json:"header_object"`
 	IDObject     string `json:"id_object"`
@@ -310,18 +408,65 @@ type nativeRBDGroupImage struct {
 		Order      int    `json:"order"`
 		Prefix     string `json:"block_name_prefix"`
 	} `json:"stat"`
-	Features      uint64                        `json:"features"`
-	OpFeatures    uint64                        `json:"op_features"`
-	Snapshots     []nativeRBDGroupImageSnapshot `json:"snapshots"`
-	SnapshotCalls []nativeRBDGroupCall          `json:"snapshot_calls"`
-	Objects       []nativeRBDObject             `json:"objects"`
-	Blobs         map[string]nativeRBDBlob      `json:"blobs"`
+	Features        uint64                        `json:"features"`
+	OpFeatures      uint64                        `json:"op_features"`
+	Snapshots       []nativeRBDGroupImageSnapshot `json:"snapshots"`
+	SnapshotCalls   []nativeRBDGroupCall          `json:"snapshot_calls"`
+	SnapContextCall nativeRBDGroupCall            `json:"snapcontext_call"`
+	LockCall        nativeRBDGroupCall            `json:"lock_call"`
+	Views           []nativeRBDGroupDataView      `json:"views"`
+}
+
+type nativeRBDGroupCreationPhase struct {
+	Phase    string             `json:"phase"`
+	AfterNS  int64              `json:"after_ns"`
+	ListCall nativeRBDGroupCall `json:"list_call"`
+	Images   []struct {
+		Key             string             `json:"key"`
+		SnapContextCall nativeRBDGroupCall `json:"snapcontext_call"`
+		LockCall        nativeRBDGroupCall `json:"lock_call"`
+	} `json:"images"`
+	RollbackErrno *int `json:"rollback_errno"`
+}
+
+type nativeRBDGroupCreation struct {
+	Snapshot  string                        `json:"snapshot"`
+	GroupID   string                        `json:"group_id"`
+	ImageIDs  map[string]string             `json:"image_ids"`
+	Phases    []nativeRBDGroupCreationPhase `json:"phases"`
+	Errno     int                           `json:"errno"`
+	ElapsedNS int64                         `json:"elapsed_ns"`
+}
+
+// nativeRBDGroupState is the native driver's published state during a
+// creation (rbd-group-<action>-state.json).
+type nativeRBDGroupState struct {
+	Token          string                        `json:"token"`
+	RequestID      int64                         `json:"request_id"`
+	NativeGlobalID uint64                        `json:"native_global_id"`
+	Snapshot       string                        `json:"snapshot"`
+	GroupID        string                        `json:"group_id"`
+	ImageIDs       map[string]string             `json:"image_ids"`
+	Phase          string                        `json:"phase"`
+	Phases         []nativeRBDGroupCreationPhase `json:"phases"`
+}
+
+type nativeRBDGroupView struct {
+	Name          string                 `json:"name"`
+	ID            string                 `json:"id"`
+	HeaderObject  string                 `json:"header_object"`
+	Members       []nativeRBDGroupMember `json:"members"`
+	Snapshots     []nativeRBDGroupSnap   `json:"snapshots"`
+	SnapshotInfos []nativeRBDGroupSnap   `json:"snapshot_infos"`
+	DirectoryCall nativeRBDGroupCall     `json:"directory_call"`
+	ListCalls     []nativeRBDGroupCall   `json:"list_calls"`
 }
 
 type nativeRBDGroup struct {
 	Action         string   `json:"action"`
 	RequestID      int64    `json:"request_id"`
 	PoolID         int64    `json:"pool_id"`
+	SecondPoolID   int64    `json:"second_pool_id"`
 	NativeGlobalID uint64   `json:"native_global_id"`
 	ImagesListed   []string `json:"images_listed"`
 	GroupsListed   []string `json:"groups_listed"`
@@ -333,32 +478,27 @@ type nativeRBDGroup struct {
 		Written uint64 `json:"written"`
 		SHA256  string `json:"sha256"`
 	} `json:"writes"`
-	Group *struct {
-		Name          string                 `json:"name"`
-		ID            string                 `json:"id"`
-		HeaderObject  string                 `json:"header_object"`
-		Members       []nativeRBDGroupMember `json:"members"`
-		Snapshots     []nativeRBDGroupSnap   `json:"snapshots"`
-		SnapshotInfo  nativeRBDGroupSnap     `json:"snapshot_info"`
-		DirectoryCall nativeRBDGroupCall     `json:"directory_call"`
-		ListCalls     []nativeRBDGroupCall   `json:"list_calls"`
-	} `json:"group"`
-	Images  []nativeRBDGroupImage `json:"images"`
-	Removed *struct {
+	Creation     *nativeRBDGroupCreation `json:"creation"`
+	RolledBackTo string                  `json:"rolled_back_to"`
+	Group        *nativeRBDGroupView     `json:"group"`
+	Images       []nativeRBDGroupImage   `json:"images"`
+	Removed      *struct {
 		GroupID     string `json:"group_id"`
 		GroupHeader string `json:"group_header"`
 		Images      []struct {
 			Key            string                        `json:"key"`
 			Name           string                        `json:"name"`
+			Pool           string                        `json:"pool"`
 			ImageID        string                        `json:"image_id"`
 			Prefix         string                        `json:"prefix"`
 			Objects        uint64                        `json:"objects"`
 			SnapshotsAfter []nativeRBDGroupImageSnapshot `json:"snapshots_after"`
 			HeaderErrno    int                           `json:"header_errno"`
 			IDErrno        int                           `json:"id_errno"`
+			ObjectMapErrno int                           `json:"object_map_errno"`
 			DataErrno      []int                         `json:"data_errno"`
 		} `json:"images"`
-		GroupSnapshotsAfter []nativeRBDGroupSnap   `json:"group_snapshots_after"`
+		GroupSnapshotsAfter [][]nativeRBDGroupSnap `json:"group_snapshots_after"`
 		MembersAfter        []nativeRBDGroupMember `json:"members_after"`
 		GroupHeaderErrno    int                    `json:"group_header_errno"`
 		DirectoryCall       nativeRBDGroupCall     `json:"directory_call"`
@@ -389,6 +529,17 @@ type nativeRBDGroupResult struct {
 	ElapsedMS int64  `json:"elapsed_ms"`
 }
 
+// nativeRBDGroupOracle is the group acceptance's part of the RBD base
+// oracle: its second owned pool.
+type nativeRBDGroupOracle struct {
+	SecondPool *struct {
+		ID        int64  `json:"pool"`
+		Name      string `json:"pool_name"`
+		Flags     uint64 `json:"flags"`
+		FlagNames string `json:"flags_names"`
+	} `json:"group_second_pool"`
+}
+
 type rbdGroupRequestEvidence struct {
 	Label        string
 	Route        rbdRoute
@@ -411,70 +562,309 @@ type rbdGroupNativeActionEvidence struct {
 	RequestID      int64
 	NativeGlobalID uint64
 	ElapsedMS      int64
+	StderrLines    int
+}
+
+// rbdGroupNotification is one notification on the Go member header watch
+// and the Go answer to it.
+type rbdGroupNotification struct {
+	Action           string
+	Index            int
+	AfterMS          float64
+	NotifyID         uint64
+	NotifierGlobalID uint64
+	Cookie           uint64
+	PayloadHex       string
+	Op               uint32
+	Request          *rbdAsyncRequestID `json:",omitempty"`
+	// Held marks a quiesce or unquiesce request whose answer waited for the
+	// test's reads; HeldMS is that wait.
+	Held           bool
+	HeldMS         float64
+	AckDisposition string
+	AckHex         string
+	AckError       string `json:",omitempty"`
+	Unexpected     bool
+}
+
+// rbdGroupHoldEvidence is what the Go test read while it held one answer.
+type rbdGroupHoldEvidence struct {
+	Action, Phase    string
+	NotifyID         uint64
+	Request          rbdAsyncRequestID
+	ControlRunning   [2]bool // before the first read and after the last
+	GroupSnapListHex string
+	SnapContexts     map[string]string
+	LockInfos        map[string]string
+	NativePhase      string `json:",omitempty"`
+	HeldMS           float64
+	AnswerHex        string
 }
 
 type rbdGroupEvidence struct {
-	Token         string
-	Pool          string
-	PoolID        int64
-	GoIdentity    string
-	GoGlobalID    uint64
-	GroupID       string
-	GroupSnapshot string
-	Members       []rbdGroupImageSnapSpec
-	Requests      []rbdGroupRequestEvidence
-	ClassOutputs  map[string]string
-	NativeActions []rbdGroupNativeActionEvidence
-	Timings       map[string]string
+	Token          string
+	Pool           string
+	PoolID         int64
+	SecondPool     string
+	SecondPoolID   int64
+	GoIdentity     string
+	GoGlobalID     uint64
+	GoWatchCookie  uint64
+	GroupID        string
+	Snapshots      map[string]string
+	Records        map[string]rbdGroupSnapRecord
+	Requests       []rbdGroupRequestEvidence
+	ClassOutputs   map[string]string
+	Notifications  []rbdGroupNotification
+	Holds          []rbdGroupHoldEvidence
+	Pings          int
+	PingErrors     []string
+	CreationErrnos map[string]int
+	NativeActions  []rbdGroupNativeActionEvidence
+	Timings        map[string]string
 }
 
-// TestCephRBDGroupSnapshotIntegration reads a native RBD group snapshot
-// through the explicit OSD API. Native librbd creates two layering images
-// with different contents in the fixture's RBD pool, a group holding both
-// and one group snapshot; every mutation stays native. The Go client then
-// resolves the group ID with dir_get_id on rbd_group_directory, sends
-// read-only rbd.group_snap_list to the group header with the empty start
-// record and a page size of one, and lists the next page starting after the
-// returned record, re-encoded by the test. For every member tuple of that
-// record it sends rbd.snapshot_get for the tuple's snapshot ID to the
-// tuple's image header, routed in the tuple's pool. The complete group record
-// (ID, name, COMPLETE state, member pools, image IDs and snapshot IDs) and
-// every member snapshot's GroupSnapshotNamespace (group pool, group ID,
-// group snapshot ID), name, size and child count are compared with native
-// librbd's group listing, group snapshot info, image snapshot listing and
-// group namespace, and the raw class inputs and outputs with native librados
-// exec of the same methods. Native librbd then writes new data to both live
-// heads; the group record and member snapshots must be byte-identical, and
-// Go reads of every data object at the head and at each member snapshot must
-// equal native librados objects, native librbd image reads and the expected
-// contents, the snapshot view keeping only the data written before the group
-// snapshot. Finally native librbd removes the group snapshot, the membership,
-// the group and both images, each followed by a native absence read, and the
-// Go reads of the old group header, directory entry and image headers must
-// answer ENOENT. Native librbd writes INCOMPLETE before quiescing and
-// snapshotting the members and COMPLETE only afterwards
-// (ceph/ceph/blob/v20.2.4/src/librbd/api/Group.cc), so the record read here
-// is the finished one; an INCOMPLETE record, its compensation, mirrored
-// group snapshots, migration and group snapshots with exclusive-lock or
-// journaling members are not covered.
+// rbdGroupHeld is one quiesce or unquiesce request the watch responder hands
+// to the test, which answers it on Answer.
+type rbdGroupHeld struct {
+	Event    cephmsgr.OSDWatchEvent
+	Op       uint32
+	Request  rbdAsyncRequestID
+	Received time.Time
+	Index    int
+	Answer   chan []byte
+}
+
+// rbdGroupResponder answers the Go member header watch's notifications in
+// librbd's ImageWatcher form: lock and header-update notifications get an
+// empty acknowledgement at once; quiesce and unquiesce requests go to the
+// test, which reads the cluster before it answers (a quiesce with a
+// ResponseMessage, an unquiesce with an empty acknowledgement). It pings the
+// watch while idle.
+type rbdGroupResponder struct {
+	mu         sync.Mutex
+	action     string
+	allowed    []uint32
+	events     []rbdGroupNotification
+	failure    error
+	pings      int
+	pingErrors []string
+	held       chan rbdGroupHeld
+}
+
+func (r *rbdGroupResponder) fail(err error) {
+	r.mu.Lock()
+	if r.failure == nil {
+		r.failure = err
+	}
+	r.mu.Unlock()
+}
+
+// begin starts one creation cell: notifications are attributed to action and
+// must have one of the allowed ops.
+func (r *rbdGroupResponder) begin(action string, allowed ...uint32) {
+	r.mu.Lock()
+	r.action, r.allowed = action, allowed
+	r.mu.Unlock()
+}
+
+func (r *rbdGroupResponder) snapshot() ([]rbdGroupNotification, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.events), r.failure
+}
+
+func (r *rbdGroupResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, epoch uint32, started time.Time, event cephmsgr.OSDWatchEvent) {
+	received := time.Now()
+	r.mu.Lock()
+	n := rbdGroupNotification{Action: r.action, Index: len(r.events), AfterMS: float64(received.Sub(started).Microseconds()) / 1000, NotifyID: event.NotifyID,
+		NotifierGlobalID: event.NotifierGlobalID, Cookie: event.Cookie, PayloadHex: hex.EncodeToString(event.Payload)}
+	allowed := slices.Clone(r.allowed)
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.events = append(r.events, n)
+		r.mu.Unlock()
+	}()
+	if event.Opcode != cephmsgr.OSDWatchNotification || event.Cookie != w.Cookie() {
+		n.Unexpected = true
+		r.fail(fmt.Errorf("unexpected member header watch event opcode %d cookie %d", event.Opcode, event.Cookie))
+		return
+	}
+	var ack []byte
+	op, request, err := decodeRBDQuiesceNotify(event.Payload)
+	if err == nil {
+		n.Op, n.Request, n.Held = op, &request, true
+		h := rbdGroupHeld{Event: event, Op: op, Request: request, Received: received, Index: n.Index, Answer: make(chan []byte, 1)}
+		select {
+		case r.held <- h:
+		case <-ctx.Done():
+			return
+		}
+		select {
+		case ack = <-h.Answer:
+		case <-ctx.Done():
+			// The test ended without an answer: no acknowledgement.
+			n.AckDisposition = rbdAckOmitted
+			return
+		}
+		n.HeldMS = float64(time.Since(received).Microseconds()) / 1000
+	} else {
+		m, err := decodeRBDNotifyMessage(event.Payload)
+		n.Op = m.Op
+		if err != nil || !m.Known {
+			n.Op = ^uint32(0)
+		}
+	}
+	if !slices.Contains(allowed, n.Op) {
+		n.Unexpected = true
+		r.fail(fmt.Errorf("unexpected member header notification op %d from client.%d during %s", n.Op, event.NotifierGlobalID, n.Action))
+	}
+	n.AckHex = hex.EncodeToString(ack)
+	_, submitErr := w.Acknowledge(ctx, epoch, event, ack)
+	n.AckDisposition = rbdAckDispositionOf(false, ack, submitErr)
+	if submitErr != nil {
+		n.AckError = submitErr.Error()
+		r.fail(fmt.Errorf("acknowledge member header notification %d: %w", event.NotifyID, submitErr))
+	}
+}
+
+// waitRBDGroupState polls the group driver's published creation state until
+// it holds the named phase, or the control action ended.
+func waitRBDGroupState(ctx context.Context, path, phase string, finished <-chan struct{}, finishedErr *error) (nativeRBDGroupState, nativeRBDGroupCreationPhase, error) {
+	read := func() (nativeRBDGroupState, nativeRBDGroupCreationPhase, bool) {
+		var state nativeRBDGroupState
+		data, err := os.ReadFile(path)
+		if err != nil || json.Unmarshal(data, &state) != nil {
+			return state, nativeRBDGroupCreationPhase{}, false
+		}
+		i := slices.IndexFunc(state.Phases, func(p nativeRBDGroupCreationPhase) bool { return p.Phase == phase })
+		if i < 0 {
+			return state, nativeRBDGroupCreationPhase{}, false
+		}
+		return state, state.Phases[i], true
+	}
+	for {
+		if state, p, ok := read(); ok {
+			return state, p, nil
+		}
+		select {
+		case <-finished:
+			if state, p, ok := read(); ok {
+				return state, p, nil
+			}
+			return nativeRBDGroupState{}, nativeRBDGroupCreationPhase{}, fmt.Errorf("native RBD group action ended before %s: %v", phase, *finishedErr)
+		case <-ctx.Done():
+			return nativeRBDGroupState{}, nativeRBDGroupCreationPhase{}, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// rbdGroupStderrAllowed reports whether every non-empty native stderr line
+// is one of librbd's expected error-level reports for the action and each
+// expected report appears.
+func rbdGroupStderrAllowed(stderr []byte, expected []string) bool {
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(stderr), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		i := slices.IndexFunc(expected, func(s string) bool { return strings.Contains(line, s) })
+		if i < 0 {
+			return false
+		}
+		seen[expected[i]] = true
+	}
+	return len(seen) == len(expected)
+}
+
+func TestRBDGroupStderrAllowed(t *testing.T) {
+	quiesce := []string{"failed to notify quiesce", "group snapshot is not complete"}
+	good := "2026 7f -1 librbd::ImageWatcher: 0x1 notify_quiesce: failed to notify quiesce: (16) Device or resource busy\n2026 7f -1 librbd::api::Group: snap_rollback: group snapshot is not complete\n"
+	if !rbdGroupStderrAllowed([]byte(good), quiesce) || !rbdGroupStderrAllowed(nil, nil) {
+		t.Fatal("expected librbd reports refused")
+	}
+	for _, bad := range []string{"", "failed to notify quiesce\n", good + "error while cleaning up group snapshot\n"} {
+		if rbdGroupStderrAllowed([]byte(bad), quiesce) {
+			t.Fatalf("native stderr admitted: %q", bad)
+		}
+	}
+	if rbdGroupStderrAllowed([]byte("lderr\n"), nil) {
+		t.Fatal("native stderr admitted for an action without expected reports")
+	}
+}
+
+// TestCephRBDGroupSnapshotIntegration follows a native RBD group through its
+// snapshot lifecycle with the explicit OSD API. Native librbd creates two
+// layering, exclusive-lock, object-map and fast-diff images with different contents, a
+// in the fixture's RBD pool and b in a second owned pool, a group in the
+// first pool holding both, and the first group snapshot; every mutation
+// stays native. After each native step the Go client resolves the group ID
+// with dir_get_id on rbd_group_directory, pages through rbd.group_snap_list
+// on the group header with a page size of one (each next page starting after
+// the previous record, re-encoded by the test), and sends rbd.snapshot_get
+// for every member tuple to that tuple's image header in the tuple's pool,
+// rbd.get_snapcontext and lock.get_info to both member headers, and stat and
+// read to every data object at the head and at every member snapshot. Every
+// raw class input and output is compared with native librados exec of the
+// same input, every record and member snapshot with native librbd's
+// listings and group namespaces, and every data object with native librados
+// reads, native librbd image reads and the planned contents.
+//
+// Two native group snapshot creations then run under a Go watch on member
+// b's header. librbd writes the INCOMPLETE record, quiesces every member,
+// acquires the exclusive locks, creates the member snapshots, writes the
+// COMPLETE record and unquiesces; on a failed quiesce it unquiesces and
+// removes the record (ceph/ceph/blob/v20.2.4/src/librbd/api/Group.cc
+// snap_create, ImageWatcher.cc notify_quiesce). While the Go watcher holds
+// its answer to each quiesce and unquiesce request, the Go test reads the
+// group header and both member headers, and the native driver's second
+// thread reads the same objects with the same inputs and tries a rollback to
+// the snapshot being created, which librbd refuses for an INCOMPLETE record;
+// the Go and native outputs must be byte-identical. The first creation's
+// quiesce is answered with ResponseMessage(-EBUSY): at the quiesce and at the
+// unquiesce the record is INCOMPLETE with zero member snapshot IDs, no
+// member snapshot or lock exists, the creation returns EBUSY and afterwards
+// the record is gone. The second creation's quiesce is answered with
+// ResponseMessage(0): at the quiesce the record is INCOMPLETE without
+// member snapshots or locks, at the unquiesce it is COMPLETE with both
+// member snapshots and native librbd holds both exclusive locks, and after
+// the creation the locks are released. Native librbd then rolls the group
+// back to the first snapshot; the heads read as the first snapshot while the
+// second snapshot keeps the later contents. Finally native librbd removes
+// both group snapshots, the membership, the group and both images, each
+// followed by a native absence read, and the Go reads of the old directory
+// entry, group header and member headers answer ENOENT.
+//
+// Not covered: a timed-out quiesce (librbd retries it), a lock acquisition
+// failure, a failure after the member snapshots, journaling members,
+// members in another namespace (librbd refuses them before any wire
+// request), mirrored group snapshots and migration.
 //
 //scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdgroupsnapshot key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-group-snapshot
 //scenario:row rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdgroupsnapshot key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-group-snapshot
 //scenario:covers RBD underlying I/O
-//fixture:isolated creates and removes a group, a group snapshot and two images in the fixture's RBD pool natively
+//fixture:isolated adds a second owned pool; natively snapshots, rolls back and removes a group of two images
 func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
 		t.Skip("requires the opt-in disposable RBD fixture (CEPH_MSGR_TEST_RBD=1)")
 	}
 	var oracle nativeRBDOracle
-	if err := readMDSFreshJSON(filepath.Join(dir, "rbd-base-oracle.json"), &oracle); err != nil {
+	var groupOracle nativeRBDGroupOracle
+	if err := errors.Join(readMDSFreshJSON(filepath.Join(dir, "rbd-base-oracle.json"), &oracle), readMDSFreshJSON(filepath.Join(dir, "rbd-base-oracle.json"), &groupOracle)); err != nil {
 		t.Fatal(err)
 	}
 	token, identity := oracle.Token, os.Getenv("CEPH_MSGR_RBD_BASE_IDENTITY")
+	second := groupOracle.SecondPool
+	if second == nil || second.Name != "ceph-msgr-rbd2-"+token || second.ID == oracle.Pool.ID || second.Flags&1 != 0 {
+		t.Fatal("native RBD oracle lacks the second owned pool", second)
+	}
 	if oracle.Source != mdsFreshSource || len(token) != 32 || oracle.FSID != os.Getenv("CEPH_MSGR_FSID") || oracle.Plan.Pool != "ceph-msgr-rbd-"+token || oracle.Pool.Name != oracle.Plan.Pool ||
-		oracle.Pool.Flags&1 != 0 || identity != "client.rbd-base-"+token || oracle.ClientIdentity != identity || oracle.Caps["mon"] != "profile rbd" || oracle.Caps["osd"] != "profile rbd pool="+oracle.Plan.Pool {
-		t.Fatal("native RBD oracle scope differs", oracle.Source, oracle.Pool, identity)
+		oracle.Pool.Flags&1 != 0 || identity != "client.rbd-base-"+token || oracle.ClientIdentity != identity || oracle.Caps["mon"] != "profile rbd" ||
+		oracle.Caps["osd"] != "profile rbd pool="+oracle.Plan.Pool+", profile rbd pool="+second.Name {
+		t.Fatal("native RBD oracle scope differs", oracle.Source, oracle.Pool, identity, oracle.Caps)
 	}
 	options := integrationOptions(t)
 	encoded, err := os.ReadFile(os.Getenv("CEPH_MSGR_RBD_BASE_KEY_FILE"))
@@ -491,7 +881,7 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	}
 	clear(encoded)
 	options.Identity, options.EnableOSD = identity, true
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	started := time.Now()
 	c, err := cephmsgr.Dial(ctx, options)
@@ -500,9 +890,17 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	}
 	defer c.Close()
 	gid := c.Snapshot().GlobalID
-	poolID := oracle.Pool.ID
-	evidence := rbdGroupEvidence{Token: token, Pool: oracle.Plan.Pool, PoolID: poolID, GoIdentity: identity, GoGlobalID: gid, ClassOutputs: map[string]string{}, Timings: map[string]string{}}
+	poolID, secondID := oracle.Pool.ID, second.ID
+	poolNames := map[int64]string{poolID: oracle.Plan.Pool, secondID: second.Name}
+	evidence := rbdGroupEvidence{Token: token, Pool: oracle.Plan.Pool, PoolID: poolID, SecondPool: second.Name, SecondPoolID: secondID, GoIdentity: identity, GoGlobalID: gid,
+		Snapshots: map[string]string{}, Records: map[string]rbdGroupSnapRecord{}, ClassOutputs: map[string]string{}, CreationErrnos: map[string]int{}, Timings: map[string]string{}}
+	var responder *rbdGroupResponder
 	defer func() {
+		if responder != nil {
+			responder.mu.Lock()
+			evidence.Notifications, evidence.Pings, evidence.PingErrors = slices.Clone(responder.events), responder.pings, slices.Clone(responder.pingErrors)
+			responder.mu.Unlock()
+		}
 		evidence.Timings["total"] = time.Since(started).String()
 		data, err := json.Marshal(evidence)
 		if err == nil {
@@ -514,16 +912,11 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	}()
 
 	// Native control: one closed action at a time, each journaled by the
-	// fixture and answered with its own receipt.
+	// fixture and answered with its own receipt. stderr lists librbd's
+	// expected error-level reports for the action.
 	var plan nativeRBDGroupPlan
-	native := func(t *testing.T, action string) *nativeRBDGroup {
+	receipt := func(t *testing.T, action string, stderr []string) *nativeRBDGroup {
 		t.Helper()
-		if err := os.Remove(filepath.Join(dir, "rbd-group-"+action+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
-			t.Fatal(err)
-		}
-		if err := testcluster.RequestControl(ctx, dir, "rbd-group", "rbd-group-completed", token, action); err != nil {
-			t.Fatal("native RBD group", action, err)
-		}
 		var result nativeRBDGroupResult
 		if err := readMDSFreshJSON(filepath.Join(dir, "rbd-group-"+action+".json"), &result); err != nil {
 			t.Fatal(err)
@@ -532,29 +925,47 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 		if result.Source != mdsFreshSource || result.Token != token || result.Action != action || !result.Complete || result.Error != "" || result.Mutation == nil ||
 			result.Mutation.Kind != "native-group-"+action || result.Mutation.State != "applied" || result.Mutation.ReadOnly || result.Mutation.RequestID != result.RequestID ||
 			result.Process == nil || result.Process.ExitCode != 0 || result.Process.TimedOut || n == nil || n.Action != action || n.RequestID != result.RequestID ||
-			n.NativeGlobalID == 0 || n.NativeGlobalID == gid || n.PoolID != poolID || plan.Pool != "" && !reflect.DeepEqual(result.Plan, plan) {
+			n.NativeGlobalID == 0 || n.NativeGlobalID == gid || n.PoolID != poolID || n.SecondPoolID != secondID || plan.Pool != "" && !reflect.DeepEqual(result.Plan, plan) {
 			t.Fatal("native RBD group receipt differs", action, result.Error)
 		}
-		// librbd logs failed group, snapshot and removal steps at error level.
-		if len(result.Process.Stderr) != 0 {
-			t.Fatalf("native RBD group %s logged errors: %q", action, result.Process.Stderr)
+		if !rbdGroupStderrAllowed(result.Process.Stderr, stderr) {
+			t.Fatalf("native RBD group %s logged unexpected errors: %q", action, result.Process.Stderr)
 		}
 		if plan.Pool == "" {
 			plan = result.Plan
 		}
-		evidence.NativeActions = append(evidence.NativeActions, rbdGroupNativeActionEvidence{Action: action, RequestID: result.RequestID, NativeGlobalID: n.NativeGlobalID, ElapsedMS: result.ElapsedMS})
+		evidence.NativeActions = append(evidence.NativeActions, rbdGroupNativeActionEvidence{Action: action, RequestID: result.RequestID, NativeGlobalID: n.NativeGlobalID,
+			ElapsedMS: result.ElapsedMS, StderrLines: strings.Count(string(result.Process.Stderr), "\n")})
 		return n
+	}
+	request := func(t *testing.T, action string) {
+		t.Helper()
+		for _, name := range []string{"rbd-group-" + action + ".json", "rbd-group-" + action + "-state.json"} {
+			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+		}
+	}
+	native := func(t *testing.T, action string) *nativeRBDGroup {
+		t.Helper()
+		request(t, action)
+		if err := testcluster.RequestControl(ctx, dir, "rbd-group", "rbd-group-completed", token, action); err != nil {
+			t.Fatal("native RBD group", action, err)
+		}
+		return receipt(t, action, nil)
 	}
 	setup := native(t, "setup")
 	k := uint64(1) << 10
-	if plan.Pool != oracle.Plan.Pool || plan.BaseImage != oracle.Plan.Image || plan.Group != "ceph-msgr-group-"+token || plan.GroupSnapshot != "ceph-msgr-gsnap-"+token[:8] ||
-		plan.Order != 16 || plan.Size != 192*k || plan.Features != 1 || plan.ListPage != 1 || len(plan.Images) != 2 ||
-		plan.Images[0].Key != "a" || plan.Images[0].Name != "ceph-msgr-gimage-a-"+token || plan.Images[1].Key != "b" || plan.Images[1].Name != "ceph-msgr-gimage-b-"+token {
+	if plan.Pool != oracle.Plan.Pool || plan.SecondPool != second.Name || plan.BaseImage != oracle.Plan.Image || plan.Group != "ceph-msgr-group-"+token ||
+		plan.GroupSnapshot != "ceph-msgr-gsnap-"+token[:8] || plan.RefusedSnapshot != "ceph-msgr-gsnap-refused-"+token[:8] || plan.SecondSnapshot != "ceph-msgr-gsnap-second-"+token[:8] ||
+		plan.Order != 16 || plan.Size != 192*k || plan.Features != 1|4|8|16 || plan.ListPage != 1 || plan.PollPage != 16 || plan.QuiesceRefusal != rbdGroupQuiesceRefusal || len(plan.Images) != 2 ||
+		plan.Images[0].Key != "a" || plan.Images[0].Name != "ceph-msgr-gimage-a-"+token || plan.Images[0].Pool != plan.Pool ||
+		plan.Images[1].Key != "b" || plan.Images[1].Name != "ceph-msgr-gimage-b-"+token || plan.Images[1].Pool != plan.SecondPool {
 		t.Fatal("RBD group plan differs", plan)
 	}
-	evidence.GroupSnapshot = plan.GroupSnapshot
 	objectSize := uint64(1) << plan.Order
 	objectCount := plan.Size >> plan.Order
+	imagePool := map[string]int64{"a": poolID, "b": secondID}
 	// expected builds an image's bytes from its writes of the given phases.
 	expected := func(image nativeRBDGroupImagePlan, phases ...string) []byte {
 		view := make([]byte, plan.Size)
@@ -591,7 +1002,7 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 		}
 	}
 	checkWrites(t, setup, "pre")
-	wantListed := []string{plan.BaseImage, plan.Images[0].Name, plan.Images[1].Name}
+	wantListed := []string{plan.Pool + "/" + plan.BaseImage, plan.Pool + "/" + plan.Images[0].Name, plan.SecondPool + "/" + plan.Images[1].Name}
 	slices.Sort(wantListed)
 	if !slices.Equal(setup.ImagesListed, wantListed) || !slices.Equal(setup.GroupsListed, []string{plan.Group}) || setup.Group == nil || len(setup.Images) != 2 {
 		t.Fatal("native RBD group setup listing differs", setup.ImagesListed, setup.GroupsListed)
@@ -599,30 +1010,22 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	group := setup.Group
 	evidence.GroupID = group.ID
 	imageIDs := map[string]string{}
+	imageKeys := map[string]string{}
 	for i, image := range setup.Images {
-		if image.Key != plan.Images[i].Key || image.Name != plan.Images[i].Name || image.Stat.Size != plan.Size || image.Stat.Order != plan.Order || image.Stat.Objects != objectCount ||
-			image.Stat.Prefix != "rbd_data."+image.ImageID || image.Features != plan.Features|rbdFeatureOperations || image.OpFeatures != rbdOperationFeatureGroup ||
-			image.HeaderObject != "rbd_header."+image.ImageID {
+		if image.Key != plan.Images[i].Key || image.Name != plan.Images[i].Name || image.Pool != plan.Images[i].Pool || image.PoolID != imagePool[image.Key] ||
+			image.Stat.Size != plan.Size || image.Stat.Order != plan.Order || image.Stat.Objects != objectCount || image.Stat.Prefix != "rbd_data."+image.ImageID ||
+			image.Features != plan.Features|rbdFeatureOperations || image.OpFeatures != rbdOperationFeatureGroup || image.HeaderObject != "rbd_header."+image.ImageID {
 			t.Fatal("native RBD group member image differs", image.Key, image.Stat)
 		}
-		imageIDs[image.Name] = image.ImageID
+		imageIDs[image.Key], imageKeys[image.ImageID] = image.ImageID, image.Key
 	}
-	if len(imageIDs) != 2 || imageIDs[plan.Images[0].Name] == imageIDs[plan.Images[1].Name] {
+	if len(imageKeys) != 2 {
 		t.Fatal("native RBD group member image IDs are not distinct", imageIDs)
 	}
 	members := slices.Clone(group.Members)
 	slices.SortFunc(members, func(a, b nativeRBDGroupMember) int { return strings.Compare(a.Name, b.Name) })
-	if !reflect.DeepEqual(members, []nativeRBDGroupMember{{plan.Images[0].Name, poolID, 0}, {plan.Images[1].Name, poolID, 0}}) {
-		t.Fatal("native RBD group membership differs (want both images attached)", group.Members)
-	}
-	if len(group.Snapshots) != 1 || !reflect.DeepEqual(group.Snapshots[0], group.SnapshotInfo) {
-		t.Fatal("native RBD group snapshot listing and info differ", group.Snapshots, group.SnapshotInfo)
-	}
-	nativeSnap := group.Snapshots[0]
-	// librbd's state COMPLETE (1) and the user group-snapshot namespace (0).
-	if nativeSnap.Name != plan.GroupSnapshot || nativeSnap.State != 1 || nativeSnap.NamespaceType != 0 || nativeSnap.ID == "" || len(nativeSnap.ImageSnaps) != 2 ||
-		nativeSnap.ImageSnapName != rbdGroupImageSnapName(poolID, group.ID, nativeSnap.ID) {
-		t.Fatal("native RBD group snapshot differs", nativeSnap)
+	if !reflect.DeepEqual(members, []nativeRBDGroupMember{{plan.Images[0].Name, poolID, 0}, {plan.Images[1].Name, secondID, 0}}) {
+		t.Fatal("native RBD group membership differs (want both images attached, b in the second pool)", group.Members)
 	}
 
 	addresses := osdDumpAddresses(t, ctx, c)
@@ -632,14 +1035,15 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 			o.Close()
 		}
 	}()
-	// route places one object of the owned pool; pool is the ID the caller
-	// read for this object (a member tuple's pool), which must be that pool.
+	// route places one object of an owned pool; pool is the ID the caller
+	// read for this object (a member tuple's pool), which must be owned.
 	route := func(t *testing.T, pool int64, object string) (rbdRoute, *cephmsgr.OSDConnection) {
 		t.Helper()
-		if pool != poolID {
-			t.Fatal("RBD group object is outside the owned pool", pool, object)
+		name, owned := poolNames[pool]
+		if !owned {
+			t.Fatal("RBD group object is outside the owned pools", pool, object)
 		}
-		p, err := recoveryObjectPlacement(ctx, c, plan.Pool, object)
+		p, err := recoveryObjectPlacement(ctx, c, name, object)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -656,9 +1060,10 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 		}
 		return r, connections[r.Primary]
 	}
-	request := func(r rbdRoute, ops ...cephmsgr.OSDOperation) cephmsgr.OSDRequest {
+	osdRequest := func(r rbdRoute, ops ...cephmsgr.OSDOperation) cephmsgr.OSDRequest {
 		return cephmsgr.OSDRequest{MapEpoch: r.Epoch, Object: cephmsgr.OSDObject{Pool: r.Pool, Name: r.Object, Hash: r.Hash}, Operations: ops}
 	}
+	var evidenceMu sync.Mutex
 	record := func(label string, r rbdRoute, req cephmsgr.OSDRequest, reply cephmsgr.OSDReply, err error) {
 		e := rbdGroupRequestEvidence{Label: label, Route: r, ReadSnapshot: req.ReadSnapshot, Submission: reply.Submission, Transaction: reply.Transaction, GlobalID: reply.GlobalID,
 			MapEpoch: reply.MapEpoch, PG: reply.PG, Code: reply.Code, Flags: reply.Flags, UserVersion: reply.UserVersion}
@@ -679,7 +1084,9 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 		if err != nil {
 			e.Error = err.Error()
 		}
+		evidenceMu.Lock()
 		evidence.Requests = append(evidence.Requests, e)
+		evidenceMu.Unlock()
 	}
 	checkReply := func(t *testing.T, r rbdRoute, reply cephmsgr.OSDReply, code int32) {
 		t.Helper()
@@ -688,139 +1095,269 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 			t.Fatalf("OSD reply identity differs: code=%d tid=%d gid=%d pg=%+v epoch=%d", reply.Code, reply.Transaction, reply.GlobalID, reply.PG, reply.MapEpoch)
 		}
 	}
-	// call sends one read-mode rbd CALL alone in its request and requires
-	// the given result; it returns the class output of a success.
-	call := func(t *testing.T, label string, pool int64, object, method string, input []byte, code int32) []byte {
+	// call sends one read-mode CALL alone in its request and requires the
+	// given result; it returns the class output of a success.
+	call := func(t *testing.T, label string, pool int64, object, class, method string, input []byte, code int32) []byte {
 		t.Helper()
 		r, o := route(t, pool, object)
-		req := request(r, cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: "rbd", Method: method, Mode: cephmsgr.OSDCallRead, MaxOutputBytes: 8192}})
+		req := osdRequest(r, cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: class, Method: method, Mode: cephmsgr.OSDCallRead, MaxOutputBytes: 8192}})
 		reply, err := o.Request(ctx, req)
 		record(label, r, req, reply, err)
 		if code != 0 {
 			var server *cephmsgr.OSDError
 			if !errors.As(err, &server) || server.Code != code {
-				t.Fatalf("Go CALL rbd.%s (%s): want server result %d, got %v", method, label, code, err)
+				t.Fatalf("Go CALL %s.%s (%s): want server result %d, got %v", class, method, label, code, err)
 			}
 			checkReply(t, r, reply, code)
 			return nil
 		}
 		if err != nil {
-			t.Fatalf("Go CALL rbd.%s (%s): %v", method, label, err)
+			t.Fatalf("Go CALL %s.%s (%s): %v", class, method, label, err)
 		}
 		checkReply(t, r, reply, 0)
 		got := reply.Operations[0]
-		if got.Result != 0 || got.Class.ClassLength != 3 || got.Class.MethodLength != uint8(len(method)) || got.Class.InputLength != uint32(len(input)) || got.Class.OutputLength != uint64(len(got.Data)) {
-			t.Fatalf("CALL rbd.%s per-op result or union echo differs: %+v", method, got.Class)
+		if got.Result != 0 || got.Class.ClassLength != uint8(len(class)) || got.Class.MethodLength != uint8(len(method)) || got.Class.InputLength != uint32(len(input)) || got.Class.OutputLength != uint64(len(got.Data)) {
+			t.Fatalf("CALL %s.%s per-op result or union echo differs: %+v", class, method, got.Class)
 		}
+		evidenceMu.Lock()
 		evidence.ClassOutputs[label] = hex.EncodeToString(got.Data)
+		evidenceMu.Unlock()
 		return got.Data
 	}
-	sameCall := func(t *testing.T, label string, n nativeRBDGroupCall, object, method string, input, output []byte) {
+	sameCall := func(t *testing.T, label string, n nativeRBDGroupCall, object, class, method string, input, output []byte) {
 		t.Helper()
-		if n.Object != object || n.Class != "rbd" || n.Method != method || n.InputHex != hex.EncodeToString(input) || n.Code != 0 || n.OutputHex != hex.EncodeToString(output) {
-			t.Fatalf("%s: Go CALL rbd.%s differs from native librados exec: native=%+v go_input=%x go_output=%x", label, method, n, input, output)
+		if n.Object != object || n.Class != class || n.Method != method || n.InputHex != hex.EncodeToString(input) || n.Code != 0 || n.OutputHex != hex.EncodeToString(output) {
+			t.Fatalf("%s: Go CALL %s.%s differs from native librados exec: native=%+v go_input=%x go_output=%x", label, class, method, n, input, output)
 		}
 	}
-
-	// observeGroup reads the group directory, both group_snap_list pages and
-	// each member snapshot, compares them with the native observation n and
-	// returns the group record with every class output.
-	observeGroup := func(t *testing.T, phase string, n *nativeRBDGroup) (rbdGroupSnapRecord, map[string][]byte) {
+	header := "rbd_group_header." + group.ID
+	pollInput := rbdGroupSnapListInput(rbdGroupSnapRecord{}, plan.PollPage)
+	memberHeader := func(key string) string { return "rbd_header." + imageIDs[key] }
+	// listRecords decodes a single-call group_snap_list output by name.
+	listRecords := func(t *testing.T, out []byte) map[string]rbdGroupSnapRecord {
 		t.Helper()
-		outputs := map[string][]byte{}
-		g := n.Group
-		nameInput := rbdGroupString(nil, plan.Group)
-		out := call(t, phase+"_dir_get_id", poolID, "rbd_group_directory", "dir_get_id", nameInput, 0)
-		sameCall(t, phase+" dir_get_id", g.DirectoryCall, "rbd_group_directory", "dir_get_id", nameInput, out)
-		d := &rbdDecoder{data: out}
-		groupID := d.str()
-		if err := d.done(); err != nil || groupID != g.ID || groupID != group.ID {
-			t.Fatal("Go group directory lookup differs from native librbd's group ID", groupID, g.ID, err)
-		}
-		outputs["dir_get_id"] = out
-		header := "rbd_group_header." + groupID
-		if g.HeaderObject != header || len(g.ListCalls) != 2 {
-			t.Fatal("native group header observation differs", g.HeaderObject, len(g.ListCalls))
-		}
-		first := rbdGroupSnapListInput(rbdGroupSnapRecord{}, plan.ListPage)
-		out = call(t, phase+"_group_snap_list_1", poolID, header, "group_snap_list", first, 0)
-		sameCall(t, phase+" group_snap_list page 1", g.ListCalls[0], header, "group_snap_list", first, out)
-		outputs["group_snap_list_1"] = out
 		records, err := decodeRBDGroupSnapList(out)
-		if err != nil || len(records) != 1 {
-			t.Fatal("group_snap_list page 1 must hold exactly the one group snapshot", records, err)
+		byName := map[string]rbdGroupSnapRecord{}
+		for _, r := range records {
+			byName[r.Name] = r
 		}
-		rec := records[0]
-		// The next page starts after the returned record, re-encoded here:
-		// the bytes must equal the server's own encoding of that record.
-		if !bytes.Equal(encodeRBDGroupSnapRecord(rec), out[4:]) {
-			t.Fatal("test-only GroupSnapshot re-encoding differs from the OSD class output")
+		if err != nil || len(byName) != len(records) {
+			t.Fatal("group_snap_list output", records, err)
 		}
-		next := rbdGroupSnapListInput(rec, plan.ListPage)
-		out = call(t, phase+"_group_snap_list_2", poolID, header, "group_snap_list", next, 0)
-		sameCall(t, phase+" group_snap_list page 2", g.ListCalls[1], header, "group_snap_list", next, out)
-		outputs["group_snap_list_2"] = out
-		if after, err := decodeRBDGroupSnapList(out); err != nil || len(after) != 0 {
-			t.Fatal("group_snap_list after the only record must be empty", after, err)
-		}
-		// The complete record against native librbd's listing.
-		ns := g.Snapshots[0]
-		if rec.ID != ns.ID || rec.Name != ns.Name || rec.Name != plan.GroupSnapshot || rec.State != rbdGroupSnapStateComplete || int(rec.State) != ns.State || len(rec.Snaps) != len(ns.ImageSnaps) || len(rec.Snaps) != 2 {
-			t.Fatal("Go group record differs from native librbd's group snapshot", rec, ns)
-		}
-		seen := map[string]bool{}
-		for i, spec := range rec.Snaps {
-			want := ns.ImageSnaps[i]
-			if spec.Pool != want.PoolID || spec.Pool != poolID || spec.SnapID != want.SnapID || spec.ImageID != imageIDs[want.ImageName] || spec.ImageID == "" || seen[spec.ImageID] {
-				t.Fatal("Go group member tuple differs from native librbd", i, spec, want)
+		return byName
+	}
+	// memberSpecs checks a record's member tuples against the two members,
+	// in either order, and returns them by image key.
+	memberSpecs := func(t *testing.T, r rbdGroupSnapRecord) map[string]rbdGroupImageSnapSpec {
+		t.Helper()
+		specs := map[string]rbdGroupImageSnapSpec{}
+		for _, s := range r.Snaps {
+			key := imageKeys[s.ImageID]
+			if key == "" || s.Pool != imagePool[key] {
+				t.Fatal("group record member tuple names another image or pool", r.Name, s)
 			}
-			seen[spec.ImageID] = true
+			specs[key] = s
 		}
-		// Each member snapshot on its own image header.
-		for _, spec := range rec.Snaps {
-			var image *nativeRBDGroupImage
-			for i := range n.Images {
-				if n.Images[i].ImageID == spec.ImageID {
-					image = &n.Images[i]
+		if len(specs) != 2 || len(r.Snaps) != 2 {
+			t.Fatal("group record does not hold both members once", r)
+		}
+		return specs
+	}
+	snapContext := func(t *testing.T, out []byte) []uint64 {
+		t.Helper()
+		snapc, err := decodeRBDSnapContext(out)
+		if err != nil {
+			t.Fatal("get_snapcontext output", err)
+		}
+		return snapc.Snapshots
+	}
+	lockInfo := func(t *testing.T, out []byte) rbdLockInfo {
+		t.Helper()
+		info, err := decodeRBDLockInfo(out)
+		if err != nil {
+			t.Fatal("lock.get_info output", err)
+		}
+		return info
+	}
+
+	// observeGroup reads the group directory, every group_snap_list page,
+	// each member snapshot and both member headers, compares them with the
+	// native observation n and returns the group records by name. want lists
+	// the group snapshot names the group must hold.
+	observeGroup := func(t *testing.T, phase string, n *nativeRBDGroup, want []string) map[string]rbdGroupSnapRecord {
+		t.Helper()
+		g := n.Group
+		if g == nil || g.ID != group.ID || g.HeaderObject != header || len(g.Snapshots) != len(want) || len(g.ListCalls) != len(want)+1 || !reflect.DeepEqual(g.Snapshots, g.SnapshotInfos) {
+			t.Fatal("native group observation differs", phase, g)
+		}
+		nameInput := rbdGroupString(nil, plan.Group)
+		out := call(t, phase+"_dir_get_id", poolID, "rbd_group_directory", "rbd", "dir_get_id", nameInput, 0)
+		sameCall(t, phase+" dir_get_id", g.DirectoryCall, "rbd_group_directory", "rbd", "dir_get_id", nameInput, out)
+		d := &rbdDecoder{data: out}
+		if groupID := d.str(); d.done() != nil || groupID != group.ID {
+			t.Fatal("Go group directory lookup differs from native librbd's group ID", groupID)
+		}
+		records := map[string]rbdGroupSnapRecord{}
+		start := rbdGroupSnapRecord{}
+		for i := range g.ListCalls {
+			input := rbdGroupSnapListInput(start, plan.ListPage)
+			out := call(t, fmt.Sprintf("%s_group_snap_list_%d", phase, i+1), poolID, header, "rbd", "group_snap_list", input, 0)
+			sameCall(t, fmt.Sprintf("%s group_snap_list page %d", phase, i+1), g.ListCalls[i], header, "rbd", "group_snap_list", input, out)
+			page, err := decodeRBDGroupSnapList(out)
+			if i == len(g.ListCalls)-1 {
+				if err != nil || len(page) != 0 {
+					t.Fatal("group_snap_list after the last record must be empty", page, err)
+				}
+				break
+			}
+			if err != nil || len(page) != 1 {
+				t.Fatal("group_snap_list page must hold exactly one record", i, page, err)
+			}
+			// The next page starts after the returned record, re-encoded
+			// here: the bytes must equal the server's own encoding.
+			if !bytes.Equal(encodeRBDGroupSnapRecord(page[0]), out[4:]) {
+				t.Fatal("test-only GroupSnapshot re-encoding differs from the OSD class output")
+			}
+			start, records[page[0].Name] = page[0], page[0]
+		}
+		if len(records) != len(want) {
+			t.Fatal("group_snap_list pages hold a repeated record", records)
+		}
+		snapshotIDs := map[string][]uint64{}
+		for _, ns := range g.Snapshots {
+			rec, ok := records[ns.Name]
+			if !ok || !slices.Contains(want, ns.Name) || rec.ID != ns.ID || rec.State != rbdGroupSnapStateComplete || ns.State != 1 || ns.NamespaceType != 0 ||
+				len(ns.ImageSnaps) != 2 || ns.ImageSnapName != rbdGroupImageSnapName(poolID, group.ID, rec.ID) {
+				t.Fatal("Go group record differs from native librbd's group snapshot", phase, rec, ns)
+			}
+			specs := memberSpecs(t, rec)
+			for _, nativeSnap := range ns.ImageSnaps {
+				key := slices.IndexFunc(plan.Images, func(i nativeRBDGroupImagePlan) bool { return i.Name == nativeSnap.ImageName })
+				if key < 0 {
+					t.Fatal("native group snapshot names another image", nativeSnap)
+				}
+				spec := specs[plan.Images[key].Key]
+				if spec.Pool != nativeSnap.PoolID || spec.SnapID != nativeSnap.SnapID || spec.SnapID == 0 {
+					t.Fatal("Go group member tuple differs from native librbd", phase, spec, nativeSnap)
 				}
 			}
-			if image == nil || len(image.Snapshots) != 1 || len(image.SnapshotCalls) != 1 {
-				t.Fatal("native observation lacks the member image", spec)
-			}
-			header := "rbd_header." + spec.ImageID
-			input := rbdLE64(spec.SnapID)
-			label := phase + "_snapshot_get_" + image.Key
-			out := call(t, label, spec.Pool, header, "snapshot_get", input, 0)
-			sameCall(t, phase+" snapshot_get "+image.Key, image.SnapshotCalls[0], header, "snapshot_get", input, out)
-			outputs["snapshot_get_"+image.Key] = out
-			info, err := decodeRBDGroupSnapshotInfo(out)
-			snap := image.Snapshots[0]
-			if err != nil || info.ID != spec.SnapID || info.GroupPool != poolID || info.GroupID != groupID || info.GroupSnapshotID != rec.ID ||
-				info.Name != ns.ImageSnapName || info.ImageSize != plan.Size || info.ChildCount != 0 || info.Seconds == 0 {
-				t.Fatal("Go member snapshot differs from the group record", image.Key, info, err)
-			}
-			if snap.ID != info.ID || snap.Name != info.Name || snap.Size != info.ImageSize || snap.Namespace != rbdSnapshotNamespaceTypeGroup || snap.Group == nil ||
-				snap.Group.Pool != info.GroupPool || snap.Group.Name != plan.Group || snap.Group.SnapName != rec.Name {
-				t.Fatal("Go member snapshot differs from native librbd's snapshot and group namespace", image.Key, info, snap)
+			// Each member snapshot on its own image header, in its pool;
+			// the namespace names the group pool for both.
+			for _, image := range n.Images {
+				spec := specs[image.Key]
+				j := slices.IndexFunc(image.Snapshots, func(s nativeRBDGroupImageSnapshot) bool { return s.ID == spec.SnapID })
+				if j < 0 {
+					t.Fatal("native observation lacks the member snapshot", image.Key, spec)
+				}
+				input := rbdLE64(spec.SnapID)
+				label := phase + "_snapshot_get_" + image.Key + "_" + ns.Name
+				out := call(t, label, spec.Pool, image.HeaderObject, "rbd", "snapshot_get", input, 0)
+				sameCall(t, label, image.SnapshotCalls[j], image.HeaderObject, "rbd", "snapshot_get", input, out)
+				info, err := decodeRBDGroupSnapshotInfo(out)
+				snap := image.Snapshots[j]
+				if err != nil || info.ID != spec.SnapID || info.GroupPool != poolID || info.GroupID != group.ID || info.GroupSnapshotID != rec.ID ||
+					info.Name != ns.ImageSnapName || info.ImageSize != plan.Size || info.ChildCount != 0 || info.Seconds == 0 {
+					t.Fatal("Go member snapshot differs from the group record", image.Key, info, err)
+				}
+				if snap.Name != info.Name || snap.Size != info.ImageSize || snap.Namespace != rbdSnapshotNamespaceTypeGroup || snap.Group == nil ||
+					snap.Group.Pool != poolID || snap.Group.Name != plan.Group || snap.Group.SnapName != rec.Name {
+					t.Fatal("Go member snapshot differs from native librbd's snapshot and group namespace", image.Key, info, snap)
+				}
+				snapshotIDs[image.Key] = append(snapshotIDs[image.Key], spec.SnapID)
 			}
 		}
-		return rec, outputs
+		for i, image := range n.Images {
+			if image.Key != plan.Images[i].Key || image.ImageID != imageIDs[image.Key] || image.PoolID != imagePool[image.Key] || len(image.Snapshots) != len(want) {
+				t.Fatal("native member observation differs", phase, image.Key, image.Snapshots)
+			}
+			out := call(t, phase+"_get_snapcontext_"+image.Key, image.PoolID, image.HeaderObject, "rbd", "get_snapcontext", nil, 0)
+			sameCall(t, phase+" get_snapcontext "+image.Key, image.SnapContextCall, image.HeaderObject, "rbd", "get_snapcontext", nil, out)
+			got := snapContext(t, out)
+			wantIDs := slices.Clone(snapshotIDs[image.Key])
+			slices.Sort(wantIDs)
+			slices.Reverse(wantIDs)
+			if !slices.Equal(got, wantIDs) {
+				t.Fatal("member snap context differs from the group records", image.Key, got, wantIDs)
+			}
+			out = call(t, phase+"_lock_get_info_"+image.Key, image.PoolID, image.HeaderObject, "lock", "get_info", rbdLockGetInfoInput(), 0)
+			sameCall(t, phase+" lock.get_info "+image.Key, image.LockCall, image.HeaderObject, "lock", "get_info", rbdLockGetInfoInput(), out)
+			if info := lockInfo(t, out); len(info.Lockers) != 0 {
+				t.Fatal("a member exclusive lock is held after the native action returned", phase, image.Key, info)
+			}
+		}
+		return records
 	}
 
-	var setupRecord rbdGroupSnapRecord
-	var setupOutputs map[string][]byte
-	t.Run("group_snapshot_record", func(t *testing.T) {
-		setupRecord, setupOutputs = observeGroup(t, "setup", setup)
-		evidence.Members = setupRecord.Snaps
-		// Before the heads change, each member snapshot reads as its head
-		// and as the pre-snapshot contents.
-		for i, image := range setup.Images {
-			head, snap := readRBDBlob(t, dir, image.Blobs["image_head"]), readRBDBlob(t, dir, image.Blobs["image_snap"])
-			if !bytes.Equal(head, expected(plan.Images[i], "pre")) || !bytes.Equal(snap, head) {
-				t.Fatal("native member image views before the head writes differ from the plan", image.Key)
+	// checkData reads every data object of both members at the head and at
+	// every snapshot and compares it with the native views; want gives each
+	// view's planned phases by label ("head" or a group snapshot name).
+	checkData := func(t *testing.T, phase string, n *nativeRBDGroup, records map[string]rbdGroupSnapRecord, want map[string][]string) {
+		t.Helper()
+		for i, image := range n.Images {
+			labels := map[string]string{"head": "head"}
+			for name, rec := range records {
+				labels[fmt.Sprint("s", memberSpecs(t, rec)[image.Key].SnapID)] = name
+			}
+			if len(image.Views) != len(labels) {
+				t.Fatal("native member views differ from the group records", image.Key, len(image.Views))
+			}
+			for _, view := range image.Views {
+				name, ok := labels[view.Label]
+				if !ok || len(view.Objects) != int(objectCount) {
+					t.Fatal("native member view is not a planned one", image.Key, view.Label)
+				}
+				imageBytes, blob := readRBDBlob(t, dir, view.Image), readRBDBlob(t, dir, view.ObjectBytes)
+				if !bytes.Equal(imageBytes, expected(plan.Images[i], want[name]...)) {
+					t.Fatalf("%s: native member %s %s (%s) differs from the planned %v contents", phase, image.Key, view.Label, name, want[name])
+				}
+				for j, object := range view.Objects {
+					objectName := fmt.Sprintf("%s.%016x", image.Stat.Prefix, j)
+					r, o := route(t, image.PoolID, objectName)
+					req := osdRequest(r, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat}, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: objectSize})
+					req.ReadSnapshot = view.SnapID
+					reply, err := o.Request(ctx, req)
+					record(fmt.Sprintf("%s_read_%s_%s_%d", phase, image.Key, view.Label, j), r, req, reply, err)
+					extent := imageBytes[uint64(j)*objectSize : uint64(j+1)*objectSize]
+					if object.Index != uint64(j) {
+						t.Fatal("native object view order differs", image.Key, view.Label, j)
+					}
+					if !object.Exists {
+						var server *cephmsgr.OSDError
+						if !errors.As(err, &server) || server.Code != -2 {
+							t.Fatalf("%s %s object %d: native librados reports ENOENT, Go %v", image.Key, view.Label, j, err)
+						}
+						checkReply(t, r, reply, -2)
+						if !bytes.Equal(extent, make([]byte, objectSize)) {
+							t.Fatalf("%s %s object %d is absent but native librbd reads non-zero bytes", image.Key, view.Label, j)
+						}
+						continue
+					}
+					if err != nil {
+						t.Fatalf("%s %s object %d: %v", image.Key, view.Label, j, err)
+					}
+					checkReply(t, r, reply, 0)
+					stat, data := reply.Operations[0], reply.Operations[1].Data
+					if stat.Result != 0 || len(stat.Data) != 16 || binary.LittleEndian.Uint64(stat.Data) != object.Size || uint64(len(data)) != object.Size || reply.Operations[1].Result != 0 {
+						t.Fatalf("%s %s object %d stat/read size differs from native librados: native %d", image.Key, view.Label, j, object.Size)
+					}
+					if !bytes.Equal(data, blob[object.Offset:object.Offset+object.Size]) {
+						t.Fatalf("%s %s object %d bytes differ from native librados", image.Key, view.Label, j)
+					}
+					if !bytes.Equal(append(bytes.Clone(data), make([]byte, objectSize-uint64(len(data)))...), extent) {
+						t.Fatalf("%s %s object %d bytes differ from native librbd image extent", image.Key, view.Label, j)
+					}
+				}
 			}
 		}
-		t.Logf("group %s snapshot %s: COMPLETE with %d member snapshots, each in its group namespace", group.ID, setupRecord.ID, len(setupRecord.Snaps))
+	}
+
+	var first rbdGroupSnapRecord
+	t.Run("group_snapshot_record", func(t *testing.T) {
+		records := observeGroup(t, "setup", setup, []string{plan.GroupSnapshot})
+		first = records[plan.GroupSnapshot]
+		evidence.Records["first"], evidence.Snapshots["first"] = first, first.ID
+		checkData(t, "setup", setup, records, map[string][]string{"head": {"pre"}, plan.GroupSnapshot: {"pre"}})
+		t.Logf("group %s snapshot %s: COMPLETE with members in pools %d and %d, each snapshot in the group namespace of pool %d", group.ID, first.ID, poolID, secondID, poolID)
 	})
 	if t.Failed() {
 		return
@@ -828,87 +1365,395 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 
 	modify := native(t, "modify")
 	checkWrites(t, modify, "post")
-	if !slices.Equal(modify.ImagesListed, wantListed) || !slices.Equal(modify.GroupsListed, []string{plan.Group}) || modify.Group == nil || len(modify.Images) != 2 {
+	if !slices.Equal(modify.ImagesListed, wantListed) || !slices.Equal(modify.GroupsListed, []string{plan.Group}) || len(modify.Images) != 2 {
 		t.Fatal("native RBD group listing after the head writes differs")
 	}
-	for i, image := range modify.Images {
-		if image.ImageID != setup.Images[i].ImageID || !reflect.DeepEqual(image.Snapshots, setup.Images[i].Snapshots) || !reflect.DeepEqual(image.SnapshotCalls, setup.Images[i].SnapshotCalls) {
-			t.Fatal("native member snapshot changed with its head", image.Key)
-		}
-	}
-	if !reflect.DeepEqual(modify.Group.Snapshots, group.Snapshots) || !reflect.DeepEqual(modify.Group.ListCalls, group.ListCalls) {
-		t.Fatal("native group snapshot changed with the member heads")
-	}
 	t.Run("record_after_head_writes", func(t *testing.T) {
-		rec, outputs := observeGroup(t, "modify", modify)
-		if !reflect.DeepEqual(rec, setupRecord) || !reflect.DeepEqual(outputs, setupOutputs) {
-			t.Fatal("group record or member snapshots changed with the member heads")
+		records := observeGroup(t, "modify", modify, []string{plan.GroupSnapshot})
+		if !reflect.DeepEqual(records[plan.GroupSnapshot], first) || !reflect.DeepEqual(modify.Group.ListCalls, group.ListCalls) {
+			t.Fatal("group record changed with the member heads")
 		}
-	})
-	t.Run("snapshot_and_head_bytes", func(t *testing.T) {
 		for i, image := range modify.Images {
-			want := plan.Images[i]
-			snapID := setupRecord.Snaps[slices.IndexFunc(setupRecord.Snaps, func(s rbdGroupImageSnapSpec) bool { return s.ImageID == image.ImageID })].SnapID
-			views := map[string][]byte{}
-			for key, blob := range image.Blobs {
-				views[key] = readRBDBlob(t, dir, blob)
+			if !reflect.DeepEqual(image.Snapshots, setup.Images[i].Snapshots) || !reflect.DeepEqual(image.SnapshotCalls, setup.Images[i].SnapshotCalls) {
+				t.Fatal("native member snapshot changed with its head", image.Key)
 			}
-			if !bytes.Equal(views["image_head"], expected(want, "pre", "post")) || !bytes.Equal(views["image_snap"], expected(want, "pre")) ||
-				bytes.Equal(views["image_head"], views["image_snap"]) {
-				t.Fatal("native member image views after the head writes differ from the plan", image.Key)
-			}
-			if len(image.Objects) != int(objectCount) {
-				t.Fatal("native member object views missing", image.Key)
-			}
-			for _, snapshot := range []bool{false, true} {
-				label, read, imageView, blob := "head", uint64(0), views["image_head"], views["objects_head"]
-				if snapshot {
-					label, read, imageView, blob = "snap", snapID, views["image_snap"], views["objects_snap"]
+		}
+		checkData(t, "modify", modify, records, map[string][]string{"head": {"pre", "post"}, plan.GroupSnapshot: {"pre"}})
+	})
+	if t.Failed() {
+		return
+	}
+
+	// The Go watch on member b's header, in the second pool, for both
+	// creations.
+	wr, wo := route(t, secondID, memberHeader("b"))
+	watchRequest := osdRequest(wr)
+	watchRequest.Operations = nil
+	w, reply, err := wo.WatchObject(ctx, watchRequest, cephmsgr.OSDWatchOptions{TimeoutSeconds: 30})
+	record("member_watch_register", wr, watchRequest, reply, err)
+	if err != nil {
+		t.Fatal("Go member header watch", err)
+	}
+	evidence.GoWatchCookie = w.Cookie()
+	responder = &rbdGroupResponder{held: make(chan rbdGroupHeld)}
+	respondCtx, stopResponding := context.WithCancel(ctx)
+	responderDone := make(chan struct{})
+	responderStarted := time.Now()
+	go func() {
+		defer close(responderDone)
+		lastPing := time.Now()
+		for {
+			if time.Since(lastPing) >= rbdLockPingInterval {
+				_, err := w.Ping(respondCtx, wr.Epoch)
+				if respondCtx.Err() != nil {
+					return
 				}
-				for j, object := range image.Objects {
-					view := object.Head
-					if snapshot {
-						view = object.Snap
-					}
-					name := fmt.Sprintf("%s.%016x", image.Stat.Prefix, j)
-					if object.Name != name {
-						t.Fatal("Go data object name differs from native librbd layout", name)
-					}
-					r, o := route(t, poolID, name)
-					req := request(r, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat}, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: objectSize})
-					req.ReadSnapshot = read
-					reply, err := o.Request(ctx, req)
-					record(fmt.Sprintf("read_%s_%s_%d", image.Key, label, j), r, req, reply, err)
-					extent := imageView[uint64(j)*objectSize : uint64(j+1)*objectSize]
-					if !view.Exists {
-						var server *cephmsgr.OSDError
-						if !errors.As(err, &server) || server.Code != -2 {
-							t.Fatalf("%s %s object %d: native librados reports ENOENT, Go %v", image.Key, label, j, err)
-						}
-						checkReply(t, r, reply, -2)
-						if !bytes.Equal(extent, make([]byte, objectSize)) {
-							t.Fatalf("%s %s object %d is absent but native librbd reads non-zero bytes", image.Key, label, j)
-						}
-						continue
-					}
-					if err != nil {
-						t.Fatalf("%s %s object %d: %v", image.Key, label, j, err)
-					}
-					checkReply(t, r, reply, 0)
-					stat, data := reply.Operations[0], reply.Operations[1].Data
-					if stat.Result != 0 || len(stat.Data) != 16 || binary.LittleEndian.Uint64(stat.Data) != view.Size || uint64(len(data)) != view.Size || reply.Operations[1].Result != 0 {
-						t.Fatalf("%s %s object %d stat/read size differs from native librados: native %d", image.Key, label, j, view.Size)
-					}
-					if !bytes.Equal(data, blob[view.Offset:view.Offset+view.Size]) {
-						t.Fatalf("%s %s object %d bytes differ from native librados", image.Key, label, j)
-					}
-					if !bytes.Equal(append(bytes.Clone(data), make([]byte, objectSize-uint64(len(data)))...), extent) {
-						t.Fatalf("%s %s object %d bytes differ from native librbd image extent", image.Key, label, j)
-					}
+				lastPing = time.Now()
+				responder.mu.Lock()
+				responder.pings++
+				if err != nil {
+					responder.pingErrors = append(responder.pingErrors, err.Error())
+				}
+				responder.mu.Unlock()
+			}
+			wait, stop := context.WithDeadline(respondCtx, lastPing.Add(rbdLockPingInterval))
+			event, err := w.Next(wait)
+			stop()
+			if respondCtx.Err() != nil {
+				return
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				continue
+			}
+			if err != nil {
+				responder.fail(fmt.Errorf("member header watch ended: %w", err))
+				return
+			}
+			responder.handle(respondCtx, w, wr.Epoch, responderStarted, event)
+		}
+	}()
+	watching := true
+	unwatch := func(t *testing.T) {
+		stopResponding()
+		<-responderDone
+		if watching {
+			watching = false
+			req := osdRequest(wr)
+			req.Operations = nil
+			reply, err := w.Unwatch(ctx, wr.Epoch)
+			record("member_watch_unwatch", wr, req, reply, err)
+			if err != nil {
+				t.Error("Go member header unwatch", err)
+			}
+		}
+	}
+	defer func() {
+		if watching {
+			unwatch(t)
+		}
+	}()
+
+	// creation runs one native creation under the Go watch, answering its
+	// quiesce with answer, and returns its receipt and the records read at
+	// the quiesce and at the unquiesce.
+	type holdView struct {
+		list    []byte
+		records map[string]rbdGroupSnapRecord
+		snapc   map[string][]uint64
+		locks   map[string]rbdLockInfo
+	}
+	creation := func(t *testing.T, action, snapshot string, answer int32, allowed []uint32, stderr []string, atUnquiesce func(*testing.T, holdView, rbdGroupHeld, nativeRBDGroupState)) *nativeRBDGroup {
+		t.Helper()
+		responder.begin(action, allowed...)
+		request(t, action)
+		finished := make(chan struct{})
+		var controlErr error
+		go func() {
+			defer close(finished)
+			controlErr = testcluster.RequestControl(ctx, dir, "rbd-group", "rbd-group-completed", token, action)
+		}()
+		defer func() { <-finished }()
+		running := func() bool {
+			select {
+			case <-finished:
+				return false
+			default:
+				return true
+			}
+		}
+		statePath := filepath.Join(dir, "rbd-group-"+action+"-state.json")
+		waitHeld := func(t *testing.T, op uint32) rbdGroupHeld {
+			t.Helper()
+			select {
+			case h := <-responder.held:
+				if h.Op != op {
+					h.Answer <- nil
+					t.Fatalf("%s: member header received op %d before op %d", action, h.Op, op)
+				}
+				return h
+			case <-finished:
+				t.Fatalf("%s: native creation returned before op %d reached the Go watch: %v", action, op, controlErr)
+			case <-time.After(60 * time.Second):
+				t.Fatalf("%s: op %d did not reach the Go watch", action, op)
+			}
+			return rbdGroupHeld{}
+		}
+		// read takes the hold's view: the group records and both member
+		// headers' snap contexts and lock records.
+		read := func(t *testing.T, phase string) holdView {
+			t.Helper()
+			v := holdView{snapc: map[string][]uint64{}, locks: map[string]rbdLockInfo{}}
+			v.list = call(t, action+"_"+phase+"_group_snap_list", poolID, header, "rbd", "group_snap_list", pollInput, 0)
+			v.records = listRecords(t, v.list)
+			for _, key := range []string{"a", "b"} {
+				v.snapc[key] = snapContext(t, call(t, action+"_"+phase+"_get_snapcontext_"+key, imagePool[key], memberHeader(key), "rbd", "get_snapcontext", nil, 0))
+				v.locks[key] = lockInfo(t, call(t, action+"_"+phase+"_lock_get_info_"+key, imagePool[key], memberHeader(key), "lock", "get_info", rbdLockGetInfoInput(), 0))
+			}
+			return v
+		}
+		// sameAsNative compares the hold's reads with the native thread's
+		// observation of the same objects with the same inputs.
+		sameAsNative := func(t *testing.T, label string, v holdView, p nativeRBDGroupCreationPhase) {
+			t.Helper()
+			sameCall(t, label+" group_snap_list", p.ListCall, header, "rbd", "group_snap_list", pollInput, v.list)
+			if len(p.Images) != 2 {
+				t.Fatal("native creation observation lacks a member", label)
+			}
+			for _, image := range p.Images {
+				object := memberHeader(image.Key)
+				out := evidence.ClassOutputs[action+"_"+label+"_get_snapcontext_"+image.Key]
+				lock := evidence.ClassOutputs[action+"_"+label+"_lock_get_info_"+image.Key]
+				if image.SnapContextCall.Object != object || image.SnapContextCall.Method != "get_snapcontext" || image.SnapContextCall.Code != 0 || image.SnapContextCall.OutputHex != out ||
+					image.LockCall.Object != object || image.LockCall.Class != "lock" || image.LockCall.InputHex != hex.EncodeToString(rbdLockGetInfoInput()) || image.LockCall.Code != 0 || image.LockCall.OutputHex != lock {
+					t.Fatal("native member header observation differs from the Go reads", label, image.Key)
 				}
 			}
 		}
-		t.Log("Go head and member-snapshot reads equal native librados objects, native librbd reads and the planned contents")
+		answerHeld := func(h rbdGroupHeld, phase string, v holdView, nativePhase string, ack []byte, runningBefore bool) {
+			hold := rbdGroupHoldEvidence{Action: action, Phase: phase, NotifyID: h.Event.NotifyID, Request: h.Request, ControlRunning: [2]bool{runningBefore, running()},
+				GroupSnapListHex: hex.EncodeToString(v.list), SnapContexts: map[string]string{}, LockInfos: map[string]string{}, NativePhase: nativePhase,
+				HeldMS: float64(time.Since(h.Received).Microseconds()) / 1000, AnswerHex: hex.EncodeToString(ack)}
+			for _, key := range []string{"a", "b"} {
+				hold.SnapContexts[key] = fmt.Sprint(v.snapc[key])
+				hold.LockInfos[key] = evidence.ClassOutputs[action+"_"+phase+"_lock_get_info_"+key]
+			}
+			evidence.Holds = append(evidence.Holds, hold)
+			h.Answer <- ack
+		}
+
+		// The quiesce: INCOMPLETE, written before it, with zero member
+		// snapshot IDs; no member snapshot or lock yet.
+		quiesce := waitHeld(t, rbdNotifyQuiesce)
+		before := running()
+		atQuiesce := read(t, "quiesce")
+		state, nativePhase, err := waitRBDGroupState(ctx, statePath, "incomplete-observed", finished, &controlErr)
+		if err != nil {
+			quiesce.Answer <- rbdResponseMessage(answer)
+			t.Fatal(err)
+		}
+		if !before || !running() || time.Since(quiesce.Received) >= rbdNotifyTimeout {
+			quiesce.Answer <- rbdResponseMessage(answer)
+			t.Fatalf("%s: the quiesce hold is unproven (control running %v, held %v)", action, before, time.Since(quiesce.Received))
+		}
+		answerHeld(quiesce, "quiesce", atQuiesce, nativePhase.Phase, rbdResponseMessage(answer), before)
+		if state.Token != token || state.Snapshot != snapshot || state.GroupID != group.ID || state.NativeGlobalID == 0 || state.NativeGlobalID == gid ||
+			!reflect.DeepEqual(state.ImageIDs, imageIDs) || quiesce.Request.Client.GID != state.NativeGlobalID || quiesce.Event.NotifierGlobalID != state.NativeGlobalID || quiesce.Request.Client.Handle == 0 {
+			t.Fatal("quiesce request does not come from the native creating client", action, state.NativeGlobalID, quiesce.Request, quiesce.Event.NotifierGlobalID)
+		}
+		sameAsNative(t, "quiesce", atQuiesce, nativePhase)
+		if nativePhase.RollbackErrno == nil || *nativePhase.RollbackErrno != 22 {
+			t.Fatal("native librbd did not refuse a rollback to the INCOMPLETE group snapshot with EINVAL", action, nativePhase.RollbackErrno)
+		}
+		created, ok := atQuiesce.records[snapshot]
+		if len(atQuiesce.records) != 2 || !ok || !reflect.DeepEqual(atQuiesce.records[plan.GroupSnapshot], first) || created.State != rbdGroupSnapStateIncomplete || created.ID == "" || created.ID == first.ID {
+			t.Fatal("at the quiesce the group must hold the first snapshot and the INCOMPLETE record", action, atQuiesce.records)
+		}
+		for key, spec := range memberSpecs(t, created) {
+			if spec.SnapID != 0 {
+				t.Fatal("INCOMPLETE record names a member snapshot before the quiesce answer", key, spec)
+			}
+		}
+		firstSpecs := memberSpecs(t, first)
+		for _, key := range []string{"a", "b"} {
+			if !slices.Equal(atQuiesce.snapc[key], []uint64{firstSpecs[key].SnapID}) || len(atQuiesce.locks[key].Lockers) != 0 {
+				t.Fatal("at the quiesce a member holds a new snapshot or a lock", action, key, atQuiesce.snapc[key], atQuiesce.locks[key])
+			}
+		}
+
+		// The unquiesce: the same request ID, answered empty.
+		unquiesce := waitHeld(t, rbdNotifyUnquiesce)
+		before = running()
+		atUnquiesceView := read(t, "unquiesce")
+		unquiesceState := state
+		if answer == 0 {
+			unquiesceState, nativePhase, err = waitRBDGroupState(ctx, statePath, "complete-observed", finished, &controlErr)
+			if err != nil {
+				unquiesce.Answer <- nil
+				t.Fatal(err)
+			}
+		}
+		if !before || !running() || time.Since(unquiesce.Received) >= rbdNotifyTimeout {
+			unquiesce.Answer <- nil
+			t.Fatalf("%s: the unquiesce hold is unproven (control running %v, held %v)", action, before, time.Since(unquiesce.Received))
+		}
+		answerHeld(unquiesce, "unquiesce", atUnquiesceView, map[bool]string{true: nativePhase.Phase}[answer == 0], nil, before)
+		if unquiesce.Request != quiesce.Request || unquiesce.Event.NotifyID == quiesce.Event.NotifyID {
+			t.Fatal("unquiesce request differs from its quiesce", action, unquiesce.Request, quiesce.Request)
+		}
+		if answer == 0 {
+			sameAsNative(t, "unquiesce", atUnquiesceView, nativePhase)
+		}
+		atUnquiesce(t, atUnquiesceView, unquiesce, unquiesceState)
+		select {
+		case <-finished:
+		case <-time.After(90 * time.Second):
+			t.Fatal("native creation did not return after both answers", action)
+		}
+		if controlErr != nil {
+			t.Fatal("native RBD group", action, controlErr)
+		}
+		n := receipt(t, action, stderr)
+		events, failure := responder.snapshot()
+		if failure != nil {
+			t.Fatal(failure)
+		}
+		var quiesces []rbdGroupNotification
+		for _, e := range events {
+			if e.Action == action && (e.Op == rbdNotifyQuiesce || e.Op == rbdNotifyUnquiesce) {
+				quiesces = append(quiesces, e)
+			}
+		}
+		// One quiesce (no retry after a timeout) and one unquiesce.
+		if len(quiesces) != 2 || quiesces[0].Op != rbdNotifyQuiesce || quiesces[1].Op != rbdNotifyUnquiesce || quiesces[0].AckDisposition != rbdAckSubmittedResponse ||
+			quiesces[1].AckDisposition != rbdAckSubmittedEmpty || quiesces[0].AckHex != hex.EncodeToString(rbdResponseMessage(answer)) {
+			t.Fatal("member header quiesce requests differ", action, quiesces)
+		}
+		cr := n.Creation
+		last := "incomplete-observed"
+		if answer == 0 {
+			last = "complete-observed"
+		}
+		final, _, err := waitRBDGroupState(ctx, statePath, last, finished, &controlErr)
+		if err != nil || cr == nil || cr.Snapshot != snapshot || cr.GroupID != group.ID || !reflect.DeepEqual(cr.ImageIDs, imageIDs) || final.Phase != last || !reflect.DeepEqual(cr.Phases, final.Phases) {
+			t.Fatal("native creation record differs from its published state", action, cr, err)
+		}
+		evidence.CreationErrnos[action] = cr.Errno
+		return n
+	}
+
+	// The refused creation: Go answers the quiesce with -EBUSY. librbd
+	// unquiesces before it removes the INCOMPLETE record, takes no lock and
+	// creates no member snapshot.
+	firstSpecs := memberSpecs(t, first)
+	var refusedRecord rbdGroupSnapRecord
+	t.Run("refused_quiesce_compensation", func(t *testing.T) {
+		n := creation(t, "refused", plan.RefusedSnapshot, rbdGroupQuiesceRefusal, []uint32{rbdNotifyQuiesce, rbdNotifyUnquiesce},
+			[]string{"failed to notify quiesce", "group snapshot is not complete"},
+			func(t *testing.T, v holdView, _ rbdGroupHeld, _ nativeRBDGroupState) {
+				// Still INCOMPLETE at the unquiesce: the compensation
+				// removes the record only after the unquiesce returns.
+				refused, ok := v.records[plan.RefusedSnapshot]
+				evidence.Records["refused"] = refused
+				if len(v.records) != 2 || !ok || refused.State != rbdGroupSnapStateIncomplete || !reflect.DeepEqual(v.records[plan.GroupSnapshot], first) {
+					t.Fatal("at the refused unquiesce the INCOMPLETE record must remain", v.records)
+				}
+				refusedRecord = refused
+				for _, key := range []string{"a", "b"} {
+					if !slices.Equal(v.snapc[key], []uint64{firstSpecs[key].SnapID}) || len(v.locks[key].Lockers) != 0 {
+						t.Fatal("a refused creation took a member snapshot or lock", key, v.snapc[key], v.locks[key])
+					}
+				}
+			})
+		if n.Creation.Errno != -rbdGroupQuiesceRefusal {
+			t.Fatal("refused group snapshot creation must return the quiesce answer's EBUSY", n.Creation.Errno)
+		}
+		evidence.Snapshots["refused"] = refusedRecord.ID
+		records := observeGroup(t, "refused", n, []string{plan.GroupSnapshot})
+		if !reflect.DeepEqual(records[plan.GroupSnapshot], first) {
+			t.Fatal("refused creation changed the first group snapshot")
+		}
+		for i, image := range n.Images {
+			if !reflect.DeepEqual(image.Snapshots, modify.Images[i].Snapshots) {
+				t.Fatal("refused creation left a member snapshot", image.Key, image.Snapshots)
+			}
+		}
+		// The compensated record is gone from the server's listing.
+		out := call(t, "refused_after_group_snap_list", poolID, header, "rbd", "group_snap_list", pollInput, 0)
+		if after := listRecords(t, out); len(after) != 1 || !reflect.DeepEqual(after[plan.GroupSnapshot], first) {
+			t.Fatal("refused INCOMPLETE record remained after the creation returned", after)
+		}
+		checkData(t, "refused", n, records, map[string][]string{"head": {"pre", "post"}, plan.GroupSnapshot: {"pre"}})
+		t.Logf("refused group snapshot %s: INCOMPLETE at quiesce and unquiesce, EBUSY returned, record removed", refusedRecord.ID)
+	})
+	if t.Failed() {
+		return
+	}
+
+	// The accepted creation: Go answers the quiesce with 0. librbd acquires
+	// both exclusive locks, snapshots both members and writes COMPLETE
+	// before the unquiesce, and releases the locks when it closes.
+	var secondRecord rbdGroupSnapRecord
+	t.Run("accepted_quiesce_ordering", func(t *testing.T) {
+		n := creation(t, "accepted", plan.SecondSnapshot, 0, []uint32{rbdNotifyQuiesce, rbdNotifyUnquiesce, rbdNotifyAcquiredLock, rbdNotifyReleasedLock, rbdNotifyHeaderUpdate},
+			[]string{"group snapshot is not complete"},
+			func(t *testing.T, v holdView, h rbdGroupHeld, state nativeRBDGroupState) {
+				rec, ok := v.records[plan.SecondSnapshot]
+				if len(v.records) != 2 || !ok || rec.State != rbdGroupSnapStateComplete || !reflect.DeepEqual(v.records[plan.GroupSnapshot], first) {
+					t.Fatal("at the accepted unquiesce the record must be COMPLETE", v.records)
+				}
+				secondRecord = rec
+				specs := memberSpecs(t, rec)
+				for _, key := range []string{"a", "b"} {
+					want := []uint64{specs[key].SnapID, firstSpecs[key].SnapID}
+					if specs[key].SnapID <= firstSpecs[key].SnapID || !slices.Equal(v.snapc[key], want) {
+						t.Fatal("at the accepted unquiesce a member lacks its new snapshot", key, v.snapc[key], want)
+					}
+					// librbd's exclusive lock: the creating client, an
+					// "auto <handle>" cookie, exclusive with the internal
+					// tag.
+					info := v.locks[key]
+					if len(info.Lockers) != 1 || info.Type != rbdLockExclusive || info.Tag != rbdLockTag {
+						t.Fatal("at the accepted unquiesce a member exclusive lock is not held", key, info)
+					}
+					l := info.Lockers[0]
+					handle, cookie := rbdLockHandle(l.Cookie)
+					if l.NameType != rbdEntityClient || uint64(l.NameNumber) != state.NativeGlobalID || !cookie || l.Address.Endpoint.Addr().IsUnspecified() {
+						t.Fatal("member exclusive lock is not native librbd's", key, l)
+					}
+					// The quiesce came from member b's image watcher: its
+					// ClientId handle is that member's lock cookie.
+					if key == "b" && handle != h.Request.Client.Handle {
+						t.Fatal("member b's lock cookie differs from its quiesce requester", l.Cookie, h.Request)
+					}
+				}
+			})
+		if n.Creation.Errno != 0 {
+			t.Fatal("accepted group snapshot creation failed", n.Creation.Errno)
+		}
+		evidence.Records["second"], evidence.Snapshots["second"] = secondRecord, secondRecord.ID
+		records := observeGroup(t, "accepted", n, []string{plan.GroupSnapshot, plan.SecondSnapshot})
+		if !reflect.DeepEqual(records[plan.GroupSnapshot], first) || !reflect.DeepEqual(records[plan.SecondSnapshot], secondRecord) {
+			t.Fatal("group records after the accepted creation differ from the unquiesce reads")
+		}
+		checkData(t, "accepted", n, records, map[string][]string{"head": {"pre", "post"}, plan.GroupSnapshot: {"pre"}, plan.SecondSnapshot: {"pre", "post"}})
+		t.Logf("accepted group snapshot %s: INCOMPLETE at the quiesce, COMPLETE with both locks held at the unquiesce, locks released after", secondRecord.ID)
+	})
+	unwatch(t)
+	if t.Failed() {
+		return
+	}
+
+	rollback := native(t, "rollback")
+	t.Run("rollback_to_first", func(t *testing.T) {
+		if rollback.RolledBackTo != plan.GroupSnapshot {
+			t.Fatal("native rollback target differs", rollback.RolledBackTo)
+		}
+		records := observeGroup(t, "rollback", rollback, []string{plan.GroupSnapshot, plan.SecondSnapshot})
+		if !reflect.DeepEqual(records[plan.GroupSnapshot], first) || !reflect.DeepEqual(records[plan.SecondSnapshot], secondRecord) {
+			t.Fatal("rollback changed a group record")
+		}
+		checkData(t, "rollback", rollback, records, map[string][]string{"head": {"pre"}, plan.GroupSnapshot: {"pre"}, plan.SecondSnapshot: {"pre", "post"}})
+		t.Log("after the group rollback both heads read as the first snapshot; the second keeps the later contents")
 	})
 	if t.Failed() {
 		return
@@ -917,25 +1762,29 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	cleanup := native(t, "cleanup")
 	t.Run("native_removal", func(t *testing.T) {
 		r := cleanup.Removed
-		if r == nil || r.GroupID != group.ID || r.GroupHeader != "rbd_group_header."+group.ID || len(r.GroupSnapshotsAfter) != 0 || len(r.MembersAfter) != 0 ||
+		if r == nil || r.GroupID != group.ID || r.GroupHeader != header || len(r.GroupSnapshotsAfter) != 2 || len(r.GroupSnapshotsAfter[0]) != 1 ||
+			r.GroupSnapshotsAfter[0][0].Name != plan.GroupSnapshot || r.GroupSnapshotsAfter[0][0].ID != first.ID || len(r.GroupSnapshotsAfter[1]) != 0 || len(r.MembersAfter) != 0 ||
 			r.GroupHeaderErrno != 2 || r.DirectoryCall.Code != -2 || r.DirectoryCall.InputHex != hex.EncodeToString(rbdGroupString(nil, plan.Group)) || len(r.Images) != 2 {
 			t.Fatal("native group snapshot, membership or group removal is not proven", r)
 		}
 		for i, image := range r.Images {
-			if image.Key != plan.Images[i].Key || image.ImageID != setup.Images[i].ImageID || image.Prefix != setup.Images[i].Stat.Prefix || len(image.SnapshotsAfter) != 0 ||
-				image.HeaderErrno != 2 || image.IDErrno != 2 || len(image.DataErrno) != int(objectCount) || slices.ContainsFunc(image.DataErrno, func(e int) bool { return e != 2 }) {
+			if image.Key != plan.Images[i].Key || image.Pool != plan.Images[i].Pool || image.ImageID != imageIDs[image.Key] || image.Prefix != "rbd_data."+image.ImageID ||
+				len(image.SnapshotsAfter) != 0 || image.HeaderErrno != 2 || image.IDErrno != 2 || image.ObjectMapErrno != 2 || len(image.DataErrno) != int(objectCount) ||
+				slices.ContainsFunc(image.DataErrno, func(e int) bool { return e != 2 }) {
 				t.Fatal("native member snapshot or image removal is not proven", image.Key, image)
 			}
 		}
-		if !slices.Equal(cleanup.ImagesListed, []string{plan.BaseImage}) || len(cleanup.GroupsListed) != 0 {
+		if !slices.Equal(cleanup.ImagesListed, []string{plan.Pool + "/" + plan.BaseImage}) || len(cleanup.GroupsListed) != 0 {
 			t.Fatal("native listing after removal still holds owned group state", cleanup.ImagesListed, cleanup.GroupsListed)
 		}
 	})
 	t.Run("go_reads_after_removal", func(t *testing.T) {
-		call(t, "cleanup_dir_get_id", poolID, "rbd_group_directory", "dir_get_id", rbdGroupString(nil, plan.Group), -2)
-		call(t, "cleanup_group_snap_list", poolID, "rbd_group_header."+group.ID, "group_snap_list", rbdGroupSnapListInput(rbdGroupSnapRecord{}, plan.ListPage), -2)
-		for _, spec := range setupRecord.Snaps {
-			call(t, "cleanup_snapshot_get_"+spec.ImageID, spec.Pool, "rbd_header."+spec.ImageID, "snapshot_get", rbdLE64(spec.SnapID), -2)
+		call(t, "cleanup_dir_get_id", poolID, "rbd_group_directory", "rbd", "dir_get_id", rbdGroupString(nil, plan.Group), -2)
+		call(t, "cleanup_group_snap_list", poolID, header, "rbd", "group_snap_list", rbdGroupSnapListInput(rbdGroupSnapRecord{}, plan.ListPage), -2)
+		for _, rec := range []rbdGroupSnapRecord{first, secondRecord} {
+			for key, spec := range memberSpecs(t, rec) {
+				call(t, "cleanup_snapshot_get_"+key+"_"+rec.ID, spec.Pool, "rbd_header."+spec.ImageID, "rbd", "snapshot_get", rbdLE64(spec.SnapID), -2)
+			}
 		}
 	})
 }
