@@ -80,6 +80,14 @@ func TestCephOSDCopyFromSnapTruncateIntegration(t *testing.T) {
   one reader. A row selects the test it is declared beside unless it gives
   an explicit `test_run`; a `//scenario:suite` row runs its whole fixture
   configuration. Every row is in the default coverage (`all`).
+- Suite parts: `integration/fixture/suite_part.go`. A suite row whose
+  selection outgrows one native job is declared as rows that differ only in
+  `suite_part=K/N` (identifier suffix `.suite-part-K-of-N`), one job each;
+  part K runs the K-th contiguous slice of the selection Go lists, so the
+  parts together run each test once. `TestSuitePartsCoverTheirSelectionOnce`
+  (fixture module) requires the parts 1..N, no whole row beside them, and at
+  most `suitePartMaxTests` tests per part; a part over that bound needs
+  another part on every row of the configuration.
 - Fixture sharing: `tools/fixture_sharing.py`. The planner runs selected
   shareable rows of one fixture configuration as one fixture sequence job.
 - Capabilities: `integration/fixture/capability.go`.
@@ -146,7 +154,9 @@ and are judged by the calling revision's result gate
 (`tools/native_test_results.py`): every test an explicit `test_run` selects
 must PASS, and a skipped, missing or failed selected test fails the job. A
 broad suite row requires at least one PASS and does not claim that its
-optional tests ran. Separate trusted jobs publish the request's status; a
+optional tests passed; the fixture announces the tests each suite run
+selects, and every announced test needs a PASS or SKIP, so a run that was
+cut off reports the tests it did not reach. Separate trusted jobs publish the request's status; a
 failed, canceled, skipped or missing selected suite never becomes a pass.
 A row's fixture inputs need no workflow change: the trusted
 `tools/native_env.py` forwards each row parameter as `CEPH_MSGR_TEST_<NAME>`
