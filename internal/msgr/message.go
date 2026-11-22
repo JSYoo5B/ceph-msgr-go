@@ -35,21 +35,26 @@ const (
 	// MonCommandReplyMessage is received with header compat at most 1 and
 	// matched by type and transaction.
 	MonCommandReplyMessage uint16 = 51
-	// TellCommandMessage is sent with header 1/0 (MCommand to a MON, MGR, OSD or
-	// MDS).
+	// TellCommandMessage is sent and received: sent with header 1/0 (MCommand
+	// to a MON, MGR, OSD or MDS); received by the MGR daemon role with header
+	// version at least 1 and compat at most 1 (DecodeMgrCommandRequest).
 	TellCommandMessage uint16 = 97
-	// TellCommandReplyMessage is received with header compat at most 1 and
-	// matched by type and transaction.
+	// TellCommandReplyMessage is sent and received: received with header
+	// compat at most 1 and matched by type and transaction; sent by the MGR
+	// daemon role with header 1/1 and the request's TID (CommandReplyFor).
 	TellCommandReplyMessage uint16 = 98
 	// MgrBeaconMessage is sent by the MGR daemon role with header 11/8 and high
 	// priority (maps.EncodeMgrBeacon).
 	MgrBeaconMessage uint16 = 0x703
 	// MgrMapMessage is received; header compat above 1 is refused.
 	MgrMapMessage uint16 = 0x704
-	// MgrCommandMessage is sent with header 1/0.
+	// MgrCommandMessage is sent and received: sent with header 1/0; received
+	// by the MGR daemon role with header version at least 1 and compat at most
+	// 1 (DecodeMgrCommandRequest).
 	MgrCommandMessage uint16 = 0x709
-	// MgrCommandReplyMessage is received with header compat at most 1 and
-	// matched by type and transaction.
+	// MgrCommandReplyMessage is sent and received: received with header
+	// compat at most 1 and matched by type and transaction; sent by the MGR
+	// daemon role with header 1/1 and the request's TID (CommandReplyFor).
 	MgrCommandReplyMessage uint16 = 0x70a
 )
 

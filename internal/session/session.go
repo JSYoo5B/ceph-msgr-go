@@ -35,9 +35,40 @@ type request struct {
 	message msgr.MessageData
 	started bool
 	result  chan response
+	// delivered receives the outcome of a Deliver request exactly once,
+	// from the writer; abandoned (under Session.mu) withdraws an unstarted
+	// one whose caller stopped waiting.
+	delivered chan error
+	abandoned bool
 	// completedErr preserves the first completed local/session failure when
 	// cancellation races with a writer admission rejection or Fail.
 	completedErr error // guarded by Session.mu
+}
+
+// unsent reports a Deliver request that was not started; cause is the
+// session's failure or, without one, ctx's end or an admission refusal.
+func (r *request) unsent(cause error, ctx context.Context) {
+	if r.delivered == nil {
+		return
+	}
+	if cause == nil && ctx != nil {
+		cause = ctx.Err()
+	}
+	if cause == nil {
+		cause = context.Canceled // withdrawn by its caller
+	}
+	r.delivered <- notSent(cause)
+}
+
+// written reports a started Deliver request's write outcome.
+func (r *request) written(err error) {
+	if r.delivered == nil {
+		return
+	}
+	if err != nil {
+		err = &OutcomeUnknownError{Cause: err}
+	}
+	r.delivered <- err
 }
 
 // Called with the session lock held. Completed calls can remain in the
@@ -111,6 +142,10 @@ type Session struct {
 	unacked     []msgr.MessageData
 	resumeState ResumeState
 	resumes     atomic.Uint64
+	// beforeStartLock, when set (tests only), runs on the writer after it
+	// has taken a queued request's Done channel and before it takes mu for
+	// the start decision.
+	beforeStartLock func()
 }
 
 func New(t *Transport, config Config, onMessage func(msgr.MessageData) error, onClose func(error)) *Session {
@@ -371,6 +406,78 @@ func (s *Session) SendControl(ctx context.Context, m msgr.MessageData) error {
 	}
 }
 
+// ErrNotSent wraps the cause of a Deliver whose message was never started
+// on the wire: it is known not to have reached the peer.
+var ErrNotSent = errors.New("ceph messenger: message not sent")
+
+func notSent(cause error) error { return fmt.Errorf("%w: %w", ErrNotSent, cause) }
+
+// Deliver queues m on the ordered writer, as SendControl does, and waits for
+// its local outcome. nil means the whole frame was written to the socket: a
+// local send, not proof that the peer received or processed it. An error
+// wrapping ErrNotSent means the frame was never started (ctx ended or the
+// session failed first) and is known not to have been sent. An
+// OutcomeUnknownError means the write started and then the transport
+// failed, or ctx ended after the start: the peer may have received it.
+// ctx stays with the queued message: the writer observes its Done channel
+// inside the session-lock critical section that marks the write started,
+// and the caller's withdrawal takes that lock too, so a message whose ctx
+// ended before that section is never written, whether the writer or the
+// waiting caller sees the end first.
+func (s *Session) Deliver(ctx context.Context, m msgr.MessageData) error {
+	r, err := s.queueDelivery(ctx, m)
+	if err != nil {
+		return err
+	}
+	withdraw := func(cause error) (error, bool) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if r.started {
+			return nil, false
+		}
+		r.abandoned = true
+		r.releaseUnstarted()
+		return notSent(cause), true
+	}
+	select {
+	case err := <-r.delivered:
+		return err
+	case <-ctx.Done():
+		select {
+		case err := <-r.delivered:
+			return err
+		default:
+		}
+		if err, withdrawn := withdraw(ctx.Err()); withdrawn {
+			return err
+		}
+		return &OutcomeUnknownError{Cause: ctx.Err()}
+	case <-s.done:
+		if err, withdrawn := withdraw(s.Err()); withdrawn {
+			return err
+		}
+		// A started write always reports its outcome.
+		return <-r.delivered
+	}
+}
+
+// queueDelivery admits one Deliver request, carrying ctx, to the writer's
+// queue; the request's delivered channel then receives its outcome once.
+func (s *Session) queueDelivery(ctx context.Context, m msgr.MessageData) (*request, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, notSent(err)
+	}
+	r := &request{ctx: ctx, message: m, delivered: make(chan error, 1)}
+	select {
+	case <-s.done:
+		return nil, notSent(s.Err())
+	case <-ctx.Done():
+		return nil, notSent(ctx.Err())
+	case s.queue <- r:
+		return r, nil
+	}
+}
+
 func (s *Session) control(f msgr.Frame) error {
 	select {
 	case s.controls <- f:
@@ -446,23 +553,46 @@ func (s *Session) writeLoop(t *Transport, epoch uint64, stop <-chan struct{}, lo
 		case r := <-s.queue:
 			s.mu.Lock()
 			id, ctx, m := r.message.Transaction, r.ctx, r.message
-			valid := s.err == nil && (r.result == nil || s.pending[id] == r)
+			valid := s.err == nil && (r.result == nil || s.pending[id] == r) && !r.abandoned
+			cause := s.err
 			s.mu.Unlock()
 			// Both context and admission callbacks run outside mu. Snapshot
 			// the message under mu because cancellation/Fail may clear the
 			// queued request while either callback is inspecting its bytes.
 			if !valid || ctx.Err() != nil {
+				r.unsent(cause, ctx)
 				continue
 			}
 			var admissionErr error
 			if s.config.BeforeWrite != nil {
 				admissionErr = s.config.BeforeWrite(m)
-				if ctx.Err() != nil {
-					continue
-				}
+			}
+			// Cancellation is decided in the same critical section that
+			// marks the start: the Done channel is taken outside mu (a
+			// context method may inspect the session) and received from,
+			// without blocking, under mu; the cause is read after unlock.
+			// A ctx that ended before this section, even while the writer
+			// waited for mu, is never started; one that ends after it
+			// finds the request started, or withdrawn by its waiting
+			// caller under mu first.
+			done := ctx.Done()
+			if s.beforeStartLock != nil {
+				s.beforeStartLock()
 			}
 			s.mu.Lock()
-			valid = s.err == nil && (r.result == nil || s.pending[id] == r)
+			valid = s.err == nil && (r.result == nil || s.pending[id] == r) && !r.abandoned
+			cause = s.err
+			ended := false
+			select {
+			case <-done:
+				ended = true
+			default:
+			}
+			if valid && ended {
+				s.mu.Unlock()
+				r.unsent(nil, ctx)
+				continue
+			}
 			if valid && admissionErr != nil {
 				if r.result != nil {
 					s.remove(id)
@@ -471,24 +601,28 @@ func (s *Session) writeLoop(t *Transport, epoch uint64, stop <-chan struct{}, lo
 					r.result <- response{message: msgr.MessageData{Transaction: id}, err: admissionErr}
 				} else {
 					r.releaseUnstarted()
+					r.unsent(admissionErr, ctx)
 				}
 				s.mu.Unlock()
 				continue
 			}
-			if valid && r.result != nil {
+			if valid && (r.result != nil || r.delivered != nil) {
 				r.started = true
 			}
 			s.mu.Unlock()
 			if !valid {
+				r.unsent(cause, ctx)
 				continue
 			}
 			m.Sequence = s.sent.Add(1)
 			m.AckSequence = s.received.Load()
 			if err := s.retain(m); err != nil {
+				r.written(err)
 				s.Fail(err)
 				return
 			}
 			err = s.writeFrame(t, m.Frame())
+			r.written(err)
 		}
 		if err != nil {
 			s.fault(epoch, err)

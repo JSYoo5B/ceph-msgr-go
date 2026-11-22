@@ -135,12 +135,15 @@ var vectorFSID = [16]byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 
 // families, and clients with a repeated name and an empty vector).
 func TestMgrBeaconMatchesNativeEncoder(t *testing.T) {
 	vectors := mgrDaemonVectors(t)
-	standby := EncodeMgrBeacon(MgrBeacon{GlobalID: 4242, Name: "x", FSID: vectorFSID})
+	standby, err := EncodeMgrBeacon(MgrBeacon{GlobalID: 4242, Name: "x", FSID: vectorFSID}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sixOne := vectorAddress(t, 2, "10.0.0.6:0")
 	sixOne.Nonce = 77
 	sixTwo := sixOne
 	sixTwo.Nonce = 78
-	active := EncodeMgrBeacon(MgrBeacon{
+	active, err := EncodeMgrBeacon(MgrBeacon{
 		GlobalID: 4242, Name: "x", FSID: vectorFSID, Available: true,
 		ServerAddresses: []msgr.Address{vectorAddress(t, 2, "10.0.0.5:6800"), vectorAddress(t, 1, "10.0.0.5:6801"), vectorAddress(t, 2, "[fd00::5]:6802")},
 		Commands: []MgrCommand{
@@ -151,7 +154,10 @@ func TestMgrBeaconMatchesNativeEncoder(t *testing.T) {
 		Services: map[string]string{"dashboard": "https://10.0.0.5:8443/"},
 		Modules:  vectorModules(), Features: 0x3f,
 		Clients: []MgrClient{{Name: "rbd_support"}, {Name: "libcephsqlite", Addresses: []msgr.Address{sixOne}}, {Name: "libcephsqlite", Addresses: []msgr.Address{sixTwo}}},
-	})
+	}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, got := range map[string]msgr.MessageData{"beacon-standby": standby, "beacon-active": active} {
 		native := nativeMessage(t, vectors[name], msgr.MgrBeaconMessage, 11, 8)
 		if got.Type != native.Type || got.Version != native.Version || got.CompatVersion != native.CompatVersion || got.Priority != 196 || got.Middle != nil || got.Data != nil {

@@ -12,20 +12,28 @@ import (
 // Pinned Ceph 20.2.4 7f793731f1b39eb4f465e960113d2363c311b964,
 // src/msg/Message.h MSG_MGR_*: the MGR service-daemon lifecycle messages.
 const (
-	// MgrOpenMessage is sent with header 3/1, by the opt-in service daemon only.
+	// MgrOpenMessage is sent and received: sent with header 3/1 by the opt-in
+	// service daemon; received by the MGR daemon role with header versions 1
+	// to 3 and compat at most 1 (DecodeMgrDaemonOpen).
 	MgrOpenMessage uint16 = 0x700
-	// MgrConfigureMessage is received by the opt-in service daemon with header
-	// versions 1 to 4 and compat exactly 1; a nonempty middle or data segment is
-	// refused and unimplemented extension bytes are kept raw.
+	// MgrConfigureMessage is sent and received: received by the opt-in
+	// service daemon with header versions 1 to 4 and compat exactly 1 (a
+	// nonempty middle or data segment is refused and unimplemented extension
+	// bytes are kept raw); sent by the MGR daemon role with header 4/1
+	// (EncodeMgrConfigure).
 	MgrConfigureMessage uint16 = 0x701
-	// MgrReportMessage is sent with header 9/1, by the opt-in service daemon
-	// only.
+	// MgrReportMessage is sent and received: sent with header 9/1 by the
+	// opt-in service daemon; received by the MGR daemon role with header
+	// versions 1 to 9 and compat at most 1 (DecodeMgrDaemonReport).
 	MgrReportMessage uint16 = 0x702
-	// MgrCloseMessage is sent and received by the opt-in service daemon; the
-	// echo must have header exactly 1/1 and empty middle and data segments.
+	// MgrCloseMessage is sent and received by the opt-in service daemon (the
+	// echo must have header exactly 1/1 and empty middle and data segments)
+	// and by the MGR daemon role, which receives it with the same header
+	// check and sends the same message back (MgrCloseEcho).
 	MgrCloseMessage uint16 = 0x708
-	// MgrUpdateMessage is sent with header 2/1, by the opt-in service daemon
-	// only.
+	// MgrUpdateMessage is sent and received: sent with header 2/1 by the
+	// opt-in service daemon; received by the MGR daemon role with header
+	// versions 1 and 2 and compat at most 1 (DecodeMgrDaemonUpdate).
 	MgrUpdateMessage uint16 = 0x70b
 )
 
@@ -75,6 +83,35 @@ func encodeServiceMap(e *wire.Encoder, m map[string]string) {
 	}
 }
 
+// serviceMapSize is the encoded size of one std::map<string,string>: a
+// count and each entry's two strings (at least 8 bytes per entry).
+func serviceMapSize(m map[string]string) uint64 {
+	n := uint64(4)
+	for k, v := range m {
+		n += 8 + uint64(len(k)) + uint64(len(v))
+	}
+	return n
+}
+
+// optionalServiceMapSize is an optional map: a presence byte and, when
+// present, the map.
+func optionalServiceMapSize(m map[string]string) uint64 {
+	if m == nil {
+		return 1
+	}
+	return 1 + serviceMapSize(m)
+}
+
+// checkServiceBound refuses a message whose exact encoded size, computed
+// from lengths and counts before anything is copied or sorted, exceeds
+// MaxServiceMessageSize.
+func checkServiceBound(size uint64) error {
+	if size > MaxServiceMessageSize {
+		return fmt.Errorf("%w: encoded message exceeds %d bytes", ErrServiceRegistration, MaxServiceMessageSize)
+	}
+	return nil
+}
+
 func checkServiceSize(e *wire.Encoder) error {
 	if len(e.Data) > MaxServiceMessageSize {
 		return fmt.Errorf("%w: encoded message exceeds %d bytes", ErrServiceRegistration, MaxServiceMessageSize)
@@ -98,6 +135,9 @@ func MgrOpen(service, daemon string, metadata, status map[string]string) (Messag
 		return MessageData{}, err
 	}
 	if err := errors.Join(validateServiceMap("metadata", metadata), validateServiceMap("status", status)); err != nil {
+		return MessageData{}, err
+	}
+	if err := checkServiceBound(8 + uint64(len(daemon)+len(service)) + 1 + serviceMapSize(metadata) + serviceMapSize(status) + 8); err != nil {
 		return MessageData{}, err
 	}
 	e := wire.Encoder{}
@@ -127,6 +167,9 @@ func MgrUpdate(service, daemon string, metadata map[string]string) (MessageData,
 	if err := validateServiceMap("metadata", metadata); err != nil {
 		return MessageData{}, err
 	}
+	if err := checkServiceBound(8 + uint64(len(daemon)+len(service)) + 1 + serviceMapSize(metadata) + 4); err != nil {
+		return MessageData{}, err
+	}
 	e := wire.Encoder{}
 	e.String(daemon)
 	e.String(service)
@@ -150,6 +193,9 @@ func MgrReport(service, daemon string, status, task map[string]string) (MessageD
 		return MessageData{}, err
 	}
 	if err := errors.Join(validateServiceMap("status", status), validateServiceMap("task status", task)); err != nil {
+		return MessageData{}, err
+	}
+	if err := checkServiceBound(4 + uint64(len(daemon)) + 4 + 10 + 4 + 4 + uint64(len(service)) + optionalServiceMapSize(status) + 12 + optionalServiceMapSize(task) + 1); err != nil {
 		return MessageData{}, err
 	}
 	e := wire.Encoder{}
