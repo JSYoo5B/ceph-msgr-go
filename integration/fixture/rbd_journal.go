@@ -106,12 +106,17 @@ var capRBDJournalOwnerLoss = defineExclusiveCapability(fixtureRBD, "rbd-journal-
 // observation after the recorded unknown outcome, followed by `takeover`
 // instead of the replay. The Go owner never releases the lock and its watch
 // is no longer renewed. The takeover lists the lock record and the header
-// watchers right before its first write (its boundary); its librbd writes
-// then ask a listed owner for the lock (RequestLock, which the Go test's
-// observer watch receives), blocklist the owner's address and break the
-// lock once no watcher matches the record (managed_lock/AcquireRequest.cc
-// send_break_lock, managed_lock/BreakRequest.cc), acquire it, replay the
-// journal and journal and apply their own writes. Native behavior relied
+// watchers right before its first write (its boundary). Its librbd writes
+// then take the lock as the automatic policy does: the run is set up for
+// the path where librbd finds the owner's watch listed and requests the
+// lock (RequestLock, which the Go test's observer watch receives), then
+// blocklists the owner's address and breaks the lock once no watcher
+// matches the record (managed_lock/AcquireRequest.cc send_break_lock,
+// managed_lock/BreakRequest.cc), acquires it, replays the journal and
+// journals and applies its own writes. This driver reports the boundary
+// and what is listed after the takeover; which branch librbd took is the
+// test's to bound from those observations, not this driver's to report.
+// Native behavior relied
 // upon in addition to the list above: osd/Watch.cc (a watch is kept for its
 // timeout after the last ping) at rbdBaseSource.
 var rbdJournalOwnerLossActions = []string{"setup", "observe-locked", "checkpoint", "observe-recorded", "takeover"}
