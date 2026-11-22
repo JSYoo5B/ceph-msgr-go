@@ -12,7 +12,8 @@ func TestOSDTopologyVocabularySeparatesDaemonsFromReplication(t *testing.T) {
 	want := map[string]osdTopology{
 		"1": {daemons: 1, poolSize: 1, poolMinSize: 1},
 		"3": {daemons: 3, poolSize: 3, poolMinSize: 2},
-		"4": {daemons: 4, poolSize: 3, poolMinSize: 2, erasureCapacity: true},
+		"4": {daemons: 4, poolSize: 3, poolMinSize: 2, erasureCapacity: fixtureOSDErasureCapacity, erasureDefault: "^TestCephOSDErasureK2M2Integration$"},
+		"6": {daemons: 6, poolSize: 3, poolMinSize: 2, erasureCapacity: fixtureOSDErasureSix, erasureDefault: "^TestCephOSDErasureOptimizedK4M2Integration$"},
 	}
 	if len(osdTopologies) != len(want) {
 		t.Fatal("OSD topology vocabulary changed", osdTopologies)
@@ -22,7 +23,7 @@ func TestOSDTopologyVocabularySeparatesDaemonsFromReplication(t *testing.T) {
 			t.Fatalf("topology %s = %+v, want %+v", name, osdTopologies[name], topology)
 		}
 	}
-	if got := strings.Join(osdTopologyNames(), ","); got != "1,3,4" {
+	if got := strings.Join(osdTopologyNames(), ","); got != "1,3,4,6" {
 		t.Fatal("topology names", got)
 	}
 	if (profile{osdReplicas: "2"}).osdTopology().daemons != 0 {
@@ -78,7 +79,8 @@ func TestOSDTopologyErasureCapacityProfile(t *testing.T) {
 		"sparse oracle":       {"CEPH_MSGR_TEST_SPARSE_READ_ORACLE": "/oracle"},
 		"unknown topology":    {"CEPH_MSGR_TEST_OSD_REPLICAS": "2"},
 		"padded topology":     {"CEPH_MSGR_TEST_OSD_REPLICAS": "04"},
-		"arbitrary integer":   {"CEPH_MSGR_TEST_OSD_REPLICAS": "6"},
+		"arbitrary integer":   {"CEPH_MSGR_TEST_OSD_REPLICAS": "5"},
+		"six-OSD capability":  {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK3M1FailoverIntegration$", "CEPH_MSGR_TEST_CAPABILITIES": "osd-erasure-width-six"},
 		"undeclared width":    {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK2M2FailoverIntegration$"},
 		"joined with width":   {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$", "CEPH_MSGR_TEST_CAPABILITIES": "osd-erasure-width"},
 		"width on topology 3": {"CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK2M2FailoverIntegration$", "CEPH_MSGR_TEST_CAPABILITIES": "osd-erasure-width"},
@@ -93,7 +95,61 @@ func TestOSDTopologyErasureCapacityProfile(t *testing.T) {
 	}
 }
 
+// The six-OSD topology has its own default baseline and its own exclusive
+// capability; neither topology admits the other's.
+func TestOSDTopologySixOSDErasureCapacityProfile(t *testing.T) {
+	base := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "6",
+		"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"}
+	load := func(change map[string]string) (profile, error) {
+		env := copyProfileEnv(base)
+		for key, value := range change {
+			env[key] = value
+		}
+		return loadProfile(func(name string) string { return env[name] })
+	}
+	selections := map[string]string{"": ""}
+	for _, row := range ciRepositoryCatalog(t) {
+		if row.Params["osd_replicas"] == "6" {
+			selections[row.Params["test_run"]] = row.Params["capabilities"]
+		}
+	}
+	if len(selections) < 3 {
+		t.Fatal("six-OSD catalog rows", selections)
+	}
+	for selector, capabilities := range selections {
+		p, err := load(map[string]string{"CEPH_MSGR_TEST_RUN": selector, "CEPH_MSGR_TEST_CAPABILITIES": capabilities})
+		if err != nil {
+			t.Fatal(selector, err)
+		}
+		if p.testRun != cmp.Or(selector, "^TestCephOSDErasureOptimizedK4M2Integration$") || p.osdTopology().daemons != 6 ||
+			p.containerEnvironment()["CEPH_MSGR_TEST_OSD_REPLICAS"] != "6" {
+			t.Fatalf("six-OSD profile %+v", p)
+		}
+	}
+	for name, change := range map[string]map[string]string{
+		"four-OSD default":    {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureK2M2Integration$"},
+		"undeclared width":    {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK4M2FailoverIntegration$"},
+		"four-OSD capability": {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK4M2FailoverIntegration$", "CEPH_MSGR_TEST_CAPABILITIES": "osd-erasure-width"},
+		"both capabilities":   {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK4M2FailoverIntegration$", "CEPH_MSGR_TEST_CAPABILITIES": "osd-erasure-width,osd-erasure-width-six"},
+		"joined with width":   {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK4M2(Failover)?Integration$", "CEPH_MSGR_TEST_CAPABILITIES": "osd-erasure-width-six"},
+		"MemStore":            {"CEPH_MSGR_TEST_OSD_STORE": "memstore"},
+		"broad selector":      {"CEPH_MSGR_TEST_RUN": "^TestCephOSD.*Integration$"},
+		"reply-v8":            {"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-reply-v8"},
+		"width on topology 4": {"CEPH_MSGR_TEST_OSD_REPLICAS": "4", "CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK4M2FailoverIntegration$", "CEPH_MSGR_TEST_CAPABILITIES": "osd-erasure-width-six"},
+	} {
+		if p, err := load(change); err == nil {
+			t.Fatalf("%s: six-OSD profile accepted: %+v", name, p)
+		}
+	}
+}
+
 func TestOwnedOSDInventoryMatchesTopology(t *testing.T) {
+	if ids, err := ownedOSDInventory([]int{5, 3, 1, 0, 2, 4}, osdTopologies["6"]); err != nil || len(ids) != 6 || ids[5] != 5 {
+		t.Fatal(ids, err)
+	}
+	if _, err := ownedOSDInventory([]int{0, 1, 2, 3}, osdTopologies["6"]); err == nil {
+		t.Fatal("four daemons accepted for the six-OSD topology")
+	}
 	ids, err := ownedOSDInventory([]int{3, 1, 0, 2}, osdTopologies["4"])
 	if err != nil || len(ids) != 4 || ids[0] != 0 || ids[3] != 3 {
 		t.Fatal(ids, err)

@@ -38,7 +38,7 @@ func TestSequenceLoadsTheOneProfileOfItsMembers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.testRun != union || p.sequence != sequence || !p.osdTopology().erasureCapacity {
+	if p.testRun != union || p.sequence != sequence || p.osdTopology().erasureCapacity == "" {
 		t.Fatalf("sequence profile %+v", p)
 	}
 	single.testRun, single.sequence = p.testRun, p.sequence

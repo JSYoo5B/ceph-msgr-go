@@ -319,7 +319,7 @@ func TestExclusiveCapabilityAdmitsOneTestOfItsOwnFixture(t *testing.T) {
 		}
 	}
 	for _, f := range []ownFixture{fixtureMDSCommands, fixtureMDSCephFS, fixtureMDSCephFSCompletion, fixtureMDSCephFSData,
-		fixtureRBD, fixtureOSDCachePools, fixtureOSDErasureCapacity} {
+		fixtureRBD, fixtureOSDCachePools, fixtureOSDErasureCapacity, fixtureOSDErasureSix} {
 		if len(byFixture[f]) == 0 {
 			t.Fatalf("no capability admits an exclusive test of the %s fixture", f)
 		}

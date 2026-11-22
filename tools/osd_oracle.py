@@ -11,9 +11,9 @@ import re
 import sys
 
 # The closed CEPH_MSGR_TEST_OSD_REPLICAS topologies (integration/fixture/profile.go):
-# owned daemon count, then the fixture data pool's size and min_size. "4" adds
-# erasure-code capacity without widening the replicated data pool.
-OSD_TOPOLOGIES = {"1": (1, 1, 1), "3": (3, 3, 2), "4": (4, 3, 2)}
+# owned daemon count, then the fixture data pool's size and min_size. "4" and
+# "6" add erasure-code capacity without widening the replicated data pool.
+OSD_TOPOLOGIES = {"1": (1, 1, 1), "3": (3, 3, 2), "4": (4, 3, 2), "6": (6, 3, 2)}
 
 
 class Timespec(ctypes.Structure):

@@ -70,6 +70,42 @@ func TestCephOSDErasureOptimizedK2M2Integration(t *testing.T) {
 	erasureScenario(t, erasureK2M2, true, "isa")
 }
 
+// The optimized k=2,m=2 pool with the jerasure plugin (technique
+// reed_sol_van, the jerasure technique pinned
+// ErasureCodeJerasure::ErasureCodeJerasure marks optimization-capable)
+// instead of the cluster default isa. Encoding stays inside the OSDs: the
+// native profile must name jerasure, and the requests and observations are
+// those of the isa pool.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2jerasure key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:shareable own EC pool I/O only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
+func TestCephOSDErasureOptimizedK2M2JerasureIntegration(t *testing.T) {
+	erasureScenario(t, erasureK2M2, true, "jerasure")
+}
+
+// An optimized isa k=3,m=1 pool on the four-OSD topology: size 4, min_size
+// 3 and nonprimary shards {1,2}, the first width with more than one shard
+// that may not lead, all read back from the native map before any Go I/O.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1 key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:shareable own EC pool I/O only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
+func TestCephOSDErasureOptimizedK3M1Integration(t *testing.T) {
+	erasureScenario(t, erasureK3M1, true, "isa")
+}
+
+// The default baseline of the six-OSD topology: an optimized isa k=4,m=2
+// pool, size 6, min_size 5 (k + min(1, m-1)) and nonprimary shards
+// {1,2,3}, all read back from the native map before any Go I/O.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2 key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8
+//scenario:covers CLIENT to OSD
+//fixture:shareable own EC pool I/O only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
+func TestCephOSDErasureOptimizedK4M2Integration(t *testing.T) {
+	erasureScenario(t, erasureK4M2, true, "isa")
+}
+
 func erasureScenario(t *testing.T, width erasureWidth, optimized bool, plugin string) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
@@ -231,6 +267,12 @@ func erasureScenario(t *testing.T, width erasureWidth, optimized bool, plugin st
 				if err == nil {
 					t.Fatal("a read with the wrong shard succeeded", name)
 				}
+			}
+			// An OSD silently discards a request older than its PG's
+			// interval, so the refusals count only if the interval in which
+			// the placement was read held around them.
+			if err := erasurePGState(t, ctx, object).heldSince(route); err != nil {
+				t.Fatal("the interval of the placement did not hold around the wrong-shard reads, so their refusals are unattributed:", err)
 			}
 		})
 	}

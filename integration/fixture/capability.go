@@ -59,6 +59,7 @@ const (
 	fixtureRBD                 ownFixture = "RBD"
 	fixtureOSDCachePools       ownFixture = "OSD cache-pool"
 	fixtureOSDErasureCapacity  ownFixture = "four-OSD erasure-capacity"
+	fixtureOSDErasureSix       ownFixture = "six-OSD erasure-capacity"
 )
 
 // fixtureCapabilities is filled by the defineCapability calls of this package.
