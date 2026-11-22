@@ -329,7 +329,10 @@ func admitSingleProfile(p profile, getenv func(string) string) (profile, error) 
 		selected = "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"
 	}
 	// The default OSD selection on three BlueStore replicas runs past ten
-	// minutes; an explicit CEPH_MSGR_TEST_TIMEOUT still wins.
+	// minutes; an explicit CEPH_MSGR_TEST_TIMEOUT still wins. This static
+	// value bounds a run without a job deadline and each test of a fixture
+	// sequence; under a native CI job's deadline the default selection is
+	// bounded by the job instead (job_budget.go).
 	if p.osd == "1" && getenv("CEPH_MSGR_TEST_TIMEOUT") == "" {
 		p.testTimeout = "30m"
 	}

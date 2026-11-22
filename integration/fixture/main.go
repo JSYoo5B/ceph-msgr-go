@@ -139,6 +139,10 @@ func command(ctx context.Context, args []string) (result error) {
 	if err != nil {
 		return err
 	}
+	budget, err := loadJobBudget(os.Getenv)
+	if err != nil {
+		return err
+	}
 	if *diagnostics != "" {
 		p.diagnostics = *diagnostics
 	}
@@ -196,10 +200,10 @@ func command(ctx context.Context, args []string) (result error) {
 	if err := buildTests(ctx, root, out, arch, p); err != nil {
 		return err
 	}
-	return run(ctx, root, out, p)
+	return run(ctx, root, out, p, budget)
 }
 
-func run(ctx context.Context, project, out string, p profile) (result error) {
+func run(ctx context.Context, project, out string, p profile, budget jobBudget) (result error) {
 	if err := stageAssets(project, out, p); err != nil {
 		return err
 	}
@@ -216,7 +220,7 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 			terminationErr := c.Terminate(cleanup)
 			if p.mgrServiceColdBootstrap() {
 				// Independent inspection is read-only and never repeats teardown.
-				proof, stopProof := context.WithTimeout(context.Background(), 30*time.Second)
+				proof, stopProof := context.WithTimeout(context.Background(), coldBootstrapProofBudget)
 				proofErr := confirmColdBootstrapCleanup(proof, out)
 				stopProof()
 				terminationErr = errors.Join(terminationErr, proofErr)
@@ -242,7 +246,7 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 		return err
 	}
 	if p.sequence != "" {
-		if err := runSequence(ctx, p, sequenceRunner(c, out, proxy, p)); err != nil {
+		if err := runSequence(ctx, p, sequenceRunner(c, out, proxy, p, budget)); err != nil {
 			return err
 		}
 	} else {
@@ -252,8 +256,13 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 			if err := c.checkControl(); err != nil {
 				return err
 			}
+			timeout, err := budget.suiteTimeout(p, time.Now(), false)
+			if err != nil {
+				return fmt.Errorf("%s native suite: %w", name, err)
+			}
+			budget.report(os.Stderr, name, timeout)
 			fmt.Printf("Running Ceph test suite: %s\n", name)
-			if err := c.runSuite(ctx, out, proxy, p, name, []string{"-test.run", p.testRun, "-test.v", "-test.timeout", p.testTimeout}, os.Stdout); err != nil {
+			if err := c.runSuite(ctx, out, proxy, p, name, []string{"-test.run", p.testRun, "-test.v", "-test.timeout", timeout}, os.Stdout); err != nil {
 				return err
 			}
 		}
@@ -261,17 +270,25 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 	if err := c.checkControl(); err != nil {
 		return err
 	}
-	if err := c.finishMDSFresh(ctx); err != nil {
+	// The finish steps are reserved by the suites' timeouts and cut at the
+	// start of the teardown reserve (job_budget.go).
+	finish, stopFinish := budget.workContext(ctx, p)
+	defer stopFinish()
+	if err := c.finishMDSFresh(finish); err != nil {
 		return err
 	}
-	if err := c.finishRBDBase(ctx); err != nil {
+	if err := c.finishRBDBase(finish); err != nil {
 		return err
 	}
-	if err := c.finishOSDCachePools(ctx); err != nil {
+	if err := c.finishOSDCachePools(finish); err != nil {
 		return err
 	}
 	return saveMetadata(out, p.diagnostics)
 }
+
+// coldBootstrapProofBudget bounds the read-only removal proof of the
+// cold-bootstrap fixture after termination; teardownReserve counts it.
+const coldBootstrapProofBudget = 30 * time.Second
 
 // suiteNames are the native suites in the order every fixture runs them.
 var suiteNames = []string{"api", "client"}

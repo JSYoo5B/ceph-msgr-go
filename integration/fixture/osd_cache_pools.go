@@ -469,6 +469,12 @@ func defineCachePoolAction(name string, action cachePoolAction) bool {
 	return true
 }
 
+// cachePoolsFinishReserve is the job budget's reserve for
+// finishOSDCachePools (afterSuiteReserve): the closed cache-pool oracle's
+// three-minute bound and a minute for removing the owned resources. Under a
+// job deadline the step also runs under jobBudget.workContext.
+const cachePoolsFinishReserve = 4 * time.Minute
+
 func (c *fixtureCluster) finishOSDCachePools(ctx context.Context) (result error) {
 	x := c.cachePools
 	if x == nil {
