@@ -17,103 +17,150 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	"github.com/JSYoo5B/ceph-testcontainers-go/rbd"
 )
 
 // The RBD group-snapshot acceptance reuses the RBD base scope (token, owned
-// pool and both identities) and adds, on the test's request only, two native
-// librbd images in one native RBD group with one native group snapshot. Every
-// mutation stays with native librbd: the Go test only reads the group header
-// and the member image headers through rbd object-class CALLs and the data
-// objects through explicit OSD reads, and compares them with native librbd
-// listings and native librados reads published by this control. The closed
-// sequence is setup (images, contents, group, membership, group snapshot),
-// modify (new data on both live heads after the snapshot) and cleanup (the
-// group snapshot, the membership, the group and both images removed natively,
-// each removal followed by a native absence read). Every native action is
-// journaled in rbd-base-owned.json before it is issued and is never reissued;
-// whatever an uncertain action leaves goes with the owned pool at fixture
-// cleanup. Group-record and snapshot decoding stay in the test-only consumer
-// (integration/rbd_group_test.go). Native behavior relied upon, at
-// rbdBaseSource: librbd/api/Group.cc (group creation, membership, snapshot
-// creation and removal, the ".group.<pool>_<group id>_<snapshot id>" member
-// snapshot name), cls/rbd/cls_rbd.cc (group_snap_list, snapshot_get,
-// dir_get_id), cls/rbd/cls_rbd_types.cc, pybind/rbd/rbd.pyx and
-// pybind/rados/rados.pyx (LGPL-2.1 references; no code copied).
+// pool and both identities), adds a second owned pool and, on the test's
+// request only, two native librbd images (exclusive-lock, object-map and
+// fast-diff members, one in each pool) in one native RBD group held in the first
+// pool. Every mutation stays with native librbd: the Go test reads the group
+// header, the member image headers and the data objects, holds one member
+// header watch and answers its notifications, and compares what it saw with
+// native librbd listings and native librados reads published by this
+// control. The closed sequence is
+//
+//   - setup: images, contents, group, membership and the first group
+//     snapshot;
+//   - modify: new data on both live heads;
+//   - refused: a second group snapshot whose quiesce the Go watcher refuses,
+//     so native librbd compensates;
+//   - accepted: a second group snapshot whose quiesce the Go watcher accepts;
+//   - rollback: the group rolled back to the first group snapshot;
+//   - cleanup: both group snapshots, the membership, the group and both
+//     images removed natively, each removal followed by a native absence
+//     read.
+//
+// During refused and accepted the native driver creates the group snapshot
+// on a second thread while its main thread independently reads the group
+// header and the member headers through librados exec of read methods, tries
+// a rollback to the snapshot being created, and publishes what it saw before
+// the Go watcher answers. Every native action is journaled in
+// rbd-base-owned.json before it is issued and is never reissued; whatever an
+// uncertain action leaves goes with the owned pools at fixture cleanup.
+// Group-record, notification and snapshot decoding stay in the test-only
+// consumer (integration/rbd_group_test.go). Native behavior relied upon, at
+// rbdBaseSource: librbd/api/Group.cc (membership, snapshot creation with its
+// INCOMPLETE record, quiesce, exclusive locks, COMPLETE record, unquiesce and
+// compensation; rollback, snapshot removal, the
+// ".group.<pool>_<group id>_<snapshot id>" member snapshot name),
+// librbd/ImageWatcher.cc (quiesce notification and its responses),
+// cls/rbd/cls_rbd.cc (group_snap_list, snapshot_get, get_snapcontext,
+// dir_get_id), cls/lock/cls_lock.cc (get_info), cls/rbd/cls_rbd_types.cc,
+// pybind/rbd/rbd.pyx and pybind/rados/rados.pyx (LGPL-2.1 references; no
+// code copied).
 
 // capRBDGroupSnapshot admits the group-snapshot acceptance. Its test runs
-// alone on a fresh RBD fixture, so the owned pool holds only the base image
+// alone on a fresh RBD fixture, so the owned pools hold only the base image
 // besides the group's two images.
 var capRBDGroupSnapshot = defineExclusiveCapability(fixtureRBD, "rbd-group-snapshot",
-	"run one test alone on a fresh RBD fixture with the native group-snapshot sequence",
+	"run one test alone on a fresh RBD fixture with a second owned pool and the native group-snapshot sequence",
 	"RBD=1", nil)
 
 // rbdGroupActions is the closed, ordered action sequence of the group
 // control. Each action runs at most once and only after its predecessors.
-var rbdGroupActions = []string{"setup", "modify", "cleanup"}
+var rbdGroupActions = []string{"setup", "modify", "refused", "accepted", "rollback", "cleanup"}
 
-// rbdGroupBlobViews names the binary views each image of an observation
-// publishes; the file of view v of image k for action a is
-// rbd-group-<a>-<k>-<v>.bin.
-var rbdGroupBlobViews = map[string]string{
-	"image_head":   "image-head",
-	"image_snap":   "image-snap",
-	"objects_head": "objects-head",
-	"objects_snap": "objects-snap",
+// rbdGroupObserved are the actions whose output carries a group and image
+// observation; rbdGroupCreating are those that create a group snapshot under
+// a Go-answered quiesce.
+var (
+	rbdGroupObserved = []string{"setup", "modify", "refused", "accepted", "rollback"}
+	rbdGroupCreating = []string{"refused", "accepted"}
+)
+
+// rbdGroupQuiesceRefusal is the result the Go watcher answers the refused
+// creation's quiesce with: -EBUSY in a ResponseMessage.
+const rbdGroupQuiesceRefusal = -16
+
+// rbdGroupBlobName names one published binary view: the image bytes or the
+// concatenated objects of image k at view label v (head, or s<snapshot id>)
+// for action a.
+func rbdGroupBlobName(action, image, label, kind string) string {
+	return "rbd-group-" + action + "-" + image + "-" + label + "-" + kind + ".bin"
 }
 
-func rbdGroupBlobName(action, image, key string) string {
-	return "rbd-group-" + action + "-" + image + "-" + rbdGroupBlobViews[key] + ".bin"
-}
-
-// rbdGroupImagePlan is one member image: writes before the group snapshot
-// (setup) and after it (modify).
+// rbdGroupImagePlan is one member image: its owned pool and its writes before
+// the first group snapshot (setup) and after it (modify).
 type rbdGroupImagePlan struct {
 	Key        string          `json:"key"`
 	Name       string          `json:"name"`
+	Pool       string          `json:"pool"`
 	PreWrites  []rbdBaseExtent `json:"pre_snapshot_writes"`
 	PostWrites []rbdBaseExtent `json:"post_snapshot_writes"`
 }
 
-// rbdGroupPlan is the fixed recipe of the group acceptance. ListPage is the
-// page size of every group_snap_list call, the driver's and the Go test's.
+// rbdGroupPlan is the fixed recipe of the group acceptance. Pool holds the
+// group, the base image and image a; SecondPool holds image b. ListPage is
+// the page size of the paged group_snap_list calls, PollPage that of the
+// single-call listings during creation. QuiesceRefusal is the Go watcher's
+// answer to the refused creation's quiesce.
 type rbdGroupPlan struct {
-	Pool          string              `json:"pool"`
-	BaseImage     string              `json:"base_image"`
-	Group         string              `json:"group"`
-	GroupSnapshot string              `json:"group_snapshot"`
-	Order         int                 `json:"order"`
-	Size          uint64              `json:"size"`
-	Features      uint64              `json:"features"`
-	ListPage      uint64              `json:"list_page"`
-	Images        []rbdGroupImagePlan `json:"images"`
+	Pool            string              `json:"pool"`
+	SecondPool      string              `json:"second_pool"`
+	BaseImage       string              `json:"base_image"`
+	Group           string              `json:"group"`
+	GroupSnapshot   string              `json:"group_snapshot"`
+	RefusedSnapshot string              `json:"refused_snapshot"`
+	SecondSnapshot  string              `json:"second_snapshot"`
+	Order           int                 `json:"order"`
+	Size            uint64              `json:"size"`
+	Features        uint64              `json:"features"`
+	ListPage        uint64              `json:"list_page"`
+	PollPage        uint64              `json:"poll_page"`
+	QuiesceRefusal  int                 `json:"quiesce_refusal"`
+	Images          []rbdGroupImagePlan `json:"images"`
 }
 
+// rbdGroupFeatures is layering, exclusive-lock, object-map and fast-diff
+// (librbd enables fast-diff with object-map unless told otherwise): librbd
+// acquires each member's exclusive lock after the quiesce and before the
+// member snapshots (ceph/ceph/blob/v20.2.4/src/include/rbd/features.h).
+const rbdGroupFeatures = 1 | 4 | 8 | 16
+
 // rbdGroupPlanFor places two three-object images with different contents.
-// Image a: object 0 and part of object 1 before the snapshot; after it, part
-// of object 0 rewritten and object 2 created. Image b: parts of objects 0 and
-// 2 before; after it, object 1 created and part of object 2 rewritten. Each
-// image's snapshot view therefore differs from its later head in an existing
-// object and in an object created after the snapshot.
+// Image a: object 0 and part of object 1 before the first snapshot; after it,
+// part of object 0 rewritten and object 2 created. Image b: parts of objects
+// 0 and 2 before; after it, object 1 created and part of object 2 rewritten.
+// Each image's first snapshot view therefore differs from its later head in
+// an existing object and in an object created after the snapshot.
 func rbdGroupPlanFor(token string) rbdGroupPlan {
 	const k = 1 << 10
-	snapshot := "ceph-msgr-gsnap"
+	short := ""
 	if len(token) >= 8 {
-		snapshot += "-" + token[:8]
+		short = "-" + token[:8]
 	}
-	return rbdGroupPlan{Pool: "ceph-msgr-rbd-" + token, BaseImage: "ceph-msgr-image-" + token, Group: "ceph-msgr-group-" + token, GroupSnapshot: snapshot,
-		// RBD_FEATURE_LAYERING only: no exclusive lock to acquire while
-		// librbd quiesces and snapshots the members.
-		Order: 16, Size: 192 * k, Features: 1, ListPage: 1,
+	return rbdGroupPlan{Pool: "ceph-msgr-rbd-" + token, SecondPool: rbdGroupSecondPoolName(token), BaseImage: "ceph-msgr-image-" + token, Group: "ceph-msgr-group-" + token,
+		GroupSnapshot: "ceph-msgr-gsnap" + short, RefusedSnapshot: "ceph-msgr-gsnap-refused" + short, SecondSnapshot: "ceph-msgr-gsnap-second" + short,
+		Order: 16, Size: 192 * k, Features: rbdGroupFeatures, ListPage: 1, PollPage: 16, QuiesceRefusal: rbdGroupQuiesceRefusal,
 		Images: []rbdGroupImagePlan{
-			{Key: "a", Name: "ceph-msgr-gimage-a-" + token, PreWrites: []rbdBaseExtent{{0, 48 * k}, {80 * k, 16 * k}}, PostWrites: []rbdBaseExtent{{16 * k, 16 * k}, {128 * k, 8 * k}}},
-			{Key: "b", Name: "ceph-msgr-gimage-b-" + token, PreWrites: []rbdBaseExtent{{8 * k, 24 * k}, {136 * k, 32 * k}}, PostWrites: []rbdBaseExtent{{64 * k, 12 * k}, {144 * k, 8 * k}}},
+			{Key: "a", Name: "ceph-msgr-gimage-a-" + token, Pool: "ceph-msgr-rbd-" + token, PreWrites: []rbdBaseExtent{{0, 48 * k}, {80 * k, 16 * k}}, PostWrites: []rbdBaseExtent{{16 * k, 16 * k}, {128 * k, 8 * k}}},
+			{Key: "b", Name: "ceph-msgr-gimage-b-" + token, Pool: rbdGroupSecondPoolName(token), PreWrites: []rbdBaseExtent{{8 * k, 24 * k}, {136 * k, 32 * k}}, PostWrites: []rbdBaseExtent{{64 * k, 12 * k}, {144 * k, 8 * k}}},
 		}}
 }
 
+func rbdGroupSecondPoolName(token string) string { return "ceph-msgr-rbd2-" + token }
+
 func (p rbdGroupPlan) owned(token string) bool {
-	return len(token) == 32 && p.Pool == "ceph-msgr-rbd-"+token && p.BaseImage == "ceph-msgr-image-"+token && p.Group == "ceph-msgr-group-"+token &&
-		p.GroupSnapshot == "ceph-msgr-gsnap-"+token[:8] && p.Order == 16 && p.Size == 192<<10 && p.Features == 1 && p.ListPage == 1 && len(p.Images) == 2 &&
-		p.Images[0].Key == "a" && p.Images[0].Name == "ceph-msgr-gimage-a-"+token && p.Images[1].Key == "b" && p.Images[1].Name == "ceph-msgr-gimage-b-"+token &&
+	if len(token) != 32 {
+		return false
+	}
+	short := "-" + token[:8]
+	return p.Pool == "ceph-msgr-rbd-"+token && p.SecondPool == rbdGroupSecondPoolName(token) && p.BaseImage == "ceph-msgr-image-"+token && p.Group == "ceph-msgr-group-"+token &&
+		p.GroupSnapshot == "ceph-msgr-gsnap"+short && p.RefusedSnapshot == "ceph-msgr-gsnap-refused"+short && p.SecondSnapshot == "ceph-msgr-gsnap-second"+short &&
+		p.Order == 16 && p.Size == 192<<10 && p.Features == rbdGroupFeatures && p.ListPage == 1 && p.PollPage == 16 && p.QuiesceRefusal == rbdGroupQuiesceRefusal && len(p.Images) == 2 &&
+		p.Images[0].Key == "a" && p.Images[0].Name == "ceph-msgr-gimage-a-"+token && p.Images[0].Pool == p.Pool &&
+		p.Images[1].Key == "b" && p.Images[1].Name == "ceph-msgr-gimage-b-"+token && p.Images[1].Pool == p.SecondPool &&
 		!slices.ContainsFunc(p.Images, func(i rbdGroupImagePlan) bool { return len(i.PreWrites) == 0 || len(i.PostWrites) == 0 })
 }
 
@@ -127,37 +174,120 @@ const (
 )
 
 // rbdGroupState is the group control's part of the RBD base scope: its plan,
-// the last control request and the index of the next admitted action.
+// the last control request, the index of the next admitted action and the
+// second owned pool (its name is journaled before it is created).
 type rbdGroupState struct {
-	plan          rbdGroupPlan
-	lastRequestID int64
-	next          int
+	plan             rbdGroupPlan
+	lastRequestID    int64
+	next             int
+	secondPoolIntent bool
+	secondPoolName   string
+	secondPoolHandle *ceph.Pool
+	secondPool       *rbdBasePoolPolicy
+}
+
+// prepareRBDGroupPool creates and initializes the group acceptance's second
+// owned pool with the first pool's policy, before the identities whose
+// capabilities name both pools. The intent is journaled first; a pool handle
+// returned with an error still identifies it for cleanup.
+func (c *fixtureCluster) prepareRBDGroupPool(ctx context.Context, config ceph.PoolConfig) error {
+	x := c.rbdBase
+	if x == nil || x.group.secondPoolIntent || x.goIntent || x.nativeIntent {
+		return errors.New("invalid RBD group pool preparation scope")
+	}
+	x.group.secondPoolIntent, x.group.secondPoolName = true, rbdGroupSecondPoolName(x.token)
+	config.Name = x.group.secondPoolName
+	m, err := c.rbdBaseBegin("group-pool-create", config.Name, 0)
+	if err != nil {
+		return err
+	}
+	x.group.secondPoolHandle, err = c.cluster.CreatePool(ctx, config)
+	if err := c.rbdBaseFinish(m, err); err != nil {
+		return fmt.Errorf("create the second owned RBD pool: %w", err)
+	}
+	m, err = c.rbdBaseBegin("group-pool-init", config.Name, 0)
+	if err != nil {
+		return err
+	}
+	if err := c.rbdBaseFinish(m, rbd.InitPool(ctx, c.cluster, config.Name)); err != nil {
+		return fmt.Errorf("initialize the second owned RBD pool: %w", err)
+	}
+	return nil
+}
+
+// removeRBDGroupPool removes the second owned pool through its handle (or
+// the pool of the planned name, which then must exist) and proves its
+// absence from a native OSDMap.
+func (c *fixtureCluster) removeRBDGroupPool(ctx context.Context, receipt *rbdBaseCleanup) error {
+	x := c.rbdBase
+	receipt.SecondPool = x.group.secondPoolName
+	pool := x.group.secondPoolHandle
+	var err error
+	if pool == nil {
+		pool, err = c.cluster.Pool(ctx, x.group.secondPoolName)
+	}
+	if err == nil {
+		err = pool.Remove(ctx)
+	}
+	receipt.SecondPoolRemoved = err == nil
+	data, readErr := c.cluster.Ceph(ctx, "osd", "dump", "--format", "json")
+	var dump struct {
+		FSID  string `json:"fsid"`
+		Pools []struct {
+			ID   int64  `json:"pool"`
+			Name string `json:"pool_name"`
+		} `json:"pools"`
+	}
+	if readErr == nil && (len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &dump) != nil || dump.FSID != c.profile.fsid || dump.Pools == nil) {
+		readErr = errors.New("RBD group cleanup native OSDMap unavailable")
+	}
+	if readErr == nil {
+		receipt.SecondPoolAbsentNatively = true
+		for _, p := range dump.Pools {
+			if p.Name == x.group.secondPoolName || x.group.secondPool != nil && p.ID == x.group.secondPool.ID {
+				receipt.SecondPoolAbsentNatively = false
+				readErr = errors.New("second owned RBD pool remained after removal")
+			}
+		}
+	}
+	return errors.Join(err, readErr)
 }
 
 // The fixed native group driver. The fixture passes only the token-bound plan
 // and a closed action; the driver re-checks every name. librbd runs without
 // its cache and with error-level stderr only. Every native class call is a
-// librados exec of a read method, so it changes nothing. Sources:
-// pybind/rbd/rbd.pyx and pybind/rados/rados.pyx at rbdBaseSource; independent
-// driver, no code copied.
+// librados exec of a read method, so it changes nothing. During refused and
+// accepted the group snapshot is created on a second thread with its own
+// ioctx; the main thread only reads, tries the rollback that librbd must
+// refuse for an INCOMPLETE snapshot, and publishes rbd-group-<action>-state.json
+// before the Go watcher answers the quiesce. Sources: pybind/rbd/rbd.pyx and
+// pybind/rados/rados.pyx at rbdBaseSource; independent driver, no code
+// copied.
 const rbdGroupNativePython = `
-import hashlib, json, os, struct, sys
+import hashlib, json, os, struct, sys, threading, time
 import rados, rbd
 identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
-ACTIONS = ('setup', 'modify', 'cleanup')
+ACTIONS = ('setup', 'modify', 'refused', 'accepted', 'rollback', 'cleanup')
+short = '-' + token[:8]
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
-        or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
-        or plan.get('group') != 'ceph-msgr-group-' + token or plan.get('group_snapshot') != 'ceph-msgr-gsnap-' + token[:8]
+        or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('second_pool') != 'ceph-msgr-rbd2-' + token
+        or plan.get('base_image') != 'ceph-msgr-image-' + token or plan.get('group') != 'ceph-msgr-group-' + token
+        or plan.get('group_snapshot') != 'ceph-msgr-gsnap' + short or plan.get('refused_snapshot') != 'ceph-msgr-gsnap-refused' + short
+        or plan.get('second_snapshot') != 'ceph-msgr-gsnap-second' + short
         or [i.get('key') for i in plan.get('images', [])] != ['a', 'b']
         or [i.get('name') for i in plan['images']] != ['ceph-msgr-gimage-a-' + token, 'ceph-msgr-gimage-b-' + token]
-        or plan.get('list_page') != 1 or action not in ACTIONS or not request_id.isdecimal()):
+        or [i.get('pool') for i in plan['images']] != [plan['pool'], plan['second_pool']]
+        or plan.get('list_page') != 1 or plan.get('poll_page') != 16 or action not in ACTIONS or not request_id.isdecimal()):
     raise ValueError('native RBD group driver scope is not owned')
 OUT = '/out'
-pool, group_name, snap_name, page = plan['pool'], plan['group'], plan['group_snapshot'], plan['list_page']
+pool, group_name, page, poll_page = plan['pool'], plan['group'], plan['list_page'], plan['poll_page']
+CREATED = {'refused': plan['refused_snapshot'], 'accepted': plan['second_snapshot']}
 # group_snap_list input: cls::rbd::GroupSnapshot (ENCODE_START(1, 1), empty id
 # and name, state INCOMPLETE, no member snapshots) and the page size.
 START = b'\x01\x01' + struct.pack('<I', 13) + struct.pack('<IIBI', 0, 0, 0, 0)
+# cls_lock_get_info_op: ENCODE_START(1, 1) and the lock name.
+LOCK_INFO = b'\x01\x01' + struct.pack('<I', 12) + struct.pack('<I', 8) + b'rbd_lock'
 
 def text(value):
     return value.decode('utf-8') if isinstance(value, bytes) else value
@@ -198,56 +328,82 @@ def errno_of(ioctx, oid):
     except rados.ObjectNotFound:
         return 2
 
+def error_number(error):
+    number = getattr(error, 'errno', None)
+    if not isinstance(number, int) or number == 0:
+        raise error
+    return abs(number)
+
+def group_records(output):
+    # The (id, name, state) of each GroupSnapshot in a group_snap_list output.
+    count, pos, records = struct.unpack_from('<I', output, 0)[0], 4, []
+    for _ in range(count):
+        version, compat, length = struct.unpack_from('<BBI', output, pos)
+        body, pos = output[pos + 6:pos + 6 + length], pos + 6 + length
+        n = struct.unpack_from('<I', body, 0)[0]
+        snap_id, p = body[4:4 + n].decode(), 4 + n
+        n = struct.unpack_from('<I', body, p)[0]
+        name, p = body[p + 4:p + 4 + n].decode(), p + 4 + n
+        records.append({'id': snap_id, 'name': name, 'state': body[p]})
+    if pos != len(output):
+        raise ValueError('group_snap_list output has trailing bytes')
+    return records
+
 def group_snap(s):
     return {'id': text(s['id']), 'name': text(s['name']), 'state': s['state'], 'namespace_type': s['namespace_type'],
             'image_snap_name': text(s['image_snap_name']),
             'image_snaps': [{'pool_id': i['pool_id'], 'snap_id': i['snap_id'], 'image_name': text(i['image_name'])} for i in s['image_snaps']]}
 
-def object_views(ioctx, prefix, count, snap_id):
-    objects, blobs = [], {'head': bytearray(), 'snap': bytearray()}
+def members_of(group):
+    return [{'name': text(m['name']), 'pool': m['pool'], 'state': m['state']} for m in group.list_images()]
+
+def data_view(ioctx, key, label, snap, image_bytes, prefix, count):
+    objects, blob = [], bytearray()
+    ioctx.set_read(snap)
     try:
         for index in range(count):
             oid = '%s.%016x' % (prefix, index)
-            entry = {'index': index, 'name': oid}
-            for label, snap in (('head', rados.LIBRADOS_SNAP_HEAD), ('snap', snap_id)):
-                ioctx.set_read(snap)
-                blob = blobs[label]
-                try:
-                    length, _ = ioctx.stat(oid)
-                    data = ioctx.read(oid, length, 0) if length else b''
-                except rados.ObjectNotFound:
-                    entry[label] = {'exists': False, 'errno': 2, 'size': 0, 'offset': len(blob), 'sha256': ''}
-                    continue
-                if len(data) != length:
-                    raise ValueError('native object read is shorter than its stat')
-                entry[label] = {'exists': True, 'errno': 0, 'size': length, 'offset': len(blob), 'sha256': hashlib.sha256(data).hexdigest()}
-                blob += data
-            objects.append(entry)
+            try:
+                length, _ = ioctx.stat(oid)
+                data = ioctx.read(oid, length, 0) if length else b''
+            except rados.ObjectNotFound:
+                objects.append({'index': index, 'exists': False, 'errno': 2, 'size': 0, 'offset': len(blob), 'sha256': ''})
+                continue
+            if len(data) != length:
+                raise ValueError('native object read is shorter than its stat')
+            objects.append({'index': index, 'exists': True, 'errno': 0, 'size': length, 'offset': len(blob), 'sha256': hashlib.sha256(data).hexdigest()})
+            blob += data
     finally:
         ioctx.set_read(rados.LIBRADOS_SNAP_HEAD)
-    return objects, blobs
+    return {'label': label, 'snap_id': 0 if snap == rados.LIBRADOS_SNAP_HEAD else snap, 'objects': objects,
+            'image': publish('rbd-group-%s-%s-%s-image.bin' % (action, key, label), image_bytes),
+            'object_bytes': publish('rbd-group-%s-%s-%s-objects.bin' % (action, key, label), bytes(blob))}
 
-def observe_group(ioctx, out):
+def observe_group(out):
+    ioctx = ioctxs[pool]
     with rbd.Group(ioctx, group_name) as group:
         group_id = text(group.id())
-        members = [{'name': text(m['name']), 'pool': m['pool'], 'state': m['state']} for m in group.list_images()]
+        members = members_of(group)
         snaps = [group_snap(s) for s in group.list_snaps()]
-        info = group_snap(group.get_snap_info(snap_name))
+        infos = [group_snap(group.get_snap_info(s['name'])) for s in snaps]
     header = 'rbd_group_header.' + group_id
-    first = call(ioctx, header, 'rbd', 'group_snap_list', START + struct.pack('<Q', page))
-    calls = [first]
-    output = bytes.fromhex(first['output_hex'])
-    # The next page starts after the first page's only record: the output is
-    # a u32 count and that one encoded GroupSnapshot.
-    if first['code'] == 0 and len(output) > 4 and struct.unpack('<I', output[:4])[0] == 1:
-        calls.append(call(ioctx, header, 'rbd', 'group_snap_list', output[4:] + struct.pack('<Q', page)))
-    out['group'] = {'name': group_name, 'id': group_id, 'header_object': header, 'members': members, 'snapshots': snaps, 'snapshot_info': info,
+    # Page by page from the empty start record: each next page starts after
+    # the previous page's only record, until an empty page.
+    calls, start = [], START
+    while len(calls) < 8:
+        entry = call(ioctx, header, 'rbd', 'group_snap_list', start + struct.pack('<Q', page))
+        calls.append(entry)
+        output = bytes.fromhex(entry['output_hex'])
+        if entry['code'] != 0 or len(output) <= 4 or struct.unpack('<I', output[:4])[0] != 1:
+            break
+        start = output[4:]
+    out['group'] = {'name': group_name, 'id': group_id, 'header_object': header, 'members': members, 'snapshots': snaps, 'snapshot_infos': infos,
                     'directory_call': call(ioctx, 'rbd_group_directory', 'rbd', 'dir_get_id', struct.pack('<I', len(group_name)) + group_name.encode()),
                     'list_calls': calls}
 
-def observe_image(ioctx, entry):
-    name = entry['name']
-    view = {'key': entry['key'], 'name': name}
+def observe_image(entry):
+    ioctx, name = ioctxs[entry['pool']], entry['name']
+    view = {'key': entry['key'], 'name': name, 'pool': entry['pool'], 'pool_id': ioctx.get_pool_id()}
     with rbd.Image(ioctx, name, read_only=True) as image:
         stat = image.stat()
         view['image_id'] = text(image.id())
@@ -262,19 +418,19 @@ def observe_image(ioctx, entry):
             snaps.append(snap)
         view['snapshots'] = snaps
         head = image.read(0, stat['size'])
-    view['header_object'], view['id_object'] = 'rbd_header.' + view['image_id'], 'rbd_id.' + name
-    view['snapshot_calls'] = [call(ioctx, view['header_object'], 'rbd', 'snapshot_get', struct.pack('<Q', s['id'])) for s in snaps]
-    if len(snaps) != 1:
-        raise ValueError('owned group member holds other snapshots')
-    snap_id = snaps[0]['id']
-    with rbd.Image(ioctx, name, read_only=True) as image:
-        image.set_snap_by_id(snap_id)
-        snap = image.read(0, image.size())
-    objects, views = object_views(ioctx, stat['block_name_prefix'], stat['num_objs'], snap_id)
-    view['objects'] = objects
-    prefix = 'rbd-group-%s-%s-' % (action, entry['key'])
-    view['blobs'] = {'image_head': publish(prefix + 'image-head.bin', head), 'image_snap': publish(prefix + 'image-snap.bin', snap),
-                     'objects_head': publish(prefix + 'objects-head.bin', bytes(views['head'])), 'objects_snap': publish(prefix + 'objects-snap.bin', bytes(views['snap']))}
+    header = 'rbd_header.' + view['image_id']
+    view['header_object'], view['id_object'] = header, 'rbd_id.' + name
+    view['snapshot_calls'] = [call(ioctx, header, 'rbd', 'snapshot_get', struct.pack('<Q', s['id'])) for s in snaps]
+    view['snapcontext_call'] = call(ioctx, header, 'rbd', 'get_snapcontext', b'')
+    view['lock_call'] = call(ioctx, header, 'lock', 'get_info', LOCK_INFO)
+    prefix, count = stat['block_name_prefix'], stat['num_objs']
+    views = [data_view(ioctx, entry['key'], 'head', rados.LIBRADOS_SNAP_HEAD, head, prefix, count)]
+    for s in snaps:
+        with rbd.Image(ioctx, name, read_only=True) as image:
+            image.set_snap_by_id(s['id'])
+            data = image.read(0, image.size())
+        views.append(data_view(ioctx, entry['key'], 's%d' % s['id'], s['id'], data, prefix, count))
+    view['views'] = views
     return view
 
 def write(image, key, phase, extent):
@@ -284,80 +440,170 @@ def write(image, key, phase, extent):
         raise ValueError('native RBD write was short')
     return {'image': key, 'phase': phase, 'offset': extent['offset'], 'length': extent['length'], 'written': written, 'sha256': hashlib.sha256(data).hexdigest()}
 
-def listed(ioctx, out):
-    out['images_listed'] = sorted(text(i) for i in rbd.RBD().list(ioctx))
-    out['groups_listed'] = sorted(text(g) for g in rbd.RBD().group_list(ioctx))
+def listed(out):
+    out['images_listed'] = sorted('%s/%s' % (p, text(i)) for p in (pool, plan['second_pool']) for i in rbd.RBD().list(ioctxs[p]))
+    out['groups_listed'] = sorted(text(g) for p in (pool, plan['second_pool']) for g in rbd.RBD().group_list(ioctxs[p]))
+
+def create_under_quiesce(out):
+    # Snapshot creation on a second thread; this thread reads and publishes.
+    name, ioctx = CREATED[action], ioctxs[pool]
+    with rbd.Group(ioctx, group_name) as group:
+        group_id = text(group.id())
+    header = 'rbd_group_header.' + group_id
+    image_ids = {}
+    for entry in plan['images']:
+        with rbd.Image(ioctxs[entry['pool']], entry['name'], read_only=True) as image:
+            image_ids[entry['key']] = text(image.id())
+    creation = {'snapshot': name, 'group_id': group_id, 'image_ids': image_ids, 'phases': []}
+    result = {}
+    creator_ioctx = cluster.open_ioctx(pool)
+    def create():
+        started = time.monotonic_ns()
+        try:
+            with rbd.Group(creator_ioctx, group_name) as group:
+                group.create_snap(name)
+            result['errno'] = 0
+        except Exception as error:
+            try:
+                result['errno'] = error_number(error)
+            except Exception as other:
+                result['error'] = repr(other)
+        finally:
+            result['elapsed_ns'] = time.monotonic_ns() - started
+    started = time.monotonic_ns()
+    worker = threading.Thread(target=create, daemon=True)
+    state = {'token': token, 'request_id': int(request_id), 'native_global_id': out['native_global_id'], 'snapshot': name, 'group_id': group_id,
+             'image_ids': image_ids, 'phase': 'started', 'phases': creation['phases']}
+    def listing():
+        return call(ioctx, header, 'rbd', 'group_snap_list', START + struct.pack('<Q', poll_page))
+    def wait_record(want):
+        deadline = time.monotonic() + 30
+        while True:
+            entry = listing()
+            if entry['code'] == 0 and any(r['name'] == name and r['state'] == want for r in group_records(bytes.fromhex(entry['output_hex']))):
+                return
+            if not worker.is_alive():
+                raise ValueError('group snapshot creation returned before its record reached state %d' % want)
+            if time.monotonic() > deadline:
+                raise TimeoutError('group snapshot record did not reach state %d' % want)
+            time.sleep(0.005)
+    def observe(label, rollback):
+        phase = {'phase': label, 'after_ns': time.monotonic_ns() - started, 'list_call': listing(), 'images': []}
+        for entry in plan['images']:
+            io, header_object = ioctxs[entry['pool']], 'rbd_header.' + image_ids[entry['key']]
+            phase['images'].append({'key': entry['key'], 'snapcontext_call': call(io, header_object, 'rbd', 'get_snapcontext', b''),
+                                    'lock_call': call(io, header_object, 'lock', 'get_info', LOCK_INFO)})
+        if rollback:
+            try:
+                with rbd.Group(ioctx, group_name) as group:
+                    group.rollback_to_snap(name)
+                phase['rollback_errno'] = 0
+            except Exception as error:
+                phase['rollback_errno'] = error_number(error)
+        creation['phases'].append(phase)
+        state['phase'] = label
+        publish('rbd-group-%s-state.json' % action, json.dumps(state, sort_keys=True).encode())
+    worker.start()
+    try:
+        # INCOMPLETE (0) is written before the quiesce, COMPLETE (1) after the
+        # member snapshots and before the unquiesce; the Go watcher holds its
+        # answer to each until this thread has published.
+        wait_record(0)
+        observe('incomplete-observed', True)
+        if action == 'accepted':
+            wait_record(1)
+            observe('complete-observed', False)
+    finally:
+        worker.join(60)
+        if worker.is_alive():
+            raise TimeoutError('group snapshot creation did not return')
+        creator_ioctx.close()
+    if 'error' in result:
+        raise ValueError('group snapshot creation raised without an errno: ' + result['error'])
+    creation['errno'], creation['elapsed_ns'] = result['errno'], result['elapsed_ns']
+    out['creation'] = creation
 
 cluster = rados.Rados(conffile='/tmp/ceph-msgr-test/ceph.conf', rados_id=identity[len('client.'):],
                       conf={'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'})
 cluster.connect(timeout=30)
 out = {'action': action, 'token': token, 'request_id': int(request_id), 'pool': pool, 'native_global_id': cluster.get_instance_id()}
+ioctxs = {}
 try:
-    ioctx = cluster.open_ioctx(pool)
-    try:
-        out['pool_id'] = ioctx.get_pool_id()
-        if action == 'setup':
-            # The acceptance runs alone on its fixture: only the base image
-            # and no group may exist before it.
-            listed(ioctx, out)
-            if out['images_listed'] != [plan['base_image']] or out['groups_listed']:
-                raise ValueError('owned RBD pool holds an unplanned image or group')
-            writes = []
+    for p in (pool, plan['second_pool']):
+        ioctxs[p] = cluster.open_ioctx(p)
+    out['pool_id'], out['second_pool_id'] = ioctxs[pool].get_pool_id(), ioctxs[plan['second_pool']].get_pool_id()
+    group_ioctx = ioctxs[pool]
+    if action == 'setup':
+        # The acceptance runs alone on its fixture: only the base image and
+        # no group may exist before it.
+        listed(out)
+        if out['images_listed'] != [pool + '/' + plan['base_image']] or out['groups_listed']:
+            raise ValueError('owned RBD pools hold an unplanned image or group')
+        writes = []
+        for entry in plan['images']:
+            rbd.RBD().create(ioctxs[entry['pool']], entry['name'], plan['size'], order=plan['order'], old_format=False, features=plan['features'])
+            with rbd.Image(ioctxs[entry['pool']], entry['name']) as image:
+                writes += [write(image, entry['key'], 'pre', e) for e in entry['pre_snapshot_writes']]
+                image.flush()
+        rbd.RBD().group_create(group_ioctx, group_name)
+        with rbd.Group(group_ioctx, group_name) as group:
             for entry in plan['images']:
-                rbd.RBD().create(ioctx, entry['name'], plan['size'], order=plan['order'], old_format=False, features=plan['features'])
-                with rbd.Image(ioctx, entry['name']) as image:
-                    writes += [write(image, entry['key'], 'pre', e) for e in entry['pre_snapshot_writes']]
-                    image.flush()
-            rbd.RBD().group_create(ioctx, group_name)
-            with rbd.Group(ioctx, group_name) as group:
-                for entry in plan['images']:
-                    group.add_image(ioctx, entry['name'])
-                group.create_snap(snap_name)
-            out['writes'] = writes
-        elif action == 'modify':
-            writes = []
-            for entry in plan['images']:
-                with rbd.Image(ioctx, entry['name']) as image:
-                    writes += [write(image, entry['key'], 'post', e) for e in entry['post_snapshot_writes']]
-                    image.flush()
-            out['writes'] = writes
-        if action in ('setup', 'modify'):
-            listed(ioctx, out)
-            observe_group(ioctx, out)
-            out['images'] = [observe_image(ioctx, entry) for entry in plan['images']]
-        else:
-            # Identities first, then each removal with its own native
-            # absence read before the next one.
-            with rbd.Group(ioctx, group_name) as group:
-                group_id = text(group.id())
-            removal = {'group_id': group_id, 'group_header': 'rbd_group_header.' + group_id, 'images': []}
-            for entry in plan['images']:
-                with rbd.Image(ioctx, entry['name'], read_only=True) as image:
-                    stat = image.stat()
-                    removal['images'].append({'key': entry['key'], 'name': entry['name'], 'image_id': text(image.id()),
-                                              'prefix': text(stat['block_name_prefix']), 'objects': stat['num_objs']})
-            with rbd.Group(ioctx, group_name) as group:
+                group.add_image(ioctxs[entry['pool']], entry['name'])
+            group.create_snap(plan['group_snapshot'])
+        out['writes'] = writes
+    elif action == 'modify':
+        writes = []
+        for entry in plan['images']:
+            with rbd.Image(ioctxs[entry['pool']], entry['name']) as image:
+                writes += [write(image, entry['key'], 'post', e) for e in entry['post_snapshot_writes']]
+                image.flush()
+        out['writes'] = writes
+    elif action in CREATED:
+        create_under_quiesce(out)
+    elif action == 'rollback':
+        with rbd.Group(group_ioctx, group_name) as group:
+            group.rollback_to_snap(plan['group_snapshot'])
+        out['rolled_back_to'] = plan['group_snapshot']
+    if action != 'cleanup':
+        listed(out)
+        observe_group(out)
+        out['images'] = [observe_image(entry) for entry in plan['images']]
+    else:
+        # Identities first, then each removal with its own native absence
+        # read before the next one.
+        with rbd.Group(group_ioctx, group_name) as group:
+            group_id = text(group.id())
+        removal = {'group_id': group_id, 'group_header': 'rbd_group_header.' + group_id, 'images': [], 'group_snapshots_after': []}
+        for entry in plan['images']:
+            with rbd.Image(ioctxs[entry['pool']], entry['name'], read_only=True) as image:
+                stat = image.stat()
+                removal['images'].append({'key': entry['key'], 'name': entry['name'], 'pool': entry['pool'], 'image_id': text(image.id()),
+                                          'prefix': text(stat['block_name_prefix']), 'objects': stat['num_objs']})
+        with rbd.Group(group_ioctx, group_name) as group:
+            for snap_name in (plan['second_snapshot'], plan['group_snapshot']):
                 group.remove_snap(snap_name)
-                removal['group_snapshots_after'] = [group_snap(s) for s in group.list_snaps()]
-                for image in removal['images']:
-                    with rbd.Image(ioctx, image['name'], read_only=True) as opened:
-                        image['snapshots_after'] = [{'id': s['id'], 'name': text(s['name']), 'size': s['size'], 'namespace': s['namespace']} for s in opened.list_snaps()]
-                for entry in plan['images']:
-                    group.remove_image(ioctx, entry['name'])
-                removal['members_after'] = [{'name': text(m['name']), 'pool': m['pool'], 'state': m['state']} for m in group.list_images()]
-            rbd.RBD().group_remove(ioctx, group_name)
-            removal['group_header_errno'] = errno_of(ioctx, removal['group_header'])
-            removal['directory_call'] = call(ioctx, 'rbd_group_directory', 'rbd', 'dir_get_id', struct.pack('<I', len(group_name)) + group_name.encode())
+                removal['group_snapshots_after'].append([group_snap(s) for s in group.list_snaps()])
             for image in removal['images']:
-                rbd.RBD().remove(ioctx, image['name'])
-                image['header_errno'] = errno_of(ioctx, 'rbd_header.' + image['image_id'])
-                image['id_errno'] = errno_of(ioctx, 'rbd_id.' + image['name'])
-                image['data_errno'] = [errno_of(ioctx, '%s.%016x' % (image['prefix'], i)) for i in range(image['objects'])]
-            listed(ioctx, out)
-            out['removed'] = removal
-    finally:
-        ioctx.close()
+                with rbd.Image(ioctxs[image['pool']], image['name'], read_only=True) as opened:
+                    image['snapshots_after'] = [{'id': s['id'], 'name': text(s['name']), 'size': s['size'], 'namespace': s['namespace']} for s in opened.list_snaps()]
+            for entry in plan['images']:
+                group.remove_image(ioctxs[entry['pool']], entry['name'])
+            removal['members_after'] = members_of(group)
+        rbd.RBD().group_remove(group_ioctx, group_name)
+        removal['group_header_errno'] = errno_of(group_ioctx, removal['group_header'])
+        removal['directory_call'] = call(group_ioctx, 'rbd_group_directory', 'rbd', 'dir_get_id', struct.pack('<I', len(group_name)) + group_name.encode())
+        for image in removal['images']:
+            io = ioctxs[image['pool']]
+            rbd.RBD().remove(io, image['name'])
+            image['header_errno'] = errno_of(io, 'rbd_header.' + image['image_id'])
+            image['id_errno'] = errno_of(io, 'rbd_id.' + image['name'])
+            image['object_map_errno'] = errno_of(io, 'rbd_object_map.' + image['image_id'])
+            image['data_errno'] = [errno_of(io, '%s.%016x' % (image['prefix'], i)) for i in range(image['objects'])]
+        listed(out)
+        out['removed'] = removal
 finally:
+    for io in ioctxs.values():
+        io.close()
     cluster.shutdown()
 print(json.dumps(out, sort_keys=True))
 `
@@ -390,7 +636,7 @@ type rbdGroupView struct {
 	HeaderObject  string              `json:"header_object"`
 	Members       []rbdGroupMember    `json:"members"`
 	Snapshots     []rbdGroupSnap      `json:"snapshots"`
-	SnapshotInfo  *rbdGroupSnap       `json:"snapshot_info"`
+	SnapshotInfos []rbdGroupSnap      `json:"snapshot_infos"`
 	DirectoryCall *rbdWriteClassCall  `json:"directory_call"`
 	ListCalls     []rbdWriteClassCall `json:"list_calls"`
 }
@@ -409,19 +655,41 @@ type rbdGroupSnapshot struct {
 	Group     *rbdGroupNamespace `json:"group,omitempty"`
 }
 
+type rbdGroupObjectView struct {
+	Index  uint64 `json:"index"`
+	Exists bool   `json:"exists"`
+	Errno  int    `json:"errno"`
+	Size   uint64 `json:"size"`
+	Offset uint64 `json:"offset"`
+	SHA256 string `json:"sha256"`
+}
+
+// rbdGroupDataView is one image's bytes and data objects at the head or at
+// one snapshot.
+type rbdGroupDataView struct {
+	Label       string               `json:"label"`
+	SnapID      uint64               `json:"snap_id"`
+	Objects     []rbdGroupObjectView `json:"objects"`
+	Image       rbdBaseBlob          `json:"image"`
+	ObjectBytes rbdBaseBlob          `json:"object_bytes"`
+}
+
 type rbdGroupImageView struct {
-	Key           string                 `json:"key"`
-	Name          string                 `json:"name"`
-	ImageID       string                 `json:"image_id"`
-	HeaderObject  string                 `json:"header_object"`
-	IDObject      string                 `json:"id_object"`
-	Stat          *rbdBaseStat           `json:"stat"`
-	Features      uint64                 `json:"features"`
-	OpFeatures    uint64                 `json:"op_features"`
-	Snapshots     []rbdGroupSnapshot     `json:"snapshots"`
-	SnapshotCalls []rbdWriteClassCall    `json:"snapshot_calls"`
-	Objects       []rbdBaseObject        `json:"objects"`
-	Blobs         map[string]rbdBaseBlob `json:"blobs"`
+	Key             string              `json:"key"`
+	Name            string              `json:"name"`
+	Pool            string              `json:"pool"`
+	PoolID          int64               `json:"pool_id"`
+	ImageID         string              `json:"image_id"`
+	HeaderObject    string              `json:"header_object"`
+	IDObject        string              `json:"id_object"`
+	Stat            *rbdBaseStat        `json:"stat"`
+	Features        uint64              `json:"features"`
+	OpFeatures      uint64              `json:"op_features"`
+	Snapshots       []rbdGroupSnapshot  `json:"snapshots"`
+	SnapshotCalls   []rbdWriteClassCall `json:"snapshot_calls"`
+	SnapContextCall *rbdWriteClassCall  `json:"snapcontext_call"`
+	LockCall        *rbdWriteClassCall  `json:"lock_call"`
+	Views           []rbdGroupDataView  `json:"views"`
 }
 
 type rbdGroupWrite struct {
@@ -433,15 +701,45 @@ type rbdGroupWrite struct {
 	SHA256  string `json:"sha256"`
 }
 
+// rbdGroupCreationImage is one member header's state during a creation.
+type rbdGroupCreationImage struct {
+	Key             string             `json:"key"`
+	SnapContextCall *rbdWriteClassCall `json:"snapcontext_call"`
+	LockCall        *rbdWriteClassCall `json:"lock_call"`
+}
+
+// rbdGroupCreationPhase is one independent native observation while the
+// creating thread waited on the Go watcher's answer.
+type rbdGroupCreationPhase struct {
+	Phase         string                  `json:"phase"`
+	AfterNS       int64                   `json:"after_ns"`
+	ListCall      *rbdWriteClassCall      `json:"list_call"`
+	Images        []rbdGroupCreationImage `json:"images"`
+	RollbackErrno *int                    `json:"rollback_errno,omitempty"`
+}
+
+// rbdGroupCreation is a refused or accepted creation: the snapshot name, the
+// creating call's errno (0 for success) and the observations.
+type rbdGroupCreation struct {
+	Snapshot  string                  `json:"snapshot"`
+	GroupID   string                  `json:"group_id"`
+	ImageIDs  map[string]string       `json:"image_ids"`
+	Phases    []rbdGroupCreationPhase `json:"phases"`
+	Errno     int                     `json:"errno"`
+	ElapsedNS int64                   `json:"elapsed_ns"`
+}
+
 type rbdGroupRemovedImage struct {
 	Key            string             `json:"key"`
 	Name           string             `json:"name"`
+	Pool           string             `json:"pool"`
 	ImageID        string             `json:"image_id"`
 	Prefix         string             `json:"prefix"`
 	Objects        uint64             `json:"objects"`
 	SnapshotsAfter []rbdGroupSnapshot `json:"snapshots_after"`
 	HeaderErrno    int                `json:"header_errno"`
 	IDErrno        int                `json:"id_errno"`
+	ObjectMapErrno int                `json:"object_map_errno"`
 	DataErrno      []int              `json:"data_errno"`
 }
 
@@ -451,7 +749,7 @@ type rbdGroupRemoval struct {
 	GroupID             string                 `json:"group_id"`
 	GroupHeader         string                 `json:"group_header"`
 	Images              []rbdGroupRemovedImage `json:"images"`
-	GroupSnapshotsAfter []rbdGroupSnap         `json:"group_snapshots_after"`
+	GroupSnapshotsAfter [][]rbdGroupSnap       `json:"group_snapshots_after"`
 	MembersAfter        []rbdGroupMember       `json:"members_after"`
 	GroupHeaderErrno    int                    `json:"group_header_errno"`
 	DirectoryCall       *rbdWriteClassCall     `json:"directory_call"`
@@ -465,10 +763,13 @@ type rbdGroupNative struct {
 	RequestID      int64               `json:"request_id"`
 	Pool           string              `json:"pool"`
 	PoolID         int64               `json:"pool_id"`
+	SecondPoolID   int64               `json:"second_pool_id"`
 	NativeGlobalID uint64              `json:"native_global_id"`
 	ImagesListed   []string            `json:"images_listed"`
 	GroupsListed   []string            `json:"groups_listed"`
 	Writes         []rbdGroupWrite     `json:"writes,omitempty"`
+	Creation       *rbdGroupCreation   `json:"creation,omitempty"`
+	RolledBackTo   string              `json:"rolled_back_to,omitempty"`
 	Group          *rbdGroupView       `json:"group,omitempty"`
 	Images         []rbdGroupImageView `json:"images,omitempty"`
 	Removed        *rbdGroupRemoval    `json:"removed,omitempty"`
@@ -478,52 +779,94 @@ func rbdGroupIDValid(id string) bool {
 	return id != "" && len(id) <= 64 && !strings.ContainsAny(id, "./ \x00")
 }
 
-func rbdGroupCallValid(call *rbdWriteClassCall, object, method string) bool {
+func rbdGroupCallValid(call *rbdWriteClassCall, object, class, method string) bool {
 	if call == nil {
 		return false
 	}
 	_, inErr := hex.DecodeString(call.InputHex)
 	_, outErr := hex.DecodeString(call.OutputHex)
-	return call.Object == object && call.Class == "rbd" && call.Method == method && inErr == nil && outErr == nil && call.Code <= 0 && len(call.OutputHex) <= 16384
+	return call.Object == object && call.Class == class && call.Method == method && inErr == nil && outErr == nil && call.Code <= 0 && len(call.OutputHex) <= 16384
 }
 
 func rbdGroupSnapValid(s *rbdGroupSnap) bool {
 	return s != nil && len(s.ImageSnaps) <= 16 && len(s.Name) <= 256 && len(s.ImageSnapName) <= 512 && len(s.ID) <= 64
 }
 
+// rbdGroupDataViewValid checks one view's object layout and blob names.
+func rbdGroupDataViewValid(action, key string, v rbdGroupDataView, s *rbdBaseStat) bool {
+	ok := len(v.Objects) == int(s.Objects) && (v.Label == "head") == (v.SnapID == 0) && (v.Label == "head" || v.Label == fmt.Sprintf("s%d", v.SnapID))
+	var offset uint64
+	for i, o := range v.Objects {
+		ok = ok && o.Index == uint64(i) && o.Offset == offset && o.Size <= s.ObjectSize &&
+			(o.Exists && o.Errno == 0 && len(o.SHA256) == 64 || !o.Exists && o.Errno == 2 && o.Size == 0 && o.SHA256 == "")
+		offset += o.Size
+	}
+	return ok && v.Image.Name == rbdGroupBlobName(action, key, v.Label, "image") && v.Image.Length == s.Size && len(v.Image.SHA256) == 64 &&
+		v.ObjectBytes.Name == rbdGroupBlobName(action, key, v.Label, "objects") && v.ObjectBytes.Length == offset && offset <= rbdBaseBlobLimit && len(v.ObjectBytes.SHA256) == 64
+}
+
 // rbdGroupImageViewValid checks the structure of one member observation;
-// which snapshot and contents it must show is the test's judgment.
+// which snapshots and contents it must show is the test's judgment.
 func rbdGroupImageViewValid(action string, v rbdGroupImageView, want rbdGroupImagePlan, plan rbdGroupPlan) bool {
 	s := v.Stat
-	ok := v.Key == want.Key && v.Name == want.Name && rbdGroupIDValid(v.ImageID) && v.HeaderObject == "rbd_header."+v.ImageID && v.IDObject == "rbd_id."+want.Name &&
+	ok := v.Key == want.Key && v.Name == want.Name && v.Pool == want.Pool && v.PoolID >= 0 && rbdGroupIDValid(v.ImageID) && v.HeaderObject == "rbd_header."+v.ImageID && v.IDObject == "rbd_id."+want.Name &&
 		s != nil && s.Order == plan.Order && s.ObjectSize == 1<<plan.Order && s.Size == plan.Size && s.Objects == plan.Size>>plan.Order &&
 		s.Prefix == "rbd_data."+v.ImageID && s.ParentPool == ^uint64(0) && s.ParentName == "" &&
 		v.Features == plan.Features|rbdFeatureOperations && v.OpFeatures == rbdOperationFeatureGroup &&
-		len(v.Snapshots) == 1 && len(v.SnapshotCalls) == 1 && len(v.Objects) == int(s.Objects) && len(v.Blobs) == len(rbdGroupBlobViews)
-	for i, snap := range v.Snapshots {
-		ok = ok && snap.ID != 0 && len(snap.Name) <= 512 && rbdGroupCallValid(&v.SnapshotCalls[i], v.HeaderObject, "snapshot_get") &&
-			(snap.Namespace == 1) == (snap.Group != nil)
+		len(v.Snapshots) <= 4 && len(v.SnapshotCalls) == len(v.Snapshots) && len(v.Views) == len(v.Snapshots)+1 &&
+		rbdGroupCallValid(v.SnapContextCall, v.HeaderObject, "rbd", "get_snapcontext") && rbdGroupCallValid(v.LockCall, v.HeaderObject, "lock", "get_info")
+	if !ok {
+		return false
 	}
-	offsets := map[string]uint64{"head": 0, "snap": 0}
-	for i, o := range v.Objects {
-		ok = ok && o.Index == uint64(i) && o.Name == fmt.Sprintf("%s.%016x", s.Prefix, i)
-		for label, view := range map[string]rbdBaseObjectView{"head": o.Head, "snap": o.Snap} {
-			ok = ok && view.Offset == offsets[label] && view.Size <= s.ObjectSize && (view.Exists && view.Errno == 0 && len(view.SHA256) == 64 || !view.Exists && view.Errno == 2 && view.Size == 0 && view.SHA256 == "")
-			offsets[label] += view.Size
+	for i, snap := range v.Snapshots {
+		ok = ok && snap.ID != 0 && len(snap.Name) <= 512 && rbdGroupCallValid(&v.SnapshotCalls[i], v.HeaderObject, "rbd", "snapshot_get") &&
+			(snap.Namespace == 1) == (snap.Group != nil) && v.Views[i+1].SnapID == snap.ID
+	}
+	for _, view := range v.Views {
+		ok = ok && rbdGroupDataViewValid(action, want.Key, view, s)
+	}
+	return ok && v.Views[0].Label == "head"
+}
+
+// rbdGroupCreationValid checks the structure of a refused or accepted
+// creation record: one observation, or two for the accepted one, each with
+// both member headers, and the rollback attempt on the first only.
+func rbdGroupCreationValid(action string, c *rbdGroupCreation, plan rbdGroupPlan, header string) bool {
+	if c == nil {
+		return false
+	}
+	want := map[string]string{"refused": plan.RefusedSnapshot, "accepted": plan.SecondSnapshot}[action]
+	phases := []string{"incomplete-observed"}
+	if action == "accepted" {
+		phases = append(phases, "complete-observed")
+	}
+	ok := c.Snapshot == want && rbdGroupIDValid(c.GroupID) && header == "rbd_group_header."+c.GroupID && len(c.ImageIDs) == len(plan.Images) &&
+		len(c.Phases) == len(phases) && c.Errno >= 0 && c.Errno < 4096 && c.ElapsedNS > 0
+	for _, image := range plan.Images {
+		ok = ok && rbdGroupIDValid(c.ImageIDs[image.Key])
+	}
+	for i, p := range c.Phases {
+		if i >= len(phases) || !ok {
+			return false
+		}
+		ok = p.Phase == phases[i] && p.AfterNS > 0 && rbdGroupCallValid(p.ListCall, header, "rbd", "group_snap_list") && len(p.Images) == len(plan.Images) &&
+			(i == 0) == (p.RollbackErrno != nil)
+		for j, image := range p.Images {
+			if j >= len(plan.Images) {
+				return false
+			}
+			object := "rbd_header." + c.ImageIDs[plan.Images[j].Key]
+			ok = ok && image.Key == plan.Images[j].Key && rbdGroupCallValid(image.SnapContextCall, object, "rbd", "get_snapcontext") && rbdGroupCallValid(image.LockCall, object, "lock", "get_info")
 		}
 	}
-	for key := range rbdGroupBlobViews {
-		blob, present := v.Blobs[key]
-		ok = ok && present && blob.Name == rbdGroupBlobName(action, want.Key, key) && blob.Length <= rbdBaseBlobLimit && len(blob.SHA256) == 64
-	}
-	return ok && v.Blobs["image_head"].Length == plan.Size && v.Blobs["image_snap"].Length == plan.Size &&
-		v.Blobs["objects_head"].Length == offsets["head"] && v.Blobs["objects_snap"].Length == offsets["snap"]
+	return ok
 }
 
 // decodeRBDGroupNative accepts exactly the shape of one admitted action for
-// the owned plan. It checks structure only; the group record, the member
-// snapshots and the absence results are the test's judgment, so a mismatch
-// is reported by the test instead of stopping the control loop.
+// the owned plan. It checks structure only; the group records, the member
+// snapshots, the creation outcome and the absence results are the test's
+// judgment, so a mismatch is reported by the test instead of stopping the
+// control loop.
 func decodeRBDGroupNative(action, token string, request int64, plan rbdGroupPlan, data []byte) (rbdGroupNative, error) {
 	var result rbdGroupNative
 	if len(data) == 0 || len(data) > rbdBaseJSONLimit || !json.Valid(data) {
@@ -534,36 +877,36 @@ func decodeRBDGroupNative(action, token string, request int64, plan rbdGroupPlan
 	if err := decoder.Decode(&result); err != nil {
 		return rbdGroupNative{}, fmt.Errorf("native RBD group output decoding: %w", err)
 	}
-	if result.Action != action || result.Token != token || result.RequestID != request || result.Pool != plan.Pool || result.PoolID < 0 || result.NativeGlobalID == 0 {
+	if result.Action != action || result.Token != token || result.RequestID != request || result.Pool != plan.Pool || result.PoolID < 0 || result.SecondPoolID < 0 ||
+		result.PoolID == result.SecondPoolID || result.NativeGlobalID == 0 {
 		return rbdGroupNative{}, errors.New("native RBD group output identity differs")
 	}
 	ok := len(result.ImagesListed) <= 16 && len(result.GroupsListed) <= 16
-	switch action {
-	case "setup", "modify":
+	observed, creating := slices.Contains(rbdGroupObserved, action), slices.Contains(rbdGroupCreating, action)
+	if observed {
 		g := result.Group
 		ok = ok && result.Removed == nil && len(result.Images) == len(plan.Images) && g != nil && g.Name == plan.Group && rbdGroupIDValid(g.ID) &&
-			g.HeaderObject == "rbd_group_header."+g.ID && len(g.Members) <= 16 && len(g.Snapshots) <= 16 && rbdGroupSnapValid(g.SnapshotInfo) &&
-			rbdGroupCallValid(g.DirectoryCall, "rbd_group_directory", "dir_get_id") && len(g.ListCalls) >= 1 && len(g.ListCalls) <= 2
+			g.HeaderObject == "rbd_group_header."+g.ID && len(g.Members) <= 16 && len(g.Snapshots) <= 4 && len(g.SnapshotInfos) == len(g.Snapshots) &&
+			rbdGroupCallValid(g.DirectoryCall, "rbd_group_directory", "rbd", "dir_get_id") && len(g.ListCalls) >= 1 && len(g.ListCalls) <= len(g.Snapshots)+1
 		if g != nil {
 			for i := range g.Snapshots {
-				ok = ok && rbdGroupSnapValid(&g.Snapshots[i])
+				ok = ok && rbdGroupSnapValid(&g.Snapshots[i]) && rbdGroupSnapValid(&g.SnapshotInfos[i])
 			}
 			for i := range g.ListCalls {
-				ok = ok && rbdGroupCallValid(&g.ListCalls[i], g.HeaderObject, "group_snap_list")
+				ok = ok && rbdGroupCallValid(&g.ListCalls[i], g.HeaderObject, "rbd", "group_snap_list")
 			}
+			ok = ok && (creating == (result.Creation != nil)) && (!creating || rbdGroupCreationValid(action, result.Creation, plan, g.HeaderObject))
 		}
 		for i, v := range result.Images {
 			if i < len(plan.Images) {
 				ok = ok && rbdGroupImageViewValid(action, v, plan.Images[i], plan)
 			}
 		}
+		ok = ok && (action == "rollback") == (result.RolledBackTo != "") && (result.RolledBackTo == "" || result.RolledBackTo == plan.GroupSnapshot)
 		var want []rbdGroupWrite
 		phase := map[string]string{"setup": "pre", "modify": "post"}[action]
 		for _, image := range plan.Images {
-			extents := image.PreWrites
-			if action == "modify" {
-				extents = image.PostWrites
-			}
+			extents := map[string][]rbdBaseExtent{"setup": image.PreWrites, "modify": image.PostWrites}[action]
 			for _, e := range extents {
 				want = append(want, rbdGroupWrite{Image: image.Key, Phase: phase, Offset: e.Offset, Length: e.Length, Written: e.Length})
 			}
@@ -576,23 +919,27 @@ func decodeRBDGroupNative(action, token string, request int64, plan rbdGroupPlan
 				ok = ok && w == want[i] && len(sum) == 64
 			}
 		}
-	case "cleanup":
+	} else if action == "cleanup" {
 		r := result.Removed
-		ok = ok && result.Group == nil && result.Images == nil && result.Writes == nil && r != nil && rbdGroupIDValid(r.GroupID) &&
-			r.GroupHeader == "rbd_group_header."+r.GroupID && len(r.Images) == len(plan.Images) && len(r.GroupSnapshotsAfter) <= 16 && len(r.MembersAfter) <= 16 &&
-			(r.GroupHeaderErrno == 0 || r.GroupHeaderErrno == 2) && rbdGroupCallValid(r.DirectoryCall, "rbd_group_directory", "dir_get_id")
+		ok = ok && result.Group == nil && result.Images == nil && result.Writes == nil && result.Creation == nil && result.RolledBackTo == "" && r != nil && rbdGroupIDValid(r.GroupID) &&
+			r.GroupHeader == "rbd_group_header."+r.GroupID && len(r.Images) == len(plan.Images) && len(r.GroupSnapshotsAfter) == 2 && len(r.MembersAfter) <= 16 &&
+			(r.GroupHeaderErrno == 0 || r.GroupHeaderErrno == 2) && rbdGroupCallValid(r.DirectoryCall, "rbd_group_directory", "rbd", "dir_get_id")
 		if r != nil {
+			for _, after := range r.GroupSnapshotsAfter {
+				ok = ok && len(after) <= 4
+			}
 			for i, image := range r.Images {
 				if i >= len(plan.Images) {
 					break
 				}
-				ok = ok && image.Key == plan.Images[i].Key && image.Name == plan.Images[i].Name && rbdGroupIDValid(image.ImageID) && image.Prefix == "rbd_data."+image.ImageID &&
-					image.Objects == plan.Size>>plan.Order && len(image.SnapshotsAfter) <= 16 && (image.HeaderErrno == 0 || image.HeaderErrno == 2) &&
-					(image.IDErrno == 0 || image.IDErrno == 2) && len(image.DataErrno) == int(image.Objects) &&
-					!slices.ContainsFunc(image.DataErrno, func(e int) bool { return e != 0 && e != 2 })
+				errnoOK := func(e int) bool { return e == 0 || e == 2 }
+				ok = ok && image.Key == plan.Images[i].Key && image.Name == plan.Images[i].Name && image.Pool == plan.Images[i].Pool && rbdGroupIDValid(image.ImageID) &&
+					image.Prefix == "rbd_data."+image.ImageID && image.Objects == plan.Size>>plan.Order && len(image.SnapshotsAfter) <= 4 &&
+					errnoOK(image.HeaderErrno) && errnoOK(image.IDErrno) && errnoOK(image.ObjectMapErrno) && len(image.DataErrno) == int(image.Objects) &&
+					!slices.ContainsFunc(image.DataErrno, func(e int) bool { return !errnoOK(e) })
 			}
 		}
-	default:
+	} else {
 		ok = false
 	}
 	if !ok {
@@ -601,28 +948,33 @@ func decodeRBDGroupNative(action, token string, request int64, plan rbdGroupPlan
 	return result, nil
 }
 
-// checkRBDGroupBlobs verifies that each published binary view of one action
-// matches its receipt.
-func checkRBDGroupBlobs(out, action string, images []rbdGroupImageView) error {
+// checkRBDGroupBlob verifies that one published binary view matches its
+// receipt.
+func checkRBDGroupBlob(out string, blob rbdBaseBlob) error {
+	file, err := os.Open(filepath.Join(out, filepath.Base(blob.Name)))
+	if err != nil {
+		return err
+	}
+	data, err := io.ReadAll(io.LimitReader(file, rbdBaseBlobLimit+1))
+	file.Close()
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(data)
+	if len(data) > rbdBaseBlobLimit || uint64(len(data)) != blob.Length || hex.EncodeToString(sum[:]) != blob.SHA256 {
+		return fmt.Errorf("native RBD group binary view %s differs from its receipt", blob.Name)
+	}
+	return nil
+}
+
+// checkRBDGroupBlobs verifies every published binary view of one action.
+func checkRBDGroupBlobs(out string, images []rbdGroupImageView) error {
 	for _, image := range images {
-		for key := range rbdGroupBlobViews {
-			blob := image.Blobs[key]
-			name := rbdGroupBlobName(action, image.Key, key)
-			if blob.Name != name {
-				return fmt.Errorf("native RBD group binary view %s is misnamed", name)
-			}
-			file, err := os.Open(filepath.Join(out, name))
-			if err != nil {
-				return err
-			}
-			data, err := io.ReadAll(io.LimitReader(file, rbdBaseBlobLimit+1))
-			file.Close()
-			if err != nil {
-				return err
-			}
-			sum := sha256.Sum256(data)
-			if len(data) > rbdBaseBlobLimit || uint64(len(data)) != blob.Length || hex.EncodeToString(sum[:]) != blob.SHA256 {
-				return fmt.Errorf("native RBD group binary view %s differs from its receipt", name)
+		for _, view := range image.Views {
+			for _, blob := range []rbdBaseBlob{view.Image, view.ObjectBytes} {
+				if err := checkRBDGroupBlob(out, blob); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -668,22 +1020,29 @@ func parseRBDGroupRequest(fields []string, token string, previousID int64, next 
 
 // rbdGroupTarget names what one action changes in the mutation journal.
 func rbdGroupTarget(plan rbdGroupPlan, action string) string {
-	images := plan.Images[0].Name + "," + plan.Images[1].Name
+	images := plan.Images[0].Pool + "/" + plan.Images[0].Name + "," + plan.Images[1].Pool + "/" + plan.Images[1].Name
 	switch action {
 	case "setup":
 		return images + ":" + plan.Group + "@" + plan.GroupSnapshot
 	case "modify":
 		return images + ":head"
+	case "refused":
+		return images + ":" + plan.Group + "@" + plan.RefusedSnapshot
+	case "accepted":
+		return images + ":" + plan.Group + "@" + plan.SecondSnapshot
+	case "rollback":
+		return images + ":head<-" + plan.Group + "@" + plan.GroupSnapshot
 	}
-	return plan.Group + "@" + plan.GroupSnapshot + ":" + images + ":removed"
+	return plan.Group + "@" + plan.SecondSnapshot + "," + plan.GroupSnapshot + ":" + images + ":removed"
 }
 
 // rbdGroupControl runs one native action of the closed group sequence, only
-// on a profile that admits capRBDGroupSnapshot. Every action is journaled as
-// a mutation.
+// on a profile that admits capRBDGroupSnapshot and after the second owned
+// pool was created. Every action is journaled as a mutation.
 func (c *fixtureCluster) rbdGroupControl(ctx context.Context, out string, fields []string) (resultErr error) {
 	x := c.rbdBase
-	if c.profile.rbdBase != "1" || !c.profile.admits(capRBDGroupSnapshot) || x == nil || x.out != out || x.setup == nil || x.native == nil || !x.plan.owned(x.token) {
+	if c.profile.rbdBase != "1" || !c.profile.admits(capRBDGroupSnapshot) || x == nil || x.out != out || x.setup == nil || x.native == nil || !x.plan.owned(x.token) ||
+		!x.group.secondPoolIntent || x.group.secondPool == nil || x.group.secondPoolName != rbdGroupSecondPoolName(x.token) {
 		return errors.New("invalid owned RBD group control scope")
 	}
 	ctx, stop := context.WithTimeout(ctx, 120*time.Second)
@@ -725,11 +1084,11 @@ func (c *fixtureCluster) rbdGroupControl(ctx context.Context, out string, fields
 	}
 	process, native, err := c.rbdGroupRunNative(ctx, action, id)
 	result["native_process"] = process
-	if err == nil && native.PoolID != x.poolID {
+	if err == nil && (native.PoolID != x.poolID || native.SecondPoolID != x.group.secondPool.ID) {
 		err = errors.New("native RBD group action used another pool")
 	}
 	if err == nil {
-		err = checkRBDGroupBlobs(out, action, native.Images)
+		err = checkRBDGroupBlobs(out, native.Images)
 	}
 	if err != nil {
 		return c.rbdBaseFinish(m, err)
@@ -743,8 +1102,13 @@ var _ = defineRequestControl("rbd-group", controlAfterRanked, (*fixtureCluster).
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's control when they exist.
 var _ = collectDiagnosticFiles(
+	"rbd-group-accepted-state.json",
+	"rbd-group-accepted.json",
 	"rbd-group-cleanup.json",
 	"rbd-group-modify.json",
+	"rbd-group-refused-state.json",
+	"rbd-group-refused.json",
 	"rbd-group-results.json",
+	"rbd-group-rollback.json",
 	"rbd-group-setup.json",
 )
