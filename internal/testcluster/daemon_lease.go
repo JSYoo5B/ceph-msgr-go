@@ -58,6 +58,9 @@ const (
 	// DaemonLeaseFixtureFailed: the fixture had failed before the pause;
 	// it was not executed.
 	DaemonLeaseFixtureFailed = "fixture-failed"
+	// DaemonLeasePauseFailed: the fixture's pause call failed; a daemon it
+	// may have frozen was resumed, and the failure is the fixture's.
+	DaemonLeasePauseFailed = "pause-failed"
 )
 
 // DaemonLeaseRecord is the fixture's record of a lease at one transition.

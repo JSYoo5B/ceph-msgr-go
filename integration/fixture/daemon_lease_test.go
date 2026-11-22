@@ -29,6 +29,32 @@ type fakeDaemons struct {
 	paused  map[string]bool
 	calls   []string
 	failure map[string]error
+	// uncertain pauses freeze the daemon and return its hold with an error.
+	uncertain map[string]error
+	// block holds a call ("pause osd.2") until its channel is closed.
+	block map[string]chan struct{}
+}
+
+// wait holds a call that the test blocked, without the fake's lock.
+func (d *fakeDaemons) wait(call string) {
+	d.mu.Lock()
+	release := d.block[call]
+	d.mu.Unlock()
+	if release != nil {
+		<-release
+	}
+}
+
+// hold blocks call until the returned function releases it.
+func (d *fakeDaemons) hold(call string) (release func()) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.block == nil {
+		d.block = map[string]chan struct{}{}
+	}
+	ch := make(chan struct{})
+	d.block[call] = ch
+	return func() { close(ch) }
 }
 
 type fakeHold struct {
@@ -37,6 +63,7 @@ type fakeHold struct {
 }
 
 func (h fakeHold) Resume(context.Context) error {
+	h.d.wait("resume " + h.daemon)
 	h.d.mu.Lock()
 	defer h.d.mu.Unlock()
 	h.d.calls = append(h.d.calls, "resume "+h.daemon)
@@ -48,9 +75,10 @@ func (h fakeHold) Resume(context.Context) error {
 }
 
 func (d *fakeDaemons) pause(_ context.Context, kind, name string) (daemonHold, error) {
+	daemon := kind + "." + name
+	d.wait("pause " + daemon)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	daemon := kind + "." + name
 	d.calls = append(d.calls, "pause "+daemon)
 	if err := d.failure["pause "+daemon]; err != nil {
 		return nil, err
@@ -59,7 +87,7 @@ func (d *fakeDaemons) pause(_ context.Context, kind, name string) (daemonHold, e
 		d.paused = map[string]bool{}
 	}
 	d.paused[daemon] = true
-	return fakeHold{d, daemon}, nil
+	return fakeHold{d, daemon}, d.uncertain["pause "+daemon]
 }
 
 func (d *fakeDaemons) record() []string {
@@ -115,9 +143,22 @@ func leaseAck(t *testing.T, out, state string, lease int64) (daemonLeaseRecord, 
 	return r, true
 }
 
+// pollSettled polls once and waits until every daemon call the poll
+// started has settled, and returns the failures of the poll and of those
+// calls.
+func pollSettled(s *daemonLeases, out string) error {
+	err := s.poll(context.Background(), out)
+	s.calls.Wait()
+	s.mu.Lock()
+	reported := s.reported
+	s.reported = nil
+	s.mu.Unlock()
+	return errors.Join(err, errors.Join(reported...))
+}
+
 func pollLeases(t *testing.T, s *daemonLeases, out string) {
 	t.Helper()
-	if err := s.poll(context.Background(), out); err != nil {
+	if err := pollSettled(s, out); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -294,7 +335,212 @@ func TestDaemonLeaseRefusesInvalidRequests(t *testing.T) {
 			if err := s.poll(context.Background(), out); err == nil || len(daemons.record()) != 0 {
 				t.Fatal("accepted", content, err, daemons.record())
 			}
+			// Rejected under its request ID and taken out of the pending
+			// requests: the next poll does not meet it again.
+			if data, err := os.ReadFile(filepath.Join(out, "daemon-lease-rejected.1")); err != nil || !strings.Contains(string(data), `"request":"1"`) {
+				t.Fatal("the rejection is not acknowledged under its request ID", string(data), err)
+			}
+			if requestPending(t, out, kind) {
+				t.Fatal("the rejected request stayed pending")
+			}
+			if err := s.poll(context.Background(), out); err != nil {
+				t.Fatal("the rejected request failed a second poll", err)
+			}
 		})
+	}
+}
+
+// A request the loop rejects fails the fixture without stopping it: in the
+// same polls, a held lease past its deadline is still resumed and a valid
+// end still ends its lease, the malformed envelope is quarantined instead
+// of failing every later poll, and a later pause is refused as after a
+// fixture failure.
+func TestDaemonLeaseRejectsABadEnvelopeAndKeepsEndingTheHeldLeases(t *testing.T) {
+	out := t.TempDir()
+	s, clock, daemons := newTestLeases()
+	deadline := leaseEpoch.Add(10 * time.Second)
+	publishPause(t, out, 71, 501, "osd.1", deadline)
+	publishPause(t, out, 72, 502, "osd.2", deadline.Add(time.Minute))
+	pollLeases(t, s, out)
+	// An envelope whose content names another request ID, and one with an
+	// input line, both persistent across polls if not taken out.
+	if err := os.WriteFile(filepath.Join(out, requestEnvelopeName("end-daemon-lease", "73")), []byte("74 501 resume\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeControlRequest(t, out, "pause-daemon", "75 503 osd 3 "+strconv.FormatInt(deadline.UnixNano(), 10)+"\ninput x.json\n")
+	publishEnd(t, out, 76, 502, "resume")
+	clock.set(deadline)
+	err := pollSettled(s, out)
+	if err == nil || !strings.Contains(err.Error(), "request 73 rejected") || !strings.Contains(err.Error(), "request 75 rejected") {
+		t.Fatal("the bad requests were not reported", err)
+	}
+	if r, ok := leaseAck(t, out, leaseEnded, 501); !ok || r.Reason != leaseExpired || daemons.isPaused("osd.1") {
+		t.Fatal("a bad envelope kept a lease paused past its deadline", r, ok)
+	}
+	if r, ok := leaseAck(t, out, leaseEnded, 502); !ok || r.Reason != leaseResumed || daemons.isPaused("osd.2") {
+		t.Fatal("a bad envelope kept a valid end from ending its lease", r, ok)
+	}
+	for _, id := range []string{"73", "75"} {
+		if !fileExists(filepath.Join(out, "daemon-lease-rejected."+id)) {
+			t.Fatal("no rejection of request", id)
+		}
+	}
+	if !fileExists(filepath.Join(out, "end-daemon-lease.73.rejected")) || requestPending(t, out, "end-daemon-lease") || requestPending(t, out, "pause-daemon") {
+		t.Fatal("a bad envelope was not quarantined")
+	}
+	if err := pollSettled(s, out); err != nil {
+		t.Fatal("a quarantined envelope failed the next poll", err)
+	}
+	publishPause(t, out, 77, 504, "osd.4", deadline.Add(time.Minute))
+	pollLeases(t, s, out)
+	if r, ok := leaseAck(t, out, leaseEnded, 504); !ok || r.Reason != leaseFixtureFailed || daemons.isPaused("osd.4") {
+		t.Fatal("a pause after a rejected request", r, ok)
+	}
+}
+
+// settledLeases reports each daemon call that settled, as "<call> <lease>".
+func settledLeases(s *daemonLeases) <-chan string {
+	settled := make(chan string, 64)
+	s.settled = func(call, lease string) { settled <- call + " " + lease }
+	return settled
+}
+
+// livenessBound only turns a lost settlement into a failure instead of a
+// hung test; no assertion depends on it.
+const livenessBound = time.Minute
+
+// awaitSettled waits until the daemon call ("resume 601") settles.
+func awaitSettled(t *testing.T, settled <-chan string, call string) {
+	t.Helper()
+	bound := time.After(livenessBound)
+	for {
+		select {
+		case l := <-settled:
+			if l == call {
+				return
+			}
+		case <-bound:
+			t.Fatal("the daemon call", call, "did not settle")
+		}
+	}
+}
+
+// pollAsync runs one poll on its own goroutine, so that a poll that waited
+// for a blocked daemon call is reported instead of hanging the test.
+func pollAsync(s *daemonLeases, out string) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- s.poll(context.Background(), out) }()
+	return done
+}
+
+func awaitPoll(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(livenessBound):
+		t.Fatal("the poll waited for an outstanding daemon call")
+	}
+}
+
+// A daemon call that stays outstanding delays no other lease: an earlier
+// lease still expires while another daemon's pause is outstanding, and
+// while the resume of a lease with the same deadline is outstanding. A
+// pause that settles after its lease was ended, or after its deadline, is
+// resumed at once.
+func TestDaemonLeaseExpiresWhileAnotherDaemonCallIsOutstanding(t *testing.T) {
+	deadline := leaseEpoch.Add(10 * time.Second)
+	t.Run("pause outstanding", func(t *testing.T) {
+		out := t.TempDir()
+		s, clock, daemons := newTestLeases()
+		settled := settledLeases(s)
+		publishPause(t, out, 81, 601, "osd.1", deadline)
+		pollLeases(t, s, out)
+		release := daemons.hold("pause osd.2")
+		publishPause(t, out, 82, 602, "osd.2", deadline.Add(time.Minute))
+		awaitPoll(t, pollAsync(s, out))
+		clock.set(deadline)
+		awaitPoll(t, pollAsync(s, out))
+		awaitSettled(t, settled, "resume 601")
+		if r, ok := leaseAck(t, out, leaseEnded, 601); !ok || r.Reason != leaseExpired || daemons.isPaused("osd.1") {
+			t.Fatal("an outstanding pause of another daemon delayed the expiry", r, ok)
+		}
+		if _, ok := leaseAck(t, out, leasePaused, 602); ok {
+			t.Fatal("the blocked pause settled before its release")
+		}
+		release()
+		s.calls.Wait()
+		if r, ok := leaseAck(t, out, leasePaused, 602); !ok || !daemons.isPaused("osd.2") {
+			t.Fatal("the released pause did not settle", r, ok)
+		}
+	})
+	t.Run("resume outstanding, one deadline", func(t *testing.T) {
+		out := t.TempDir()
+		s, clock, daemons := newTestLeases()
+		settled := settledLeases(s)
+		publishPause(t, out, 91, 701, "osd.1", deadline)
+		publishPause(t, out, 92, 702, "osd.2", deadline)
+		pollLeases(t, s, out)
+		release := daemons.hold("resume osd.1")
+		clock.set(deadline)
+		awaitPoll(t, pollAsync(s, out))
+		awaitSettled(t, settled, "resume 702")
+		if r, ok := leaseAck(t, out, leaseEnded, 702); !ok || r.Reason != leaseExpired || daemons.isPaused("osd.2") {
+			t.Fatal("an outstanding resume of a lease with the same deadline delayed the expiry", r, ok)
+		}
+		if _, ok := leaseAck(t, out, leaseEnded, 701); ok || !daemons.isPaused("osd.1") {
+			t.Fatal("the blocked resume settled before its release")
+		}
+		// A second poll starts no second resume of the outstanding one.
+		awaitPoll(t, pollAsync(s, out))
+		release()
+		s.calls.Wait()
+		if r, ok := leaseAck(t, out, leaseEnded, 701); !ok || r.Reason != leaseExpired || daemons.isPaused("osd.1") {
+			t.Fatal("the released resume did not end its lease", r, ok)
+		}
+		if resumes := slices.DeleteFunc(daemons.record(), func(c string) bool { return c != "resume osd.1" }); len(resumes) != 1 {
+			t.Fatal("the outstanding resume was started again", daemons.record())
+		}
+	})
+	for _, late := range []string{"ended", "past its deadline"} {
+		t.Run("pause settles "+late, func(t *testing.T) {
+			out := t.TempDir()
+			s, clock, daemons := newTestLeases()
+			release := daemons.hold("pause osd.3")
+			publishPause(t, out, 101, 801, "osd.3", deadline)
+			awaitPoll(t, pollAsync(s, out))
+			want, end := leaseExpired, ""
+			if late == "ended" {
+				publishEnd(t, out, 102, 801, "cancel")
+				want, end = leaseResumed, "cancel"
+			} else {
+				clock.set(deadline)
+			}
+			awaitPoll(t, pollAsync(s, out))
+			release()
+			s.calls.Wait()
+			if r, ok := leaseAck(t, out, leaseEnded, 801); !ok || r.Reason != want || r.End != end || daemons.isPaused("osd.3") {
+				t.Fatal("a late pause was not resumed at once", r, ok, daemons.record())
+			}
+		})
+	}
+}
+
+// A pause call that fails but may have frozen the daemon returns a hold;
+// the lease resumes it at once and ends as pause-failed, and the failure is
+// the fixture's.
+func TestDaemonLeaseResumesAnUncertainPause(t *testing.T) {
+	out := t.TempDir()
+	s, _, daemons := newTestLeases()
+	daemons.uncertain = map[string]error{"pause osd.1": errors.New("transport lost")}
+	publishPause(t, out, 111, 901, "osd.1", leaseEpoch.Add(time.Minute))
+	if err := pollSettled(s, out); err == nil || !strings.Contains(err.Error(), "transport lost") {
+		t.Fatal("an uncertain pause was not reported", err)
+	}
+	if r, ok := leaseAck(t, out, leaseEnded, 901); !ok || r.Reason != leasePauseFailed || r.PausedAt != 0 || daemons.isPaused("osd.1") {
+		t.Fatal("an uncertain pause stayed frozen", r, ok, daemons.record())
 	}
 }
 
@@ -309,7 +555,7 @@ func TestDaemonLeaseFailuresKeepEndingTheHeldLeases(t *testing.T) {
 		publishPause(t, out, 51, 301, "osd.1", leaseEpoch.Add(time.Second))
 		pollLeases(t, s, out)
 		clock.set(leaseEpoch.Add(time.Second))
-		if err := s.poll(context.Background(), out); err == nil || !strings.Contains(err.Error(), "unpause failed") {
+		if err := pollSettled(s, out); err == nil || !strings.Contains(err.Error(), "unpause failed") {
 			t.Fatal("a failed resume was not reported", err)
 		}
 		if _, ok := leaseAck(t, out, leaseEnded, 301); ok {
@@ -333,7 +579,7 @@ func TestDaemonLeaseFailuresKeepEndingTheHeldLeases(t *testing.T) {
 		daemons.failure = map[string]error{"pause osd.2": errors.New("pause failed")}
 		publishPause(t, out, 61, 311, "osd.1", leaseEpoch.Add(time.Second))
 		publishPause(t, out, 62, 312, "osd.2", leaseEpoch.Add(time.Minute))
-		if err := s.poll(context.Background(), out); err == nil || !strings.Contains(err.Error(), "pause failed") {
+		if err := pollSettled(s, out); err == nil || !strings.Contains(err.Error(), "pause failed") {
 			t.Fatal("a failed pause was not reported", err)
 		}
 		publishPause(t, out, 63, 313, "osd.3", leaseEpoch.Add(time.Minute))
@@ -382,8 +628,8 @@ func TestDaemonLeaseExpiresBesideAStalledOwnedPoolOracle(t *testing.T) {
 	writeControlRequest(t, out, "verify-osd-pool", "61 observe\n")
 	<-started
 	// Sending a second tick returns only once the loop finished the poll of
-	// the first.
-	poll := func() { tick <- time.Time{}; tick <- time.Time{} }
+	// the first; the daemon calls that poll started are then waited for.
+	poll := func() { tick <- time.Time{}; tick <- time.Time{}; s.calls.Wait() }
 	deadline := leaseEpoch.Add(16 * time.Second)
 	publishPause(t, out, 62, 401, "osd.2", deadline)
 	poll()
