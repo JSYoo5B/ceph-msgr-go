@@ -766,9 +766,15 @@ type rbdLockNotification struct {
 // lock, "own-request" is Go's own RequestLock reaching its watch. A policy is
 // "omit" (no acknowledgement is submitted), "empty" (an empty one is) or
 // "default".
+//
+// A notification is recorded only after its acknowledgement returned, which
+// can be after the notifier's notify completed (rbdWatchLedger). A verdict
+// on the notifications of a native action that returned therefore settles
+// on the notify IDs received since its mark first (settleSince).
 type rbdLockResponder struct {
 	mu         sync.Mutex
 	events     []rbdLockNotification
+	ledger     rbdWatchLedger
 	changed    chan struct{}
 	owning     bool
 	failure    error
@@ -836,23 +842,76 @@ func (r *rbdLockResponder) fail(err error) {
 	r.mu.Unlock()
 }
 
+// snapshot returns the notifications recorded so far. A verdict after a
+// native action uses settleSince instead.
 func (r *rbdLockResponder) snapshot() ([]rbdLockNotification, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.events), r.failure
 }
 
-func (r *rbdLockResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, epoch uint32, self rbdClientID, started time.Time, event cephmsgr.OSDWatchEvent) {
-	n := rbdLockNotification{AfterMS: float64(time.Since(started).Microseconds()) / 1000, NotifyID: event.NotifyID, NotifierGlobalID: event.NotifierGlobalID, Cookie: event.Cookie,
+// mark is the number of notifications received so far, recorded or not.
+func (r *rbdLockResponder) mark() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ledger.mark()
+}
+
+// settleSince waits, bounded by rbdNotifySettleTimeout, until the exact
+// notifications received since mark are recorded and nothing else is in
+// flight. It returns every recorded notification and those received since
+// mark, in receipt order.
+func (r *rbdLockResponder) settleSince(ctx context.Context, mark int) (all, since []rbdLockNotification, err error) {
+	settleCtx, cancel := context.WithTimeout(ctx, rbdNotifySettleTimeout)
+	defer cancel()
+	r.mu.Lock()
+	ids := r.ledger.since(mark)
+	r.mu.Unlock()
+	all, err = settleRBDWatch(settleCtx, &r.mu, &r.ledger, func() ([]rbdLockNotification, <-chan struct{}, error) {
+		return slices.Clone(r.events), r.changed, r.failure
+	}, ids)
+	if err != nil {
+		return all, nil, err
+	}
+	// One handler at a time: records are in receipt order.
+	for _, n := range all {
+		if slices.Contains(ids, n.NotifyID) {
+			since = append(since, n)
+		}
+	}
+	if len(since) != len(ids) {
+		return all, since, fmt.Errorf("notify IDs %v received since mark %d were recorded as %d notifications", ids, mark, len(since))
+	}
+	return all, since, nil
+}
+
+// begin opens the record of one received notification: it is in flight
+// until finish records it.
+func (r *rbdLockResponder) begin(started time.Time, event cephmsgr.OSDWatchEvent) rbdLockNotification {
+	r.mu.Lock()
+	r.ledger.receive(event.NotifyID)
+	r.mu.Unlock()
+	return rbdLockNotification{AfterMS: float64(time.Since(started).Microseconds()) / 1000, NotifyID: event.NotifyID, NotifierGlobalID: event.NotifierGlobalID, Cookie: event.Cookie,
 		PayloadHex: hex.EncodeToString(event.Payload), RawFrontHex: hex.EncodeToString(event.RawFront), RawDataHex: hex.EncodeToString(event.RawData)}
-	defer func() {
-		r.mu.Lock()
-		n.Index = len(r.events)
-		r.events = append(r.events, n)
-		close(r.changed)
+}
+
+// finish records a received notification with its acknowledgement.
+func (r *rbdLockResponder) finish(n rbdLockNotification) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n.Index = len(r.events)
+	r.events = append(r.events, n)
+	r.ledger.record(n.NotifyID)
+	if r.changed == nil {
 		r.changed = make(chan struct{})
-		r.mu.Unlock()
-	}()
+	}
+	close(r.changed)
+	r.changed = make(chan struct{})
+}
+
+func (r *rbdLockResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, epoch uint32, self rbdClientID, started time.Time, event cephmsgr.OSDWatchEvent) {
+	n := r.begin(started, event)
+	defer func() { r.finish(n) }()
 	if event.Opcode != cephmsgr.OSDWatchNotification || event.Cookie != w.Cookie() {
 		n.Unexpected = true
 		r.fail(fmt.Errorf("unexpected header watch event opcode %d cookie %d", event.Opcode, event.Cookie))
@@ -911,6 +970,107 @@ func (r *rbdLockResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, epo
 	}
 	if n.Unexpected {
 		r.fail(fmt.Errorf("unexpected header notification op %d from client.%d", m.Op, event.NotifierGlobalID))
+	}
+}
+
+// settleRBDLockCloseCheck settles the Go header watch's notifications
+// received since mark, once the native close and the `rbd object-map check`
+// returned, and judges them: the native owner's ReleasedLock, then the
+// check's own client acquiring and releasing the lock, each acknowledged
+// empty without error.
+func settleRBDLockCloseCheck(ctx context.Context, r *rbdLockResponder, mark int, nativeOwner rbdClientID, gid, nativeGID uint64) ([]rbdLockNotification, error) {
+	_, after, err := r.settleSince(ctx, mark)
+	if err != nil {
+		return after, fmt.Errorf("header watch responder: %w", err)
+	}
+	if len(after) != 3 || after[0].Op != rbdNotifyReleasedLock || after[0].Client != nativeOwner || after[1].Op != rbdNotifyAcquiredLock || after[2].Op != rbdNotifyReleasedLock ||
+		after[1].Client != after[2].Client || after[1].Client.GID == gid || after[1].Client.GID == nativeGID || after[1].NotifierGlobalID != after[1].Client.GID ||
+		slices.ContainsFunc(after, func(n rbdLockNotification) bool {
+			return n.AckHex != "" || n.AckError != "" || n.AckDisposition != rbdAckSubmittedEmpty || n.Unexpected
+		}) {
+		return after, fmt.Errorf("notifications of the native close and the object-map check differ: %+v", after)
+	}
+	return after, nil
+}
+
+// TestRBDLockResponderSettlement checks the close-and-check verdict against
+// a Go watcher that records acknowledgements only after the native actions
+// returned: the verdict waits for the exact notify IDs received since its
+// mark, sees an acknowledgement error recorded late, refuses an extra
+// notification still in flight, and fails within its bound on a
+// notification that never settles. A snapshot taken at the same moment
+// misses the late records.
+func TestRBDLockResponderSettlement(t *testing.T) {
+	const gid, nativeGID, checkGID = 4100, 4200, 4300
+	owner, check := rbdClientID{GID: nativeGID, Handle: 7}, rbdClientID{GID: checkGID, Handle: 9}
+	type step struct {
+		op       uint32
+		client   rbdClientID
+		late     bool // recorded only after the native actions returned
+		never    bool // received but never recorded
+		ackError string
+	}
+	closeCheck := func() []step {
+		return []step{{op: rbdNotifyReleasedLock, client: owner}, {op: rbdNotifyAcquiredLock, client: check}, {op: rbdNotifyReleasedLock, client: check}}
+	}
+	late := func(steps []step, from int) []step {
+		for i := from; i < len(steps); i++ {
+			steps[i].late = true
+		}
+		return steps
+	}
+	for _, tc := range []struct {
+		name  string
+		steps []step
+		ok    bool
+	}{
+		{"recorded before return", closeCheck(), true},
+		{"check notifications recorded after return", late(closeCheck(), 1), true},
+		{"late acknowledgement error", func() []step { s := late(closeCheck(), 1); s[2].ackError = "acknowledge: connection reset"; return s }(), false},
+		{"extra notification in flight", late(append(closeCheck(), step{op: rbdNotifyAcquiredLock, client: check}), 1), false},
+		{"release never recorded", func() []step { s := closeCheck(); s[2].never = true; return s }(), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &rbdLockResponder{changed: make(chan struct{})}
+			started := time.Now()
+			// A notification of an earlier phase, recorded before the mark.
+			r.finish(r.begin(started, cephmsgr.OSDWatchEvent{Opcode: cephmsgr.OSDWatchNotification, NotifyID: 1, NotifierGlobalID: nativeGID}))
+			mark := r.mark()
+			var later []rbdLockNotification
+			for i, s := range tc.steps {
+				n := r.begin(started, cephmsgr.OSDWatchEvent{Opcode: cephmsgr.OSDWatchNotification, NotifyID: uint64(20 + i), NotifierGlobalID: s.client.GID})
+				n.Op, n.Client, n.Role, n.AckDisposition, n.AckError = s.op, s.client, "non-owner", rbdAckSubmittedEmpty, s.ackError
+				if s.ackError != "" {
+					n.AckDisposition = rbdAckSubmissionFailed
+				}
+				switch {
+				case s.never:
+				case s.late:
+					later = append(later, n)
+				default:
+					r.finish(n)
+				}
+			}
+			// The native actions have returned here.
+			if events, _ := r.snapshot(); len(later) != 0 && len(events)-1 == len(tc.steps) {
+				t.Fatal("a snapshot taken on return already holds the late records")
+			}
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				for _, n := range later {
+					r.finish(n)
+				}
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			after, err := settleRBDLockCloseCheck(ctx, r, mark, owner, gid, nativeGID)
+			if tc.ok && (err != nil || len(after) != 3) {
+				t.Fatal("settled close and check refused", err, after)
+			}
+			if !tc.ok && err == nil {
+				t.Fatalf("close and check verdict admitted %+v", after)
+			}
+		})
 	}
 }
 
@@ -2182,7 +2342,7 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 
 	var final *nativeRBDLock
 	t.Run("object_map_check", func(t *testing.T) {
-		mark := notifications()
+		mark := responder.mark()
 		proceed(t, 4)
 		select {
 		case <-controlDone:
@@ -2200,16 +2360,14 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 		closed, check := final.Phases[4], final.Check
 		evidence.Check = check
 		// The close released the lock: ReleasedLock from the native owner;
-		// the check then took and gave back the lock in its own client.
-		events, failure := responder.snapshot()
-		if failure != nil {
-			t.Fatal("header watch responder", failure)
-		}
-		after := events[mark:]
-		if len(after) != 3 || after[0].Op != rbdNotifyReleasedLock || after[0].Client != nativeOwner || after[1].Op != rbdNotifyAcquiredLock || after[2].Op != rbdNotifyReleasedLock ||
-			after[1].Client != after[2].Client || after[1].Client.GID == gid || after[1].Client.GID == nativeGID || after[1].NotifierGlobalID != after[1].Client.GID ||
-			slices.ContainsFunc(after, func(n rbdLockNotification) bool { return n.AckHex != "" || n.AckError != "" }) {
-			t.Fatalf("notifications of the native close and the object-map check differ: %+v", after)
+		// the check then took and gave back the lock in its own client. Both
+		// native processes waited for their notifications to complete, but
+		// the Go watcher may still be waiting for the OSD's replies to its
+		// acknowledgements: the verdict settles on the notify IDs received
+		// since the mark.
+		after, err := settleRBDLockCloseCheck(ctx, responder, mark, nativeOwner, gid, nativeGID)
+		if err != nil {
+			t.Fatal(err)
 		}
 		if !closed.Lockers.Empty || closed.Flags != 0 {
 			t.Fatal("closed image is still locked or flagged", closed.Lockers, closed.Flags)

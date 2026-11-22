@@ -1145,6 +1145,20 @@ func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 	// contradiction is never followed by the next step of a handoff.
 	judge := func(t *testing.T, stage string) {
 		t.Helper()
+		// The claims count the observer's and the breaker's notifications.
+		// Each responder records one only after its acknowledgement
+		// returned: settle on every notify ID received so far, so that
+		// neither an in-flight notification nor its acknowledgement error
+		// is missed. A responder failure is the claims' to judge.
+		for _, r := range []*rbdLockResponder{observerResponder, breakerResponder} {
+			if r == nil {
+				continue
+			}
+			if _, _, err := r.settleSince(ctx, 0); errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				snapshot()
+				t.Fatalf("claims at %s: %v", stage, err)
+			}
+		}
 		snapshot()
 		record.ClaimsStage, record.Problems = stage, rbdLockOwnerLossClaims(&record, stage)
 		if len(record.Problems) != 0 {
