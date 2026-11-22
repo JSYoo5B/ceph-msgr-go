@@ -2,7 +2,10 @@ package integration_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -14,7 +17,7 @@ type factsEdit func(factsPool, map[string]string, *poolReceipt, *[]map[string]an
 // receipt in the pinned MON's JSON shapes.
 func buildErasureFacts(edit factsEdit) ([]byte, []byte, poolReceipt) {
 	p := factsPool{"pool": 7, "type": 3, "size": 4, "min_size": 3, "erasure_code_profile": "ceph-msgr-owned-ec-k2m2",
-		"flags_names": "hashpspool,ec_overwrites", "crush_rule": 2, "nonprimary_shards": "{}"}
+		"flags_names": "hashpspool,ec_overwrites", "crush_rule": 2, "nonprimary_shards": "{}", "stripe_width": 8192}
 	profile := map[string]string{"k": "2", "m": "2", "plugin": "isa", "crush-failure-domain": "osd", "technique": "reed_sol_van"}
 	yes := true
 	receipt := poolReceipt{PoolID: 7, Size: 4, MinSize: 3, ErasureCodeProfile: "ceph-msgr-owned-ec-k2m2", ECOverwrites: &yes,
@@ -37,7 +40,7 @@ func TestErasureFactsFollowTheNativeWidth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if facts.size != 4 || facts.minSize != 3 || len(facts.nonprimary) != 0 || !slices.Equal(facts.owned, []int32{0, 1, 2, 3}) || facts.epoch != 51 {
+	if facts.size != 4 || facts.minSize != 3 || len(facts.nonprimary) != 0 || !slices.Equal(facts.owned, []int32{0, 1, 2, 3}) || facts.epoch != 51 || facts.chunk != 4096 {
 		t.Fatalf("facts %+v", facts)
 	}
 	if erasureK2M1.size() != 3 || erasureK2M1.minSize() != 2 || erasureK2M2.size() != 4 || erasureK2M2.minSize() != 3 {
@@ -71,8 +74,10 @@ func TestErasureFactsFollowTheNativeWidth(t *testing.T) {
 		"unexpected nonprimary": func(p factsPool, _ map[string]string, _ *poolReceipt, _ *[]map[string]any) {
 			p["nonprimary_shards"] = "{1}"
 		},
-		"three up OSDs": func(_ factsPool, _ map[string]string, _ *poolReceipt, o *[]map[string]any) { (*o)[3]["up"] = 0 },
-		"missing pool":  func(_ factsPool, _ map[string]string, r *poolReceipt, _ *[]map[string]any) { r.PoolID = 9 },
+		"three up OSDs":    func(_ factsPool, _ map[string]string, _ *poolReceipt, o *[]map[string]any) { (*o)[3]["up"] = 0 },
+		"missing pool":     func(_ factsPool, _ map[string]string, r *poolReceipt, _ *[]map[string]any) { r.PoolID = 9 },
+		"no stripe width":  func(p factsPool, _ map[string]string, _ *poolReceipt, _ *[]map[string]any) { delete(p, "stripe_width") },
+		"odd stripe width": func(p factsPool, _ map[string]string, _ *poolReceipt, _ *[]map[string]any) { p["stripe_width"] = 4097 },
 	} {
 		dump, codes, receipt := buildErasureFacts(edit)
 		if _, err := erasureFactsFrom(dump, codes, receipt, erasureK2M2, false); err == nil {
@@ -140,5 +145,100 @@ func TestErasurePlacementControlUsesThePoolSize(t *testing.T) {
 	route.ID, route.PrimaryID, route.Shard = 2, 2, 2
 	if shard, err := optimized.placementControl(route); err != nil || shard != 0 {
 		t.Fatal("k=2,m=1 control shard", shard, err)
+	}
+}
+
+// The wider widths derive size, min_size and nonprimary shards from k and m
+// alone, and their facts follow the native k=3,m=1 and k=4,m=2 shapes. The
+// synthetic dumps are the pinned MON's JSON shapes, not native evidence.
+func TestErasureFactsOfTheWiderWidths(t *testing.T) {
+	for _, c := range []struct {
+		width           erasureWidth
+		size, min       int
+		nonprimary      []int
+		owned           int
+		wrongNonprimary []string
+	}{
+		{erasureK3M1, 4, 3, []int{1, 2}, 4, []string{"{1}", "{2}", "{1,2,3}", "{}"}},
+		{erasureK4M2, 6, 5, []int{1, 2, 3}, 6, []string{"{1,2}", "{1,2,3,4}", "{2,3,4}", "{}"}},
+	} {
+		if c.width.size() != c.size || c.width.minSize() != c.min || !slices.Equal(c.width.nonprimaryShards(true), c.nonprimary) ||
+			len(c.width.nonprimaryShards(false)) != 0 {
+			t.Fatal("width arithmetic", c.width)
+		}
+		shape := func(nonprimary string) factsEdit {
+			return func(p factsPool, codes map[string]string, r *poolReceipt, osds *[]map[string]any) {
+				k, m := strconv.Itoa(c.width.k), strconv.Itoa(c.width.m)
+				p["size"], p["min_size"], p["erasure_code_profile"], p["nonprimary_shards"] = c.size, c.min, c.width.profile, nonprimary
+				p["stripe_width"] = 4096 * c.width.k
+				codes["k"], codes["m"] = k, m
+				r.Size, r.MinSize, r.ErasureCodeProfile, r.ECProfile["k"], r.ECProfile["m"] = c.size, c.min, c.width.profile, k, m
+				*osds = nil
+				for id := range c.owned {
+					*osds = append(*osds, map[string]any{"osd": id, "up": 1, "in": 1})
+				}
+			}
+		}
+		text := "{" + strings.Trim(strings.Join(strings.Fields(fmt.Sprint(c.nonprimary)), ","), "[]") + "}"
+		dump, codes, receipt := buildErasureFacts(shape(text))
+		facts, err := erasureFactsFrom(dump, codes, receipt, c.width, true)
+		if err != nil || facts.size != c.size || facts.minSize != c.min || !slices.Equal(facts.nonprimary, c.nonprimary) || len(facts.owned) != c.owned || facts.chunk != 4096 {
+			t.Fatal(c.width, facts, err)
+		}
+		for _, wrong := range c.wrongNonprimary {
+			dump, codes, receipt := buildErasureFacts(shape(wrong))
+			if _, err := erasureFactsFrom(dump, codes, receipt, c.width, true); err == nil {
+				t.Fatal(c.width, "nonprimary shards accepted:", wrong)
+			}
+		}
+		// One OSD fewer than k+m cannot host the width.
+		dump, codes, receipt = buildErasureFacts(func(p factsPool, codes map[string]string, r *poolReceipt, osds *[]map[string]any) {
+			shape(text)(p, codes, r, osds)
+			(*osds)[c.owned-1]["in"] = 0
+		})
+		if _, err := erasureFactsFrom(dump, codes, receipt, c.width, true); err == nil {
+			t.Fatal(c.width, "facts accepted with too few OSDs")
+		}
+		// The k=2,m=2 width does not accept this pool.
+		dump, codes, receipt = buildErasureFacts(shape(text))
+		if _, err := erasureFactsFrom(dump, codes, receipt, erasureK2M2, true); err == nil {
+			t.Fatal(c.width, "facts accepted as k=2,m=2")
+		}
+	}
+}
+
+// The failover lead and the read-participation arithmetic over the live
+// shard count, on synthetic facts.
+func TestErasureLeadAndReadParticipation(t *testing.T) {
+	for _, c := range []struct {
+		width erasureWidth
+		lead  int
+	}{{erasureK2M1, 2}, {erasureK2M2, 2}, {erasureK3M1, 3}, {erasureK4M2, 4}} {
+		facts := erasureFacts{size: c.width.size(), nonprimary: c.width.nonprimaryShards(true), chunk: 4096}
+		if got := erasureLeadAfterLoss(facts, 0); got != c.lead {
+			t.Fatal(c.width, "lead after the loss of shard 0", got, "want", c.lead)
+		}
+		if got := erasureLeadAfterLoss(facts, c.lead); got != 0 {
+			t.Fatal(c.width, "lead after the loss of a parity shard", got)
+		}
+		plain := erasureFacts{size: c.width.size(), chunk: 4096}
+		if got := erasureLeadAfterLoss(plain, 0); got != 1 {
+			t.Fatal(c.width, "a pool without nonprimary shards leads on shard 1", got)
+		}
+	}
+	if !erasureReadNeedsEveryShard(3, 3, 4096, 12000) {
+		t.Fatal("a 12000-byte k=3,m=1 object on three live shards needs every one of them")
+	}
+	for name, c := range map[string]struct{ live, k, chunk, size int }{
+		"two data chunks only": {3, 3, 4096, 8192},
+		"past one stripe":      {3, 3, 4096, 12289},
+		"unknown chunk":        {3, 3, 0, 12000},
+		"more than k live":     {4, 3, 4096, 12000},
+		"k=2,m=2 outage":       {3, 2, 4096, 8000},
+		"k=4,m=2 outage":       {5, 4, 4096, 16000},
+	} {
+		if erasureReadNeedsEveryShard(c.live, c.k, c.chunk, c.size) {
+			t.Fatal("read participation claimed:", name)
+		}
 	}
 }

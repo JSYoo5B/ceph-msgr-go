@@ -319,8 +319,27 @@ class OSDOracleTests(unittest.TestCase):
             self.collect()
         self.assertFalse((self.output / "osd-oracle.json").exists())
 
+    def test_six_daemons_keep_the_three_replica_data_pool(self):
+        self.replicated()
+        os.environ["CEPH_MSGR_TEST_OSD_REPLICAS"] = "6"
+        self.mapped.update(acting=[5, 0, 2], up=[5, 0, 2], acting_primary=5)
+        self.topology["osds"] = [
+            {"osd": i, "public_addrs": {"addrvec": [
+                {"type": "v2", "addr": "127.0.0.1:" + str(36900+i), "nonce": 100+i}]}}
+            for i in range(6)]
+        self.crush["devices"] = [{"id": i} for i in range(6)]
+        (self.output / "peers.json").write_text(json.dumps({"osd." + str(i): "127.0.0.1:" + str(36900+i) for i in range(6)}))
+        self.collect()
+        value = json.loads((self.output / "osd-oracle.json").read_bytes())
+        self.assertEqual((value["replicas"], value["min_size"], value["osd_id"], value["address"]), (3, 2, 5, "v2:127.0.0.1:36905/105"))
+        (self.output / "osd-oracle.json").unlink()
+        self.crush["devices"] = [{"id": i} for i in range(5)]
+        with self.assertRaises(ValueError):
+            self.collect()
+        self.assertFalse((self.output / "osd-oracle.json").exists())
+
     def test_unknown_replica_profiles_are_rejected(self):
-        for value in ("", "0", "2", "03", "04", "5", "6"):
+        for value in ("", "0", "2", "03", "04", "5", "06", "7"):
             with self.subTest(value=value), mock.patch.dict(os.environ, {"CEPH_MSGR_TEST_OSD_REPLICAS": value}), self.assertRaises(ValueError):
                 self.collect()
 

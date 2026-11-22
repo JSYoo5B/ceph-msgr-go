@@ -493,7 +493,7 @@ func legacyLoadProfile(getenv func(string) string) (profile, error) {
 			return profile{}, fmt.Errorf("MGR service acceptance requires its exclusive selector %s and either two MGRs with one legacy-v6 OSD or zero initial MGRs without OSDs", selected)
 		}
 	}
-	if p.osdTopology().erasureCapacity {
+	if p.osdTopology().erasureCapacity != "" {
 		// The four-daemon topology exists only for the bounded k=2,m=2
 		// erasure-width scenarios. The fixture's ordinary pools keep the
 		// three-replica policy; broad OSD selections stay on topology "3".
@@ -806,7 +806,7 @@ func TestJoinedLegacySelectionsNoLongerAdmitModes(t *testing.T) {
 			params["test_run"], params["capabilities"] = joined, capabilities
 			env := ciRowEnvironment(t, params)
 			p, err := loadProfile(func(name string) string { return env[name] })
-			if err == nil && (p.forcedKillAdmitted("mon") || p.osdTopology().erasureCapacity) {
+			if err == nil && (p.forcedKillAdmitted("mon") || p.osdTopology().erasureCapacity != "") {
 				t.Fatalf("%s: joined selection %s [%s] admitted a mode", row.ID, joined, capabilities)
 			}
 		}

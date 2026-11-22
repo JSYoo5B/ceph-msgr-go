@@ -16,7 +16,7 @@ class OSDErasureRowsTest(ci_row_catalog.RowsTestCase):
         # the trusted default-branch workflow needs no new parameter.
         self.assert_forwarded("osd_replicas", "CEPH_MSGR_TEST_OSD_REPLICAS", "1")
         for row in self.rows:
-            self.assertIn(row.get("osd_replicas", "1"), {"1", "3", "4"})
+            self.assertIn(row.get("osd_replicas", "1"), {"1", "3", "4", "6"})
         rows = [row for row in self.rows if row.get("osd_replicas") == "4"]
         base = {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container",
                 "osd": "1", "osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8"}
@@ -48,7 +48,7 @@ class OSDErasureRowsTest(ci_row_catalog.RowsTestCase):
             selector = "^TestCephOSDErasure%sIntegration$" % cell
             self.assertEqual([row.get("capabilities") for row in rows if row["test_run"] == selector], [capabilities], selector)
         fixture = (ROOT / "integration" / "fixture" / "profile.go").read_text(encoding="utf-8")
-        self.assertIn('selected = "^TestCephOSDErasureK2M2Integration$"', fixture)
+        self.assertIn('erasureDefault: "^TestCephOSDErasureK2M2Integration$"', fixture)
         for row in rows:
             name = row["test_run"][1:-1]
             with self.subTest(test_run=row["test_run"]):

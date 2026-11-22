@@ -453,9 +453,10 @@ class ErasureWidthTest(unittest.TestCase):
         self.assertFalse(any(c["prefix"] in ("osd erasure-code-profile set", "osd pool create") for c in rados.commands))
 
     def test_k2m2_inputs_are_closed(self):
-        for request in (dict(width="k2m2"), dict(width="k2m2", plugin="jerasure"), dict(width="k2m2", plugin="jerasure", optimized=True),
-                        dict(width="k2m2", plugin="isa", optimized="yes"),
-                        dict(width="k4m2", plugin="isa"), dict(width="", plugin="isa"), dict(width="k2m2", plugin="isa", erasure=False, size=3, min_size=2)):
+        for request in (dict(width="k2m2"), dict(width="k2m2", plugin="isa", optimized="yes"),
+                        dict(width="k3m1"), dict(width="k3m1", plugin="jerasure"), dict(width="k4m2"), dict(width="k4m2", plugin="jerasure"),
+                        dict(width="k4m3", plugin="isa"), dict(width="k3m2", plugin="isa"),
+                        dict(width="", plugin="isa"), dict(width="k2m2", plugin="isa", erasure=False, size=3, min_size=2)):
             with self.subTest(request=request), self.assertRaises(ValueError):
                 create(FakeErasureRados(), **request)
 
@@ -494,6 +495,32 @@ class ErasureWidthTest(unittest.TestCase):
         rados = FakeErasureRados()
         self.assertEqual(create(rados, width="k2m2", plugin="isa")["nonprimary_shards"], "{}")
 
+    def test_wider_widths_own_their_profiles_and_read_back_the_pinned_shape(self):
+        # k3m1 and k4m2 have more than one nonprimary data shard when
+        # optimized; min_size is the MON's k + min(1, m-1), never lowered.
+        cases = {("k3m1", "isa"): ("ceph-msgr-owned-ec-k3m1", 4, 3, "{1,2}"),
+                 ("k4m2", "isa"): ("ceph-msgr-owned-ec-k4m2", 6, 5, "{1,2,3}"),
+                 ("k2m2", "jerasure"): ("ceph-msgr-owned-ec-k2m2", 4, 3, "{1}")}
+        for (width, plugin), (profile, size, min_size, nonprimary) in cases.items():
+            with self.subTest(width=width, plugin=plugin):
+                rados = FakeErasureRados(existing_profiles=[oracle.EC_PROFILE])
+                result = create(rados, width=width, plugin=plugin, optimized=True)
+                self.assertEqual((result["width"], result["erasure_code_profile"], result["size"], result["min_size"], result["nonprimary_shards"]),
+                                 (width, profile, size, min_size, nonprimary))
+                self.assertEqual(result["ec_profile"]["plugin"], plugin)
+                setter = [c for c in rados.commands if c["prefix"] == "osd erasure-code-profile set"]
+                k, m = width[1], width[3]
+                self.assertEqual(setter, [{"prefix": "osd erasure-code-profile set", "name": profile,
+                                           "profile": ["k=" + k, "m=" + m, "crush-failure-domain=osd", "plugin=" + plugin]}])
+                self.assertFalse(any(c.get("name") == oracle.EC_PROFILE for c in rados.commands))
+        for value in ("{1}", "{1,2,3}", "{}"):
+            with self.subTest(nonprimary=value), self.assertRaises(RuntimeError):
+                create(FakeErasureRados(nonprimary_override=value), width="k3m1", plugin="isa", optimized=True)
+        with self.assertRaises(RuntimeError):
+            create(FakeErasureRados(min_size=4), width="k4m2", plugin="isa", optimized=True)
+        with self.assertRaises(RuntimeError):
+            create(FakeErasureRados(existing_profiles=["ceph-msgr-owned-ec-k4m2"]), width="k4m2", plugin="isa")
+
     def test_k2m1_keeps_its_profile_and_force_set(self):
         rados = FakeErasureRados()
         result = create(rados, plugin="jerasure")
@@ -509,13 +536,13 @@ class ErasureWidthTest(unittest.TestCase):
         result = cleanup(rados)
         self.assertTrue(result["pools_removed"])
         self.assertEqual(result["ec_profiles_remaining"], [])
-        self.assertEqual({c["name"] for c in rados.commands if c["prefix"] == "osd erasure-code-profile rm"}, set(oracle.EC_PROFILES))
+        self.assertEqual({c["name"] for c in rados.commands if c["prefix"] == "osd erasure-code-profile rm"}, {oracle.EC_PROFILE, "ceph-msgr-owned-ec-k2m2"})
         stuck = FakeErasureRados()
         create(stuck, width="k2m2", plugin="isa")
         create(stuck, slot=2, plugin="jerasure")
         stuck.removable = False
-        self.assertEqual(cleanup(stuck)["ec_profiles_remaining"], sorted(oracle.EC_PROFILES))
-        self.assertEqual(oracle.EC_PROFILES, ("ceph-msgr-owned-ec", "ceph-msgr-owned-ec-k2m2"))
+        self.assertEqual(cleanup(stuck)["ec_profiles_remaining"], [oracle.EC_PROFILE, "ceph-msgr-owned-ec-k2m2"])
+        self.assertEqual(oracle.EC_PROFILES, ("ceph-msgr-owned-ec", "ceph-msgr-owned-ec-k2m2", "ceph-msgr-owned-ec-k3m1", "ceph-msgr-owned-ec-k4m2"))
 
     def test_cleanup_restores_the_pool_delete_entry_it_found(self):
         unrelated = {"section": "osd", "name": "osd_recovery_sleep", "value": "0.25", "mask": ""}
