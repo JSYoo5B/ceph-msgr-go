@@ -100,8 +100,14 @@ fi
 # pending NAME: the oldest pending envelope of the control NAME, by request
 # ID (internal/testcluster RequestEnvelope): REQ is its path and REQ_ID its
 # ID. Every publication has its own envelope, so two publishers of one
-# control never replace each other's request.
+# control never replace each other's request. One directory listing may miss
+# an envelope renamed in while it is read and still return a later one, so
+# the oldest is taken from a second listing, once a first one has returned
+# an envelope: every request published before that envelope had been
+# published before the first listing ended (integration/fixture/control.go
+# scanRequests).
 pending() {
+    test -n "$(ls /out | sed -n "s/^$1\.\([1-9][0-9]*\)\.request\$/\1/p")" || return 1
     REQ_ID=$(ls /out | sed -n "s/^$1\.\([1-9][0-9]*\)\.request\$/\1/p" | sort -n | head -n 1)
     REQ=/out/$1.$REQ_ID.request
     test -n "$REQ_ID"
