@@ -68,15 +68,27 @@ func TestDaemonControlAdmitsOnlyStoppingTheCommandFixtureMDS(t *testing.T) {
 type orderedDaemon struct {
 	testcontainers.Container
 	actions []string
+	// bounds are the time left before each action's context deadline,
+	// zero for an action without one.
+	bounds []time.Duration
 }
 
-func (d *orderedDaemon) Stop(context.Context, *time.Duration) error {
-	d.actions = append(d.actions, "stop")
+func (d *orderedDaemon) record(ctx context.Context, action string) {
+	d.actions = append(d.actions, action)
+	var bound time.Duration
+	if deadline, ok := ctx.Deadline(); ok {
+		bound = time.Until(deadline)
+	}
+	d.bounds = append(d.bounds, bound)
+}
+
+func (d *orderedDaemon) Stop(ctx context.Context, _ *time.Duration) error {
+	d.record(ctx, "stop")
 	return nil
 }
 
-func (d *orderedDaemon) Start(context.Context) error {
-	d.actions = append(d.actions, "start")
+func (d *orderedDaemon) Start(ctx context.Context) error {
+	d.record(ctx, "start")
 	return nil
 }
 
@@ -101,6 +113,27 @@ func TestDaemonControlRunsTheActionsOfAKindInPublicationOrder(t *testing.T) {
 	for _, ack := range []string{"mon-start.9", "mon-stop.10", "mon-start.11"} {
 		if !fileExists(filepath.Join(out, ack)) {
 			t.Fatal("not acknowledged:", ack)
+		}
+	}
+}
+
+// Each daemon action runs under its own bound, so a stuck Docker call fails
+// the fixture instead of holding every other control's requests behind it.
+func TestDaemonControlBoundsEachAction(t *testing.T) {
+	out := t.TempDir()
+	d := &orderedDaemon{}
+	c := &fixtureCluster{cluster: &ceph.Container{Container: d}}
+	writeControlRequest(t, out, "stop-mon", "21 a")
+	writeControlRequest(t, out, "start-mon", "22 a")
+	if err := c.controls(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.bounds) != 2 {
+		t.Fatal("the daemon actions did not run", d.actions)
+	}
+	for i, bound := range d.bounds {
+		if bound <= 0 || bound > fixtureStartupTimeout {
+			t.Fatal("daemon action", d.actions[i], "ran without its bound", bound)
 		}
 	}
 }
