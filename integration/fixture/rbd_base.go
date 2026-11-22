@@ -109,6 +109,16 @@ func rbdBaseCaps(pool string) ceph.ClientCaps {
 	return ceph.ClientCaps{Mon: "profile rbd", OSD: "profile rbd pool=" + pool}
 }
 
+// caps is rbdBaseCaps of the owned pool, extended to the group acceptance's
+// second owned pool when that sequence created one.
+func (x *rbdBaseScope) caps() ceph.ClientCaps {
+	caps := rbdBaseCaps(x.plan.Pool)
+	if x.group.secondPoolIntent {
+		caps.OSD += ", profile rbd pool=" + x.group.secondPoolName
+	}
+	return caps
+}
+
 type rbdBaseMutation struct {
 	Kind      string `json:"kind"`
 	RequestID int64  `json:"request_id,omitempty"`
@@ -223,6 +233,10 @@ func (c *fixtureCluster) rbdBaseJournal() error {
 		// Recorded before the `osd out` command of the primary-change
 		// sequence.
 		owned["osds_marked_out"] = x.osdsMarkedOut
+	}
+	if x.group.secondPoolIntent {
+		// Recorded before the group acceptance creates its second pool.
+		owned["group_second_pool"] = x.group.secondPoolName
 	}
 	return writeMDSFreshJSON(x.out, "rbd-base-owned.json", owned)
 }
@@ -683,6 +697,13 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	if err := c.rbdBaseFinish(m, rbd.InitPool(ctx, c.cluster, x.plan.Pool)); err != nil {
 		return fmt.Errorf("initialize owned RBD pool: %w", err)
 	}
+	if p.admits(capRBDGroupSnapshot) {
+		// The group acceptance's second owned pool, for its cross-pool
+		// member (rbd_group.go).
+		if err := c.prepareRBDGroupPool(ctx, ceph.PoolConfig{PGNum: pgs, Replicas: topology.poolSize, MinSize: topology.poolMinSize, Application: "rbd", NoHashPSPool: true}); err != nil {
+			return err
+		}
+	}
 	if err := observe(c.cluster).WaitForClean(ctx); err != nil {
 		return fmt.Errorf("owned RBD pool readiness: %w", err)
 	}
@@ -699,8 +720,11 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 		if pool.Name == x.plan.Pool {
 			owned = &rbdBasePoolPolicy{ID: pool.ID, Name: pool.Name, Flags: pool.Flags, FlagNames: pool.FlagNames}
 		}
+		if x.group.secondPoolIntent && pool.Name == x.group.secondPoolName {
+			x.group.secondPool = &rbdBasePoolPolicy{ID: pool.ID, Name: pool.Name, Flags: pool.Flags, FlagNames: pool.FlagNames}
+		}
 	}
-	if owned == nil {
+	if owned == nil || x.group.secondPoolIntent && x.group.secondPool == nil {
 		return errors.New("owned RBD pool missing from the native OSDMap")
 	}
 	x.poolID = owned.ID
@@ -708,7 +732,7 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	if err := c.rbdBaseJournal(); err != nil {
 		return err
 	}
-	x.goClient, err = c.cluster.CreateClient(ctx, "rbd-base-"+token, rbdBaseCaps(x.plan.Pool))
+	x.goClient, err = c.cluster.CreateClient(ctx, "rbd-base-"+token, x.caps())
 	if err != nil {
 		return fmt.Errorf("create dedicated RBD base identity: %w", err)
 	}
@@ -727,7 +751,7 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	if err := c.rbdBaseJournal(); err != nil {
 		return err
 	}
-	x.native, err = c.cluster.CreateClient(ctx, "rbd-base-native-"+token, rbdBaseCaps(x.plan.Pool))
+	x.native, err = c.cluster.CreateClient(ctx, "rbd-base-native-"+token, x.caps())
 	if err != nil {
 		return fmt.Errorf("create dedicated native RBD oracle identity: %w", err)
 	}
@@ -764,12 +788,16 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 		return fmt.Errorf("native RBD image setup: %w", err)
 	}
 	x.setup = &native
-	caps := rbdBaseCaps(x.plan.Pool)
-	return writeMDSFreshJSON(out, "rbd-base-oracle.json", map[string]any{
+	caps := x.caps()
+	oracle := map[string]any{
 		"source_commit": rbdBaseSource, "token": token, "fsid": p.fsid, "plan": x.plan, "pool": owned,
 		"client_identity": c.profile.rbdBaseIdentity, "native_identity": "client.rbd-base-native-" + token,
 		"caps": map[string]string{"mon": caps.Mon, "osd": caps.OSD}, "native": native,
-	})
+	}
+	if x.group.secondPool != nil {
+		oracle["group_second_pool"] = x.group.secondPool
+	}
+	return writeMDSFreshJSON(out, "rbd-base-oracle.json", oracle)
 }
 
 // The request is <id> <ownership token> <action>. Only "watch" exists: the
@@ -865,10 +893,15 @@ type rbdBaseCleanup struct {
 	LockBlocklistRemoved []mdsSessionsBlock `json:"lock_blocklist_removed,omitempty"`
 	// The primary-change sequence only: the OSDs it marked out, and those
 	// the cleanup read back in.
-	OSDsMarkedOut []int    `json:"osds_marked_out,omitempty"`
-	OSDsMarkedIn  []int    `json:"osds_marked_in,omitempty"`
-	Completed     bool     `json:"completed"`
-	Errors        []string `json:"errors,omitempty"`
+	OSDsMarkedOut []int `json:"osds_marked_out,omitempty"`
+	OSDsMarkedIn  []int `json:"osds_marked_in,omitempty"`
+	// The group-snapshot sequence only: its second owned pool, removed and
+	// proven absent from a native OSDMap like the first.
+	SecondPool               string   `json:"second_pool,omitempty"`
+	SecondPoolRemoved        bool     `json:"second_pool_removed,omitempty"`
+	SecondPoolAbsentNatively bool     `json:"second_pool_absent_natively,omitempty"`
+	Completed                bool     `json:"completed"`
+	Errors                   []string `json:"errors,omitempty"`
 }
 
 // rbdLockRemoveBlocklist removes the exact blocklist entries of the given
@@ -981,6 +1014,9 @@ func (c *fixtureCluster) finishRBDBase(ctx context.Context) error {
 	} else {
 		receipt.PoolRemoved, receipt.PoolAbsentNatively = true, true
 	}
+	if x.group.secondPoolIntent {
+		fail(c.removeRBDGroupPool(ctx, &receipt))
+	}
 	remove := func(config *ceph.ClientConfig, intent bool, label string) bool {
 		if config == nil {
 			if intent {
@@ -998,7 +1034,8 @@ func (c *fixtureCluster) finishRBDBase(ctx context.Context) error {
 	for _, err := range errs {
 		receipt.Errors = append(receipt.Errors, err.Error())
 	}
-	receipt.Completed = len(errs) == 0 && receipt.PoolRemoved && receipt.PoolAbsentNatively && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved
+	receipt.Completed = len(errs) == 0 && receipt.PoolRemoved && receipt.PoolAbsentNatively && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved &&
+		(!x.group.secondPoolIntent || receipt.SecondPoolRemoved && receipt.SecondPoolAbsentNatively)
 	if !receipt.Completed && len(errs) == 0 {
 		errs = append(errs, errors.New("RBD base cleanup did not verify every check"))
 	}
