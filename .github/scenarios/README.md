@@ -25,7 +25,10 @@ no list, count or file of another area:
   also declares the one capability that admits its test there: an existing one
   (`osd-erasure-width` on the four-OSD topology), or a new
   `defineExclusiveCapability`. The public receipts the control writes are
-  declared in the same file with `collectDiagnosticFiles`.
+  declared in the same file with `collectDiagnosticFiles`, and so is every
+  receipt the test writes into the control directory; the cluster-free
+  `TestIntegrationReceiptsAreDeclaredForDiagnostics` fails on one that is not
+  declared.
 - `tools/osd_pool_mode_<name>_oracle.py`: a new mode of the owned-pool
   oracle, the handler `mode_<name>` marked `@oracle_mode`. The test reads its
   result with `nativePoolResult` into a type of its own.
