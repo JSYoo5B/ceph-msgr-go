@@ -34,8 +34,20 @@ import (
 //     key and value with their 4-byte lengths, until the budget is spent,
 //     the entry that crosses it included. Request IDs are added only to the
 //     chunk that completes the cursor. A 32 KiB data source with 48 OMAP
-//     entries of 1019 counted bytes each is therefore three chunks under a
-//     32 KiB limit: the data, 33 entries with the header, 15 entries.
+//     entries of about 1019 counted bytes each is therefore three chunks
+//     under a 32 KiB limit: the data, 33 entries with the header, 15
+//     entries. The cursor keeps the key of the entry the budget stopped on
+//     as its OMAP position.
+//   - The Objecter prints a copy-get with " in=<n>b" (src/osd/osd_types.cc:
+//     7388-7390), the length of its encoded cursor and max, 29 bytes plus
+//     the OMAP position (copyCursorInput). Every key of the three-chunk
+//     source is 11 bytes except the 33rd, which is 18, so the barrier
+//     requires in=29b for the first two copy-gets and in=47b for the third:
+//     the third continues from exactly that entry, and a copy-get that
+//     restarted the OMAP or stayed at the second chunk's cursor is refused
+//     whatever its TID. The data offset is not printed; a later data chunk
+//     is told from a restarted first one by its assert-version, its new TID
+//     and the unchanged temporary object.
 //   - src/osd/PrimaryLogPG.cc:9776-9793 (process_copy_chunk) writes every
 //     chunk that leaves the cursor incomplete into one temporary object and
 //     calls _copy_some for the next; _copy_some (9535-9600) prefixes
@@ -67,8 +79,55 @@ import (
 //     no source request ID.
 
 // copyThreeChunkEntries is the OMAP of the three-chunk source: 48 entries
-// of an 11-byte key and a 1000-byte value.
+// of a 1000-byte value under an 11-byte key, except the entry the second
+// chunk stops on (copyOmapStop), whose key copyThreeChunkCursorKey makes the
+// only one of its length. The third copy-get's printed cursor length then
+// names that key as its OMAP position.
 const copyThreeChunkEntries = 48
+
+// copyThreeChunkCursorKey is the key suffix of the entry the second chunk
+// stops on. It sorts between its neighbours.
+const copyThreeChunkCursorKey = "-cursor"
+
+// copyOmapStop is the index of the entry one copy-get of limit bytes that
+// starts at the first OMAP entry stops on (do_copy_get, counted as its key
+// and value with their 4-byte lengths, the entry that spends the budget
+// included), or -1 when the entries fit.
+func copyOmapStop(limit int, entries []cephmsgr.OSDOmapEntry) int {
+	left := limit
+	for i, entry := range entries {
+		left -= len(entry.Key) + 4 + len(entry.Value) + 4
+		if left <= 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+// copyThreeChunkSource is the OMAP of the three-chunk source and the OMAP
+// position each of its three copy-gets carries: none for the data chunk,
+// none for the chunk that starts the OMAP, and the stop entry's key for the
+// third.
+func copyThreeChunkSource() ([]cephmsgr.OSDOmapEntry, []int) {
+	entries := make([]cephmsgr.OSDOmapEntry, copyThreeChunkEntries)
+	for i := range entries {
+		value := make([]byte, 1000)
+		for j := range value {
+			value[j] = byte(i*7 + j)
+		}
+		entries[i] = cephmsgr.OSDOmapEntry{Key: fmt.Sprintf("omap-key-%02d", i), Value: value}
+	}
+	stop := copyOmapStop(multiChunkLimit, entries)
+	if stop >= 0 {
+		entries[stop].Key += copyThreeChunkCursorKey
+		stop = copyOmapStop(multiChunkLimit, entries)
+	}
+	cursors := []int{0, 0, -1}
+	if stop >= 0 {
+		cursors[2] = len(entries[stop].Key)
+	}
+	return entries, cursors
+}
 
 // copyChunkStep is one copy-get the barrier let through: the source primary
 // was frozen while it was sent and paused, then resumed.
@@ -78,25 +137,27 @@ type copyChunkStep struct {
 	FrozenFor     string   `json:"source_frozen_for"`
 	NextTID       uint64   `json:"next_copy_get_tid"`
 	NextOps       []string `json:"next_osd_ops"`
+	NextCursor    int      `json:"next_cursor_omap_offset_bytes"`
 	Temporary     string   `json:"temporary_object"`
 	StagingSHA256 []string `json:"staging_sha256"`
 }
 
-// copyChunkShape says whether ops is a copy-get of the lowered chunk that
-// asserts version, or one without assert-version when version is zero.
-func copyChunkShape(ops []string, version uint64) bool {
+// copyChunkShape says whether ops is exactly a copy-get of the lowered chunk
+// that asserts version, or one without assert-version when version is zero,
+// whose cursor's OMAP position is omapOffset bytes.
+func copyChunkShape(ops []string, version uint64, omapOffset int) bool {
 	if version == 0 {
-		return copyFirstChunk(ops)
+		return copyFirstChunk(ops, omapOffset)
 	}
-	return copyLaterChunk(ops, version)
+	return copyLaterChunk(ops, version, omapOffset)
 }
 
 // checkChunkSent judges one snapshot of the destination primary's Objecter
 // while the source primary is frozen: exactly one op of the source, a
-// copy-get of the chunk shape version gives, sent once to the source
-// primary and paused or not as want says. When tid is not zero it is that
-// op, and it is none of served.
-func checkChunkSent(objecter objecterRequestsSnapshot, route osdFixtureOracle, sourcePrimary int32, paused bool, version, tid uint64, served []uint64) (objecterRequestsOp, error) {
+// copy-get of the chunk shape version and omapOffset give, sent once to the
+// source primary and paused or not as want says. When tid is not zero it is
+// that op, and it is none of served.
+func checkChunkSent(objecter objecterRequestsSnapshot, route osdFixtureOracle, sourcePrimary int32, paused bool, version uint64, omapOffset int, tid uint64, served []uint64) (objecterRequestsOp, error) {
 	if !objecter.Complete || len(objecter.Failures) != 0 || objecter.Code != 0 || objecter.AbsenceEstablished {
 		return objecterRequestsOp{}, fmt.Errorf("incomplete objecter snapshot: %q", objecter.Failures)
 	}
@@ -107,8 +168,8 @@ func checkChunkSent(objecter objecterRequestsSnapshot, route osdFixtureOracle, s
 		return objecterRequestsOp{}, fmt.Errorf("the objecter holds %d ops of the source; want one copy-get", len(objecter.Ops))
 	}
 	read := objecter.Ops[0]
-	if !copyChunkShape(read.OSDOps, version) || read.Attempts != 1 || read.Paused != paused || read.OSD != sourcePrimary {
-		return read, fmt.Errorf("the source op is not a copy-get (assert v%d) sent once to osd.%d (paused %t): %+v", version, sourcePrimary, paused, read)
+	if !copyChunkShape(read.OSDOps, version, omapOffset) || read.Attempts != 1 || read.Paused != paused || read.OSD != sourcePrimary {
+		return read, fmt.Errorf("the source op is not a copy-get (assert v%d, in=%db) sent once to osd.%d (paused %t): %+v", version, copyCursorInput(omapOffset), sourcePrimary, paused, read)
 	}
 	if (tid != 0 && read.TID != tid) || slices.Contains(served, read.TID) {
 		return read, fmt.Errorf("the sent copy-get is tid %d; want %d, none of %v", read.TID, tid, served)
@@ -233,13 +294,13 @@ func (r *copyPrimaryChangeRun) placeForCopy() (osdFixtureOracle, osdFixtureOracl
 
 // waitChunkSent polls the destination primary's Objecter under work until
 // checkChunkSent accepts it.
-func (r *copyPrimaryChangeRun) waitChunkSent(work context.Context, h *copyChunkHold, paused bool, version, tid uint64) objecterRequestsOp {
+func (r *copyPrimaryChangeRun) waitChunkSent(work context.Context, h *copyChunkHold, paused bool, version uint64, omapOffset int, tid uint64) objecterRequestsOp {
 	t := r.t
 	t.Helper()
 	for {
 		h.pending(t, "while a copy-get was in flight")
 		objecter := copyObjecterRequests(t, work, 2, r.dest, nil, r.pools.ids[1], r.source)
-		read, err := checkChunkSent(objecter, h.route, h.source.ID, paused, version, tid, h.served)
+		read, err := checkChunkSent(objecter, h.route, h.source.ID, paused, version, omapOffset, tid, h.served)
 		if err == nil && work.Err() == nil {
 			return read
 		}
@@ -253,12 +314,17 @@ func (r *copyPrimaryChangeRun) waitChunkSent(work context.Context, h *copyChunkH
 // holdAtChunk sends request on a fresh connection to route and holds the
 // copy before its chunk held (2 or more). Each earlier chunk is let through
 // with the source primary frozen: the first copy-get asserts first (zero for
-// an unversioned copy), every later one asserts later. After each chunk the
-// next copy-get must be held paused and never sent, with one temporary
-// object of the same name listed on every OSD of the destination PG.
-func (r *copyPrimaryChangeRun) holdAtChunk(request cephmsgr.OSDRequest, route, source osdFixtureOracle, held int, first, later uint64, steps *[]copyChunkStep) *copyChunkHold {
+// an unversioned copy), every later one asserts later. The copy-get of chunk
+// k carries a cursor whose OMAP position is exactly cursors[k-1] bytes
+// (copyCursorInput). After each chunk the next copy-get must be held paused
+// and never sent, with one temporary object of the same name listed on every
+// OSD of the destination PG.
+func (r *copyPrimaryChangeRun) holdAtChunk(request cephmsgr.OSDRequest, route, source osdFixtureOracle, held int, first, later uint64, cursors []int, steps *[]copyChunkStep) *copyChunkHold {
 	t, ctx := r.t, r.ctx
 	t.Helper()
+	if len(cursors) != held || slices.Min(cursors) < 0 {
+		t.Fatalf("holding before chunk %d needs the cursor of every chunk up to it: %v", held, cursors)
+	}
 	h := &copyChunkHold{done: make(chan copyChunkOutcome, 1), route: route, source: source}
 	h.o = mutationConnection(t, r.client, ctx, route)
 	t.Cleanup(func() { h.o.Close() })
@@ -286,9 +352,9 @@ func (r *copyPrimaryChangeRun) holdAtChunk(request cephmsgr.OSDRequest, route, s
 		} else {
 			r.recovery.clearPauseReads(t, work)
 		}
-		sent := r.waitChunkSent(work, h, false, version, tid)
+		sent := r.waitChunkSent(work, h, false, version, cursors[chunk-1], tid)
 		r.recovery.setPauseReads(t, work)
-		r.waitChunkSent(work, h, true, version, sent.TID)
+		r.waitChunkSent(work, h, true, version, cursors[chunk-1], sent.TID)
 		if err := r.recovery.thaw(source.ID); err != nil {
 			t.Fatalf("resume osd.%d within the freeze budget: %v", source.ID, err)
 		}
@@ -305,7 +371,7 @@ func (r *copyPrimaryChangeRun) holdAtChunk(request cephmsgr.OSDRequest, route, s
 			h.pending(t, fmt.Sprintf("after chunk %d", chunk))
 			ops := copyOpsInFlight(t, ctx, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
 			objecter := copyObjecterRequests(t, ctx, 2, r.dest, nil, r.pools.ids[1], r.source)
-			op, read, err := checkChunkHeld(ops, objecter, route, r.gid, copyPrimaryCopyIncarnation, later, h.served)
+			op, read, err := checkChunkHeld(ops, objecter, route, r.gid, copyPrimaryCopyIncarnation, later, cursors[chunk], h.served)
 			if err == nil && previous != 0 && op.TID != previous {
 				err = fmt.Errorf("the client op is %s, not the earlier chunk's tid %d", op.Reqid, previous)
 			}
@@ -318,7 +384,7 @@ func (r *copyPrimaryChangeRun) holdAtChunk(request cephmsgr.OSDRequest, route, s
 			}
 			time.Sleep(250 * time.Millisecond)
 		}
-		step.NextTID, step.NextOps = h.read.TID, h.read.OSDOps
+		step.NextTID, step.NextOps, step.NextCursor = h.read.TID, h.read.OSDOps, cursors[chunk]
 		// The chunk's write is replicated asynchronously; the hold keeps the
 		// copy from going further, so the listings converge on one object,
 		// the same one as after the earlier chunks.
@@ -356,6 +422,7 @@ type copyThreeChunkReceipt struct {
 	Frozen      int32           `json:"frozen_source_primary"`
 	Third       int32           `json:"third_osd"`
 	Steps       []copyChunkStep `json:"chunks"`
+	Cursors     []int           `json:"cursor_omap_offset_bytes"`
 	OmapEntries int             `json:"source_omap_entries"`
 	HeaderBytes int             `json:"source_omap_header_bytes"`
 	SourceOmap  string          `json:"source_omap_sha256"`
@@ -377,8 +444,8 @@ func omapDigest(t *testing.T, s omapWriteState) string {
 // destination runs in three chunks under the destination primary's lowered
 // 32 KiB limit, and the barrier described above holds it before the third:
 // the temporary object holds the data, the header and the first entries,
-// and the third copy-get, asserting the source version, is paused and never
-// sent.
+// and the third copy-get, asserting the source version and continuing from
+// the 33rd entry's key (in=47b), is paused and never sent.
 //
 // Destination primary lost: the caller's wait ends as an unknown outcome
 // carrying the barrier's transaction, the seed is kept, the new primary's PG
@@ -478,20 +545,14 @@ func copyThreeChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, rec
 		data[i] = byte(i*29 + i>>8 + 3)
 	}
 	header := []byte("three-chunk header \x00\xff")
-	entries := make([]cephmsgr.OSDOmapEntry, copyThreeChunkEntries)
-	for i := range entries {
-		value := make([]byte, 1000)
-		for j := range value {
-			value[j] = byte(i*7 + j)
-		}
-		entries[i] = cephmsgr.OSDOmapEntry{Key: fmt.Sprintf("omap-key-%02d", i), Value: value}
-	}
+	entries, cursors := copyThreeChunkSource()
+	receipt.Cursors = cursors
 	write, source := r.writeOmapSource(data, header, entries)
 	receipt.SourceBytes, receipt.SourceUser, receipt.OmapEntries, receipt.HeaderBytes = len(data), write.UserVersion, len(entries), len(header)
 	receipt.SourceOmap = omapDigest(t, source)
 
 	route, src := r.placeForCopy()
-	h := r.holdAtChunk(r.copyRequest(cell.code, route), route, src, 3, 0, write.UserVersion, &receipt.Steps)
+	h := r.holdAtChunk(r.copyRequest(cell.code, route), route, src, 3, 0, write.UserVersion, cursors, &receipt.Steps)
 	h.write = write
 	receipt.FirstChunkTID, receipt.BarrierEpoch, receipt.BarrierReqid, receipt.BarrierPoint, receipt.BarrierEvents = h.first.TID, route.Epoch, h.op.Reqid, h.op.FlagPoint, h.op.Events
 	receipt.HeldChunk, receipt.HeldTID, receipt.Temporary = h.read.OSDOps, h.read.TID, h.temp
@@ -713,7 +774,8 @@ func copyChunkSourceChange(t *testing.T, ctx context.Context, pools ownedPools, 
 		request.Operations[0].CopyFrom.SourceVersion, firstAssert = copied.Version, copied.Version
 	}
 	receipt.SourceVersion = request.Operations[0].CopyFrom.SourceVersion
-	h := r.holdAtChunk(request, route, source, 2, firstAssert, copied.Version, &receipt.Steps)
+	// The source has no OMAP: both copy-gets carry an empty OMAP position.
+	h := r.holdAtChunk(request, route, source, 2, firstAssert, copied.Version, []int{0, 0}, &receipt.Steps)
 	receipt.BarrierReqid, receipt.HeldChunk, receipt.Temporary = h.op.Reqid, h.read.OSDOps, h.temp
 
 	// The source head changes between the chunks; a snapshot's clone stays.
@@ -807,18 +869,67 @@ func TestCopyFromMultiChunkSourceJudgements(t *testing.T) {
 	route := osdFixtureOracle{Up: []int32{1, 0, 2}, Acting: []int32{1, 0, 2}, Replicas: 3, Pool: 4, Name: "dst", ID: 1, PrimaryID: 1, Shard: -1, Epoch: 30, PGID: "4.3", RawPGID: "4.d6c2a1e3", Address: "v2:192.0.2.11:6800/1"}
 	at := route
 	at.Epoch = 32
+	// The three-chunk source: the second chunk stops on the 33rd entry, the
+	// only one whose key is 18 bytes, so the third copy-get prints in=47b
+	// and an 11-byte position (in=40b) is some other entry.
+	entries, cursors := copyThreeChunkSource()
+	stop := copyOmapStop(multiChunkLimit, entries)
+	if stop != 32 || entries[stop].Key != "omap-key-32"+copyThreeChunkCursorKey || !slices.Equal(cursors, []int{0, 0, 18}) || copyCursorInput(cursors[2]) != 47 {
+		t.Fatalf("three-chunk source misjudged: stop %d key %q cursors %v", stop, entries[stop].Key, cursors)
+	}
+	if copyOmapStop(multiChunkLimit, entries[stop+1:]) != -1 || len(entries)-stop-1 != 15 {
+		t.Fatal("the third chunk does not hold the last 15 entries")
+	}
+	for i, entry := range entries {
+		if i > 0 && entries[i-1].Key >= entry.Key {
+			t.Fatal("three-chunk keys are not sorted at", i)
+		}
+		if i != stop && len(entry.Key) == cursors[2] {
+			t.Fatal("another key has the stop entry's length:", entry.Key)
+		}
+	}
 	first := []string{"copy-get max 32768 in=29b"}
-	later := []string{"assert-version v5", "copy-get max 32768 in=41b"}
-	if !copyChunkShape(first, 0) || copyChunkShape(first, 5) || !copyChunkShape(later, 5) || copyChunkShape(later, 0) || copyChunkShape(later, 4) {
+	later := []string{"assert-version v5", "copy-get max 32768 in=29b"}
+	third := []string{"assert-version v5", "copy-get max 32768 in=47b"}
+	if !copyChunkShape(first, 0, 0) || copyChunkShape(first, 5, 0) || !copyChunkShape(later, 5, 0) || copyChunkShape(later, 0, 0) || copyChunkShape(later, 4, 0) ||
+		!copyChunkShape(third, 5, 18) || copyChunkShape(third, 5, 0) || copyChunkShape(later, 5, 18) || copyChunkShape([]string{"assert-version v5", "copy-get max 32768 in=40b"}, 5, 18) {
 		t.Fatal("copy-get shapes misjudged")
 	}
 	sent := objecterRequestsSnapshot{Complete: true, Before: at, After: at, OSD: 1, PGID: "4.3",
 		Ops: []objecterRequestsOp{{TID: 12, PG: "3.5", OSD: 0, Attempts: 1, OSDOps: later, CopyGetMax: []uint64{32768}}}}
-	if op, err := checkChunkSent(sent, route, 0, false, 5, 12, []uint64{9}); err != nil || op.TID != 12 {
+	if op, err := checkChunkSent(sent, route, 0, false, 5, 0, 12, []uint64{9}); err != nil || op.TID != 12 {
 		t.Fatal("sent later chunk refused:", err)
 	}
-	if _, err := checkChunkSent(sent, route, 0, false, 5, 0, []uint64{9}); err != nil {
+	if _, err := checkChunkSent(sent, route, 0, false, 5, 0, 0, []uint64{9}); err != nil {
 		t.Fatal("sent later chunk of any tid refused:", err)
+	}
+	sentThird := sent
+	sentThird.Ops = []objecterRequestsOp{{TID: 13, PG: "3.5", OSD: 0, Attempts: 1, OSDOps: third, CopyGetMax: []uint64{32768}}}
+	if _, err := checkChunkSent(sentThird, route, 0, false, 5, 18, 13, []uint64{9, 12}); err != nil {
+		t.Fatal("sent third chunk refused:", err)
+	}
+	// A fresh TID whose cursor did not move on, or moved back to the start of
+	// the OMAP, is not the third chunk.
+	if _, err := checkChunkSent(sent, route, 0, false, 5, 18, 0, []uint64{9}); err == nil {
+		t.Error("a fresh copy-get at the second chunk's cursor accepted as the third")
+	}
+	client := opsInFlightSnapshot{Complete: true, Before: at, After: at, OSD: 1, PGID: "4.3", Client: "client.4641.33",
+		Ops: []opsInFlightOp{{Reqid: "client.4641.33:5", TID: 5, PGID: "4.3", Epoch: 30, FlagPoint: "started", Events: []string{"queued_for_pg", "reached_pg", "started"}}}}
+	held := func(tid uint64, ops []string) objecterRequestsSnapshot {
+		return objecterRequestsSnapshot{Complete: true, Before: at, After: at, OSD: 1, PGID: "4.3",
+			Ops: []objecterRequestsOp{{TID: tid, PG: "3.5", OSD: 0, Paused: true, OSDOps: ops, CopyGetMax: []uint64{32768}}}}
+	}
+	if _, read, err := checkChunkHeld(client, held(14, third), route, 4641, 33, 5, 18, []uint64{9, 12}); err != nil || read.TID != 14 {
+		t.Fatal("held third chunk refused:", err)
+	}
+	for name, ops := range map[string][]string{
+		"the second chunk's cursor": later,
+		"another OMAP position":     {"assert-version v5", "copy-get max 32768 in=40b"},
+		"a longer position":         {"assert-version v5", "copy-get max 32768 in=48b"},
+	} {
+		if _, _, err := checkChunkHeld(client, held(14, ops), route, 4641, 33, 5, 18, []uint64{9, 12}); err == nil {
+			t.Error("held third chunk with a fresh tid accepted:", name)
+		}
 	}
 	for name, edit := range map[string]func(*objecterRequestsSnapshot) (bool, uint64, uint64, []uint64){
 		"paused wanted":     func(*objecterRequestsSnapshot) (bool, uint64, uint64, []uint64) { return true, 5, 12, nil },
@@ -826,6 +937,14 @@ func TestCopyFromMultiChunkSourceJudgements(t *testing.T) {
 		"another version":   func(*objecterRequestsSnapshot) (bool, uint64, uint64, []uint64) { return false, 6, 12, nil },
 		"another tid":       func(*objecterRequestsSnapshot) (bool, uint64, uint64, []uint64) { return false, 5, 13, nil },
 		"already served":    func(*objecterRequestsSnapshot) (bool, uint64, uint64, []uint64) { return false, 5, 0, []uint64{12} },
+		"an OMAP position": func(r *objecterRequestsSnapshot) (bool, uint64, uint64, []uint64) {
+			r.Ops[0].OSDOps = []string{"assert-version v5", "copy-get max 32768 in=40b"}
+			return false, 5, 12, nil
+		},
+		"no cursor": func(r *objecterRequestsSnapshot) (bool, uint64, uint64, []uint64) {
+			r.Ops[0].OSDOps = []string{"assert-version v5", "copy-get max 32768"}
+			return false, 5, 12, nil
+		},
 		"never sent": func(r *objecterRequestsSnapshot) (bool, uint64, uint64, []uint64) {
 			r.Ops[0].Attempts = 0
 			return false, 5, 12, nil
@@ -839,7 +958,7 @@ func TestCopyFromMultiChunkSourceJudgements(t *testing.T) {
 			return false, 5, 12, nil
 		},
 		"default chunk": func(r *objecterRequestsSnapshot) (bool, uint64, uint64, []uint64) {
-			r.Ops[0].OSDOps = []string{"assert-version v5", "copy-get max 8388608 in=41b"}
+			r.Ops[0].OSDOps = []string{"assert-version v5", "copy-get max 8388608 in=29b"}
 			return false, 5, 12, nil
 		},
 		"two ops": func(r *objecterRequestsSnapshot) (bool, uint64, uint64, []uint64) {
@@ -866,7 +985,7 @@ func TestCopyFromMultiChunkSourceJudgements(t *testing.T) {
 		s := sent
 		s.Ops = slices.Clone(sent.Ops)
 		paused, version, tid, served := edit(&s)
-		if _, err := checkChunkSent(s, route, 0, paused, version, tid, served); err == nil {
+		if _, err := checkChunkSent(s, route, 0, paused, version, 0, tid, served); err == nil {
 			t.Error("sent chunk accepted:", name)
 		}
 	}
