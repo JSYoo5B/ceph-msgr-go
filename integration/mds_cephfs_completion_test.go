@@ -29,6 +29,8 @@ type nativeMDSCephFSCompletionPlan struct {
 	FencedPayloadHex string   `json:"fenced_payload_hex"`
 	ReconnectTimeout string   `json:"reconnect_timeout"`
 	SplitFiles       []string `json:"split_files"`
+	// Charmap is the charmap acceptance's plan (mds_cephfs_charmap_test.go).
+	Charmap nativeMDSCephFSCharmapPlan `json:"charmap"`
 }
 
 type nativeMDSCephFSCompletionOracle struct {
@@ -166,6 +168,7 @@ type nativeMDSCephFSCompletionReceipt struct {
 	Completed       []nativeMDSCephFSCompletionRecord `json:"completed"`
 	Blocklist       []nativeMDSSessionsBlock          `json:"blocklist"`
 	Native          *nativeMDSCephFSOutput            `json:"native"`
+	Charmap         *nativeMDSCephFSCharmapOutput     `json:"charmap_native"`
 	Process         json.RawMessage                   `json:"native_process,omitempty"`
 	Mutation        *nativeMDSCephFSMutation          `json:"mutation"`
 	Runtime         *nativeMDSCephFSCompletionRuntime `json:"runtime"`
@@ -292,6 +295,10 @@ func (x *mdsCephFSCompletionControl) request(ctx context.Context, action string,
 	case "stat", "list", "write-fenced", "snapshot-create", "snapshot-remove", "split-flock-ex-nb", "split-final-flock-ex-nb":
 		if result.Native == nil || result.Native.NativeGlobalID == 0 || x.goGIDs[result.Native.NativeGlobalID] {
 			return result, errors.New("native CephFS completion oracle output missing or bound to a Go client")
+		}
+	case "charmap-set", "charmap-names", "charmap-create":
+		if result.Charmap == nil || result.Charmap.NativeGlobalID == 0 || x.goGIDs[result.Charmap.NativeGlobalID] || result.Native != nil {
+			return result, errors.New("native CephFS charmap oracle output missing or bound to a Go client")
 		}
 	}
 	x.mds, x.pending = expected, false
