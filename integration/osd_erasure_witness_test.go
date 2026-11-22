@@ -145,6 +145,36 @@ func erasureAwaitHeldThrough(observe func() pgIntervalObservation, route osdFixt
 	return pgIntervalObservation{}, attempts, fmt.Errorf("no complete observation within %d: %w", attempts, err)
 }
 
+// erasureObserveThrough makes one native read or request (read) and then
+// requires the interval of route, the placement of a judged observation, to
+// have held through it (erasureAwaitHeldThrough). A judged observation and
+// a later read are separate calls: an interval change between them can serve
+// the same bytes and version, so only an observation after the read
+// attributes it to route. Its results are erasureAwaitHeldThrough's.
+func erasureObserveThrough(read func(), observe func() pgIntervalObservation, route osdFixtureOracle, attempts int, pause func()) (pgIntervalObservation, int, error) {
+	read()
+	return erasureAwaitHeldThrough(observe, route, attempts, pause)
+}
+
+// erasureReplacementWitness returns the placement that requests after a
+// judged replacement carry and that every later interval check is made
+// against: the judged observation's own record, never a later one. fresh,
+// a placement record read after seen, must name the same placement at an
+// equal or newer epoch, with primary-first numbering, led by shard lead.
+// A later record of the same sets may belong to a later interval (a repeer
+// keeps every field the records compare); its epoch would let a check
+// accept an interval that started after the judged one.
+func erasureReplacementWitness(seen pgIntervalObservation, fresh osdFixtureOracle, lead int) (osdFixtureOracle, error) {
+	if seen.After == nil {
+		return osdFixtureOracle{}, errors.New("the judged observation has no placement record after its query")
+	}
+	judged := *seen.After
+	if !samePlacement(fresh, judged) || fresh.Epoch < judged.Epoch || routePrimaryFirst(fresh) == nil || int(fresh.Shard) != lead {
+		return osdFixtureOracle{}, fmt.Errorf("placement moved after the PG became active under the replacement, or gives no primary-first numbering: %+v vs %+v", fresh, judged)
+	}
+	return judged, nil
+}
+
 // failedOverOn judges one observation after the loss of origin's primary
 // and returns the shard of the primary it accepts. A pool with nonprimary
 // shards is judged by replacedOn: the first member of the primary-first
@@ -607,6 +637,90 @@ func TestErasureIntervalHeldThrough(t *testing.T) {
 		}
 		if c.ok && !reflect.DeepEqual(o, c.seen[n-1]) {
 			t.Error(name, "returned another observation")
+		}
+	}
+}
+
+// TestErasureReplacementWitness: the replacement is judged at epoch 25 in
+// the interval since 24; a repeer at 27 keeps every field of the
+// placement, so the record read at 29 is the same placement. An
+// observation after the requests that reports the interval since 27 holds
+// against the record of 29 but not against the judged one.
+func TestErasureReplacementWitness(t *testing.T) {
+	receipt, _ := pgReplacedObservation()
+	seen := heldAt(receipt.Observation, 25, 24)
+	fresh := *seen.After
+	fresh.Up, fresh.Acting, fresh.Epoch = slices.Clone(fresh.Up), slices.Clone(fresh.Acting), 29
+	witness, err := erasureReplacementWitness(seen, fresh, 2)
+	if err != nil {
+		t.Fatal("the same placement at a later epoch refused:", err)
+	}
+	if !reflect.DeepEqual(witness, *seen.After) || witness.Epoch != 25 {
+		t.Fatalf("the witness is not the judged record: %+v", witness)
+	}
+	repeered := heldAt(receipt.Observation, 29, 27)
+	if err := repeered.heldThrough(fresh); err != nil {
+		t.Fatal("the synthetic case does not reproduce the masked change:", err)
+	}
+	if err := repeered.heldThrough(witness); !errors.Is(err, errIntervalChanged) {
+		t.Fatal("an interval that started at 27 after a judgement at 25 (since 24) not reported as changed:", err)
+	}
+	if err := heldAt(receipt.Observation, 29, 24).heldThrough(witness); err != nil {
+		t.Fatal("the judged interval held through epoch 29 refused:", err)
+	}
+	for name, edit := range map[string]func(*osdFixtureOracle) (int, bool){
+		"older record": func(p *osdFixtureOracle) (int, bool) { p.Epoch = 24; return 2, false },
+		"moved": func(p *osdFixtureOracle) (int, bool) {
+			p.Acting = []int32{crushItemNone, 2, crushItemNone, 0}
+			return 2, false
+		},
+		"no pg_temp":      func(p *osdFixtureOracle) (int, bool) { p.PGTemp = false; return 2, false },
+		"another lead":    func(p *osdFixtureOracle) (int, bool) { return 3, false },
+		"another address": func(p *osdFixtureOracle) (int, bool) { p.Address = "v2:192.0.2.8:6800/9"; return 2, false },
+	} {
+		p := fresh
+		p.Up, p.Acting = slices.Clone(fresh.Up), slices.Clone(fresh.Acting)
+		lead, _ := edit(&p)
+		if _, err := erasureReplacementWitness(seen, p, lead); err == nil {
+			t.Error("witness accepted:", name)
+		}
+	}
+	if _, err := erasureReplacementWitness(pgIntervalObservation{Before: seen.Before}, fresh, 2); err == nil {
+		t.Error("witness accepted without a record after the query")
+	}
+}
+
+// TestErasureObserveThrough: a clean observation at epoch 25 in the
+// interval since 24 judges the route; a repeer at 27 follows; the native
+// read returns the same bytes; the observation after it, at 29, reports the
+// interval since 27. The read must come before the observation and must not
+// be attributed to the route.
+func TestErasureObserveThrough(t *testing.T) {
+	receipt, route := pgIntervalChange()
+	behind := heldAt(receipt.OriginObservation, 29, 24)
+	behind.Query.Epoch = 28
+	for name, c := range map[string]struct {
+		seen    []pgIntervalObservation
+		changed bool
+		ok      bool
+	}{
+		"held":                     {[]pgIntervalObservation{heldAt(receipt.OriginObservation, 29, 24)}, false, true},
+		"repeered between":         {[]pgIntervalObservation{heldAt(receipt.OriginObservation, 29, 27)}, true, false},
+		"incomplete, then changed": {[]pgIntervalObservation{behind, heldAt(receipt.OriginObservation, 29, 27)}, true, false},
+		"incomplete, then held":    {[]pgIntervalObservation{behind, heldAt(receipt.OriginObservation, 29, 24)}, false, true},
+	} {
+		var order []string
+		observed := 0
+		_, _, err := erasureObserveThrough(func() { order = append(order, "read") }, func() pgIntervalObservation {
+			order = append(order, "observe")
+			observed++
+			return c.seen[observed-1]
+		}, route, 3, func() {})
+		if len(order) == 0 || order[0] != "read" || slices.Index(order, "observe") < 1 || slices.Contains(order[1:], "read") {
+			t.Error(name, "the read is not made once before every observation:", order)
+		}
+		if errors.Is(err, errIntervalChanged) != c.changed || (err == nil) != c.ok {
+			t.Error(name, err)
 		}
 	}
 }

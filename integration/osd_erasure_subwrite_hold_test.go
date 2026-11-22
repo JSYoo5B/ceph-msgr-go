@@ -366,6 +366,7 @@ func startSubWriteRun(t *testing.T, width erasureWidth, object string, incarnati
 	if r.pre.Code != 0 || !bytes.Equal(r.pre.Data, r.data) || r.pre.Version != r.seed.UserVersion || r.pre.Seconds != int64(seeded) {
 		t.Fatal("native state before the held write differs", r.pre.Code, r.pre.Version, r.seed.UserVersion)
 	}
+	r.heldThrough("the pre-state read", object, r.route)
 	r.last = r.facts.size - 1
 	if slices.Contains(r.facts.nonprimary, r.last) || r.last == int(r.route.Shard) {
 		t.Fatal("the last parity shard is not a primary-eligible shard other than the primary's", r.last, r.facts.nonprimary, r.route.Shard)
@@ -671,8 +672,8 @@ func erasureSubWriteHoldScenario(t *testing.T, width erasureWidth) {
 		t.Fatal(err)
 	}
 	r.stayedUp(before, reply.MapEpoch)
-	r.cleanInInterval(r.object, r.route, r.since)
-	recovered := poolObserve(t, r.ctx, 1, r.object, "", "")
+	clean := r.cleanInInterval(r.object, r.route, r.since)
+	recovered := r.observeIn("the native read on the clean placement", r.object, clean)
 	if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || !maps.Equal(xattrInventory(recovered), xattrInventory(final)) {
 		t.Fatal("native state after the clean check differs", recovered.Version, final.Version)
 	}
@@ -935,9 +936,9 @@ func erasureSubWriteRollbackScenario(t *testing.T, width erasureWidth) {
 		}
 		return err
 	})
-	replaced := r.place(r.object)
-	if !samePlacement(replaced, *seen.After) || replaced.Epoch < seen.After.Epoch || int(replaced.Shard) != lead {
-		t.Fatalf("placement moved after the PG became active under the replacement: %+v vs %+v", replaced, *seen.After)
+	replaced, err := erasureReplacementWitness(seen, r.place(r.object), lead)
+	if err != nil {
+		t.Fatal(err)
 	}
 	r.unchanged("under the replacement")
 	if got := r.history("under the replacement", replaced, op.TID); len(got) != 0 {
