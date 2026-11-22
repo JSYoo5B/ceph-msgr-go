@@ -3,9 +3,12 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -1166,32 +1169,68 @@ func TestJudgeNoRollForward(t *testing.T) {
 }
 
 // A stalled held-phase read must not keep the paused shard frozen. The
-// fixture ends a lease by the deadline the pause request carries, beside a
+// fixture ends a lease by the deadline its pause request carries, beside a
 // still running oracle request (integration/fixture/daemon_lease.go;
 // TestDaemonLeaseExpiresBesideAStalledOwnedPoolOracle); on the test side the
 // held phase ends the reserve before it, a read under it is abandoned there,
-// and the test's resume is published while the read has not returned. The
-// test plays the fixture on a real control directory. The stalled
-// observation is a real owned-pool subwrites request that nobody answers;
-// the stalled STAT is a send that ignores its context until the test
-// releases it, the worst case of a STAT under the held phase. Nothing waits
-// on a clock but the bounded polls for the published requests.
+// and the test's resume is published and settled while the read is still
+// outstanding. The test plays the fixture on a real control directory.
+//
+// Each read is proven started before the held phase ends: the stalled
+// observation is a real owned-pool subwrites request, and the test waits
+// for its envelope to be published; the stalled STAT is a send that signals
+// its entry and then ignores its context until the test releases it, the
+// worst case of a STAT under the held phase. After the resume settled, the
+// observation's envelope is still pending, unclaimed and unanswered, and
+// the STAT has still not returned. A read that started only after the
+// resume fails the entry wait. The only waits are bounded polls for
+// published files and channel receives.
 func TestSubWriteHeldPhaseStallsEndThePauseByItsDeadline(t *testing.T) {
 	for _, stall := range []string{"observation", "STAT"} {
 		t.Run(stall, func(t *testing.T) {
 			dir := t.TempDir()
 			deadline := time.Now().Add(time.Minute)
-			answer := func(action string, record func(r []string) testcluster.DaemonLeaseRecord) <-chan struct{} {
-				answered := make(chan struct{})
+			published := func(request string) []string {
+				t.Helper()
+				paths, err := filepath.Glob(filepath.Join(dir, request+".*.request"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return paths
+			}
+			// answer plays the fixture for one request of action: it claims
+			// the oldest envelope and publishes record's acknowledgement. It
+			// runs off the test goroutine, so it reports a failure on the
+			// returned channel instead of failing the test itself.
+			answer := func(action string, record func(r []string) testcluster.DaemonLeaseRecord) <-chan error {
+				answered := make(chan error, 1)
 				go func() {
-					defer close(answered)
 					for range 10000 {
-						if requests := leaseRequests(t, dir, action); len(requests) != 0 {
-							writeLeaseRecord(t, dir, record(requests[0]))
+						paths, err := filepath.Glob(filepath.Join(dir, action+".*.request"))
+						if err != nil {
+							answered <- err
+							return
+						}
+						if len(paths) != 0 {
+							slices.Sort(paths)
+							data, err := os.ReadFile(paths[0])
+							if err == nil {
+								err = os.Remove(paths[0])
+							}
+							var ack []byte
+							r := record(strings.Fields(string(data)))
+							if err == nil {
+								ack, err = json.Marshal(r)
+							}
+							if err == nil {
+								err = os.WriteFile(filepath.Join(dir, "daemon-lease-"+r.State+"."+r.Lease), ack, 0o600)
+							}
+							answered <- err
 							return
 						}
 						time.Sleep(time.Millisecond)
 					}
+					answered <- fmt.Errorf("no %s request was published", action)
 				}()
 				return answered
 			}
@@ -1201,29 +1240,74 @@ func TestSubWriteHeldPhaseStallsEndThePauseByItsDeadline(t *testing.T) {
 			parent, end := context.WithCancel(context.Background())
 			defer end()
 			p := startHeldPause(t, parent, dir, "osd", "3", deadline, 10*time.Second)
-			<-paused
+			if err := <-paused; err != nil {
+				t.Fatal(err)
+			}
+			entered := make(chan struct{})
 			release := make(chan struct{})
 			returned := make(chan error, 1)
-			go func() {
+			read := func() {
 				if stall == "observation" {
 					returned <- testcluster.ControlDaemonInput(p.held, dir, "verify", "osd-pool", "subwrites", testcluster.ControlInput{Name: "osd-pool-input.json", Data: []byte(`{"osd":3}`)})
 					return
 				}
+				close(entered)
 				<-release
 				returned <- p.check("the STAT of another object of the PG")
-			}()
+			}
+			go read()
+			// The read has started: the observation's request is published,
+			// or the STAT signalled its entry.
+			started := false
+			for attempt := 0; attempt < 5000 && !started; attempt++ {
+				if stall == "observation" {
+					started = len(published("verify-osd-pool")) == 1
+				} else {
+					select {
+					case <-entered:
+						started = true
+					default:
+					}
+				}
+				if !started {
+					time.Sleep(time.Millisecond)
+				}
+			}
+			endRecord := func(r []string) testcluster.DaemonLeaseRecord {
+				return testcluster.DaemonLeaseRecord{Lease: r[1], State: testcluster.DaemonLeaseEnded, Reason: testcluster.DaemonLeaseResumed, PausedAt: 1, EndedAt: deadline.UnixNano() - int64(time.Second), Deadline: deadline.UnixNano()}
+			}
+			if !started {
+				// The lease's cleanup end is answered as the fixture would.
+				answer("end-daemon-lease", endRecord)
+				t.Fatal("the read did not start before the held phase was to end")
+			}
 			// The held phase ends (here through its parent; its deadline
 			// does the same) with the read outstanding, and the test
-			// resumes: the end is published and settled while the read has
-			// not returned.
+			// resumes: the end must be published and settled while the read
+			// is still outstanding.
 			end()
-			resumed := answer("end-daemon-lease", func(r []string) testcluster.DaemonLeaseRecord {
-				return testcluster.DaemonLeaseRecord{Lease: r[1], State: testcluster.DaemonLeaseEnded, Reason: testcluster.DaemonLeaseResumed, PausedAt: 1, EndedAt: deadline.UnixNano() - int64(time.Second), Deadline: deadline.UnixNano()}
-			})
+			resumed := answer("end-daemon-lease", endRecord)
 			if left, err := p.resume(); err != nil || left != time.Second {
 				t.Fatal("the resume with a read outstanding", left, err)
 			}
-			<-resumed
+			if err := <-resumed; err != nil {
+				t.Fatal(err)
+			}
+			if stall == "observation" {
+				// Abandoned by the test at the held phase's end, the request
+				// is still pending in the fixture: neither claimed nor
+				// answered.
+				acks, _ := filepath.Glob(filepath.Join(dir, "osd-pool-verify.*"))
+				if len(published("verify-osd-pool")) != 1 || len(acks) != 0 {
+					t.Fatal("the observation was answered or withdrawn before the resume settled", acks)
+				}
+			} else {
+				select {
+				case err := <-returned:
+					t.Fatal("the STAT returned before the resume settled:", err)
+				default:
+				}
+			}
 			if p.lease.Deadline != deadline {
 				t.Fatal("the lease does not carry the deadline the fixture enforces", p.lease.Deadline, deadline)
 			}
