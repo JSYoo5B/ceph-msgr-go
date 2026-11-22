@@ -268,6 +268,12 @@ func erasureScenario(t *testing.T, width erasureWidth, optimized bool, plugin st
 					t.Fatal("a read with the wrong shard succeeded", name)
 				}
 			}
+			// An OSD silently discards a request older than its PG's
+			// interval, so the refusals count only if the interval in which
+			// the placement was read held around them.
+			if err := erasurePGState(t, ctx, object).heldSince(route); err != nil {
+				t.Fatal("the interval of the placement did not hold around the wrong-shard reads, so their refusals are unattributed:", err)
+			}
 		})
 	}
 
