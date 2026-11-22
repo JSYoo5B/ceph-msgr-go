@@ -82,15 +82,17 @@ const FeatureCharmap = 22
 // CephFSCharmapClientFeatures is CephFSClientFeatures plus CHARMAP (22),
 // declared only when the caller opts in to a directory name policy. Besides
 // admission (a filesystem can require it, and a new incarnation checks the
-// requirement against the features the session map kept), the pinned MDS
-// reads the bit only in Server::can_handle_charmap: a session without it is answered -EPERM when it would add a dentry (create,
-// mknod, mkdir, symlink, link or rename destination) to a directory that has
-// a charmap. The MDS neither checks nor transforms the name; the bit is the
-// client's promise that it sent the name the way the stock client does
-// (Client::_wrap_name: UTF-8 validation, the directory's normalization, case
-// folding when it is case-insensitive, and the original spelling as the
-// alternate name). The library sends the caller's name and alternate name
-// unchanged; the policy is the caller's. No message format depends on it.
+// requirement against the features its session map kept), the pinned MDS
+// reads the bit only in Server::can_handle_charmap: a session without it is
+// answered -EPERM when it would add a dentry to a directory that has a
+// charmap by create, mkdir, symlink, link or rename (the destination).
+// handle_client_mknod does not call it, so MKNOD is admitted either way. The
+// MDS neither checks nor transforms the name; the bit is the client's promise
+// that it sent the name the way the stock client does (Client::_wrap_name:
+// UTF-8 validation, the directory's normalization, case folding when it is
+// case-insensitive, and the original spelling as the alternate name). The
+// library sends the caller's name and alternate name unchanged; the policy is
+// the caller's. No message format depends on it.
 var CephFSCharmapClientFeatures = []byte{0xff, 0xb7, 0x5c, 0, 0, 0, 0, 0}
 
 // NoOldestClientTID is the native MClientSession default. The MDS ignores it

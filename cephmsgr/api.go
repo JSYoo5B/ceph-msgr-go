@@ -202,9 +202,10 @@ type Options struct {
 	// EnableCephFSCharmap (requires EnableCephFS) also declares the CephFS
 	// client feature CHARMAP (bit 22) in every REQUEST_OPEN, so the MDS lets
 	// the session add entries to a directory that has a charmap (create,
-	// mknod, mkdir, symlink, link and rename destinations; without the bit
-	// they answer -EPERM) and admits it to a filesystem that requires the
-	// feature. The MDS neither checks nor transforms names. Setting this
+	// mkdir, symlink, link and rename destinations answer -EPERM without the
+	// bit; the pinned MDS does not check it for MKNOD) and admits it to a
+	// filesystem that requires the feature. The MDS neither checks nor
+	// transforms names, MKNOD's included. Setting this
 	// states that the caller treats every name it sends into such a
 	// directory as the stock client does (Client::_wrap_name at the pinned
 	// tag): it reads the directory's charmap (MDSInodeStat
