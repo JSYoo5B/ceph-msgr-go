@@ -15,7 +15,7 @@ import (
 // runtimeConfig is the fixture's consumer-side adapter for ordered
 // daemon-local runtime configuration changes. It keeps the recipe's order,
 // one effective readback per step and the caller's receipt fields, and
-// delegates each step to the public ceph-testcontainers-go v0.5.0 primitive
+// delegates each step to the public ceph-testcontainers-go v1.0.1 primitive
 // that performs it:
 //
 //   - A debug level of an owned OSD (debug_ms, debug_osd) or MDS (debug_ms,
