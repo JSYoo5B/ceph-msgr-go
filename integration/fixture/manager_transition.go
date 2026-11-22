@@ -26,7 +26,7 @@ import (
 // containers with new start times, and a beacon session (con type "mgr",
 // MgrMap GID as global ID) on some owned MON.
 //
-// Every step composes public ceph-testcontainers-go v0.5.0 primitives: the
+// Every step composes public ceph-testcontainers-go v1.0.1 primitives: the
 // rosters come from Container.Managers and Container.Monitors, the stop and
 // start from the ManagerContainer handles, the container instances from those
 // handles' State and container ID, and the beacon sessions from each

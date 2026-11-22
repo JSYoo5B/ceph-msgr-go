@@ -536,21 +536,30 @@ func (c *fixtureCluster) observeMDSFresh(ctx context.Context, out string, fields
 
 // One attempt is cached before calling a mutating provider API. Unknown Remove
 // or identity-revocation results are never replayed by the Terminate fallback.
+// The bounds of finishMDSFresh; mdsFreshFinishMax is their sum, the job
+// budget's reserve for it (afterSuiteReserve).
+const (
+	mdsFreshFinishBase     = 45 * time.Second
+	mdsFreshFinishSessions = 45 * time.Second
+	mdsFreshFinishRanks    = 100 * time.Second
+	mdsFreshFinishMax      = mdsFreshFinishBase + mdsFreshFinishSessions + mdsFreshFinishRanks
+)
+
 func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 	if c == nil || c.mdsFresh == nil {
 		return nil
 	}
 	s := c.mdsFresh
-	budget := 45 * time.Second
+	budget := mdsFreshFinishBase
 	if c.mdsSessions != nil || c.mdsCephFS != nil || c.mdsCephFSData != nil {
 		// Session restoration and CephFS verification each have their own
 		// 45-second bound before removal.
-		budget += 45 * time.Second
+		budget += mdsFreshFinishSessions
 	}
 	if c.mdsCephFSRanks != nil || c.mdsCephFSCompletion != nil {
 		// Topology return, pin restoration and readback before removal; or
 		// the completion acceptance's settings, namespace and blocklist.
-		budget += 100 * time.Second
+		budget += mdsFreshFinishRanks
 	}
 	ctx, stop := context.WithTimeout(ctx, budget)
 	defer stop()

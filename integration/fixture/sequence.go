@@ -43,7 +43,10 @@ import (
 
 const (
 	sequenceEnv = "CEPH_MSGR_TEST_SEQUENCE"
-	// sequenceStartStateBudget bounds each start-state check between tests.
+	// sequenceStartStateBudget bounds each start-state check between tests
+	// and after the last one. Under a job deadline a sequence test's timeout
+	// leaves it, and the check is cut to the time left
+	// (jobBudget.checkBudget).
 	sequenceStartStateBudget = 60 * time.Second
 	// sequenceRecordFile is the sequence's progress record, kept with the
 	// diagnostics: each test's run window and the check after it.
@@ -229,19 +232,27 @@ func runSequence(ctx context.Context, p profile, steps sequenceSteps) (result er
 }
 
 // sequenceRunner binds a sequence to the started fixture.
-func sequenceRunner(c *fixtureCluster, out, proxy string, p profile) sequenceSteps {
+func sequenceRunner(c *fixtureCluster, out, proxy string, p profile, budget jobBudget) sequenceSteps {
 	return sequenceSteps{
 		alive: c.checkControl,
 		list: func(ctx context.Context, suite, selector string) (string, error) {
 			var listing bytes.Buffer
+			ctx, stop := budget.workContext(ctx, p)
+			defer stop()
 			err := c.runSuite(ctx, out, proxy, p, suite, []string{"-test.list", selector}, &listing)
 			return listing.String(), err
 		},
 		run: func(ctx context.Context, suite, test string) error {
-			return c.runSuite(ctx, out, proxy, p, suite, []string{"-test.run", "^" + test + "$", "-test.v", "-test.timeout", p.testTimeout}, os.Stdout)
+			timeout, err := budget.suiteTimeout(p, time.Now(), true)
+			if err != nil {
+				return fmt.Errorf("not started: %w", err)
+			}
+			return c.runSuite(ctx, out, proxy, p, suite, []string{"-test.run", "^" + test + "$", "-test.v", "-test.timeout", timeout}, os.Stdout)
 		},
 		check: func(ctx context.Context) (startStateReport, error) {
-			return c.verifyStartState(ctx, out, sequenceStartStateBudget)
+			return budget.boundedCheck(ctx, p, time.Now(), func(ctx context.Context, limit time.Duration) (startStateReport, error) {
+				return c.verifyStartState(ctx, out, limit)
+			})
 		},
 		record: func(r sequenceRecord) error {
 			data, err := json.MarshalIndent(r, "", "  ")

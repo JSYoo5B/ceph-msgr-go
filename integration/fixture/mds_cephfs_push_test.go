@@ -16,7 +16,8 @@ func TestMDSCephFSPushPlanAndPaths(t *testing.T) {
 	plan := mdsCephFSPushPlanFor(token)
 	if plan.Directory != "ceph-msgr-cephfs-"+token+"-push" || plan.LeaseDir != "lease" || plan.Victim != "victim" || plan.Renamed != "renamed" || plan.SnapDir != "snap" ||
 		plan.Snapshot != "ceph-msgr-snap-"+token[:8] || plan.QuotaDir != "quota" || len(plan.RecallFiles) != mdsCephFSPushRecallFiles || plan.RecallFiles[0] != "recall-00" ||
-		plan.RecallFiles[23] != "recall-23" || plan.MinCaps != 8 || plan.MaxCaps != 12 || plan.MinCaps >= plan.MaxCaps || plan.DropTimeout != 10 {
+		plan.RecallFiles[23] != "recall-23" || plan.MinCaps != 8 || plan.MaxCaps != 12 || plan.MinCaps >= plan.MaxCaps || plan.DropTimeout != 10 ||
+		plan.CharmapDir != "charmap" || plan.CharmapEntry != "Entry" || plan.CharmapNormalization != "nfkc" {
 		t.Fatal("owned CephFS push plan changed", plan)
 	}
 	// 0xa1a1 4 KiB steps above 16 MiB.
@@ -28,15 +29,16 @@ func TestMDSCephFSPushPlanAndPaths(t *testing.T) {
 	}
 	root := "/" + plan.Directory
 	for target, want := range map[string]string{"dir": root, "lease": root + "/lease", "victim": root + "/lease/victim", "renamed": root + "/lease/renamed", "snap": root + "/snap",
-		"snap-file": root + "/snap/snap-file", "snapshot": root + "/snap/.snap/" + plan.Snapshot, "quota": root + "/quota", "quota-file": root + "/quota/quota-file", "recall": root + "/recall"} {
+		"snap-file": root + "/snap/snap-file", "snapshot": root + "/snap/.snap/" + plan.Snapshot, "quota": root + "/quota", "quota-file": root + "/quota/quota-file", "charmap": root + "/charmap",
+		"charmap-entry": root + "/charmap/Entry", "recall": root + "/recall"} {
 		if got, err := plan.path(target); err != nil || got != want {
 			t.Fatal("owned push path changed", target, got, err)
 		}
 	}
-	if len(mdsCephFSPushTargets) != 10 {
+	if len(mdsCephFSPushTargets) != 12 {
 		t.Fatal("closed push target set changed", mdsCephFSPushTargets)
 	}
-	for _, target := range []string{"", "..", "go-file", "recall-00", "victim/x", "fenced", ".snap"} {
+	for _, target := range []string{"", "..", "go-file", "recall-00", "victim/x", "fenced", ".snap", "Entry", "charmap/Entry"} {
 		if _, err := plan.path(target); err == nil {
 			t.Fatal("unowned push target admitted", target)
 		}
@@ -68,6 +70,8 @@ func TestMDSCephFSPushRequestsAreClosed(t *testing.T) {
 		{[]string{"10", token, "push-snapshot-remove"}, "push-snapshot-remove", ""},
 		{[]string{"10", token, "push-quota-set"}, "push-quota-set", ""},
 		{[]string{"10", token, "push-quota-clear"}, "push-quota-clear", ""},
+		{[]string{"10", token, "push-charmap-set"}, "push-charmap-set", ""},
+		{[]string{"10", token, "push-stat", "charmap-entry"}, "push-stat", "charmap-entry"},
 		{[]string{"10", token, "push-recall-on"}, "push-recall-on", ""},
 		{[]string{"10", token, "push-recall-max-off"}, "push-recall-max-off", ""},
 		{[]string{"10", token, "push-recall-off"}, "push-recall-off", ""},
@@ -81,6 +85,7 @@ func TestMDSCephFSPushRequestsAreClosed(t *testing.T) {
 	for _, fields := range [][]string{
 		{"10", token, "push-stat"}, {"10", token, "push-stat", "go-file"}, {"10", token, "push-stat", "/etc"}, {"10", token, "push-stat", "recall-00"},
 		{"10", token, "push-rename", "victim"}, {"10", token, "push-snapshot-create", "x"}, {"10", token, "push-quota-set", "1"}, {"10", token, "push-quota-clear", "0"},
+		{"10", token, "push-charmap-set", "nfkc"}, {"10", token, "push-charmap-set", "charmap"},
 		{"10", token, "push-recall-on", "8"}, {"10", token, "push-cache-drop", "10"}, {"10", token, "push-force-readonly"}, {"10", token, "push-config", "mds_max_caps_per_client"},
 	} {
 		if _, _, err := parseMDSCephFSRequest(fields, token, 0); err == nil {
@@ -95,6 +100,8 @@ func TestMDSCephFSPushNativeShapes(t *testing.T) {
 	renamed, _ := plan.path("renamed")
 	snapshot, _ := plan.path("snapshot")
 	quotaDir, _ := plan.path("quota")
+	charmapDir, _ := plan.path("charmap")
+	charmap := map[string]any{"casesensitive": "0", "normalization": "nfkc", "encoding": "utf8"}
 	quota := "16777216"
 	file := map[string]any{"exists": true, "errno": 0, "ino": 1099511627790, "mode": 0o100644, "uid": 0, "gid": 0, "nlink": 1, "size": 0}
 	dir := map[string]any{"exists": true, "errno": 0, "ino": 1099511627791, "mode": 0o40755, "uid": 0, "gid": 0, "nlink": 2, "size": 0}
@@ -121,6 +128,9 @@ func TestMDSCephFSPushNativeShapes(t *testing.T) {
 		{"setquota", quotaDir, []string{"0"}, base("setquota", quotaDir, map[string]any{"stat": dir, "value_hex": hex.EncodeToString([]byte("0"))})},
 		// A readback that differs is recorded for the test to judge.
 		{"setquota", quotaDir, []string{quota}, base("setquota", quotaDir, map[string]any{"stat": dir, "quota_absent": true})},
+		{"setcharmap", charmapDir, []string{"nfkc"}, base("setcharmap", charmapDir, map[string]any{"stat": dir, "charmap": charmap})},
+		{"setcharmap", charmapDir, []string{"nfkc"}, base("setcharmap", charmapDir, map[string]any{"stat": dir,
+			"charmap": map[string]any{"casesensitive": "1", "normalization": "nfd", "encoding": "utf8"}})},
 	}
 	for _, tc := range good {
 		if _, err := decodeMDSCephFSPushNative(tc.action, tc.path, tc.extra, encode(tc.output)); err != nil {
@@ -144,6 +154,16 @@ func TestMDSCephFSPushNativeShapes(t *testing.T) {
 		{"stat", victim, nil, base("stat", victim, map[string]any{"stat": file, "timings_ns": map[string]any{"start": 0, "done": 5}})},
 		{"stat", victim, nil, base("stat", renamed, map[string]any{"stat": file})},
 		{"unlink", victim, nil, base("unlink", victim, map[string]any{"stat": absent})},
+		{"setcharmap", charmapDir, []string{"nfkc"}, base("setcharmap", charmapDir, map[string]any{"stat": dir})},
+		{"setcharmap", charmapDir, []string{"nfkc"}, base("setcharmap", charmapDir, map[string]any{"stat": file, "charmap": charmap})},
+		{"setcharmap", charmapDir, []string{"nfkc"}, base("setcharmap", charmapDir, map[string]any{"stat": absent, "charmap": charmap})},
+		{"setcharmap", charmapDir, nil, base("setcharmap", charmapDir, map[string]any{"stat": dir, "charmap": charmap})},
+		{"setcharmap", charmapDir, []string{"nfkc"}, base("setcharmap", charmapDir, map[string]any{"stat": dir,
+			"charmap": map[string]any{"casesensitive": "0", "normalization": "", "encoding": "utf8"}})},
+		{"setcharmap", charmapDir, []string{"nfkc"}, base("setcharmap", charmapDir, map[string]any{"stat": dir, "charmap": charmap, "value_hex": "30"})},
+		{"setcharmap", charmapDir, []string{"nfkc"}, base("setcharmap", charmapDir, map[string]any{"stat": dir, "charmap": map[string]any{"casesensitive": "0", "normalization": "nfkc"}})},
+		{"stat", charmapDir, nil, base("stat", charmapDir, map[string]any{"stat": dir, "charmap": charmap})},
+		{"setquota", quotaDir, []string{quota}, base("setquota", quotaDir, map[string]any{"stat": dir, "value_hex": hex.EncodeToString([]byte(quota)), "charmap": charmap})},
 	}
 	for _, tc := range bad {
 		if _, err := decodeMDSCephFSPushNative(tc.action, tc.path, tc.extra, encode(tc.output)); err == nil {

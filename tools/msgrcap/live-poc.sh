@@ -5,7 +5,7 @@
 # Runs on a GitHub Actions Linux runner (Docker, sudo tcpdump, tshark). One run
 # records the same traffic twice:
 # - reference: runner-host tcpdump on the fixture bridge, one continuous file;
-# - provider: ceph-testcontainers-go v0.5.0 capture.Start with CAPTURE_IMAGE
+# - provider: ceph-testcontainers-go v1.0.1 capture.Start with CAPTURE_IMAGE
 #   (pinned by digest) in the MON's network namespace. A session is bound to
 #   one container generation, so the MON restart splits it into two segments
 #   with one declared gap (coverage.go reads the segment manifest).

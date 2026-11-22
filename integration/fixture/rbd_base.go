@@ -906,6 +906,10 @@ func rbdLockRemoveBlocklist(ctx context.Context, addresses []string, ops mdsCeph
 	return removed, errors.Join(errs...)
 }
 
+// rbdBaseFinishBudget bounds finishRBDBase; the job budget reserves it
+// (afterSuiteReserve).
+const rbdBaseFinishBudget = 100 * time.Second
+
 // finishRBDBase runs once. It removes only owned state: the pool (its images,
 // snapshots, lock attributes, object maps and CRUSH rule go with it; any
 // lingering watch is discarded) and
@@ -915,7 +919,7 @@ func (c *fixtureCluster) finishRBDBase(ctx context.Context) error {
 		return nil
 	}
 	x := c.rbdBase
-	ctx, stop := context.WithTimeout(ctx, 100*time.Second)
+	ctx, stop := context.WithTimeout(ctx, rbdBaseFinishBudget)
 	defer stop()
 	if err := lockMDSFresh(ctx, &x.mu); err != nil {
 		return err
