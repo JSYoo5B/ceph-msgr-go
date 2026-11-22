@@ -889,16 +889,16 @@ func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 	t.Logf("snapshots %d and %d: clones of %d and %d bytes, head %d bytes at version %d, unchanged across the primary's outage and return", s1, s2, len(first), len(second), len(third), degraded.UserVersion)
 }
 
-// TestCephOSDErasureOptimizedK2M2PGBackoffIntegration: a PG-wide backoff of
-// an optimized EC PG, released by the interval change of a returning OSD.
-// The OSDs of the nonprimary data shard and of the last parity shard are
-// killed, which leaves two of four shards, below min_size 3: the PG must be
-// peered and not active under the unchanged shard-0 primary. One Go
-// APPEND+SETXATTR on a connection to that primary must draw a native BLOCK
-// for the whole PG on its actual shard; the caller ACKs it. Further requests
-// for the PG on that connection, also one that names another shard as an
-// optimized pool's primary-first numbering would, must then be refused
-// locally without being sent. Starting the parity shard's OSD ends the
+// erasurePGBackoffScenario: a PG-wide backoff of an optimized EC PG,
+// released by the interval change of a returning OSD. The OSDs of the last
+// nonprimary data shard and of the last parity shard are killed, which
+// leaves k of k+m shards, below min_size k+1: the PG must be peered and not
+// active under the unchanged shard-0 primary. One Go APPEND+SETXATTR on a
+// connection to that primary must draw a native BLOCK for the whole PG on
+// its actual shard; the caller ACKs it. Further requests for the PG on that
+// connection, also one that names the first parity shard as an optimized
+// pool's primary-first numbering would, must then be refused locally
+// without being sent. Starting the last parity shard's OSD ends the
 // interval: the primary must send the matching UNBLOCK and the PG must be
 // active again without the nonprimary shard. The dropped APPEND keeps its
 // unknown outcome; the native object is unchanged, and one explicit
@@ -909,11 +909,12 @@ func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 // osd_erasure_epoch_backoff_test.go. Not verified: the op history of this
 // BLOCK's ACK.
 //
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2pgbackoff key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
-//scenario:covers CLIENT to OSD
-//fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
-func TestCephOSDErasureOptimizedK2M2PGBackoffIntegration(t *testing.T) {
-	r := startECEpochRun(t, erasureK2M2, 900*time.Second)
+// The PG can be peered below min_size only while it keeps at least k
+// shards, so min_size must exceed k. Pinned OSDMonitor::prepare_pool_size
+// gives k + min(1, m-1), which equals k for m=1: an optimized k=3,m=1 pool
+// has min_size 3 and no such state, and has no row here.
+func erasurePGBackoffScenario(t *testing.T, width erasureWidth) {
+	r := startECEpochRun(t, width, 900*time.Second)
 	const (
 		object          = "ec-pg-backoff"
 		attr            = "ec-backoff"
@@ -931,17 +932,16 @@ func TestCephOSDErasureOptimizedK2M2PGBackoffIntegration(t *testing.T) {
 	if pre.Code != 0 || !bytes.Equal(pre.Data, seed) || pre.Seconds != seeded || xattrInventory(pre)[attr] != "" {
 		t.Fatal("native pre-state differs", pre.Code, pre.Version, pre.Seconds)
 	}
-	// Keep the primary's shard and the first parity shard: k=2 shards
-	// remain, enough to decode, one fewer than min_size.
-	parity := r.facts.size - (erasureK2M2.m)
-	var holes []int
-	for shard := range r.facts.size {
-		if shard != int(route.Shard) && shard != parity {
-			holes = append(holes, shard)
-		}
+	// Take out the last nonprimary data shard and the last parity shard: k
+	// shards remain, enough to decode, one fewer than min_size. The first
+	// parity shard stays.
+	parity := r.facts.size - width.m
+	if width.m < 2 || r.facts.minSize != width.k+1 || len(r.facts.nonprimary) == 0 {
+		t.Fatalf("%s with min_size %d and nonprimary shards %v has no peered state below min_size", width, r.facts.minSize, r.facts.nonprimary)
 	}
-	if route.Shard != 0 || len(holes) != 2 || !slices.Contains(holes, r.facts.nonprimary[0]) {
-		t.Fatalf("the placement %+v with nonprimary shards %v does not leave shards 0 and %d", route, r.facts.nonprimary, parity)
+	holes := []int{r.facts.nonprimary[len(r.facts.nonprimary)-1], r.facts.size - 1}
+	if route.Shard != 0 || r.facts.size-len(holes) != width.k || slices.Contains(holes, parity) {
+		t.Fatalf("the placement %+v with nonprimary shards %v does not leave shard 0, the first parity shard %d and k=%d shards", route, r.facts.nonprimary, parity, width.k)
 	}
 	t.Logf("pre-state version %d; placement epoch %d pg %s acting %v primary osd.%d shard %d; taking out shards %v (osd %d, %d)",
 		pre.Version, route.Epoch, route.PGID, route.Acting, route.ID, route.Shard, holes, route.Acting[holes[0]], route.Acting[holes[1]])
@@ -1116,6 +1116,26 @@ func TestCephOSDErasureOptimizedK2M2PGBackoffIntegration(t *testing.T) {
 	if !errors.As(lost.err, &unknown) {
 		t.Fatal("the resubmission changed the original outcome")
 	}
+}
+
+// TestCephOSDErasureOptimizedK2M2PGBackoffIntegration is erasurePGBackoffScenario on optimized isa k=2,m=2 (four
+// OSDs; shards 1 and 3 are taken out).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2pgbackoff key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK2M2PGBackoffIntegration(t *testing.T) {
+	erasurePGBackoffScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK4M2PGBackoffIntegration is erasurePGBackoffScenario on optimized isa k=4,m=2 (six
+// OSDs; nonprimary shards {1,2,3}; shards 3 and 5 are taken out).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2pgbackoff key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK4M2PGBackoffIntegration(t *testing.T) {
+	erasurePGBackoffScenario(t, erasureK4M2)
 }
 
 // pgStateObservation builds one synthetic read-only observation of PG 3.7 on
