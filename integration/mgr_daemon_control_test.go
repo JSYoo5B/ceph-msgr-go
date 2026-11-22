@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -255,12 +256,61 @@ func rotatingIDs(keys cephmsgr.MgrRotatingKeys) []uint64 {
 	return ids
 }
 
-// observeOSDHello accepts connections on the advertised listener and reads
-// the msgr2 banner and HELLO of each. A stock connector sends its entity type
-// and the exact target address it dialed (ProtocolV2's HELLO); nothing is
-// authenticated and every connection is closed, since accepting a session
-// is not part of this test.
-func observeOSDHello(listener net.Listener, hellos chan<- msgr.Address, types chan<- uint8) {
+// connectorHello is what one connection to the advertised listener sent
+// first: its remote endpoint and the HELLO that a stock connector sends
+// after the banners (ProtocolV2's HELLO: its entity type and the exact
+// target address it dialed), both decoded from the same frame. Err ends an
+// observation that did not yield a whole HELLO; Entity is still set when
+// the entity byte was read (HasEntity).
+type connectorHello struct {
+	Remote    string
+	HasEntity bool
+	Entity    uint8
+	Target    msgr.Address
+	Err       error
+}
+
+func (h connectorHello) String() string {
+	if h.Err != nil {
+		return fmt.Sprintf("%s (entity %d, read %v): %v", h.Remote, h.Entity, h.HasEntity, h.Err)
+	}
+	return fmt.Sprintf("%s entity %d target %v nonce %d", h.Remote, h.Entity, h.Target.Endpoint, h.Target.Nonce)
+}
+
+// readConnectorHello exchanges banners on conn and reads its HELLO within
+// ten seconds. Nothing is authenticated.
+func readConnectorHello(conn net.Conn) connectorHello {
+	h := connectorHello{Remote: conn.RemoteAddr().String()}
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	local := msgr.Banner{Supported: msgr.Revision1 | msgr.Compression, Required: msgr.Revision1}
+	if h.Err = msgr.WriteFull(conn, local.Encode()); h.Err != nil {
+		return h
+	}
+	if _, h.Err = msgr.ReadBanner(conn, local); h.Err != nil {
+		return h
+	}
+	frame, err := msgr.NewReader(conn, 4096).Read()
+	if err != nil {
+		h.Err = err
+		return h
+	}
+	if frame.Tag != msgr.Hello || len(frame.Segments) != 1 || len(frame.Segments[0]) == 0 {
+		h.Err = fmt.Errorf("%w: first frame tag %d with %d segments is not a HELLO", msgr.ErrFrame, frame.Tag, len(frame.Segments))
+		return h
+	}
+	d := wire.NewDecoder(frame.Segments[0])
+	h.Entity, h.HasEntity = d.U8(), true
+	h.Target = msgr.DecodeAddress(d)
+	h.Err = d.Done()
+	return h
+}
+
+// observeHellos accepts connections on listener until it closes and sends
+// one observation per connection on out, each read by its own goroutine;
+// an observation not taken by the time done closes is dropped. Every
+// connection is closed after its HELLO, since accepting a session is not
+// part of the control test.
+func observeHellos(listener net.Listener, out chan<- connectorHello, done <-chan struct{}) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -268,33 +318,52 @@ func observeOSDHello(listener net.Listener, hellos chan<- msgr.Address, types ch
 		}
 		go func() {
 			defer conn.Close()
-			conn.SetDeadline(time.Now().Add(10 * time.Second))
-			local := msgr.Banner{Supported: msgr.Revision1 | msgr.Compression, Required: msgr.Revision1}
-			if msgr.WriteFull(conn, local.Encode()) != nil {
-				return
-			}
-			if _, err := msgr.ReadBanner(conn, local); err != nil {
-				return
-			}
-			frame, err := msgr.NewReader(conn, 4096).Read()
-			if err != nil || frame.Tag != msgr.Hello || len(frame.Segments) != 1 {
-				return
-			}
-			d := wire.NewDecoder(frame.Segments[0])
-			peer := d.U8()
-			target := msgr.DecodeAddress(d)
-			if d.Done() != nil {
-				return
-			}
+			h := readConnectorHello(conn)
 			select {
-			case types <- peer:
-			default:
-			}
-			select {
-			case hellos <- target:
-			default:
+			case out <- h:
+			case <-done:
 			}
 		}()
+	}
+}
+
+// Ceph entity types (CEPH_ENTITY_TYPE_*) a stock connector can announce.
+var connectorEntities = map[uint8]string{1: "MON", 2: "MDS", 4: "OSD", 8: "CLIENT", 16: "MGR"}
+
+// awaitOSDHello takes observations until a stock OSD's HELLO with target
+// want arrives, and returns it with the observations it passed. A stock MON
+// runs a MgrClient too (ceph/ceph/blob/v20.2.4/src/mon/Monitor.cc) and may
+// reach the newly published endpoint first: whole HELLOs of other Ceph
+// entity types, and connections that closed before sending any HELLO byte,
+// are passed over. These end the wait as errors naming the peer's remote
+// endpoint: an OSD HELLO with another target, an OSD HELLO that does not
+// decode, a malformed first frame or an unknown entity type. ctx bounds the
+// wait; its end is an error listing what was passed.
+func awaitOSDHello(ctx context.Context, in <-chan connectorHello, want msgr.Address) (connectorHello, []connectorHello, error) {
+	var passed []connectorHello
+	for {
+		select {
+		case <-ctx.Done():
+			return connectorHello{}, passed, fmt.Errorf("no stock OSD HELLO targeting %v nonce %d before %w; passed %v", want.Endpoint, want.Nonce, ctx.Err(), passed)
+		case h := <-in:
+			_, known := connectorEntities[h.Entity]
+			switch {
+			case h.Err != nil && !h.HasEntity && (errors.Is(h.Err, io.EOF) || errors.Is(h.Err, io.ErrUnexpectedEOF)):
+				passed = append(passed, h) // closed before its HELLO
+			case h.Err != nil && h.HasEntity && h.Entity == 4:
+				return h, passed, fmt.Errorf("stock OSD at %s sent a HELLO that does not decode: %w", h.Remote, h.Err)
+			case h.Err != nil:
+				return h, passed, fmt.Errorf("connector at %s: %w", h.Remote, h.Err)
+			case !known:
+				return h, passed, fmt.Errorf("connector at %s announced unknown entity type %d", h.Remote, h.Entity)
+			case h.Entity != 4:
+				passed = append(passed, h)
+			case h.Target != want:
+				return h, passed, fmt.Errorf("stock OSD at %s targeted %v nonce %d type %d, want %v nonce %d type %d", h.Remote, h.Target.Endpoint, h.Target.Nonce, h.Target.Type, want.Endpoint, want.Nonce, want.Type)
+			default:
+				return h, passed, nil
+			}
+		}
 	}
 }
 
@@ -313,8 +382,10 @@ func observeOSDHello(listener net.Listener, hellos chan<- msgr.Address, types ch
 // global ID first (unavailable), then publishes the exact advertised addrvec
 // after an available beacon, compared entry by entry with the native dump. A
 // stock OSD then dials that published endpoint: the test's listener reads
-// the OSD's msgr2 HELLO, whose target address is the advertised entry with
-// its type and nonce. Stopping the MON that holds the session makes the
+// each connector's msgr2 HELLO, passes over other stock connectors (a MON's
+// MgrClient can arrive first) and requires an OSD HELLO whose target
+// address is the advertised entry with its type and nonce
+// (awaitOSDHello). Stopping the MON that holds the session makes the
 // daemon reconnect to another MON with the same global ID; the map resent on
 // the new session is not delivered again, and native dumps keep the daemon
 // active. Rotating MGR secret IDs are recorded across a native refresh, with
@@ -550,8 +621,9 @@ func TestCephMgrDaemonControlIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	hellos, types := make(chan msgr.Address, 1), make(chan uint8, 1)
-	go observeOSDHello(listener, hellos, types)
+	hellos, observing := make(chan connectorHello, 16), make(chan struct{})
+	defer close(observing)
+	go observeHellos(listener, hellos, observing)
 	localMu.Lock()
 	host := local
 	localMu.Unlock()
@@ -575,18 +647,17 @@ func TestCephMgrDaemonControlIntegration(t *testing.T) {
 	}
 	t.Logf("native mgr dump epoch %d: %s/%d active and available at %v", published.Epoch, name, identity.GlobalID, published.ActiveAddrs.Addrvec)
 
-	// A stock OSD selects the published endpoint.
-	select {
-	case target := <-hellos:
-		peer := <-types
-		want := msgr.Address{Type: advertised[0].Type, Nonce: advertised[0].Nonce, Endpoint: advertised[0].Endpoint}
-		if peer != 4 || target != want {
-			t.Fatalf("connector HELLO: entity %d target %+v, want OSD and %+v", peer, target, want)
-		}
-		t.Logf("stock OSD dialed the published endpoint: HELLO entity type %d, target %v nonce %d", peer, target.Endpoint, target.Nonce)
-	case <-ctx.Done():
-		t.Fatal("no stock OSD connected to the published endpoint")
+	// A stock OSD selects the published endpoint; other stock connectors,
+	// such as a MON's MgrClient, may come first.
+	want := msgr.Address{Type: advertised[0].Type, Nonce: advertised[0].Nonce, Endpoint: advertised[0].Endpoint}
+	osd, passed, err := awaitOSDHello(ctx, hellos, want)
+	for _, h := range passed {
+		t.Logf("passed connector before the OSD: %v", h)
 	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("stock OSD at %s dialed the published endpoint: HELLO entity type %d, target %v nonce %d", osd.Remote, osd.Entity, osd.Target.Endpoint, osd.Target.Nonce)
 
 	// MON loss: stop the MON holding the session.
 	before := daemon.State()
