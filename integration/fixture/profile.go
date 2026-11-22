@@ -237,6 +237,9 @@ func admitSingleProfile(p profile, getenv func(string) string) (profile, error) 
 			return profile{}, err
 		}
 		p.defaultRun = p.testRun
+		if err := suitePartProblem(p); err != nil {
+			return profile{}, err
+		}
 		return p, nil
 	}
 	if p.osdProfile == "replicated-pg-request-v9-reply-v8" && p.osdReplicas != "1" {
@@ -487,6 +490,9 @@ func admitSingleProfile(p profile, getenv func(string) string) (profile, error) 
 		return profile{}, err
 	}
 	if _, err := soakExpectedTests(p); err != nil {
+		return profile{}, err
+	}
+	if err := suitePartProblem(p); err != nil {
 		return profile{}, err
 	}
 	return p, nil

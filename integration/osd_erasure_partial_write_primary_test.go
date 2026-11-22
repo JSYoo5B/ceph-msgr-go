@@ -381,21 +381,21 @@ func (r *partialWriteRun) primaryBack(o *primaryOutage) pgIntervalReceipt {
 	return pgIntervalReceipt{}
 }
 
-// After the partial overwrite of the first control, which leaves the
-// nonprimary data shard out, the primary's OSD is taken out of the PG by the
-// fixture's forced kill. The PG must become active under the first parity
-// shard's OSD, which the map names under a pg_temp with shard 0's position
-// empty, and that primary's own info must still hold the left-out shard's
-// range. The object is read back natively and through the Go client. The Go
+// erasurePartialWritePrimaryReplacementScenario: after the partial
+// overwrite of the first control, which leaves the nonprimary data shards
+// out, the primary's OSD is taken out of the PG by the fixture's forced
+// kill. The PG must become active under the first parity shard's OSD, which
+// the map names under a pg_temp with shard 0's position empty, and that
+// primary's own info must still hold the range of every left-out shard. The object is read back natively and through the Go client. The Go
 // client then overwrites a few bytes inside the absent shard 0's chunk,
 // exactly once, through the replacement primary; the write must be
 // acknowledged, and it is read back natively and through the Go client. The
-// replacement's info must show the range reset to that write. The OSD is
+// replacement's info must show the ranges reset to that write. The OSD is
 // started again and the PG must be active+clean on its original placement,
 // under its original primary, in a newer interval, which includes the
 // recovery of the object to the returned primary. Every acting shard's store
-// is then captured: the returned primary and both parity shards hold all
-// three entries; the left-out shard holds the full write and the write
+// is then captured: the returned primary and the parity shards hold all
+// three entries; each left-out shard holds the full write and the write
 // during the outage, not the overwrite between them, with its head at its
 // last entry. This states what each shard's own log holds at capture time;
 // it claims nothing about eviction, loss or replay.
@@ -404,19 +404,14 @@ func (r *partialWriteRun) primaryBack(o *primaryOutage) pgIntervalReceipt {
 // PeeringState.cc:1760-1817, OSDMap.cc:3060-3093), hence the forced kill. Not
 // run: an orderly stop, noup, a partition, a primary outage without a write,
 // and a capture while the primary is away.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteprimaryreplacementshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
-//scenario:covers CLIENT to OSD
-//fixture:isolated kills the primary OSD (its PG proven clean without pg_temp) and pauses each acting OSD for a store copy, no clean wait
-func TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration(t *testing.T) {
-	run := startPartialWriteRun(t, 900*time.Second)
+func erasurePartialWritePrimaryReplacementScenario(t *testing.T, width erasureWidth) {
+	run := startPartialWriteRun(t, width, 900*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince
 	state := run.partialOverwrite()
-	left := run.leftOutShard(state)
-	records := []shardPartialWrite{{Shard: left, From: state.want.full, To: state.want.patch}}
+	skipped, _, records := run.leftOut(state)
 	// The replacement's peering applies the range only if the primary that
 	// can lead recorded it; every shard that can be primary records it.
-	run.waitPrimaryRecords(records)
+	run.waitPrimaryRecords(records, started)
 
 	outage := run.replacePrimary(started)
 	if slices.Contains(run.facts.nonprimary, outage.lead) || outage.lead == int(outage.origin.Shard) {
@@ -437,11 +432,12 @@ func TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIn
 
 	degraded := []byte("primary\x00\xffaway")
 	// A few bytes into the absent shard 0's chunk of the first stripe, after
-	// the earlier overwrite: by its bytes the write leaves shard 1 out.
+	// the earlier overwrite: by its bytes the write leaves the nonprimary
+	// shards out.
 	offset := uint64(partialWriteOffset + 40)
 	gone := int(outage.origin.Shard)
-	if planned, skipped := run.plan(offset, len(degraded)); !slices.Contains(planned, gone) || !slices.Equal(skipped, []int{left}) {
-		t.Fatalf("the write [%d,+%d) names shards %v and leaves out %v by its bytes; this control needs shard %d's chunk without shard %d", offset, len(degraded), planned, skipped, gone, left)
+	if planned, left := run.plan(offset, len(degraded)); !slices.Contains(planned, gone) || !slices.Equal(left, skipped) {
+		t.Fatalf("the write [%d,+%d) names shards %v and leaves out %v by its bytes; this control needs shard %d's chunk without shards %v", offset, len(degraded), planned, left, gone, skipped)
 	}
 	reply := run.overwrite("write under the replacement", degradedIncarnation, 1700009104, offset, degraded)
 	if reply.UserVersion <= state.patched.UserVersion || reply.ReplayVersion.Epoch < replaced {
@@ -460,8 +456,8 @@ func TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIn
 		key, offset, len(degraded), writes[2].version, reply.UserVersion, run.route.PrimaryID, run.route.Shard, outage.osd, gone)
 	run.readVersion("read after the write", writtenReadIncarnation, reply)
 	// The return's peering reads the replacement's record: the write reset
-	// the left-out shard's range to itself.
-	reset := []shardPartialWrite{{Shard: left, From: writes[2].version, To: writes[2].version}}
+	// every left-out shard's range to itself.
+	reset := rangeRecords(skipped, writes[2].version, writes[2].version)
 	run.waitReplacedRecords(outage, reset)
 
 	returned := run.primaryBack(outage)
@@ -484,6 +480,36 @@ func TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIn
 		t.Fatalf("the PG's interval started at epoch %d when the primary was back and at epoch %d after the last capture", interval, ended)
 	}
 	t.Logf("the PG stayed in the interval that started at epoch %d", interval)
+}
+
+// TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration is erasurePartialWritePrimaryReplacementScenario on optimized isa
+// k=2,m=2 (four OSDs; nonprimary shard {1}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteprimaryreplacementshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD (its PG proven clean without pg_temp) and pauses each acting OSD for a store copy, no clean wait
+func TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration(t *testing.T) {
+	erasurePartialWritePrimaryReplacementScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1PartialWritePrimaryReplacementShardHistoryIntegration is erasurePartialWritePrimaryReplacementScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1partialwriteprimaryreplacementshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD (its PG proven clean without pg_temp) and pauses each acting OSD for a store copy, no clean wait
+func TestCephOSDErasureOptimizedK3M1PartialWritePrimaryReplacementShardHistoryIntegration(t *testing.T) {
+	erasurePartialWritePrimaryReplacementScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2PartialWritePrimaryReplacementShardHistoryIntegration is erasurePartialWritePrimaryReplacementScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2partialwriteprimaryreplacementshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD (its PG proven clean without pg_temp) and pauses each acting OSD for a store copy, no clean wait
+func TestCephOSDErasureOptimizedK4M2PartialWritePrimaryReplacementShardHistoryIntegration(t *testing.T) {
+	erasurePartialWritePrimaryReplacementScenario(t, erasureK4M2)
 }
 
 // pgReplacedObservation builds one synthetic receipt of PG 3.7 without the

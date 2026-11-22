@@ -29,10 +29,15 @@ import (
 //
 // First a Go client (the zombie) takes the managed lock as librbd does and
 // then stops renewing its header watch: it sends nothing, but keeps its
-// connection and releases nothing. Native librbd, asked to write, requests
-// the lock from that owner while its watch is still listed, and once the OSD
-// has expired the watch it blocklists the owner's address through the MON,
-// breaks the header and object-map locks and writes. The zombie then tries
+// connection and releases nothing. Native librbd, asked to write, sends a
+// RequestLock, and right after it the zombie's watch is still listed. Once
+// the OSD has expired the watch, the owner's address is blocklisted and
+// native librbd holds the header and object-map locks and writes. That
+// librbd asked because it found the watch listed, and blocklisted the
+// address before it broke the locks, is consistent with v20.2.4
+// managed_lock/BreakRequest.cc and is not observed step by step (a
+// RequestLock also follows an incompatible lock or a locker that changed
+// on the recheck). The zombie then tries
 // three mutations on its lock-bearing connection; each must come back as the
 // OSD's raw blocklisted error and change nothing native clients read.
 //
@@ -769,18 +774,18 @@ func rbdLockOwnerLossClaims(r *rbdLockOwnerLossRecord, stage string) []string {
 		// the fixture began, and holds none of the zombie's afterwards.
 		c, w := pending.Requests[0], pending.Requests[1]
 		goOwnerAt, ownerErr := time.Parse(time.RFC3339Nano, view("go-owner").ObservedUTC)
-		for _, request := range []rbdLockOwnerLossAttempt{c, w} {
-			i := slices.IndexFunc(a.OpsBefore, func(o rbdLockOwnerLossOp) bool {
-				return o.Client == entity(z) && o.Transaction == request.Submission.Transaction && request.Submission.Transaction != 0
-			})
-			if i < 0 {
-				fail("advance: the OSD did not report the zombie's %s (transaction %d) in flight before the epoch was raised: %s", request.Label, request.Submission.Transaction, text(a.OpsBefore))
+		ops, opProblems := rbdLockOwnerLossHeld(a.OpsBefore, entity(z), c.Submission.Transaction, w.Submission.Transaction)
+		for _, p := range opProblems {
+			fail("advance: before the epoch was raised, %s: %s", p, text(a.OpsBefore))
+		}
+		for i, request := range []rbdLockOwnerLossAttempt{c, w} {
+			if ops[i] == nil {
 				continue
 			}
-			initiated, err := rbdLockOwnerLossUntil(a.OpsBefore[i].InitiatedAt)
+			initiated, err := rbdLockOwnerLossUntil(ops[i].InitiatedAt)
 			at, parseErr := time.Parse(time.RFC3339Nano, initiated)
 			if err != nil || parseErr != nil || ownerErr != nil || !at.Before(goOwnerAt) {
-				fail("advance: the OSD did not have the zombie's %s before the go-owner observation (initiated %q, observed %q)", request.Label, a.OpsBefore[i].InitiatedAt, view("go-owner").ObservedUTC)
+				fail("advance: the OSD did not have the zombie's %s before the go-owner observation (initiated %q, observed %q)", request.Label, ops[i].InitiatedAt, view("go-owner").ObservedUTC)
 			}
 		}
 		if slices.ContainsFunc(a.OpsAfter, func(o rbdLockOwnerLossOp) bool { return o.Client == entity(z) }) {
@@ -878,6 +883,35 @@ func rbdLockBreakInput(locker rbdLockOwnerLossLocker) ([]byte, error) {
 	}
 	p := append(rbdString(rbdLockName), rbdEntityClient)
 	return rbdEnvelope(append(append(p, rbdLE64(uint64(number))...), rbdString(locker.Cookie)...)), nil
+}
+
+// rbdLockOwnerLossHeld finds the one record the OSD lists in flight for each
+// of a client's transactions, in order. A transaction it does not list, one it
+// lists more than once, and any other record of that client are problems: the
+// count of caller invocations alone cannot show that a request reached the OSD
+// only once.
+func rbdLockOwnerLossHeld(ops []rbdLockOwnerLossOp, client string, tids ...uint64) ([]*rbdLockOwnerLossOp, []string) {
+	var problems []string
+	held := make([]*rbdLockOwnerLossOp, len(tids))
+	for i, tid := range tids {
+		n := 0
+		for j := range ops {
+			if ops[j].Client == client && ops[j].Transaction == tid && tid != 0 {
+				n++
+				held[i] = &ops[j]
+			}
+		}
+		if n != 1 {
+			held[i] = nil
+			problems = append(problems, fmt.Sprintf("the OSD lists %d record(s) of %s transaction %d in flight, want one", n, client, tid))
+		}
+	}
+	for _, o := range ops {
+		if o.Client == client && !slices.Contains(tids, o.Transaction) {
+			problems = append(problems, fmt.Sprintf("the OSD lists another operation of %s in flight: %+v", client, o))
+		}
+	}
+	return held, problems
 }
 
 // rbdLockOwnerLossUntil normalizes a blocklist expiry as the MON prints it.
@@ -1145,6 +1179,20 @@ func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 	// contradiction is never followed by the next step of a handoff.
 	judge := func(t *testing.T, stage string) {
 		t.Helper()
+		// The claims count the observer's and the breaker's notifications.
+		// Each responder records one only after its acknowledgement
+		// returned: settle on every notify ID received so far, so that
+		// neither an in-flight notification nor its acknowledgement error
+		// is missed. A responder failure is the claims' to judge.
+		for _, r := range []*rbdLockResponder{observerResponder, breakerResponder} {
+			if r == nil {
+				continue
+			}
+			if _, _, err := r.settleSince(ctx, 0); errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				snapshot()
+				t.Fatalf("claims at %s: %v", stage, err)
+			}
+		}
 		snapshot()
 		record.ClaimsStage, record.Problems = stage, rbdLockOwnerLossClaims(&record, stage)
 		if len(record.Problems) != 0 {
@@ -1734,7 +1782,8 @@ func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 	if pendingVariant {
 		// Two requests that the OSD holds: they name an epoch the cluster has
 		// not reached, so the OSD waits for that map before it looks at them.
-		// Each is sent once, from its own goroutine, and never again.
+		// The test invokes each once, from its own goroutine, and never
+		// again; the OSD's in-flight list shows what reached it.
 		p := record.Pending
 		p.SentAtEpoch, _ = blocklist(t, observer, "pending_epoch")
 		p.NamedEpoch = p.SentAtEpoch + rbdLockOwnerLossPendingEpochs
@@ -1784,7 +1833,9 @@ func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 		controlErr = testcluster.RequestControl(ctx, dir, "rbd-lock", "rbd-lock-completed", token, "takeover")
 		close(controlDone)
 	}()
-	// librbd finds the lock held, the owner's watch listed, and asks.
+	// librbd asks for the lock; the view right after it shows whether the
+	// owner's watch was still listed. The RequestLock alone does not name
+	// the branch of librbd's acquisition that sent it.
 	goGIDs := []uint64{zombie.gid, observer.gid}
 	first := seen(t, 1, "native RequestLock", 60*time.Second, func(n rbdLockNotification) bool {
 		return n.Op == rbdNotifyRequestLock && !slices.Contains(goGIDs, n.NotifierGlobalID)
@@ -1792,7 +1843,8 @@ func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 	goView(t, "request-while-listed")
 	done("request_while_listed")
 	// The OSD expires the zombie's watch a timeout after its registration;
-	// librbd then blocklists, breaks and announces its lock.
+	// librbd then announces its lock, consistent with BreakRequest's
+	// blocklist and break once no watcher matches (not observed separately).
 	acquiredNote := seen(t, first.Index+1, "native AcquiredLock", time.Duration(rbdLockOwnerLossWatchTimeout+60)*time.Second, func(n rbdLockNotification) bool {
 		return n.Op == rbdNotifyAcquiredLock && n.NotifierGlobalID == first.NotifierGlobalID
 	})
@@ -2166,7 +2218,7 @@ func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 		}
 		record.Pending.Advance = advance.Advance
 		done("advance-map")
-		// The OSD now has the named map and answers. Nothing was resent.
+		// The OSD now has the named map and answers. The test invokes nothing again.
 		settle(t, 1, 30*time.Second)
 		record.Pending.AnsweredUTC = time.Now().UTC().Format(time.RFC3339Nano)
 		done("pending_answered")

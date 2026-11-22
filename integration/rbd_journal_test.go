@@ -119,6 +119,7 @@ type nativeRBDJournalPlan struct {
 	ConcurrentOwnerEvents []nativeRBDJournalEvent `json:"concurrent_owner_events"`
 	GoConcurrentWrites    []nativeRBDExtent       `json:"go_concurrent_writes"`
 	ConcurrentEvents      []nativeRBDJournalEvent `json:"concurrent_events"`
+	TakeoverEvents        []nativeRBDJournalEvent `json:"takeover_events"`
 }
 
 type nativeRBDJournalApplied struct {
@@ -209,6 +210,50 @@ type nativeRBDJournal struct {
 	Phases         []nativeRBDJournalPhase   `json:"phases"`
 	AioReturns     []int64                   `json:"aio_return_values"`
 	FinalWaitNS    int64                     `json:"final_wait_ns"`
+	// The owner-loss and forced-break actions only (rbd_journal.go).
+	WriteNS         int64                       `json:"write_ns"`
+	ForceBreak      *nativeRBDJournalForceBreak `json:"force_break"`
+	BlocklistBefore *[]nativeRBDLockBlock       `json:"blocklist_before"`
+	Blocklist       *[]nativeRBDLockBlock       `json:"blocklist"`
+	// Boundary is the lock record and the header watchers the takeover
+	// listed after its open and right before its first write.
+	Boundary *struct {
+		Lockers  nativeRBDWriteLockers `json:"lockers"`
+		Watchers []nativeRBDWatcher    `json:"watchers"`
+	} `json:"boundary"`
+	// LockLog is the lock state machines' part of librbd's debug log of the
+	// force-break and takeover actions (rbd_journal.go lock_log).
+	LockLog *nativeRBDJournalLockLog `json:"lock_log"`
+}
+
+// nativeRBDJournalLockLog is the driver's filtered librbd debug log at level
+// 10, with pointers replaced by per-run ordinals.
+type nativeRBDJournalLockLog struct {
+	Present   bool `json:"present"`
+	Matched   int  `json:"matched"`
+	Truncated bool `json:"truncated"`
+	Lines     []struct {
+		Level     int    `json:"level"`
+		Component string `json:"component"`
+		Text      string `json:"text"`
+	} `json:"lines"`
+}
+
+// nativeRBDJournalForceBreak is the force-break action's own output.
+type nativeRBDJournalForceBreak struct {
+	Owners []struct {
+		Mode  int    `json:"mode"`
+		Owner string `json:"owner"`
+	} `json:"owners"`
+	WatchersBefore  []nativeRBDWatcher    `json:"watchers_before"`
+	LockersBefore   nativeRBDWriteLockers `json:"lockers_before"`
+	BlocklistBefore []nativeRBDLockBlock  `json:"blocklist_before"`
+	BreakNS         int64                 `json:"break_ns"`
+	OwnersAfter     []struct {
+		Mode  int    `json:"mode"`
+		Owner string `json:"owner"`
+	} `json:"owners_after"`
+	IsOwner bool `json:"is_owner"`
 }
 
 type nativeRBDJournalResult struct {
@@ -1514,8 +1559,13 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal("Go journal header watch", err)
 		}
+		// The watch loop records a notification only after its
+		// acknowledgement returned; ledger and changed let the verdict
+		// settle on every received notify ID first (rbdWatchLedger).
 		var mu sync.Mutex
 		var failure error
+		var ledger rbdWatchLedger
+		changed := make(chan struct{})
 		watchCtx, stopWatch := context.WithCancel(ctx)
 		done := make(chan struct{})
 		watchStarted := time.Now()
@@ -1551,6 +1601,9 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 					mu.Unlock()
 					return
 				}
+				mu.Lock()
+				ledger.receive(event.NotifyID)
+				mu.Unlock()
 				// JournalMetadata::handle_watch_notify acknowledges every
 				// header update with an empty payload and refreshes.
 				n := rbdJournalNotification{AfterMS: float64(time.Since(watchStarted).Microseconds()) / 1000, NotifyID: event.NotifyID, NotifierGlobalID: event.NotifierGlobalID,
@@ -1565,6 +1618,11 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 				evidenceMu.Lock()
 				evidence.Notifications = append(evidence.Notifications, n)
 				evidenceMu.Unlock()
+				mu.Lock()
+				ledger.record(event.NotifyID)
+				close(changed)
+				changed = make(chan struct{})
+				mu.Unlock()
 			}
 		}()
 		unwatched := false
@@ -1579,6 +1637,17 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		n := native(t, "write")
 		applyEvents(t, "write", n.Events, plan.WriteEvents)
 		checkImage(t, n)
+		// The native writer waited for its header notifications to
+		// complete; the Go acknowledgements may still await their replies.
+		mu.Lock()
+		received := ledger.since(0)
+		mu.Unlock()
+		settleCtx, stopSettle := context.WithTimeout(ctx, rbdNotifySettleTimeout)
+		_, err = settleRBDWatch(settleCtx, &mu, &ledger, func() ([]rbdJournalNotification, <-chan struct{}, error) { return nil, changed, failure }, received)
+		stopSettle()
+		if err != nil {
+			t.Fatal("journal header watch", err)
+		}
 		stopWatch()
 		<-done
 		reply, err = w.Unwatch(ctx, hr.Epoch)
@@ -2368,11 +2437,15 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 			t.Fatal("native ReleasedLock on close differs", closing)
 		}
 		waitState(t, "closed")
-		stopResponder()
-		events, failure := responder.snapshot()
-		if failure != nil {
-			t.Fatal("image header watch responder", failure)
+		// The closed native instance waited for its notifications; the Go
+		// watcher may still be waiting for the replies to its last
+		// acknowledgements. Settle on every notify ID received before the
+		// verdict and before the responder stops.
+		events, _, err := responder.settleSince(ctx, 0)
+		if err != nil {
+			t.Fatal("image header watch responder", err)
 		}
+		stopResponder()
 		reply, err = w.Unwatch(ctx, hr.Epoch)
 		record("concurrent_watch_unwatch", hr, watchRequest, reply, err)
 		watching = false

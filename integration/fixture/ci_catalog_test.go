@@ -255,12 +255,20 @@ func ciSelection(sources map[string]string, scenarios []ciScenario) ([]ciTestSel
 			problems = append(problems, fmt.Sprintf("%s: %v", scenario.ID, err))
 			continue
 		}
+		// A suite part (suite_part.go) runs its part of the selection only.
+		var part map[string]bool
+		if k, n, _ := p.suitePart(); k != 0 {
+			if part, err = ciSuitePartNames(p.testRun, k, n); err != nil {
+				problems = append(problems, fmt.Sprintf("%s: %v", scenario.ID, err))
+				continue
+			}
+		}
 		matches := 0
 		for index := range rows {
 			label, name, _ := strings.Cut(rows[index].Test, "/")
 			// A routed row selects only the RGW checkpoints, every other
 			// row only the suites the controller runs on its fixture.
-			if ciRoutedSuite(label) != (p.rgwNative == "1") || !selector.MatchString(name) {
+			if ciRoutedSuite(label) != (p.rgwNative == "1") || !selector.MatchString(name) || part != nil && !part[rows[index].Test] {
 				continue
 			}
 			matches++

@@ -52,7 +52,7 @@ const (
 	shardHistoryReaderRoot  = "/shard"
 	shardHistoryReaderLabel = "ceph-msgr-go.shard-history-reader"
 
-	// shardHistoryOutputLimit bounds each offline dump; four of them fit the
+	// shardHistoryOutputLimit bounds each offline dump; six of them fit the
 	// owned-pool oracle's receipt.
 	shardHistoryOutputLimit = 64 << 10
 	shardHistoryStderrLimit = 4 << 10
@@ -66,11 +66,12 @@ const (
 )
 
 // capOSDShardHistory admits the capture of every acting shard's own store
-// copy, for one test of the four-OSD topology: the COPY_FROM2 control, the
-// partial-overwrite control and its five continuations.
+// copy, for one test of an erasure-capacity topology (four or six BlueStore
+// OSDs): the COPY_FROM2 control, the partial-overwrite control and its five
+// continuations, on each width those topologies host.
 var capOSDShardHistory = defineCapability("osd-shard-history",
-	"capture every acting shard's store copy offline for one test of the four-OSD BlueStore topology",
-	"OSD=1 OSD_STORE=bluestore OSD_REPLICAS=4", nil)
+	"capture every acting shard's store copy offline for one test of the four- or six-OSD BlueStore erasure-capacity topology",
+	"OSD=1 OSD_STORE=bluestore", func(p profile) bool { return p.osdTopology().erasureCapacity != "" })
 
 // capOSDPGInterval admits the owned-pool oracle's pginterval mode, which
 // observes one owned PG and can end its interval with one `pg repeer`: the
@@ -350,7 +351,7 @@ func (c *fixtureCluster) controlOSDShardHistoryRequest(ctx context.Context, out 
 		return err
 	}
 	if len(fields) != 1 || !c.profile.shardHistorySelected() {
-		return errors.New("shard-history capture requires its exclusive four-BlueStore selector and takes no argument")
+		return errors.New("shard-history capture requires its exclusive erasure-capacity BlueStore selector and takes no argument")
 	}
 	if err := removeShardHistoryOutputs(out); err != nil {
 		return err

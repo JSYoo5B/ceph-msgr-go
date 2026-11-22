@@ -56,6 +56,35 @@ class TerminalTests(unittest.TestCase):
                     path.unlink()
                 (self.root / "scenario-result").rmdir()
 
+    def test_a_broad_run_cut_off_before_an_announced_test_is_partial(self):
+        (self.root / "expected-tests.json").write_text(json.dumps({"selector": "", "expected": []}))
+        announcement = "Ceph test suite api selects 2 top-level tests: TestNative TestLater\n"
+        (self.root / "ceph-tests.log").write_text(announcement + "Running Ceph test suite: api\n--- PASS: TestNative (1s)\n")
+        result = self.record(TEST_OUTCOME="failure", RESULT="failure")
+        self.assertEqual(result["test_evidence"], "partial")
+        self.assertFalse(result["test_gate_passed"])
+        for path in (self.root / "scenario-result").iterdir():
+            path.unlink()
+        (self.root / "scenario-result").rmdir()
+        (self.root / "ceph-tests.log").write_text(announcement + "Running Ceph test suite: api\n--- PASS: TestNative (1s)\n"
+                                                  "--- SKIP: TestLater (0s)\n")
+        result = self.record()
+        self.assertEqual(result["test_evidence"], "completed")
+        self.assertTrue(result["accepted"])
+
+    def test_a_first_suite_exiting_before_the_announced_next_suite_is_partial(self):
+        (self.root / "expected-tests.json").write_text(json.dumps({"selector": "", "expected": []}))
+        # The fixture announces every suite before the first runs; the api
+        # suite printed every verdict and exited, so the client suite never ran.
+        (self.root / "ceph-tests.log").write_text(
+            "Ceph test suite api selects 1 top-level tests: TestNative\n"
+            "Ceph test suite client selects 1 top-level tests: TestClient\n"
+            "Running Ceph test suite: api\n--- PASS: TestNative (1s)\nFAIL\n")
+        result = self.record(TEST_OUTCOME="failure", RESULT="failure")
+        self.assertEqual(result["test_evidence"], "partial")
+        self.assertFalse(result["test_gate_passed"])
+        self.assertFalse(result["accepted"])
+
     def test_missing_log(self):
         result = self.record()
         self.assertEqual(result["test_evidence"], "missing")

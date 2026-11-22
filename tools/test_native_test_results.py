@@ -75,6 +75,33 @@ class NativeResultTests(unittest.TestCase):
         self.assertEqual(verdict["observed"][1]["result"], "SKIP")
         self.assertFalse(results.verify(request, text.replace("PASS", "SKIP"))["passed"])
 
+    def test_announced_selection_needs_a_terminal_result_of_every_announced_test(self):
+        request = {"selector": "", "expected": []}
+        announced = ("Ceph test suite api selects 3 top-level tests: TestA TestB TestC\n"
+                     "Running Ceph test suite: api\n--- PASS: TestA (1.00s)\n--- SKIP: TestB (0.00s)\n")
+        complete = announced + ("--- PASS: TestC (2.00s)\nCeph test suite client selects 0 top-level tests\n")
+        verdict = results.verify(request, complete)
+        self.assertTrue(verdict["passed"], verdict["problems"])
+        self.assertEqual(verdict["selected"], [["api", "TestA"], ["api", "TestB"], ["api", "TestC"]])
+        # A run cut off before its last announced test reports it missing.
+        cut = results.verify(request, announced + "panic: test timed out after 36m56s\n")
+        self.assertFalse(cut["passed"])
+        self.assertIn("api/TestC: MISSING (announced as selected)", cut["problems"])
+        # A result of a test the suite did not announce, a second
+        # announcement and a count that is not the names are refused.
+        for text in (complete + "--- PASS: TestD (0.00s)\n",
+                     complete.replace("client selects 0 top-level tests", "api selects 0 top-level tests"),
+                     complete.replace("selects 3 top-level tests", "selects 2 top-level tests"),
+                     complete.replace("TestA TestB TestC", "TestA TestA TestC")):
+            with self.subTest(text=text):
+                self.assertFalse(results.verify(request, text)["passed"])
+        # An announcement never relaxes an explicit expectation, and a log
+        # without one is judged as before.
+        explicit = {"selector": "^TestOther$", "expected": [["api", "TestOther"]]}
+        self.assertFalse(results.verify(explicit, complete)["passed"])
+        self.assertTrue(results.verify(request, complete.replace(announced.splitlines()[0] + "\n", "")
+                                       .replace("Ceph test suite client selects 0 top-level tests\n", ""))["passed"])
+
     def test_snapshot_uses_tested_source_and_rejects_missing_or_subtest_selector(self):
         root = module(self, {"new_test.go": tests_file("func TestNew(t *testing.T) {}")})
         client = root / "cephmsgr"

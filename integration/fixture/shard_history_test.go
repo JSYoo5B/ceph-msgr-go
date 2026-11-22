@@ -221,14 +221,14 @@ func TestCaptureShardHistoriesStopsAtTheFirstFailedShard(t *testing.T) {
 	}
 }
 
-// shardHistoryRows are the four-OSD catalog rows that declare the capture,
-// each with its declared capabilities.
-func shardHistoryRows(t *testing.T) map[string]string {
+// shardHistoryRows are the catalog rows that declare the capture, by
+// selector, each with its declared capabilities and topology.
+func shardHistoryRows(t *testing.T) map[string][2]string {
 	t.Helper()
-	rows := map[string]string{}
+	rows := map[string][2]string{}
 	for _, row := range ciRepositoryCatalog(t) {
 		if strings.Contains(","+row.Params["capabilities"]+",", ",osd-shard-history,") {
-			rows[row.Params["test_run"]] = row.Params["capabilities"]
+			rows[row.Params["test_run"]] = [2]string{row.Params["capabilities"], row.Params["osd_replicas"]}
 		}
 	}
 	if len(rows) == 0 {
@@ -238,15 +238,20 @@ func shardHistoryRows(t *testing.T) map[string]string {
 }
 
 func TestShardHistoryCaptureAdmission(t *testing.T) {
-	base := profile{osd: "1", osdStore: "bluestore", osdReplicas: "4", osdProfile: "replicated-pg-v8"}
+	base := profile{osd: "1", osdStore: "bluestore", osdProfile: "replicated-pg-v8"}
 	rows := shardHistoryRows(t)
-	intervals := 0
-	for selector, capabilities := range rows {
+	intervals, topologies := 0, map[string]bool{}
+	for selector, declared := range rows {
+		capabilities := declared[0]
 		p := base
-		p.testRun, p.capabilities = selector, capabilities
-		if !p.shardHistorySelected() || p.testEnvironment("/out", "")[shardHistoryMarker] != "1" || !p.admits(capOSDErasureWidth) {
-			t.Fatal("the selected four-BlueStore profile does not admit the capture for", selector)
+		p.testRun, p.capabilities, p.osdReplicas = selector, capabilities, declared[1]
+		// The capture runs on an erasure-capacity topology, beside the
+		// exclusive capability that admits the test there.
+		width := map[string]*fixtureCapability{"4": capOSDErasureWidth, "6": capOSDErasureWidthSix}[p.osdReplicas]
+		if width == nil || !p.shardHistorySelected() || p.testEnvironment("/out", "")[shardHistoryMarker] != "1" || !p.admits(width) {
+			t.Fatal("the selected BlueStore erasure-capacity profile does not admit the capture for", selector, p.osdReplicas)
 		}
+		topologies[p.osdReplicas] = true
 		// The oracle mode that observes one PG and can end its interval is
 		// admitted where it is declared alone, on the capture's topology.
 		want := strings.Contains(capabilities, "osd-pg-interval")
@@ -264,7 +269,7 @@ func TestShardHistoryCaptureAdmission(t *testing.T) {
 			"broad selector":     func(p *profile) { p.testRun = "^TestCephOSD.*Integration$" },
 			"two selectors":      func(p *profile) { p.testRun = selector + "|^TestCephOSDErasureOptimizedK2M2Integration$" },
 			"a common prefix":    func(p *profile) { p.testRun = "^TestCephOSDErasureOptimizedK2M2PartialWrite" },
-			"undeclared capture": func(p *profile) { p.capabilities = "osd-erasure-width" },
+			"undeclared capture": func(p *profile) { p.capabilities = width.name },
 			"no declaration":     func(p *profile) { p.capabilities = "" },
 			"three OSDs":         func(p *profile) { p.osdReplicas = "3" },
 			"one OSD":            func(p *profile) { p.osdReplicas = "1" },
@@ -280,7 +285,7 @@ func TestShardHistoryCaptureAdmission(t *testing.T) {
 		}
 		// The interval mode needs the capture it extends.
 		alone := p
-		alone.capabilities = "osd-erasure-width,osd-pg-interval"
+		alone.capabilities = width.name + ",osd-pg-interval"
 		if alone.pgIntervalSelected() || nativePoolModeAllowed(alone, oracleModes, "pginterval") {
 			t.Error("interval mode admitted without the capture for", selector)
 		}
@@ -288,21 +293,24 @@ func TestShardHistoryCaptureAdmission(t *testing.T) {
 	if intervals == 0 || intervals == len(rows) {
 		t.Fatal("the catalog no longer separates capture-only rows from interval rows", intervals, len(rows))
 	}
+	if !topologies["4"] || !topologies["6"] {
+		t.Fatal("the catalog no longer declares the capture on both erasure-capacity topologies", topologies)
+	}
 	// The control refuses before it reads anything when it is not selected.
 	out := t.TempDir()
 	if err := writeRequestFile(out, "capture-osd-shard-history", "7 \n"); err != nil {
 		t.Fatal(err)
 	}
 	c := &fixtureCluster{profile: profile{osd: "1", osdStore: "bluestore", osdReplicas: "4", testRun: "^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$", capabilities: "osd-erasure-width"}}
-	if err := c.controlOSDShardHistoryRequest(context.Background(), out); err == nil || !strings.Contains(err.Error(), "exclusive four-BlueStore selector") {
+	if err := c.controlOSDShardHistoryRequest(context.Background(), out); err == nil || !strings.Contains(err.Error(), "exclusive erasure-capacity BlueStore selector") {
 		t.Fatal("unselected capture request:", err)
 	}
 	if err := writeRequestFile(out, "capture-osd-shard-history", "7 4.2\n"); err != nil {
 		t.Fatal(err)
 	}
-	for selector, capabilities := range shardHistoryRows(t) {
+	for selector, declared := range shardHistoryRows(t) {
 		c.profile = base
-		c.profile.testRun, c.profile.capabilities = selector, capabilities
+		c.profile.testRun, c.profile.capabilities, c.profile.osdReplicas = selector, declared[0], declared[1]
 		break
 	}
 	if err := c.controlOSDShardHistoryRequest(context.Background(), out); err == nil || !strings.Contains(err.Error(), "takes no argument") {

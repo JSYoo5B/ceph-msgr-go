@@ -9,7 +9,10 @@ scenarios, run ID and attempt, job and step outcomes):
 
 - test_evidence is missing without a snapshot or log, partial when required
   results are missing, completed when every required parent has a terminal
-  result; a completed FAIL or SKIP still fails the gate.
+  result; a completed FAIL or SKIP still fails the gate. The required tests
+  are the snapshot's expected tests and the tests the fixture announced as
+  selected (native_test_results.py), so a broad run cut off before its last
+  announced test is partial.
 - test_result=passed needs both the reconstructed gate and a successful test
   step, so a cancelled step can keep a completed PASS while its attempt stays
   unaccepted, and missing evidence never yields acceptance.
@@ -58,7 +61,7 @@ def record(env, directory):
         (output / "tests.json").write_text(json.dumps(gate, indent=2) + "\n")
     completeness = "missing"
     if gate is not None:
-        required = set(map(tuple, gate["expected"]))
+        required = set(map(tuple, gate["expected"])) | set(map(tuple, gate.get("selected", [])))
         observed = {(item["suite"], item["test"]) for item in gate["observed"]}
         completeness = "completed" if observed and required <= observed else "partial"
     outcome = env.get("TEST_OUTCOME", "")

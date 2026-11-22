@@ -335,7 +335,7 @@ const (
 	partialWriteOffset = 5
 )
 
-// partialWriteRun is one owned optimized isa k=2,m=2 pool with eight PGs and
+// partialWriteRun is one owned optimized isa pool with eight PGs and
 // the single object that a partial-overwrite control writes through the Go
 // client. Every request is sent once; a failed or unknown result stops the
 // test and nothing is resent.
@@ -360,9 +360,8 @@ type partialWriteRun struct {
 // startPartialWriteRun creates the pool, reads its geometry from native
 // sources only, requires the head to be absent and connects to the native
 // primary. The pool and its profile are removed on cleanup.
-func startPartialWriteRun(t *testing.T, timeout time.Duration) *partialWriteRun {
+func startPartialWriteRun(t *testing.T, width erasureWidth, timeout time.Duration) *partialWriteRun {
 	t.Helper()
-	width := erasureK2M2
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
 	}
@@ -633,22 +632,50 @@ func (r *partialWriteRun) partialOverwrite() partialOverwrite {
 	return state
 }
 
-// The Go client writes two full stripes to a fresh head of an owned
-// optimized isa k=2,m=2 pool and then overwrites a few bytes inside shard
-// 0's chunk of the first stripe; partialOverwrite states what is required of
-// the primary and of every acting shard's own log afterwards. This is a
-// control of what each shard's log holds after an acknowledged partial
-// write: it stops before any trimming, peering or resubmission and claims
-// nothing about eviction, loss or replay.
-// One geometry runs (stripe width 8192, a 14-byte overwrite at offset 5 of a
-// two-stripe object); other offsets, appends, truncates, more than one
-// skipped shard and plugins with a chunk mapping are not run natively.
+// erasurePartialWriteShardHistoryScenario: the Go client writes two full
+// stripes to a fresh head of an owned optimized isa pool and then overwrites
+// a few bytes inside shard 0's chunk of the first stripe, which leaves every
+// nonprimary data shard out (one on k=2, two on k=3, three on k=4);
+// partialOverwrite states what is required of the primary and of every
+// acting shard's own log afterwards. This is a control of what each shard's
+// log holds after an acknowledged partial write: it stops before any
+// trimming, peering or resubmission and claims nothing about eviction, loss
+// or replay. One overwrite runs per width (a 14-byte overwrite at offset 5
+// of a two-stripe object, the stripe width from the native map); other
+// offsets, appends, truncates, a write that leaves out only some nonprimary
+// shards and plugins with a chunk mapping are not run natively.
+func erasurePartialWriteShardHistoryScenario(t *testing.T, width erasureWidth) {
+	startPartialWriteRun(t, width, 420*time.Second).partialOverwrite()
+}
+
+// TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration is erasurePartialWriteShardHistoryScenario on optimized isa
+// k=2,m=2 (four OSDs; nonprimary shard {1}).
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-shard-history
 //scenario:covers CLIENT to OSD
 //fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
 func TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration(t *testing.T) {
-	startPartialWriteRun(t, 420*time.Second).partialOverwrite()
+	erasurePartialWriteShardHistoryScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1PartialWriteShardHistoryIntegration is erasurePartialWriteShardHistoryScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1partialwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
+func TestCephOSDErasureOptimizedK3M1PartialWriteShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteShardHistoryScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2PartialWriteShardHistoryIntegration is erasurePartialWriteShardHistoryScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2partialwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
+func TestCephOSDErasureOptimizedK4M2PartialWriteShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteShardHistoryScenario(t, erasureK4M2)
 }
 
 func TestPartialWritePlan(t *testing.T) {
@@ -671,6 +698,9 @@ func TestPartialWritePlan(t *testing.T) {
 		"k=4 touching shard 2 only":     {4, 2, []int{1, 2, 3}, 16384, 16384, 8192, 4096, []int{0, 2, 4, 5}, []int{1, 3}},
 		"k=4 touching shards 1 and 2":   {4, 2, []int{1, 2, 3}, 16384, 16384, 8191, 2, []int{0, 1, 2, 4, 5}, []int{3}},
 		"k=2,m=1":                       {2, 1, []int{1}, 8192, 8192, 0, 1, []int{0, 2}, []int{1}},
+		"k=3 inside shard 0's chunk":    {3, 1, []int{1, 2}, 12288, 24576, 5, 13, []int{0, 3}, []int{1, 2}},
+		"k=3 shard 1's chunk only":      {3, 1, []int{1, 2}, 12288, 24576, 4101, 13, []int{0, 1, 3}, []int{2}},
+		"k=4 inside shard 0's chunk":    {4, 2, []int{1, 2, 3}, 16384, 32768, 5, 13, []int{0, 4, 5}, []int{1, 2, 3}},
 	} {
 		written, skipped, err := partialWritePlan(c.k, c.m, c.nonprimary, c.stripe, c.size, c.offset, c.length)
 		if err != nil || !slices.Equal(written, c.written) || !slices.Equal(skipped, c.skipped) {

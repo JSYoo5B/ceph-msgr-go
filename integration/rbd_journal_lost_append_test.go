@@ -217,6 +217,25 @@ type rbdJournalLostAppendView struct {
 	InspectTotal  *int
 	InspectErrors *int
 	InspectOwned  []rbdJournalLostAppendEvent
+	// InspectNext are the entries of the tag after the subject's: native
+	// librbd's own entries once it replayed the journal and wrote.
+	InspectNext []rbdJournalLostAppendEvent
+	// Blocklist is the OSDMap blocklist the action read, nil when it read
+	// none.
+	Blocklist []rbdLockOwnerLossBlock
+	// The journal header as `rbd journal status` shows it: the minimum and
+	// active object sets and every registered client with its commit
+	// position, in the order listed.
+	MinimumSet, ActiveSet uint64
+	Clients               []rbdJournalClientView
+}
+
+// rbdJournalClientView is one registered journal client and its commit
+// position.
+type rbdJournalClientView struct {
+	ID        string
+	State     string
+	Positions []rbdJournalPosition
 }
 
 type rbdJournalLostAppendOutcome struct {
@@ -277,13 +296,25 @@ type rbdJournalLostAppendRecord struct {
 	Timings     map[string]string
 	// PrimaryChange is set in the primary-change variant only.
 	PrimaryChange *rbdJournalPrimaryChange
+	// OwnerLoss is set in the owner-loss and forced-break variants only.
+	OwnerLoss *rbdJournalOwnerLoss
+	// ForcedPending is set in the forced-break variant with held appends
+	// (rbd_journal_forced_break_pending_test.go) only.
+	ForcedPending *rbdJournalForcedPending
 }
 
 // rbdJournalLostAppendPlan returns the stages and the step order of the
 // variant the record belongs to.
 func rbdJournalLostAppendPlan(r *rbdJournalLostAppendRecord) (stages, order []string) {
-	if r.PrimaryChange != nil {
+	switch {
+	case r.ForcedPending != nil:
+		return rbdJournalForcedPendingStages, rbdJournalForcedPendingOrder
+	case r.PrimaryChange != nil:
 		return rbdJournalPrimaryChangeStages, rbdJournalPrimaryChangeOrder
+	case r.OwnerLoss != nil && r.OwnerLoss.Forced:
+		return rbdJournalForcedBreakStages, rbdJournalForcedBreakOrder
+	case r.OwnerLoss != nil:
+		return rbdJournalOwnerLossStages, rbdJournalOwnerLossOrder
 	}
 	return rbdJournalLostAppendStages, rbdJournalLostAppendOrder
 }
@@ -304,10 +335,22 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 	fail := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	// Records hold optional fields as pointers; print them as their JSON.
 	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+	if r.ForcedPending != nil {
+		return rbdJournalForcedPendingClaims(r, stage)
+	}
+	if r.OwnerLoss != nil && r.OwnerLoss.Forced {
+		return rbdJournalForcedBreakClaims(r, stage)
+	}
 	e := r.Entry
 	stages, order := rbdJournalLostAppendPlan(r)
 	if !slices.Contains(stages, stage) {
 		return []string{"unknown stage " + stage}
+	}
+	// The owner-loss variant ends in the native takeover instead of the
+	// replay.
+	dead, final := r.OwnerLoss != nil, "replay"
+	if dead {
+		final = "takeover"
 	}
 	// reached counts the stages both variants share; the primary-change
 	// variant's two stages lie between "observe-recorded" and "replay".
@@ -317,6 +360,9 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 	reached := slices.Index(rbdJournalLostAppendStages, stage)
 	if reached < 0 {
 		reached = 1
+	}
+	if stage == "takeover" {
+		reached = 2
 	}
 	view := func(name string, from int) *rbdJournalLostAppendView {
 		if reached < from {
@@ -329,7 +375,7 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		}
 		return v
 	}
-	setup, locked, checkpoint, recorded, replay := view("setup", 0), view("observe-locked", 0), view("checkpoint", 0), view("observe-recorded", 1), view("replay", 2)
+	setup, locked, checkpoint, recorded, replay := view("setup", 0), view("observe-locked", 0), view("checkpoint", 0), view("observe-recorded", 1), view(final, 2)
 	var moved, resolved *rbdJournalLostAppendView
 	if changed {
 		moved = view("change-primary", 1)
@@ -440,9 +486,15 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 	// primary-change variant the append and its one resubmission, each on a
 	// connection of its own.
 	bound, large, marked := 1, 1, []int{1}
+	// The owner-loss variant never dials again after the silent connection
+	// was closed.
+	total := 2
+	if dead {
+		total = 1
+	}
 	if pc == nil {
-		if r.DialsBeforeClose == nil || *r.DialsBeforeClose != 1 || r.DialsTotal == nil || *r.DialsTotal != 2 || g.Connections != 2 {
-			fail("transmission: not two subject connections, one of them before the silent one was closed: gate %s, dials before close %s, in total %s", text(g), text(r.DialsBeforeClose), text(r.DialsTotal))
+		if r.DialsBeforeClose == nil || *r.DialsBeforeClose != 1 || r.DialsTotal == nil || *r.DialsTotal != total || g.Connections != total {
+			fail("transmission: not %d subject connection(s), one of them before the silent one was closed: gate %s, dials before close %s, in total %s", total, text(g), text(r.DialsBeforeClose), text(r.DialsTotal))
 		}
 	} else {
 		bound, large, marked = pc.AppendConnection, 2, []int{pc.AppendConnection, pc.ResubmitConnection}
@@ -476,6 +528,11 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		if g.WithheldBytesSeen == nil || !*g.WithheldBytesSeen || r.WithheldBeforeCancel == nil || !*r.WithheldBeforeCancel {
 			fail("transmission: the undecoded gate did not withhold received bytes before the wait was canceled: at cancellation %s, finally %s", text(r.WithheldBeforeCancel), text(g.WithheldBytesSeen))
 		}
+	}
+
+	if dead {
+		rbdJournalTakeoverClaims(r, replay, checkpoint, locked, setup, fail)
+		return problems
 	}
 
 	// Replay: native librbd applied the entry once and nothing was appended.
@@ -627,7 +684,13 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 		return nil, errors.New("native rbd journal status missing")
 	}
 	found := false
+	v.MinimumSet, v.ActiveSet, v.Clients = status.MinimumSet, status.ActiveSet, []rbdJournalClientView{}
 	for _, client := range status.Clients {
+		listed := rbdJournalClientView{ID: client.ID, State: client.State, Positions: []rbdJournalPosition{}}
+		for _, p := range client.CommitPosition.Positions {
+			listed.Positions = append(listed.Positions, rbdJournalPosition{p.Object, p.Tag, p.Entry})
+		}
+		v.Clients = append(v.Clients, listed)
 		if client.ID == "" {
 			found = true
 			v.ImageCommit = []rbdJournalPosition{}
@@ -671,15 +734,27 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 			if ne.CommitTID != uint64(i+1) {
 				return nil, errors.New("native rbd journal inspect commit tids are not contiguous")
 			}
-			if entry == nil || ne.TagID != entry.Tag {
+			if entry == nil || ne.TagID != entry.Tag && ne.TagID != entry.Tag+1 {
 				continue
 			}
 			ts, err := time.Parse("2006-01-02T15:04:05.000000-0700", ne.Event.Timestamp)
 			if err != nil || ne.Event.Offset == nil || ne.Event.Length == nil {
 				return nil, fmt.Errorf("native rbd journal inspect entry of tag %d does not parse: %v", ne.TagID, err)
 			}
-			v.InspectOwned = append(v.InspectOwned, rbdJournalLostAppendEvent{ne.Event.Type, *ne.Event.Offset, *ne.Event.Length, ts.UTC().Format(time.RFC3339Nano)})
+			event := rbdJournalLostAppendEvent{ne.Event.Type, *ne.Event.Offset, *ne.Event.Length, ts.UTC().Format(time.RFC3339Nano)}
+			if ne.TagID == entry.Tag {
+				v.InspectOwned = append(v.InspectOwned, event)
+			} else {
+				v.InspectNext = append(v.InspectNext, event)
+			}
 		}
+	}
+	if n.Blocklist != nil {
+		blocks, err := rbdLockOwnerLossBlocks(*n.Blocklist)
+		if err != nil {
+			return nil, err
+		}
+		v.Blocklist = blocks
 	}
 	return v, nil
 }
@@ -688,7 +763,9 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 //scenario:row rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-lost-append
 //scenario:covers RBD underlying I/O
 //fixture:isolated creates a journaling image in the fixture's RBD pool and appends to it; image not removed
-func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) { runRBDJournalLostAppend(t, false) }
+func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
+	runRBDJournalLostAppend(t, rbdJournalVariantLostAppend)
+}
 
 // TestCephRBDJournalPrimaryChangeIntegration runs the lost-append sequence on
 // three replicated BlueStore OSDs and changes the acting primary while the
@@ -718,9 +795,17 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) { runRBDJournalL
 //scenario:row rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimarychange key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-primary-change
 //scenario:covers RBD underlying I/O
 //fixture:isolated marks the PG primary OSD out (marked in only at fixture teardown) and leaves a journaling image
-func TestCephRBDJournalPrimaryChangeIntegration(t *testing.T) { runRBDJournalLostAppend(t, true) }
+func TestCephRBDJournalPrimaryChangeIntegration(t *testing.T) {
+	runRBDJournalLostAppend(t, rbdJournalVariantPrimaryChange)
+}
 
-func runRBDJournalLostAppend(t *testing.T, primaryChange bool) {
+// runRBDJournalLostAppend runs one variant: rbdJournalVariantLostAppend,
+// PrimaryChange, OwnerLoss (rbd_journal_owner_loss_test.go), ForcedBreak or
+// ForcedBreakPending (rbd_journal_forced_break_pending_test.go); the last two
+// withhold no reply.
+func runRBDJournalLostAppend(t *testing.T, variant string) {
+	primaryChange, ownerLoss, forced := variant == rbdJournalVariantPrimaryChange, variant == rbdJournalVariantOwnerLoss, variant == rbdJournalVariantForcedBreak
+	forcedPending := variant == rbdJournalVariantForcedBreakPending
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
 		t.Skip("requires the opt-in disposable RBD fixture (CEPH_MSGR_TEST_RBD=1) under its exact selector")
@@ -756,8 +841,15 @@ func runRBDJournalLostAppend(t *testing.T, primaryChange bool) {
 	defer cancel()
 	started := time.Now()
 	results, outcomeFile := "rbd-journal-lost-append-results.json", "rbd-journal-lost-append-outcome.json"
-	if primaryChange {
+	switch variant {
+	case rbdJournalVariantPrimaryChange:
 		results, outcomeFile = "rbd-journal-primary-change-results.json", "rbd-journal-primary-change-outcome.json"
+	case rbdJournalVariantOwnerLoss:
+		results, outcomeFile = "rbd-journal-owner-loss-results.json", "rbd-journal-owner-loss-outcome.json"
+	case rbdJournalVariantForcedBreak:
+		results = "rbd-journal-forced-break-results.json"
+	case rbdJournalVariantForcedBreakPending:
+		results = "rbd-journal-forced-break-pending-results.json"
 	}
 
 	// The observer is a second Go client with its own connections. It
@@ -804,6 +896,12 @@ func runRBDJournalLostAppend(t *testing.T, primaryChange bool) {
 		ConnectionMode: mode, Views: map[string]*rbdJournalLostAppendView{}, Timings: map[string]string{}}
 	if primaryChange {
 		record.PrimaryChange = &rbdJournalPrimaryChange{}
+	}
+	if ownerLoss || forced || forcedPending {
+		record.OwnerLoss = &rbdJournalOwnerLoss{Forced: forced || forcedPending}
+	}
+	if forcedPending {
+		record.ForcedPending = &rbdJournalForcedPending{}
 	}
 	publish := func() error {
 		record.Timings["total"] = time.Since(started).String()
@@ -1136,8 +1234,28 @@ func runRBDJournalLostAppend(t *testing.T, primaryChange bool) {
 	copy(after[extent.Offset:], rbdJournalPattern(token, "go-lost-append", extent.Offset, extent.Length))
 	record.ExpectedHeadAfter = digest(after)
 	record.ExpectedCommitAfter = rbdJournalCommitPosition(imageClient.Positions, []rbdJournalEntry{{Object: object, Tag: tag, EntryID: 0}}, uint64(splay))
+	if ol := record.OwnerLoss; ol != nil {
+		// The takeover replays the owned entry, allocates the next tag and
+		// journals each of its writes as entry 0, 1, ... of that tag, at
+		// splay offsets 0, 1, ... of the same object set.
+		taken := slices.Clone(after)
+		committed := []rbdJournalEntry{{Object: object, Tag: tag, EntryID: 0}}
+		for i, w := range plan.TakeoverEvents {
+			copy(taken[w.Offset:], rbdJournalPattern(token, "takeover", w.Offset, w.Length))
+			ol.TakeoverEvents = append(ol.TakeoverEvents, rbdJournalLostAppendEvent{Type: "AioWrite", Offset: w.Offset, Length: w.Length})
+			committed = append(committed, rbdJournalEntry{Object: activeSet*uint64(splay) + uint64(i)%uint64(splay), Tag: tag + 1, EntryID: uint64(i)})
+		}
+		ol.ExpectedHeadTakeover = digest(taken)
+		ol.ExpectedCommitTakeover = rbdJournalCommitPosition(imageClient.Positions, committed, uint64(splay))
+	}
 
 	lockedNative := native(t, "observe-locked")
+	if ol := record.OwnerLoss; ol != nil {
+		if lockedNative.Lockers.Empty || len(lockedNative.Lockers.Lockers) != 1 || lockedNative.Lockers.Lockers[0].Client != fmt.Sprintf("client.%d", gid) {
+			t.Fatal("native librbd does not list the subject as the one lock owner", lockedNative.Lockers)
+		}
+		ol.LockerAddress = lockedNative.Lockers.Lockers[0].Address
+	}
 	objectsBlob := readRBDBlob(t, dir, lockedNative.Blobs["journal_objects"])
 	nativeBefore := objectsBlob[lockedNative.JournalObjects[object].Offset : lockedNative.JournalObjects[object].Offset+lockedNative.JournalObjects[object].Size]
 	// A read on the subject's own connection passes the armed-to-be gate and
@@ -1148,6 +1266,18 @@ func runRBDJournalLostAppend(t *testing.T, primaryChange bool) {
 	}
 	if s := gate.State(); s.LargeWrites != 0 || s.Bound || s.Connections != len(conns) {
 		t.Fatal("the subject already wrote a frame of the append's size, so the gate cannot single out the append", s)
+	}
+	if forced || forcedPending {
+		steps := rbdJournalForcedBreakSteps{ctx: ctx, record: &record, entry: entry, header: header, plan: plan, token: token, gid: gid, w: w, conn: first,
+			appendInput: append(rbdLE64(1<<order), rbdJournalBL(entryBytes)...), splay: uint64(splay), locked: lockedNative, route: route, request: request, keep: keep,
+			now: now, send: send, native: native, judge: judge, done: done, released: func() { unlocked = true }}
+		if forced {
+			runRBDJournalForcedBreak(t, steps)
+			return
+		}
+		runRBDJournalForcedBreakPending(t, rbdJournalForcedPendingSteps{rbdJournalForcedBreakSteps: steps, dir: dir, closeAll: closeAll, connect: connect,
+			dials: func() int { return int(osdDials.Load()) }, after: after, timings: record.Timings})
+		return
 	}
 	if err := gate.Arm(entryBytes); err != nil {
 		t.Fatal(err)
@@ -1330,6 +1460,94 @@ func runRBDJournalLostAppend(t *testing.T, primaryChange bool) {
 		}
 		pc.Native, pc.GoAfter = receipt.PrimaryChange, placements(t)
 		judge(t, "change-primary")
+	}
+
+	if ownerLoss {
+		// The observer watches the image header from here on, answering
+		// every notification as a non-owner, so that the native takeover's
+		// lock requests and announcements are received by a Go client. Its
+		// watch is registered after the last observation before the loss and
+		// changes nothing the earlier stages judged.
+		ol := record.OwnerLoss
+		hr := route(t, header)
+		oc, err := observer.OpenOSD(ctx, cephmsgr.OSDTarget{ID: hr.Primary, Address: hr.Address})
+		if err != nil {
+			t.Fatal("observer header connection", err)
+		}
+		observerWatch := request(hr)
+		observerWatch.Operations = nil
+		ow, _, err := oc.WatchObject(ctx, observerWatch, cephmsgr.OSDWatchOptions{TimeoutSeconds: rbdJournalLostAppendWatchTimeout})
+		if err != nil {
+			t.Fatal("observer header watch", err)
+		}
+		ol.ObserverWatchCookie = ow.Cookie()
+		responder := &rbdLockResponder{changed: make(chan struct{})}
+		responderCtx, stopResponder := context.WithCancel(ctx)
+		responderDone := make(chan struct{})
+		go func() {
+			defer close(responderDone)
+			runRBDLockResponder(responderCtx, ow, hr.Epoch, rbdClientID{GID: record.ObserverGlobalID, Handle: ow.Cookie()}, responder, time.Now())
+		}()
+		observing := true
+		unwatch := func() error {
+			observing = false
+			stopResponder()
+			<-responderDone
+			_, err := ow.Unwatch(ctx, hr.Epoch)
+			return err
+		}
+		defer func() {
+			if observing {
+				_ = unwatch()
+			}
+		}()
+		done("observer_watch")
+
+		// The subject dies as a lock owner: it closes its silent connection
+		// and sends nothing again. Its lock record and its watch stay until
+		// native librbd breaks the one and the OSD drops the other, a watch
+		// timeout after its registration (the subject never pinged).
+		before := int(osdDials.Load())
+		record.DialsBeforeClose = &before
+		if err := closeAll(); err != nil {
+			t.Fatal("close the silent OSD connection", err)
+		}
+		done("blocked_connection_closed")
+		// Native librbd breaks the lock; the compensating unlock of a
+		// failed run would name a lock that is no longer the subject's.
+		unlocked = true
+		// The takeover is to start while the subject's watch is listed. Its
+		// own boundary observation shows whether it did; this bound only
+		// refuses to start a takeover that could not.
+		age := time.Since(watched)
+		ol.WatchAgeAtTakeover = age.Round(time.Millisecond).String()
+		if age > rbdJournalOwnerLossTakeoverStart {
+			t.Fatalf("the subject's watch was registered %v ago; with its %d s timeout a takeover started now may no longer find it listed", age, rbdJournalLostAppendWatchTimeout)
+		}
+		mark := responder.mark()
+		taken := native(t, "takeover")
+		ol.Takeover = rbdJournalTakeoverOf(taken)
+		_, notes, err := responder.settleSince(ctx, mark)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			t.Fatal("observer header watch", err)
+		}
+		if err != nil {
+			// A responder failure is the claims' to judge.
+			ol.Takeover.NoteFailure = err.Error()
+			notes, _ = responder.snapshot()
+			notes = notes[min(mark, len(notes)):]
+		}
+		ol.Takeover.Notes = notes
+		if err := unwatch(); err != nil {
+			t.Fatal("observer header unwatch", err)
+		}
+		total := int(osdDials.Load())
+		record.DialsTotal = &total
+		judge(t, "takeover")
+		t.Logf("go journal owner loss mode=%s tag=%d entry=0 object=%s submission_tid=%d locker=%s watch_age_at_takeover=%s native_requests=%d takeover_write=%v watch_registered_to_takeover_end=%s",
+			mode, tag, entry.ObjectName, record.Outcome.Submission.Transaction, ol.LockerAddress, ol.WatchAgeAtTakeover, rbdJournalRequestLocks(ol.Takeover), time.Duration(taken.WriteNS),
+			time.Since(watched).Round(time.Millisecond))
+		return
 	}
 
 	// Only now the handoff. The silent connection is closed; the subject
