@@ -649,3 +649,40 @@ func TestDaemonLeaseExpiresBesideAStalledOwnedPoolOracle(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// An end and a pause of one lease are read in one snapshot: of an end and a
+// later pause, a poll that serves the pause has served the end, also when
+// one read of the directory misses the end. So the late pause is refused
+// and never freezes the daemon.
+func TestDaemonLeaseReadsEndsAndPausesInOneSnapshot(t *testing.T) {
+	for _, interleaving := range []string{"published after the first read", "one read misses the end"} {
+		t.Run(interleaving, func(t *testing.T) {
+			out := t.TempDir()
+			s, _, daemons := newTestLeases()
+			deadline := leaseEpoch.Add(10 * time.Second)
+			if interleaving == "one read misses the end" {
+				publishEnd(t, out, 21, 9, "cancel")
+				publishPause(t, out, 22, 9, "osd.1", deadline)
+			}
+			hookRequestReads(t, func(n int, entries []os.DirEntry) []os.DirEntry {
+				if n != 1 {
+					return entries
+				}
+				if interleaving == "published after the first read" {
+					publishEnd(t, out, 21, 9, "cancel")
+					publishPause(t, out, 22, 9, "osd.1", deadline)
+					return entries
+				}
+				return withoutEntry(entries, requestEnvelopeName("end-daemon-lease", "21"))
+			})
+			pollLeases(t, s, out)
+			pollLeases(t, s, out)
+			if calls := daemons.record(); len(calls) != 0 {
+				t.Fatal("a pause published after its lease's end was executed", calls)
+			}
+			if r, ok := leaseAck(t, out, leaseEnded, 9); !ok || r.Reason != leaseEndedBeforePause {
+				t.Fatal("the lease is not ended before its pause", r, ok)
+			}
+		})
+	}
+}
