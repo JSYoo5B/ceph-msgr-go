@@ -1182,7 +1182,8 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 				t.Fatal("session client dialed an OSD or redialed the MDS", r.name, r.dials.MDS.Load(), r.dials.OSD.Load())
 			}
 		}
-		if len(dialRecords) != 15 {
+		// Two of them (O and P) belong to the CHARMAP admission leaf.
+		if len(dialRecords) != 17 {
 			t.Fatal("unexpected number of session clients", len(dialRecords))
 		}
 	})
