@@ -25,6 +25,10 @@ type erasureWidth struct {
 var (
 	erasureK2M1 = erasureWidth{name: "k2m1", profile: "ceph-msgr-owned-ec", topology: "3", k: 2, m: 1}
 	erasureK2M2 = erasureWidth{name: "k2m2", profile: "ceph-msgr-owned-ec-k2m2", topology: "4", k: 2, m: 2}
+	// erasureK3M1 and erasureK4M2 have more than one nonprimary data shard
+	// when optimized ({1,2} and {1,2,3}).
+	erasureK3M1 = erasureWidth{name: "k3m1", profile: "ceph-msgr-owned-ec-k3m1", topology: "4", k: 3, m: 1}
+	erasureK4M2 = erasureWidth{name: "k4m2", profile: "ceph-msgr-owned-ec-k4m2", topology: "6", k: 4, m: 2}
 )
 
 func (w erasureWidth) String() string { return fmt.Sprintf("k=%d,m=%d", w.k, w.m) }
@@ -58,6 +62,9 @@ type erasureFacts struct {
 	// owned are the up and in OSDs of the map.
 	owned []int32
 	epoch uint32
+	// chunk is the pool's native stripe_width divided by k: the bytes of
+	// one data chunk per stripe.
+	chunk int
 }
 
 // crushItemNone is CRUSH_ITEM_NONE, an empty acting-set position.
@@ -93,6 +100,7 @@ type erasureMapPool struct {
 	FlagNames  string          `json:"flags_names"`
 	CrushRule  int             `json:"crush_rule"`
 	Nonprimary json.RawMessage `json:"nonprimary_shards"`
+	Stripe     int             `json:"stripe_width"`
 }
 
 type erasureRuleStep struct {
@@ -125,6 +133,10 @@ func erasureFactsFrom(dump, profile []byte, created poolReceipt, width erasureWi
 		return erasureFacts{}, fmt.Errorf("%s pool type/size/min_size %d/%d/%d (oracle %d/%d), expected 3/%d/%d",
 			width, pool.Type, pool.Size, pool.MinSize, created.Size, created.MinSize, facts.size, facts.minSize)
 	}
+	if pool.Stripe <= 0 || pool.Stripe%width.k != 0 {
+		return erasureFacts{}, fmt.Errorf("EC pool stripe_width %d is not a positive multiple of k=%d", pool.Stripe, width.k)
+	}
+	facts.chunk = pool.Stripe / width.k
 	if pool.Profile != width.profile || created.ErasureCodeProfile != width.profile {
 		return erasureFacts{}, fmt.Errorf("EC pool profile %q (oracle %q), expected %q", pool.Profile, created.ErasureCodeProfile, width.profile)
 	}
