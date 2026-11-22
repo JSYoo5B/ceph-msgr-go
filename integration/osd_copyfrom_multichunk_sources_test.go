@@ -147,10 +147,35 @@ func poolOmapState(t *testing.T, ctx context.Context, slot int, object string) o
 	return result.State
 }
 
+// omapPage is the complete OMAP of one native omapstate observation: its
+// one page, which must not report more entries, plus the empty key when the
+// explicit by-keys read found it (the page cannot hold it).
+func omapPage(t *testing.T, state omapWriteState) map[string][]byte {
+	t.Helper()
+	if state.Code != 0 || state.Omap == nil || len(state.Omap.Operations) != 2 || state.Header == nil {
+		t.Fatal("native OMAP state lacks an existing object inventory/header")
+	}
+	page, keyed := state.Omap.Operations[0], state.Omap.Operations[1]
+	if page.More == nil || *page.More || page.Result != 0 || keyed.Result != 0 {
+		t.Fatal("native OMAP page is incomplete")
+	}
+	result := map[string][]byte{}
+	for _, entry := range page.Entries {
+		result[string(entry.Key)] = entry.Value
+	}
+	for _, entry := range keyed.Entries {
+		if len(entry.Key) != 0 {
+			t.Fatalf("the by-keys read of the empty key returned %q", entry.Key)
+		}
+		result[""] = entry.Value
+	}
+	return result
+}
+
 // sameOmap says whether two native states hold the same OMAP and header.
 func sameOmap(t *testing.T, a, b omapWriteState) bool {
 	t.Helper()
-	return a.Header != nil && b.Header != nil && bytes.Equal(*a.Header, *b.Header) && equalOmapModel(omapWriteInventory(t, a), omapWriteInventory(t, b))
+	return a.Header != nil && b.Header != nil && bytes.Equal(*a.Header, *b.Header) && equalOmapModel(omapPage(t, a), omapPage(t, b))
 }
 
 // lowerCopyChunk lowers the destination primary's osd_copyfrom_max_chunk
@@ -340,7 +365,7 @@ type copyThreeChunkReceipt struct {
 // omapDigest is a short fingerprint of a native OMAP state for a receipt.
 func omapDigest(t *testing.T, s omapWriteState) string {
 	t.Helper()
-	raw, err := json.Marshal(omapWriteEntries(omapWriteInventory(t, s)))
+	raw, err := json.Marshal(omapWriteEntries(omapPage(t, s)))
 	if err != nil || s.Header == nil {
 		t.Fatal("OMAP digest", err)
 	}
@@ -435,7 +460,7 @@ func (r *copyPrimaryChangeRun) writeOmapSource(data, header []byte, entries []ce
 		model[entry.Key] = entry.Value
 	}
 	if native.Code != 0 || !bytes.Equal(native.Data, data) || attrNames(native.nativeXattrSnapshot)["copy-primary-attr"] != string([]byte{9, 0xfe}) || native.Version != reply.UserVersion ||
-		native.Header == nil || !bytes.Equal(*native.Header, header) || !equalOmapModel(omapWriteInventory(t, native), model) {
+		native.Header == nil || !bytes.Equal(*native.Header, header) || !equalOmapModel(omapPage(t, native), model) {
 		t.Fatalf("native source differs from the Go write: code %d version %d (reply %d) %d bytes", native.Code, native.Version, reply.UserVersion, len(native.Data))
 	}
 	return reply, native
@@ -695,14 +720,12 @@ func copyChunkSourceChange(t *testing.T, ctx context.Context, pools ownedPools, 
 	changed := r.writeSourceHead("head write between chunks", 1700009320, []byte("source changed between chunks"), []byte{4}, snapc)
 	receipt.ChangedUser = changed.UserVersion
 	sourceKeys = append(sourceKeys, pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryWriteIncarnation, TID: changed.Transaction})
-	if head := poolObserve(t, ctx, 1, r.source, "", ""); head.Code != 0 || head.Version != changed.UserVersion || head.Version <= copied.Version || string(head.Data) != "source changed between chunks" {
-		t.Fatalf("native source head is not the write between chunks: code %d version %d (reply %d)", head.Code, head.Version, changed.UserVersion)
+	if changed.UserVersion <= copied.Version {
+		t.Fatalf("the write between chunks has user version %d, not above the copied %d", changed.UserVersion, copied.Version)
 	}
-	if cell.snapshot {
-		if clone := poolObserveSnap(t, ctx, 1, r.source, "", "", receipt.SnapID); !sameNative(clone, copied) {
-			t.Fatalf("the head write between chunks changed the clone: %s", nativeDigest(clone))
-		}
-	}
+	// Native reads wait out pauserd in the librados Objecter
+	// (Objecter.cc:2550-2556), so the source is observed natively only after
+	// the copy was answered; nothing else writes it meanwhile.
 	h.pending(t, "after the source changed")
 	r.recovery.clearPauseReads(t, ctx)
 
@@ -728,6 +751,14 @@ func copyChunkSourceChange(t *testing.T, ctx context.Context, pools ownedPools, 
 		t.Fatal(err)
 	}
 	h.o.Close()
+	if head := poolObserve(t, ctx, 1, r.source, "", ""); head.Code != 0 || head.Version != changed.UserVersion || string(head.Data) != "source changed between chunks" {
+		t.Fatalf("native source head is not the write between chunks: code %d version %d (reply %d)", head.Code, head.Version, changed.UserVersion)
+	}
+	if cell.snapshot {
+		if clone := poolObserveSnap(t, ctx, 1, r.source, "", "", receipt.SnapID); !sameNative(clone, copied) {
+			t.Fatalf("the head write between chunks changed the clone: %s", nativeDigest(clone))
+		}
+	}
 
 	want := seeded
 	if cell.snapshot {
