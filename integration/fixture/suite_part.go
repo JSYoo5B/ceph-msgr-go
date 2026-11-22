@@ -40,10 +40,11 @@ import (
 //     part's exact names). A part of a suite with no test of the part is not
 //     run.
 //
-// Every suite run of the default path announces the top-level tests it
-// selects ("Ceph test suite <suite> selects ..."), a part's or the whole
-// row's, before it starts, and fails when a selected test printed no
-// verdict. The result gate (tools/native_test_results.py) requires a verdict
+// Before its first suite runs, the default path announces the top-level
+// tests each suite run selects ("Ceph test suite <suite> selects ..."), a
+// part's or the whole row's, and a suite run fails when a selected test
+// printed no verdict. A suite that exits early therefore leaves the tests of
+// the later suites announced and unreported. The result gate (tools/native_test_results.py) requires a verdict
 // of every announced test as well, so a broad run that was cut off reports
 // the tests it did not reach.
 
@@ -162,7 +163,7 @@ type suiteSteps struct {
 
 // runSuites runs the fixture's selection (a fixture sequence runs instead
 // with runSequence): each suite in order, the whole selection or the
-// profile's part of it, after announcing the tests the run selects.
+// profile's part of it, after announcing the tests of every suite run.
 func runSuites(ctx context.Context, p profile, steps suiteSteps) error {
 	k, n, err := p.suitePart()
 	if err != nil {
@@ -188,8 +189,12 @@ func runSuites(ctx context.Context, p profile, steps suiteSteps) error {
 	if k != 0 && !slices.ContainsFunc(selected, func(tests []string) bool { return len(tests) != 0 }) {
 		return fmt.Errorf("suite part %d/%d selects no test", k, n)
 	}
+	// Every suite's selection is announced before any suite runs, so a suite
+	// that exits early still leaves the tests of the later suites required.
 	for i, suite := range suiteNames {
 		fmt.Fprintln(steps.stdout, suiteSelectionLine(suite, selected[i]))
+	}
+	for i, suite := range suiteNames {
 		selector := p.testRun
 		if k != 0 {
 			if len(selected[i]) == 0 {

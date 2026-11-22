@@ -12,14 +12,15 @@ and the external test package both declare it) is refused by `snapshot`, before
 any run: `-run` runs both under that name and a result line cannot tell which
 one it reports.
 
-Before each suite run of its default path the fixture announces the
-top-level tests the run selects, on a line "Ceph test suite <suite> selects
+Before the first suite run of its default path the fixture announces the
+top-level tests each suite run selects, on a line "Ceph test suite <suite> selects
 <n> top-level tests: <Test> ..." (integration/fixture/suite_part.go): the
 whole selection of a broad row, or the part of it a suite part runs. Every
 announced test needs a terminal result (PASS or SKIP; a FAIL fails anyway),
 and with an announcement a suite may report no result of a test it did not
-announce. A broad run that a timeout cut off therefore reports the tests it
-did not reach instead of passing on the tests it did. The announcement comes
+announce. A broad run that a timeout cut off, or whose first suite exited
+before the next one started, therefore reports the tests it did not reach
+instead of passing on the tests it did. The announcement comes
 from the tested revision, so it can only add requirements: a revision that
 announces nothing (one from before announcements) is judged as before, and
 it never relaxes the snapshot's own expected tests.

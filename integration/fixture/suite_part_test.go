@@ -145,10 +145,12 @@ func TestSuitePartIsAdmittedOnlyForTheDefaultSelection(t *testing.T) {
 }
 
 // fakeSuites is a fixture whose suites list and run the named tests,
-// printing a verdict of each test a run selects except those in silent.
+// printing a verdict of each test a run selects except those in silent; a
+// suite in fails then exits with its error.
 type fakeSuites struct {
 	tests  map[string][]string
 	silent map[string]bool
+	fails  map[string]error
 	runs   []string
 	out    bytes.Buffer
 }
@@ -174,7 +176,7 @@ func (f *fakeSuites) steps() suiteSteps {
 					fmt.Fprintf(w, " (0.01s)\n")
 				}
 			}
-			return nil
+			return f.fails[suite]
 		},
 		stdout: &f.out,
 	}
@@ -237,6 +239,28 @@ func TestRunSuitesFailsWithoutAVerdictOfASelectedTest(t *testing.T) {
 	steps.alive = func() error { return stopped }
 	if err := runSuites(context.Background(), suitePartProfile(t, ""), steps); !errors.Is(err, stopped) || len(f.runs) != 0 {
 		t.Fatalf("a failed control loop: %v, runs %v", err, f.runs)
+	}
+}
+
+func TestRunSuitesAnnouncesEverySuiteBeforeTheFirstRuns(t *testing.T) {
+	failed := errors.New("api suite exited 1")
+	// Part 2/2 of the five tests is TestC of the api suite and both client tests.
+	for part, clientTests := range map[string]string{"": "TestD TestE", "2/2": "TestD TestE"} {
+		f := &fakeSuites{tests: map[string][]string{"api": {"TestA", "TestB", "TestC"}, "client": {"TestD", "TestE"}}, fails: map[string]error{"api": failed}}
+		if err := runSuites(context.Background(), suitePartProfile(t, part), f.steps()); !errors.Is(err, failed) {
+			t.Fatalf("part %q: %v", part, err)
+		}
+		if len(f.runs) != 1 {
+			t.Fatalf("part %q: the client suite ran after the api suite failed: %v", part, f.runs)
+		}
+		out := f.out.String()
+		client, api := strings.Index(out, "Ceph test suite client selects "), strings.Index(out, "Running Ceph test suite: api")
+		if client < 0 || api < 0 || client > api {
+			t.Fatalf("part %q: the client selection was not announced before the api suite ran:\n%s", part, out)
+		}
+		if want := fmt.Sprintf("Ceph test suite client selects %d top-level tests: %s\n", len(strings.Fields(clientTests)), clientTests); !strings.Contains(out, want) {
+			t.Fatalf("part %q: no announcement %q:\n%s", part, want, out)
+		}
 	}
 }
 

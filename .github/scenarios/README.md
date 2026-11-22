@@ -154,9 +154,10 @@ and are judged by the calling revision's result gate
 (`tools/native_test_results.py`): every test an explicit `test_run` selects
 must PASS, and a skipped, missing or failed selected test fails the job. A
 broad suite row requires at least one PASS and does not claim that its
-optional tests passed; the fixture announces the tests each suite run
-selects, and every announced test needs a PASS or SKIP, so a run that was
-cut off reports the tests it did not reach. Separate trusted jobs publish the request's status; a
+optional tests passed; before its first suite runs, the fixture announces
+the tests each suite run selects, and every announced test needs a PASS or
+SKIP, so a run that was cut off, or whose first suite exited before the
+next one, reports the tests it did not reach. Separate trusted jobs publish the request's status; a
 failed, canceled, skipped or missing selected suite never becomes a pass.
 A row's fixture inputs need no workflow change: the trusted
 `tools/native_env.py` forwards each row parameter as `CEPH_MSGR_TEST_<NAME>`
