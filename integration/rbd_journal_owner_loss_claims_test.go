@@ -40,7 +40,8 @@ func rbdJournalTakeoverSample(r *rbdJournalLostAppendRecord, forced bool) {
 	r.OwnerLoss.ExpectedHeadTakeover, r.OwnerLoss.ExpectedCommitTakeover = hash("c"), slices.Clone(v.ImageCommit)
 	r.OwnerLoss.Takeover = &rbdJournalTakeover{Owner: true, WriteNS: 9000, Events: []rbdJournalLostAppendEvent{{Type: "AioWrite", Offset: 40 << 10, Length: 2 << 10}},
 		BlocklistBefore: before, Blocklist: slices.Clone(block), NativeGlobalID: rbdJournalTakeoverSampleGID,
-		BoundaryLockers: []rbdJournalLockRecord{}, BoundaryWatchers: []rbdJournalWatch{{rbdJournalTakeoverSampleGID, rbdJournalTakeoverSampleHandle, "10.0.0.5:0/5"}}}
+		BoundaryLockers: []rbdJournalLockRecord{}, BoundaryWatchers: []rbdJournalWatch{{rbdJournalTakeoverSampleGID, rbdJournalTakeoverSampleHandle, "10.0.0.5:0/5"}},
+		LockPath: rbdJournalLockPathSample(rbdJournalFreeLockPath)}
 	if forced {
 		return
 	}
@@ -57,6 +58,12 @@ func rbdJournalTakeoverSample(r *rbdJournalLostAppendRecord, forced bool) {
 		tk.Notes = append(tk.Notes, rbdLockNotification{Index: i, NotifyID: uint64(700 + i), NotifierGlobalID: native.GID, Cookie: 66, Op: op, Client: native, Role: "non-owner",
 			AckDisposition: rbdAckSubmittedEmpty})
 	}
+	tk.LockPath = rbdJournalLockPathSample(rbdJournalOwnerLossLockPath(2))
+}
+
+// rbdJournalLockPathSample is a complete lock log projected to steps.
+func rbdJournalLockPathSample(steps []string) *rbdJournalLockPath {
+	return &rbdJournalLockPath{Present: true, Matched: 3 * len(steps), Steps: slices.Clone(steps)}
 }
 
 // The takeover instance of the samples.
@@ -113,7 +120,8 @@ func rbdJournalForcedBreakSample() *rbdJournalLostAppendRecord {
 	r.OwnerLoss = &rbdJournalOwnerLoss{Forced: true, LockerAddress: rbdJournalOwnerLossSampleAddress,
 		Break: &rbdJournalBreak{Owners: []string{rbdJournalOwnerLossSampleAddress}, OwnersAfter: []string{}, BreakNS: 3000, LockerBefore: "client.4321", LockerCookieBefore: base.LockCookie,
 			WatchersBefore:      []rbdJournalWatch{{base.SubjectGlobalID, base.WatchCookie, rbdJournalOwnerLossSampleAddress}, {base.ObserverGlobalID, 66, "10.0.0.6:0/6"}},
-			LockerAddressBefore: rbdJournalOwnerLossSampleAddress, BlocklistBefore: []rbdLockOwnerLossBlock{}, Blocklist: slices.Clone(block)},
+			LockerAddressBefore: rbdJournalOwnerLossSampleAddress, BlocklistBefore: []rbdLockOwnerLossBlock{}, Blocklist: slices.Clone(block),
+			LockPath: rbdJournalLockPathSample(rbdJournalForcedBreakLockPath)},
 		PingBefore:  &rbdLockOwnerLossAttempt{Label: "watch_ping", Invocations: 1, Class: "applied"},
 		Fenced:      []rbdLockOwnerLossAttempt{fenced("watch_ping_fenced"), fenced("journal_append_fenced"), fenced("lock_unlock_fenced")},
 		FencedEpoch: 44,
@@ -257,6 +265,33 @@ func TestRBDJournalOwnerLossClaims(t *testing.T) {
 		},
 		"unexpected notification":       func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.Notes[3].Unexpected = true },
 		"notification on another watch": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.Notes[0].Cookie = 67 },
+		// librbd's own log of the acquisition.
+		"lock log missing":   func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.LockPath = nil },
+		"lock log absent":    func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.LockPath.Present = false },
+		"lock log truncated": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.LockPath.Truncated = true },
+		"locker changed on the recheck": func(r *rbdJournalLostAppendRecord) {
+			steps := r.OwnerLoss.Takeover.LockPath.Steps
+			steps[3] = "break.handle_get_locker r=0"
+		},
+		"incompatible lock instead of a live watcher": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.LockPath.Steps = slices.Concat([]string{"acquire.handle_get_locker r=-16", "exclusive.post_acquire_lock_handler r=-16", "watcher.notify_request_lock"},
+				r.OwnerLoss.Takeover.LockPath.Steps[8:])
+		},
+		"one RequestLock fewer in the log": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.LockPath.Steps = r.OwnerLoss.Takeover.LockPath.Steps[8:]
+		},
+		"broken without blocklisting": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.LockPath.Steps = slices.DeleteFunc(r.OwnerLoss.Takeover.LockPath.Steps, func(s string) bool { return s == "break.handle_blocklist r=0" })
+		},
+		"broken before blocklisting": func(r *rbdJournalLostAppendRecord) {
+			steps := r.OwnerLoss.Takeover.LockPath.Steps
+			i, j := slices.Index(steps, "break.handle_blocklist r=0"), slices.Index(steps, "break.handle_break_lock r=0")
+			steps[i], steps[j] = steps[j], steps[i]
+		},
+		"lock not taken after the break": func(r *rbdJournalLostAppendRecord) {
+			steps := r.OwnerLoss.Takeover.LockPath.Steps
+			steps[len(steps)-2] = "acquire.handle_lock r=-16"
+		},
 	} {
 		r := rbdJournalOwnerLossSample("secure")
 		mutate(r)
@@ -388,6 +423,25 @@ func TestRBDJournalForcedBreakClaims(t *testing.T) {
 		"order: fenced before the break": func(r *rbdJournalLostAppendRecord) {
 			i, j := slices.Index(r.Order, "force-break"), slices.Index(r.Order, "fenced")
 			r.Order[i], r.Order[j] = r.Order[j], r.Order[i]
+		},
+		// librbd's own logs of the break and of the takeover.
+		"break lock log missing": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Break.LockPath = nil },
+		"break did not see the live owner": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Break.LockPath.Steps = slices.Delete(r.OwnerLoss.Break.LockPath.Steps, 1, 2)
+		},
+		"break without its blocklist step": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Break.LockPath.Steps = slices.Delete(r.OwnerLoss.Break.LockPath.Steps, 3, 4)
+		},
+		"break ended with -EAGAIN": func(r *rbdJournalLostAppendRecord) {
+			s := r.OwnerLoss.Break.LockPath.Steps
+			s[len(s)-1] = "break.finish r=-11"
+		},
+		"takeover lock log truncated": func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover.LockPath.Truncated = true },
+		"takeover broke a lock": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.LockPath.Steps = rbdJournalOwnerLossLockPath(0)
+		},
+		"takeover found a locker": func(r *rbdJournalLostAppendRecord) {
+			r.OwnerLoss.Takeover.LockPath.Steps[0] = "acquire.handle_get_locker r=0"
 		},
 	} {
 		r := rbdJournalForcedBreakSample()
