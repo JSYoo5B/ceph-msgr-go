@@ -239,10 +239,11 @@ func shardPGHistory(t *testing.T, ctx context.Context, slot int, object string, 
 	return s
 }
 
-// The Go client writes a fresh source head once in an owned replicated pool
-// and copies it once, pinned to that write's user version, to a fresh head of
-// an owned optimized isa k=2,m=2 pool. The destination's live primary must
-// bind the copy to the source write exactly as in the replicated control.
+// erasureCopyFromHistoryScenario: the Go client writes a fresh source head
+// once in an owned replicated pool and copies it once, pinned to that
+// write's user version, to a fresh head of an owned optimized isa pool. The
+// destination's live primary must bind the copy to the source write exactly
+// as in the replicated control.
 // Then every acting shard's store is copied while its container is paused
 // and read offline, between two identical native placement records. Each
 // copy must be attributed to its acting index and complete, and must hold
@@ -252,12 +253,7 @@ func shardPGHistory(t *testing.T, ctx context.Context, slot int, object string, 
 // eviction or replay. Not exercised: the duplicate tier (nothing is trimmed),
 // more than one transferred identity, COPY_FROM, an EC source, and degraded,
 // remapped or pg_temp PGs.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2copyfromhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-shard-history
-//scenario:covers CLIENT to OSD
-//fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
-func TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration(t *testing.T) {
-	width := erasureK2M2
+func erasureCopyFromHistoryScenario(t *testing.T, width erasureWidth) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
 	}
@@ -436,6 +432,36 @@ func TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration is erasureCopyFromHistoryScenario on optimized isa
+// k=2,m=2 (four OSDs).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2copyfromhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
+func TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration(t *testing.T) {
+	erasureCopyFromHistoryScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1CopyFromHistoryIntegration is erasureCopyFromHistoryScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1copyfromhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
+func TestCephOSDErasureOptimizedK3M1CopyFromHistoryIntegration(t *testing.T) {
+	erasureCopyFromHistoryScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2CopyFromHistoryIntegration is erasureCopyFromHistoryScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2copyfromhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
+func TestCephOSDErasureOptimizedK4M2CopyFromHistoryIntegration(t *testing.T) {
+	erasureCopyFromHistoryScenario(t, erasureK4M2)
 }
 
 func TestCopyFromShardObservation(t *testing.T) {

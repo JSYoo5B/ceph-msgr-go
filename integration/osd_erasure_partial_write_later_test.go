@@ -155,6 +155,15 @@ func shardLogExpected(writes []shardWrite, shard, shards int, peered bool) (shar
 	return state, nil
 }
 
+// nonprimarySpan is an overwrite of the first stripe that starts a few bytes
+// into shard 1's chunk and ends with tail inside the last data shard's
+// chunk, so that it touches every nonprimary data shard of a pool without a
+// chunk mapping: k-2 whole chunks of filler before tail. On k=2 it is tail
+// alone, inside shard 1's chunk. tail must be shorter than chunk-5 bytes.
+func nonprimarySpan(chunk uint64, k int, tail []byte) (uint64, []byte) {
+	return chunk + 5, append(bytes.Repeat([]byte{0x6c}, int(chunk)*(k-2)), tail...)
+}
+
 // partialWriteRecordsAmong says whether a shard's partial-write records are
 // exactly one of the allowed lists.
 func partialWriteRecordsAmong(got []shardPartialWrite, allowed ...[]shardPartialWrite) bool {
@@ -463,28 +472,24 @@ func (r *partialWriteRun) everyShard() []int {
 	return shards
 }
 
-// After the partial overwrite of the first control, which leaves the
-// nonprimary data shard out, the Go client overwrites a few bytes inside
-// that shard's chunk in the same interval. The write is acknowledged and
-// read back natively, and every acting shard's store is captured again. The
-// later write's entry must be held by every shard, the nonprimary data shard
-// included, and name every shard. That shard must still not hold the entry
-// of the overwrite it was left out of: its own log holds the full write and
-// the later write, with its head at the later write. The PG must have stayed
+// erasurePartialWriteLaterWriteScenario: after the partial overwrite of the
+// first control, which leaves the nonprimary data shards out, the Go client
+// overwrites bytes from inside shard 1's chunk through the last data
+// shard's chunk in the same interval. The write is acknowledged and read
+// back natively, and every acting shard's store is captured again. The
+// later write's entry must be held by every shard, the nonprimary data
+// shards included, and name every shard. Those shards must still not hold
+// the entry of the overwrite they were left out of: each one's own log
+// holds the full write and the later write, with its head at the later
+// write. The PG must have stayed
 // in one interval. This states what each shard's own log holds at capture
 // time; it claims nothing about eviction, loss or replay.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritelaterwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
-//scenario:covers CLIENT to OSD
-//fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
-func TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration(t *testing.T) {
-	run := startPartialWriteRun(t, 600*time.Second)
+func erasurePartialWriteLaterWriteScenario(t *testing.T, width erasureWidth) {
+	run := startPartialWriteRun(t, width, 600*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince
 	state := run.partialOverwrite()
 	const laterIncarnation = 11
-	later := []byte("later\x00\xffwrite")
-	// A few bytes into the nonprimary data shard's chunk of the first stripe.
-	offset := run.stripe/uint64(run.width.k) + 5
+	offset, later := nonprimarySpan(run.stripe/uint64(run.width.k), run.width.k, []byte("later\x00\xffwrite"))
 	written, skipped := run.plan(offset, len(later))
 	if len(skipped) != 0 {
 		t.Fatalf("the later write [%d,+%d) names shards %v and leaves out %v; this control needs every shard named", offset, len(later), written, skipped)
@@ -532,29 +537,56 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegratio
 	t.Logf("the PG stayed in the interval that started at epoch %d", started)
 }
 
-// After the partial overwrite of the first control, which leaves the
-// nonprimary data shard out, the PG's interval is ended once by an owned,
-// self-restoring `pg repeer` and the PG must settle clean on its original
-// placement in a newer interval; no daemon stops and no data moves. Every
-// acting shard's store is captured again: the shards that hold the
-// overwrite's entry are unchanged, and the nonprimary data shard still does
-// not hold it, but its own last_update, last_complete and log head are now
-// at the overwrite, past its last entry, and its own info holds the
-// partial-write range between them. The object is read back natively and
-// through the Go client on the new placement record. The first Go write of
-// the new interval, again confined to shard 0's chunk, must be held by every
-// shard and name every shard; the nonprimary data shard then holds the full
-// write and this write, and not the overwrite between them. This states what
+// TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration is erasurePartialWriteLaterWriteScenario on optimized isa
+// k=2,m=2 (four OSDs; nonprimary shard {1}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritelaterwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
+func TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteLaterWriteScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1PartialWriteLaterWriteShardHistoryIntegration is erasurePartialWriteLaterWriteScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1partialwritelaterwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
+func TestCephOSDErasureOptimizedK3M1PartialWriteLaterWriteShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteLaterWriteScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2PartialWriteLaterWriteShardHistoryIntegration is erasurePartialWriteLaterWriteScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2partialwritelaterwriteshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
+func TestCephOSDErasureOptimizedK4M2PartialWriteLaterWriteShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteLaterWriteScenario(t, erasureK4M2)
+}
+
+// erasurePartialWriteNewIntervalScenario: after the partial overwrite of
+// the first control, which leaves the nonprimary data shards out, the PG's
+// interval is ended once by an owned, self-restoring `pg repeer` and the PG
+// must settle clean on its original placement in a newer interval; no
+// daemon stops and no data moves. Every acting shard's store is captured
+// again: the shards that hold the overwrite's entry are unchanged, and each
+// nonprimary data shard still does not hold it, but its own last_update,
+// last_complete and log head are now at the overwrite, past its last entry,
+// and its own info holds the partial-write range of every left-out shard.
+// The object is read back natively and through the Go client on the new
+// placement record. The first Go write of the new interval, again confined
+// to shard 0's chunk, must be held by every shard and name every shard; each
+// nonprimary data shard then holds the full write and this write, and not
+// the overwrite between them. This states what
 // each shard's own log holds at capture time; it claims nothing about
 // eviction, loss or replay, and it changes no primary.
 // What the shards held in the intermediate interval, while the PG was not
 // active, is not captured.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritenewintervalshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
-//scenario:covers CLIENT to OSD
-//fixture:isolated repeers its PG and proves it clean without pg_temp, but pauses each acting OSD for a store copy with no clean wait
-func TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration(t *testing.T) {
-	run := startPartialWriteRun(t, 600*time.Second)
+func erasurePartialWriteNewIntervalScenario(t *testing.T, width erasureWidth) {
+	run := startPartialWriteRun(t, width, 600*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince
 	state := run.partialOverwrite()
 	var records []shardPartialWrite
@@ -620,6 +652,36 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegrati
 		t.Fatalf("the PG's interval started at epoch %d after the owned change and at epoch %d after the last capture", interval, ended)
 	}
 	t.Logf("the PG stayed in the interval that started at epoch %d", interval)
+}
+
+// TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration is erasurePartialWriteNewIntervalScenario on optimized isa
+// k=2,m=2 (four OSDs; nonprimary shard {1}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritenewintervalshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated repeers its PG and proves it clean without pg_temp, but pauses each acting OSD for a store copy with no clean wait
+func TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteNewIntervalScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1PartialWriteNewIntervalShardHistoryIntegration is erasurePartialWriteNewIntervalScenario on optimized isa
+// k=3,m=1 (four OSDs; nonprimary shards {1,2}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1partialwritenewintervalshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated repeers its PG and proves it clean without pg_temp, but pauses each acting OSD for a store copy with no clean wait
+func TestCephOSDErasureOptimizedK3M1PartialWriteNewIntervalShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteNewIntervalScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2PartialWriteNewIntervalShardHistoryIntegration is erasurePartialWriteNewIntervalScenario on optimized isa
+// k=4,m=2 (six OSDs; nonprimary shards {1,2,3}).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2partialwritenewintervalshardhistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six,osd-pg-interval,osd-shard-history
+//scenario:covers CLIENT to OSD
+//fixture:isolated repeers its PG and proves it clean without pg_temp, but pauses each acting OSD for a store copy with no clean wait
+func TestCephOSDErasureOptimizedK4M2PartialWriteNewIntervalShardHistoryIntegration(t *testing.T) {
+	erasurePartialWriteNewIntervalScenario(t, erasureK4M2)
 }
 
 // shardLogReceipt builds one synthetic shard receipt and the positions of
@@ -746,6 +808,27 @@ func TestShardLogObservation(t *testing.T) {
 	} {
 		if got, err := call(); err == nil || !reflect.DeepEqual(got, shardLogState{}) {
 			t.Errorf("shard log accepted: %s: %q", name, got)
+		}
+	}
+}
+
+// TestNonprimarySpan restates the later write's plan on each width: it
+// names every shard and touches each nonprimary data shard's chunk.
+func TestNonprimarySpan(t *testing.T) {
+	tail := []byte("later\x00\xffwrite")
+	for _, w := range []erasureWidth{erasureK2M2, erasureK3M1, erasureK4M2} {
+		const chunk = 4096
+		stripe := uint64(chunk * w.k)
+		offset, data := nonprimarySpan(chunk, w.k, tail)
+		if w.k == 2 && !bytes.Equal(data, tail) {
+			t.Fatalf("%s: the k=2 later write is not the tail alone: %d bytes", w, len(data))
+		}
+		written, skipped, err := partialWritePlan(w.k, w.m, w.nonprimaryShards(true), stripe, 2*stripe, offset, uint64(len(data)))
+		if err != nil || len(skipped) != 0 || len(written) != w.size() {
+			t.Fatalf("%s: [%d,+%d) names %v and leaves out %v: %v", w, offset, len(data), written, skipped, err)
+		}
+		if last := offset + uint64(len(data)) - 1; last/chunk != uint64(w.k-1) || offset/chunk != 1 {
+			t.Fatalf("%s: [%d,+%d) does not run from shard 1's chunk into shard %d's", w, offset, len(data), w.k-1)
 		}
 	}
 }
