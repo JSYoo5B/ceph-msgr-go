@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -311,6 +312,22 @@ const (
 	// creation's quiesce: -EBUSY (the fixture plan's quiesce_refusal).
 	rbdGroupQuiesceRefusal      = -16
 	rbdGroupSnapStateIncomplete = 0 // cls::rbd::GROUP_SNAPSHOT_STATE_INCOMPLETE
+	// The timed-out creation's result: every quiesce attempt ended with the
+	// OSD's ETIMEDOUT (ceph/ceph/blob/v20.2.4/src/librbd/ImageWatcher.cc
+	// notify_quiesce).
+	rbdGroupQuiesceTimedOut = 110
+	// The over-limit creation's result: cls_rbd's snapshot_add refuses a
+	// snapshot once the image holds snap_limit snapshots with EDQUOT
+	// (ceph/ceph/blob/v20.2.4/src/cls/rbd/cls_rbd.cc).
+	rbdGroupSnapLimitExceeded = 122
+	// rbd_quiesce_notification_attempts: the plan's count for the timed-out
+	// and retried creations, and librbd's default for the others
+	// (ceph/ceph/blob/v20.2.4/src/common/options/rbd.yaml.in).
+	rbdGroupQuiesceAttempts        = 2
+	rbdGroupDefaultQuiesceAttempts = 10
+	// rbdGroupNoSnapLimit is snapshot_get_limit's answer for an image
+	// without a limit.
+	rbdGroupNoSnapLimit = ^uint64(0)
 )
 
 type nativeRBDGroupCall struct {
@@ -331,20 +348,24 @@ type nativeRBDGroupImagePlan struct {
 }
 
 type nativeRBDGroupPlan struct {
-	Pool            string                    `json:"pool"`
-	SecondPool      string                    `json:"second_pool"`
-	BaseImage       string                    `json:"base_image"`
-	Group           string                    `json:"group"`
-	GroupSnapshot   string                    `json:"group_snapshot"`
-	RefusedSnapshot string                    `json:"refused_snapshot"`
-	SecondSnapshot  string                    `json:"second_snapshot"`
-	Order           int                       `json:"order"`
-	Size            uint64                    `json:"size"`
-	Features        uint64                    `json:"features"`
-	ListPage        uint64                    `json:"list_page"`
-	PollPage        uint64                    `json:"poll_page"`
-	QuiesceRefusal  int32                     `json:"quiesce_refusal"`
-	Images          []nativeRBDGroupImagePlan `json:"images"`
+	Pool              string                    `json:"pool"`
+	SecondPool        string                    `json:"second_pool"`
+	BaseImage         string                    `json:"base_image"`
+	Group             string                    `json:"group"`
+	GroupSnapshot     string                    `json:"group_snapshot"`
+	RefusedSnapshot   string                    `json:"refused_snapshot"`
+	SecondSnapshot    string                    `json:"second_snapshot"`
+	TimedOutSnapshot  string                    `json:"timed_out_snapshot"`
+	RetriedSnapshot   string                    `json:"retried_snapshot"`
+	OverLimitSnapshot string                    `json:"over_limit_snapshot"`
+	Order             int                       `json:"order"`
+	Size              uint64                    `json:"size"`
+	Features          uint64                    `json:"features"`
+	ListPage          uint64                    `json:"list_page"`
+	PollPage          uint64                    `json:"poll_page"`
+	QuiesceRefusal    int32                     `json:"quiesce_refusal"`
+	QuiesceAttempts   int                       `json:"quiesce_attempts"`
+	Images            []nativeRBDGroupImagePlan `json:"images"`
 }
 
 type nativeRBDGroupMember struct {
@@ -425,17 +446,33 @@ type nativeRBDGroupCreationPhase struct {
 		Key             string             `json:"key"`
 		SnapContextCall nativeRBDGroupCall `json:"snapcontext_call"`
 		LockCall        nativeRBDGroupCall `json:"lock_call"`
+		LimitCall       nativeRBDGroupCall `json:"limit_call"`
 	} `json:"images"`
 	RollbackErrno *int `json:"rollback_errno"`
+	// MemberSnapshotCall is the over-limit creation's snapshot_get of
+	// member b's newest snapshot while librbd compensates.
+	MemberSnapshotCall *nativeRBDGroupCall `json:"member_snapshot_call"`
 }
 
 type nativeRBDGroupCreation struct {
-	Snapshot  string                        `json:"snapshot"`
-	GroupID   string                        `json:"group_id"`
-	ImageIDs  map[string]string             `json:"image_ids"`
-	Phases    []nativeRBDGroupCreationPhase `json:"phases"`
-	Errno     int                           `json:"errno"`
-	ElapsedNS int64                         `json:"elapsed_ns"`
+	Snapshot        string                        `json:"snapshot"`
+	GroupID         string                        `json:"group_id"`
+	ImageIDs        map[string]string             `json:"image_ids"`
+	QuiesceAttempts int                           `json:"quiesce_attempts"`
+	Phases          []nativeRBDGroupCreationPhase `json:"phases"`
+	// SnapLimit is the over-limit creation's native snapshot limit on
+	// member a: librbd set it to the member's snapshot count before the
+	// creation and removed it afterwards.
+	SnapLimit *struct {
+		Image        string             `json:"image"`
+		Snapshots    uint64             `json:"snapshots"`
+		Limit        uint64             `json:"limit"`
+		SetCall      nativeRBDGroupCall `json:"set_call"`
+		RemovedLimit uint64             `json:"removed_limit"`
+		RemovedCall  nativeRBDGroupCall `json:"removed_call"`
+	} `json:"snap_limit"`
+	Errno     int   `json:"errno"`
+	ElapsedNS int64 `json:"elapsed_ns"`
 }
 
 // nativeRBDGroupState is the native driver's published state during a
@@ -578,7 +615,8 @@ type rbdGroupNotification struct {
 	Op               uint32
 	Request          *rbdAsyncRequestID `json:",omitempty"`
 	// Held marks a quiesce or unquiesce request whose answer waited for the
-	// test's reads; HeldMS is that wait.
+	// test's reads; HeldMS is that wait. An omitted answer
+	// (AckDisposition omitted) was never sent.
 	Held           bool
 	HeldMS         float64
 	AckDisposition string
@@ -596,9 +634,11 @@ type rbdGroupHoldEvidence struct {
 	GroupSnapListHex string
 	SnapContexts     map[string]string
 	LockInfos        map[string]string
+	SnapLimits       map[string]string
 	NativePhase      string `json:",omitempty"`
 	HeldMS           float64
 	AnswerHex        string
+	Omitted          bool
 }
 
 type rbdGroupEvidence struct {
@@ -625,7 +665,8 @@ type rbdGroupEvidence struct {
 }
 
 // rbdGroupHeld is one quiesce or unquiesce request the watch responder hands
-// to the test, which answers it on Answer.
+// to the test, which answers it on Answer (nil is an empty acknowledgement)
+// or closes Answer to leave the request unanswered.
 type rbdGroupHeld struct {
 	Event    cephmsgr.OSDWatchEvent
 	Op       uint32
@@ -638,8 +679,9 @@ type rbdGroupHeld struct {
 // librbd's ImageWatcher form: lock and header-update notifications get an
 // empty acknowledgement at once; quiesce and unquiesce requests go to the
 // test, which reads the cluster before it answers (a quiesce with a
-// ResponseMessage, an unquiesce with an empty acknowledgement). It pings the
-// watch while idle.
+// ResponseMessage, an unquiesce with an empty acknowledgement) or leaves the
+// request unanswered, so the OSD times the notify out for the notifier. It
+// pings the watch while idle.
 //
 // A notification is recorded only after its acknowledgement returned, which
 // can be after the notifier's notify completed: the OSD completes the notify
@@ -729,14 +771,24 @@ func (r *rbdGroupResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, ep
 		case <-ctx.Done():
 			return
 		}
+		var answered bool
 		select {
-		case ack = <-h.Answer:
+		case ack, answered = <-h.Answer:
 		case <-ctx.Done():
 			// The test ended without an answer: no acknowledgement.
 			n.AckDisposition = rbdAckOmitted
 			return
 		}
 		n.HeldMS = float64(time.Since(received).Microseconds()) / 1000
+		if !answered {
+			// The test left the request unanswered.
+			n.AckDisposition = rbdAckOmitted
+			if !slices.Contains(allowed, n.Op) {
+				n.Unexpected = true
+				r.fail(fmt.Errorf("unexpected member header notification op %d from client.%d during %s", n.Op, event.NotifierGlobalID, n.Action))
+			}
+			return
+		}
 	} else {
 		m, err := decodeRBDNotifyMessage(event.Payload)
 		n.Op = m.Op
@@ -757,17 +809,38 @@ func (r *rbdGroupResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, ep
 	}
 }
 
+// rbdGroupExpectedAnswer is one quiesce or unquiesce request the test held
+// and the Go watcher's answer to it: an acknowledgement carrying Ack (empty
+// for an unquiesce), or none at all (Omitted).
+type rbdGroupExpectedAnswer struct {
+	NotifyID uint64
+	Op       uint32
+	Ack      []byte
+	Omitted  bool
+}
+
 // settleRBDGroupCreation waits for the member header notifications of one
-// native creation to settle, keyed by the exact quiesce and unquiesce notify
-// IDs, and judges them: exactly that quiesce (no retry) answered with answer,
-// exactly that unquiesce answered empty, every notification acknowledged
-// once, and for an accepted creation (answer 0) one AcquiredLock before the
-// unquiesce and one ReleasedLock after it, both from the creating client,
-// with a HeaderUpdate between them.
-func settleRBDGroupCreation(ctx context.Context, r *rbdGroupResponder, action string, quiesceID, unquiesceID, nativeGID uint64, answer int32) ([]rbdGroupNotification, error) {
+// native creation to settle, keyed by the exact notify IDs of the held
+// requests, and judges them: the quiesce attempts and the final unquiesce
+// are exactly the held requests, in order, each answered as held (or never
+// answered), and every other notification is acknowledged empty once. A
+// creation that locked its members (locked) sends one AcquiredLock after
+// the last quiesce and before the unquiesce and one ReleasedLock after the
+// unquiesce, both from the creating client, with a HeaderUpdate between
+// them; one that removed a member snapshot after the unquiesce
+// (compensated) sends a HeaderUpdate after the unquiesce too. A creation
+// that took no lock sends nothing but the held requests.
+func settleRBDGroupCreation(ctx context.Context, r *rbdGroupResponder, action string, held []rbdGroupExpectedAnswer, nativeGID uint64, locked, compensated bool) ([]rbdGroupNotification, error) {
+	if len(held) < 2 || held[len(held)-1].Op != rbdNotifyUnquiesce || slices.ContainsFunc(held[:len(held)-1], func(h rbdGroupExpectedAnswer) bool { return h.Op != rbdNotifyQuiesce }) {
+		return nil, fmt.Errorf("%s: held requests are not quiesce attempts followed by one unquiesce", action)
+	}
+	ids := make([]uint64, 0, len(held))
+	for _, h := range held {
+		ids = append(ids, h.NotifyID)
+	}
 	settleCtx, cancel := context.WithTimeout(ctx, rbdNotifySettleTimeout)
 	defer cancel()
-	events, err := r.settle(settleCtx, quiesceID, unquiesceID)
+	events, err := r.settle(settleCtx, ids...)
 	if err != nil {
 		return events, err
 	}
@@ -778,7 +851,7 @@ func settleRBDGroupCreation(ctx context.Context, r *rbdGroupResponder, action st
 		}
 	}
 	seen := map[uint64]bool{}
-	var quiesces []rbdGroupNotification
+	var requests []rbdGroupNotification
 	count := map[uint32]int{}
 	for _, e := range own {
 		if seen[e.NotifyID] {
@@ -787,33 +860,46 @@ func settleRBDGroupCreation(ctx context.Context, r *rbdGroupResponder, action st
 		seen[e.NotifyID] = true
 		count[e.Op]++
 		if e.Op == rbdNotifyQuiesce || e.Op == rbdNotifyUnquiesce {
-			quiesces = append(quiesces, e)
+			requests = append(requests, e)
 			continue
 		}
 		if e.Unexpected || e.AckDisposition != rbdAckSubmittedEmpty || e.AckHex != "" || e.AckError != "" || e.NotifierGlobalID != nativeGID {
 			return events, fmt.Errorf("%s: member header notification differs: %+v", action, e)
 		}
 	}
-	// One quiesce (no retry after a timeout) and one unquiesce, the exact
-	// notifications the test held.
-	if len(quiesces) != 2 || quiesces[0].NotifyID != quiesceID || quiesces[0].Op != rbdNotifyQuiesce || quiesces[0].AckDisposition != rbdAckSubmittedResponse ||
-		quiesces[0].AckHex != hex.EncodeToString(rbdResponseMessage(answer)) || quiesces[1].NotifyID != unquiesceID || quiesces[1].Op != rbdNotifyUnquiesce ||
-		quiesces[1].AckDisposition != rbdAckSubmittedEmpty || quiesces[1].AckHex != "" || slices.ContainsFunc(quiesces, func(e rbdGroupNotification) bool { return e.AckError != "" || e.NotifierGlobalID != nativeGID }) {
-		return events, fmt.Errorf("%s: member header quiesce requests differ: %+v", action, quiesces)
+	// Every quiesce attempt (a retry follows only a timeout) and the
+	// unquiesce are the exact notifications the test held.
+	if len(requests) != len(held) {
+		return events, fmt.Errorf("%s: member header quiesce requests differ: %+v", action, requests)
 	}
-	if answer != 0 {
-		if len(own) != 2 {
-			return events, fmt.Errorf("%s: a refused creation sent more than its quiesce and unquiesce: %+v", action, own)
+	for i, want := range held {
+		e := requests[i]
+		disposition := rbdAckDispositionOf(want.Omitted, want.Ack, nil)
+		if e.NotifyID != want.NotifyID || e.Op != want.Op || e.AckDisposition != disposition || e.AckHex != hex.EncodeToString(want.Ack) || want.Omitted && len(want.Ack) != 0 ||
+			e.AckError != "" || e.Unexpected || e.NotifierGlobalID != nativeGID {
+			return events, fmt.Errorf("%s: member header quiesce request %d differs: %+v", action, i, e)
+		}
+	}
+	if !locked {
+		if len(own) != len(held) {
+			return events, fmt.Errorf("%s: a creation without member locks sent more than its quiesce requests: %+v", action, own)
 		}
 		return events, nil
 	}
 	position := func(op uint32) int {
 		return slices.IndexFunc(own, func(e rbdGroupNotification) bool { return e.Op == op })
 	}
-	acquired, header, unquiesce, released := position(rbdNotifyAcquiredLock), position(rbdNotifyHeaderUpdate), position(rbdNotifyUnquiesce), position(rbdNotifyReleasedLock)
+	at := func(id uint64) int {
+		return slices.IndexFunc(own, func(e rbdGroupNotification) bool { return e.NotifyID == id })
+	}
+	lastQuiesce, unquiesce := at(held[len(held)-2].NotifyID), at(held[len(held)-1].NotifyID)
+	acquired, header, released := position(rbdNotifyAcquiredLock), position(rbdNotifyHeaderUpdate), position(rbdNotifyReleasedLock)
 	if count[rbdNotifyAcquiredLock] != 1 || count[rbdNotifyReleasedLock] != 1 || count[rbdNotifyHeaderUpdate] == 0 || position(rbdNotifyQuiesce) != 0 ||
-		acquired < 0 || header < acquired || unquiesce < acquired || released < unquiesce || released < header {
+		acquired < lastQuiesce || header < acquired || unquiesce < acquired || released < unquiesce || released < header {
 		return events, fmt.Errorf("%s: member header lock notifications differ: %+v", action, own)
+	}
+	if compensated && !slices.ContainsFunc(own[unquiesce+1:], func(e rbdGroupNotification) bool { return e.Op == rbdNotifyHeaderUpdate }) {
+		return events, fmt.Errorf("%s: no header update followed the unquiesce of a compensated creation: %+v", action, own)
 	}
 	return events, nil
 }
@@ -852,27 +938,50 @@ func waitRBDGroupState(ctx context.Context, path, phase string, finished <-chan 
 
 // TestRBDGroupCreationSettlement checks the member header notification
 // verdict against a Go watcher that records the final acknowledgements only
-// after the native creation returned: the verdict waits for the exact
-// quiesce and unquiesce notify IDs and every notification in flight, and
-// still refuses a retried quiesce, a duplicate, a wrong answer, a missing
-// lock notification and a notification that never settles.
+// after the native creation returned: the verdict waits for the exact held
+// notify IDs and every notification in flight, admits the refused, accepted,
+// timed-out, retried and over-limit shapes, and still refuses an extra or
+// missing quiesce attempt, a duplicate, a wrong or omitted answer, a missing
+// lock or compensation notification and a notification that never settles.
 func TestRBDGroupCreationSettlement(t *testing.T) {
-	const native, quiesceID, unquiesceID = 4100, 11, 14
+	const native = 4100
 	type step struct {
 		id       uint64
 		op       uint32
 		ack      []byte
+		omit     bool // the watcher never answered
 		late     bool // recorded only after the native creation returned
 		unseen   bool // not yet received when the native creation returned
 		never    bool // received but never recorded
 		notifier uint64
 	}
 	accepted := func() []step {
-		return []step{{id: quiesceID, op: rbdNotifyQuiesce, ack: rbdResponseMessage(0)}, {id: 12, op: rbdNotifyAcquiredLock}, {id: 13, op: rbdNotifyHeaderUpdate},
-			{id: unquiesceID, op: rbdNotifyUnquiesce}, {id: 15, op: rbdNotifyReleasedLock}}
+		return []step{{id: 11, op: rbdNotifyQuiesce, ack: rbdResponseMessage(0)}, {id: 12, op: rbdNotifyAcquiredLock}, {id: 13, op: rbdNotifyHeaderUpdate},
+			{id: 14, op: rbdNotifyUnquiesce}, {id: 15, op: rbdNotifyReleasedLock}}
 	}
 	refused := func() []step {
-		return []step{{id: quiesceID, op: rbdNotifyQuiesce, ack: rbdResponseMessage(rbdGroupQuiesceRefusal)}, {id: unquiesceID, op: rbdNotifyUnquiesce}}
+		return []step{{id: 11, op: rbdNotifyQuiesce, ack: rbdResponseMessage(rbdGroupQuiesceRefusal)}, {id: 14, op: rbdNotifyUnquiesce}}
+	}
+	timedOut := func() []step {
+		return []step{{id: 10, op: rbdNotifyQuiesce, omit: true}, {id: 11, op: rbdNotifyQuiesce, omit: true}, {id: 14, op: rbdNotifyUnquiesce}}
+	}
+	retried := func() []step {
+		return []step{{id: 10, op: rbdNotifyQuiesce, omit: true}, {id: 11, op: rbdNotifyQuiesce, ack: rbdResponseMessage(0)}, {id: 12, op: rbdNotifyAcquiredLock},
+			{id: 13, op: rbdNotifyHeaderUpdate}, {id: 14, op: rbdNotifyUnquiesce, omit: true}, {id: 15, op: rbdNotifyReleasedLock}}
+	}
+	overLimit := func() []step {
+		return []step{{id: 11, op: rbdNotifyQuiesce, ack: rbdResponseMessage(0)}, {id: 12, op: rbdNotifyAcquiredLock}, {id: 13, op: rbdNotifyHeaderUpdate},
+			{id: 14, op: rbdNotifyUnquiesce}, {id: 16, op: rbdNotifyHeaderUpdate}, {id: 17, op: rbdNotifyReleasedLock}}
+	}
+	// expectOf is the held list of an intended watcher run.
+	expectOf := func(steps []step) []rbdGroupExpectedAnswer {
+		var held []rbdGroupExpectedAnswer
+		for _, s := range steps {
+			if s.op == rbdNotifyQuiesce || s.op == rbdNotifyUnquiesce {
+				held = append(held, rbdGroupExpectedAnswer{NotifyID: s.id, Op: s.op, Ack: s.ack, Omitted: s.omit})
+			}
+		}
+		return held
 	}
 	late := func(steps []step, from int, unseen bool) []step {
 		for i := from; i < len(steps); i++ {
@@ -882,30 +991,43 @@ func TestRBDGroupCreationSettlement(t *testing.T) {
 	}
 	with := func(steps []step, f func([]step) []step) []step { return f(steps) }
 	cases := []struct {
-		name   string
-		answer int32
-		steps  []step
-		ok     bool
+		name                string
+		steps               []step
+		expect              []rbdGroupExpectedAnswer // nil: expectOf(steps)
+		locked, compensated bool
+		ok                  bool
 	}{
-		{"accepted recorded before return", 0, accepted(), true},
-		{"accepted unquiesce and release recorded after return", 0, late(accepted(), 3, false), true},
+		{name: "accepted recorded before return", steps: accepted(), locked: true, ok: true},
+		{name: "accepted unquiesce and release recorded after return", steps: late(accepted(), 3, false), locked: true, ok: true},
 		// The unquiesce key holds the verdict until it is received; the
 		// release librbd waited for is already in flight.
-		{"accepted unquiesce received after return", 0, with(late(accepted(), 3, false), func(s []step) []step { s[3].unseen = true; return s }), true},
-		{"refused unquiesce recorded after return", rbdGroupQuiesceRefusal, late(refused(), 1, false), true},
-		{"refused unquiesce received after return", rbdGroupQuiesceRefusal, late(refused(), 1, true), true},
-		{"unquiesce never recorded", rbdGroupQuiesceRefusal, with(refused(), func(s []step) []step { s[1].never = true; return s }), false},
-		{"unquiesce never received", rbdGroupQuiesceRefusal, refused()[:1], false},
-		{"lock notification never recorded", 0, with(accepted(), func(s []step) []step { s[4].never = true; return s }), false},
-		{"retried quiesce", rbdGroupQuiesceRefusal, append([]step{{id: 10, op: rbdNotifyQuiesce, ack: rbdResponseMessage(rbdGroupQuiesceRefusal)}}, refused()...), false},
-		{"duplicate notify ID", 0, append(accepted(), step{id: 15, op: rbdNotifyReleasedLock}), false},
-		{"quiesce answered otherwise", 0, with(accepted(), func(s []step) []step { s[0].ack = rbdResponseMessage(-95); return s }), false},
-		{"unquiesce answered with a response", rbdGroupQuiesceRefusal, with(refused(), func(s []step) []step { s[1].ack = rbdResponseMessage(0); return s }), false},
-		{"accepted without its release", 0, accepted()[:4], false},
-		{"accepted with a second acquire", 0, append(accepted(), step{id: 16, op: rbdNotifyAcquiredLock}), false},
-		{"release before the unquiesce", 0, with(accepted(), func(s []step) []step { s[3], s[4] = s[4], s[3]; return s }), false},
-		{"refused with a lock notification", rbdGroupQuiesceRefusal, append(refused(), step{id: 15, op: rbdNotifyReleasedLock}), false},
-		{"lock notification from another client", 0, with(accepted(), func(s []step) []step { s[1].notifier = native + 1; return s }), false},
+		{name: "accepted unquiesce received after return", steps: with(late(accepted(), 3, false), func(s []step) []step { s[3].unseen = true; return s }), locked: true, ok: true},
+		{name: "refused unquiesce recorded after return", steps: late(refused(), 1, false), ok: true},
+		{name: "refused unquiesce received after return", steps: late(refused(), 1, true), ok: true},
+		{name: "timed out", steps: timedOut(), ok: true},
+		{name: "timed out attempts recorded after return", steps: late(timedOut(), 1, false), ok: true},
+		{name: "retried", steps: retried(), locked: true, ok: true},
+		{name: "retried unanswered unquiesce recorded after return", steps: late(retried(), 4, false), locked: true, ok: true},
+		{name: "over limit", steps: overLimit(), locked: true, compensated: true, ok: true},
+		{name: "unquiesce never recorded", steps: with(refused(), func(s []step) []step { s[1].never = true; return s })},
+		{name: "unquiesce never received", steps: refused()[:1], expect: expectOf(refused())},
+		{name: "lock notification never recorded", steps: with(accepted(), func(s []step) []step { s[4].never = true; return s }), locked: true},
+		{name: "unexpected quiesce attempt", steps: append([]step{{id: 10, op: rbdNotifyQuiesce, ack: rbdResponseMessage(rbdGroupQuiesceRefusal)}}, refused()...), expect: expectOf(refused())},
+		{name: "duplicate notify ID", steps: append(accepted(), step{id: 15, op: rbdNotifyReleasedLock}), locked: true},
+		{name: "quiesce answered otherwise", steps: with(accepted(), func(s []step) []step { s[0].ack = rbdResponseMessage(-95); return s }), expect: expectOf(accepted()), locked: true},
+		{name: "unquiesce answered with a response", steps: with(refused(), func(s []step) []step { s[1].ack = rbdResponseMessage(0); return s }), expect: expectOf(refused())},
+		{name: "accepted without its release", steps: accepted()[:4], locked: true},
+		{name: "accepted with a second acquire", steps: append(accepted(), step{id: 16, op: rbdNotifyAcquiredLock}), locked: true},
+		{name: "release before the unquiesce", steps: with(accepted(), func(s []step) []step { s[3], s[4] = s[4], s[3]; return s }), locked: true},
+		{name: "refused with a lock notification", steps: append(refused(), step{id: 15, op: rbdNotifyReleasedLock})},
+		{name: "lock notification from another client", steps: with(accepted(), func(s []step) []step { s[1].notifier = native + 1; return s }), locked: true},
+		{name: "timed out with an answered attempt", steps: with(timedOut(), func(s []step) []step { s[0].omit, s[0].ack = false, rbdResponseMessage(0); return s }), expect: expectOf(timedOut())},
+		{name: "timed out without the retry", steps: timedOut()[1:], expect: expectOf(timedOut())},
+		{name: "timed out unquiesce unanswered", steps: with(timedOut(), func(s []step) []step { s[2].omit = true; return s }), expect: expectOf(timedOut())},
+		{name: "retried lock before the retry", steps: with(retried(), func(s []step) []step { s[1], s[2] = s[2], s[1]; return s }), locked: true},
+		{name: "retried unquiesce acknowledged", steps: with(retried(), func(s []step) []step { s[4].omit = false; return s }), expect: expectOf(retried()), locked: true},
+		{name: "over limit without the removal's header update", steps: with(overLimit(), func(s []step) []step { return append(s[:4], s[5]) }), locked: true, compensated: true},
+		{name: "held list without its unquiesce", steps: refused(), expect: expectOf(refused())[:1]},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -918,7 +1040,7 @@ func TestRBDGroupCreationSettlement(t *testing.T) {
 					notifier = native
 				}
 				n, _ := r.receive(time.Now(), started, cephmsgr.OSDWatchEvent{Opcode: cephmsgr.OSDWatchNotification, NotifyID: s.id, NotifierGlobalID: notifier, Cookie: 1})
-				n.Op, n.AckHex, n.AckDisposition = s.op, hex.EncodeToString(s.ack), rbdAckDispositionOf(false, s.ack, nil)
+				n.Op, n.AckHex, n.AckDisposition = s.op, hex.EncodeToString(s.ack), rbdAckDispositionOf(s.omit, s.ack, nil)
 				return n
 			}
 			// later holds, in delivery order, what the watcher records
@@ -944,9 +1066,13 @@ func TestRBDGroupCreationSettlement(t *testing.T) {
 					f()
 				}
 			}()
+			expect := tc.expect
+			if expect == nil {
+				expect = expectOf(tc.steps)
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
-			events, err := settleRBDGroupCreation(ctx, r, "cell", quiesceID, unquiesceID, native, tc.answer)
+			events, err := settleRBDGroupCreation(ctx, r, "cell", expect, native, tc.locked, tc.compensated)
 			if tc.ok && (err != nil || len(events) != len(tc.steps)) {
 				t.Fatal("settled creation refused", err, events)
 			}
@@ -1008,40 +1134,83 @@ func TestRBDGroupStderrAllowed(t *testing.T) {
 // listings and group namespaces, and every data object with native librados
 // reads, native librbd image reads and the planned contents.
 //
-// Two native group snapshot creations then run under a Go watch on member
+// Five native group snapshot creations then run under a Go watch on member
 // b's header. librbd writes the INCOMPLETE record, quiesces every member,
 // acquires the exclusive locks, creates the member snapshots, writes the
 // COMPLETE record and unquiesces; on a failed quiesce it unquiesces and
-// removes the record (ceph/ceph/blob/v20.2.4/src/librbd/api/Group.cc
-// snap_create, ImageWatcher.cc notify_quiesce). While the Go watcher holds
-// its answer to each quiesce and unquiesce request, the Go test reads the
-// group header and both member headers, and the native driver's second
-// thread reads the same objects with the same inputs and tries a rollback to
-// the snapshot being created, which librbd refuses for an INCOMPLETE record;
-// the Go and native outputs must be byte-identical. The first creation's
-// quiesce is answered with ResponseMessage(-EBUSY): at the quiesce and at the
-// unquiesce the record is INCOMPLETE with zero member snapshot IDs, no
-// member snapshot or lock exists, the creation returns EBUSY and afterwards
-// the record is gone. The second creation's quiesce is answered with
-// ResponseMessage(0): at the quiesce the record is INCOMPLETE without
-// member snapshots or locks, at the unquiesce it is COMPLETE with both
-// member snapshots and native librbd holds both exclusive locks, and after
-// the creation the locks are released. Native librbd then rolls the group
-// back to the first snapshot; the heads read as the first snapshot while the
-// second snapshot keeps the later contents. Finally native librbd removes
-// both group snapshots, the membership, the group and both images, each
-// followed by a native absence read, and the Go reads of the old directory
-// entry, group header and member headers answer ENOENT.
+// removes the record, and on a failed member snapshot it unquiesces, removes
+// the member snapshots that exist and removes the record
+// (ceph/ceph/blob/v20.2.4/src/librbd/api/Group.cc snap_create,
+// ImageWatcher.cc notify_quiesce). Each quiesce attempt is one notify with
+// librbd's 5 s timeout (ceph/ceph/blob/v20.2.4/src/librbd/watcher/Notifier.cc);
+// librbd retries a timed-out quiesce with the same request ID up to
+// rbd_quiesce_notification_attempts times, and ignores the unquiesce's
+// result. While the Go watcher holds each quiesce and unquiesce request,
+// the Go test reads the group header and both member headers
+// (group_snap_list, get_snapcontext, lock.get_info, snapshot_get_limit) and,
+// at the requests the native driver observes, the driver's second thread
+// reads the same objects with the same inputs and the outputs must be
+// byte-identical; at the first quiesce it also tries a rollback to the
+// snapshot being created, which librbd refuses with EINVAL for an
+// INCOMPLETE record. Every hold is judged before the Go watcher answers.
 //
-// Not covered: a timed-out quiesce (librbd retries it), a lock acquisition
-// failure, a failure after the member snapshots, journaling members,
-// members in another namespace (librbd refuses them before any wire
-// request), mirrored group snapshots and migration.
+//   - refused: the quiesce is answered with ResponseMessage(-EBUSY). At the
+//     quiesce and at the unquiesce the record is INCOMPLETE with zero member
+//     snapshot IDs and no member snapshot or lock exists; the creation
+//     returns EBUSY and afterwards the record is gone.
+//   - accepted: the quiesce is answered with ResponseMessage(0). At the
+//     quiesce the record is INCOMPLETE without member snapshots or locks; at
+//     the unquiesce it is COMPLETE with both member snapshots and native
+//     librbd holds both exclusive locks, member b's cookie handle being the
+//     quiesce requester's; after the creation the locks are released.
+//   - timed-out: the creating client sets rbd_quiesce_notification_attempts
+//     to plan.QuiesceAttempts (2) and the Go watcher answers no quiesce
+//     attempt. Each attempt reaches the watch as a new notification with the
+//     first one's request ID; the record stays INCOMPLETE without member
+//     snapshots or locks through every attempt and the unquiesce, the
+//     creation returns ETIMEDOUT with librbd's "failed to notify quiesce:
+//     (110)" report, and afterwards the record is gone.
+//   - retried: with the same attempt count, the first attempt is left to
+//     time out and the retry is answered with ResponseMessage(0); librbd then
+//     locks, snapshots both members and writes COMPLETE. The unquiesce is
+//     never answered: the record is COMPLETE with both locks held while the
+//     Go watcher holds it, and after that notify times out the creation
+//     returns success and the locks are released.
+//   - over-limit: native librbd sets member a's snapshot limit to its
+//     snapshot count. The quiesce is answered with ResponseMessage(0);
+//     cls_rbd's snapshot_add refuses member a's snapshot with EDQUOT after
+//     member b's exists. At the unquiesce the record is still INCOMPLETE with
+//     zero member snapshot IDs, member a has no new snapshot, member b's new
+//     snapshot names the INCOMPLETE record in its group namespace (Go and
+//     native snapshot_get are byte-identical) and both locks are held. The
+//     creation returns EDQUOT, a header update follows the unquiesce on
+//     member b, and afterwards the record and member b's snapshot are gone
+//     (Go snapshot_get answers ENOENT). Native librbd removes the limit, and
+//     Go and native snapshot_get_limit then answer no limit.
+//
+// After each creation the Go reads of the group and both members are
+// compared with native librbd again, and every member's data objects with
+// the planned contents. The member header notifications of each creation
+// are judged once settled: the held requests in order, each answered as
+// held or never answered, and for the locking creations one AcquiredLock
+// after the last quiesce, a HeaderUpdate and one ReleasedLock after the
+// unquiesce. Native librbd then rolls the group back to the first snapshot;
+// the heads read as the first snapshot while the second and retried
+// snapshots keep the later contents. Finally native librbd removes the three
+// group snapshots, the membership, the group and both images, each followed
+// by a native absence read, and the Go reads of the old directory entry,
+// group header and member headers answer ENOENT.
+//
+// Not covered: a lock acquisition failure; a failure of the COMPLETE
+// group_snap_set after the member snapshots, which shares the over-limit
+// compensation path in librbd but has no bounded fault here; journaling
+// members; members in another namespace (librbd refuses them before any
+// wire request); mirrored group snapshots and migration.
 //
 //scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdgroupsnapshot key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-group-snapshot
 //scenario:row rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdgroupsnapshot key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 rbd=1 capabilities=rbd-group-snapshot
 //scenario:covers RBD underlying I/O
-//fixture:isolated adds a second owned pool; natively snapshots, rolls back and removes a group of two images
+//fixture:isolated adds a second owned pool; natively snapshots, limits, rolls back and removes a group of two images
 func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
@@ -1154,7 +1323,9 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	k := uint64(1) << 10
 	if plan.Pool != oracle.Plan.Pool || plan.SecondPool != second.Name || plan.BaseImage != oracle.Plan.Image || plan.Group != "ceph-msgr-group-"+token ||
 		plan.GroupSnapshot != "ceph-msgr-gsnap-"+token[:8] || plan.RefusedSnapshot != "ceph-msgr-gsnap-refused-"+token[:8] || plan.SecondSnapshot != "ceph-msgr-gsnap-second-"+token[:8] ||
-		plan.Order != 16 || plan.Size != 192*k || plan.Features != 1|4|8|16 || plan.ListPage != 1 || plan.PollPage != 16 || plan.QuiesceRefusal != rbdGroupQuiesceRefusal || len(plan.Images) != 2 ||
+		plan.TimedOutSnapshot != "ceph-msgr-gsnap-timedout-"+token[:8] || plan.RetriedSnapshot != "ceph-msgr-gsnap-retried-"+token[:8] || plan.OverLimitSnapshot != "ceph-msgr-gsnap-overlimit-"+token[:8] ||
+		plan.Order != 16 || plan.Size != 192*k || plan.Features != 1|4|8|16 || plan.ListPage != 1 || plan.PollPage != 16 || plan.QuiesceRefusal != rbdGroupQuiesceRefusal ||
+		plan.QuiesceAttempts != rbdGroupQuiesceAttempts || len(plan.Images) != 2 ||
 		plan.Images[0].Key != "a" || plan.Images[0].Name != "ceph-msgr-gimage-a-"+token || plan.Images[0].Pool != plan.Pool ||
 		plan.Images[1].Key != "b" || plan.Images[1].Name != "ceph-msgr-gimage-b-"+token || plan.Images[1].Pool != plan.SecondPool {
 		t.Fatal("RBD group plan differs", plan)
@@ -1656,18 +1827,43 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 		}
 	}()
 
-	// creation runs one native creation under the Go watch, answering its
-	// quiesce with answer, and returns its receipt and the records read at
-	// the quiesce and at the unquiesce.
+	// creation runs one native creation under the Go watch. Each step is
+	// one quiesce or unquiesce request on member b's header, in arrival
+	// order: while it holds the request the test reads the group header and
+	// both member headers, waits for the named native observation, compares
+	// the two and judges the hold, then answers the request or never
+	// answers it (omit), which leaves it to time out at the OSD for the
+	// notifier. A failed judgment still answers the request.
 	type holdView struct {
 		list    []byte
 		records map[string]rbdGroupSnapRecord
 		snapc   map[string][]uint64
 		locks   map[string]rbdLockInfo
+		limits  map[string]uint64
 	}
-	creation := func(t *testing.T, action, snapshot string, answer int32, allowed []uint32, stderr []string, atUnquiesce func(*testing.T, holdView, rbdGroupHeld, nativeRBDGroupState)) *nativeRBDGroup {
+	type holdStep struct {
+		op     uint32
+		phase  string // the evidence label
+		native string // the native observation to compare with, or ""
+		answer []byte
+		omit   bool
+		check  func(t *testing.T, v holdView, h rbdGroupHeld, state nativeRBDGroupState, p nativeRBDGroupCreationPhase)
+	}
+	type creationCell struct {
+		action, snapshot string
+		attempts         int // the creating client's quiesce attempts
+		limitA           uint64
+		steps            []holdStep
+		allowed          []uint32
+		stderr           []string
+		// locked: the creation acquires both member locks; compensated: it
+		// removes a member snapshot after the unquiesce.
+		locked, compensated bool
+	}
+	creation := func(t *testing.T, cell creationCell) *nativeRBDGroup {
 		t.Helper()
-		responder.begin(action, allowed...)
+		action := cell.action
+		responder.begin(action, cell.allowed...)
 		request(t, action)
 		finished := make(chan struct{})
 		var controlErr error
@@ -1702,15 +1898,20 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 			return rbdGroupHeld{}
 		}
 		// read takes the hold's view: the group records and both member
-		// headers' snap contexts and lock records.
+		// headers' snap contexts, lock records and snapshot limits.
 		read := func(t *testing.T, phase string) holdView {
 			t.Helper()
-			v := holdView{snapc: map[string][]uint64{}, locks: map[string]rbdLockInfo{}}
+			v := holdView{snapc: map[string][]uint64{}, locks: map[string]rbdLockInfo{}, limits: map[string]uint64{}}
 			v.list = call(t, action+"_"+phase+"_group_snap_list", poolID, header, "rbd", "group_snap_list", pollInput, 0)
 			v.records = listRecords(t, v.list)
 			for _, key := range []string{"a", "b"} {
 				v.snapc[key] = snapContext(t, call(t, action+"_"+phase+"_get_snapcontext_"+key, imagePool[key], memberHeader(key), "rbd", "get_snapcontext", nil, 0))
 				v.locks[key] = lockInfo(t, call(t, action+"_"+phase+"_lock_get_info_"+key, imagePool[key], memberHeader(key), "lock", "get_info", rbdLockGetInfoInput(), 0))
+				out := call(t, action+"_"+phase+"_snapshot_get_limit_"+key, imagePool[key], memberHeader(key), "rbd", "snapshot_get_limit", nil, 0)
+				if len(out) != 8 {
+					t.Fatal("snapshot_get_limit output", key, out)
+				}
+				v.limits[key] = binary.LittleEndian.Uint64(out)
 			}
 			return v
 		}
@@ -1722,160 +1923,293 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 			if len(p.Images) != 2 {
 				t.Fatal("native creation observation lacks a member", label)
 			}
-			for _, image := range p.Images {
-				object := memberHeader(image.Key)
-				out := evidence.ClassOutputs[action+"_"+label+"_get_snapcontext_"+image.Key]
-				lock := evidence.ClassOutputs[action+"_"+label+"_lock_get_info_"+image.Key]
-				if image.SnapContextCall.Object != object || image.SnapContextCall.Method != "get_snapcontext" || image.SnapContextCall.Code != 0 || image.SnapContextCall.OutputHex != out ||
-					image.LockCall.Object != object || image.LockCall.Class != "lock" || image.LockCall.InputHex != hex.EncodeToString(rbdLockGetInfoInput()) || image.LockCall.Code != 0 || image.LockCall.OutputHex != lock {
-					t.Fatal("native member header observation differs from the Go reads", label, image.Key)
+			for i, image := range p.Images {
+				if image.Key != plan.Images[i].Key {
+					t.Fatal("native creation observation member order differs", label, image.Key)
 				}
+				object := memberHeader(image.Key)
+				outputs := func(method string) []byte {
+					out, err := hex.DecodeString(evidence.ClassOutputs[action+"_"+label+"_"+method+"_"+image.Key])
+					if err != nil {
+						t.Fatal(err)
+					}
+					return out
+				}
+				sameCall(t, label+" get_snapcontext "+image.Key, image.SnapContextCall, object, "rbd", "get_snapcontext", nil, outputs("get_snapcontext"))
+				sameCall(t, label+" lock.get_info "+image.Key, image.LockCall, object, "lock", "get_info", rbdLockGetInfoInput(), outputs("lock_get_info"))
+				sameCall(t, label+" snapshot_get_limit "+image.Key, image.LimitCall, object, "rbd", "snapshot_get_limit", nil, outputs("snapshot_get_limit"))
 			}
 		}
-		answerHeld := func(h rbdGroupHeld, phase string, v holdView, nativePhase string, ack []byte, runningBefore bool) {
-			hold := rbdGroupHoldEvidence{Action: action, Phase: phase, NotifyID: h.Event.NotifyID, Request: h.Request, ControlRunning: [2]bool{runningBefore, running()},
-				GroupSnapListHex: hex.EncodeToString(v.list), SnapContexts: map[string]string{}, LockInfos: map[string]string{}, NativePhase: nativePhase,
-				HeldMS: float64(time.Since(h.Received).Microseconds()) / 1000, AnswerHex: hex.EncodeToString(ack)}
+		release := func(h rbdGroupHeld, s holdStep) {
+			if s.omit {
+				close(h.Answer)
+			} else {
+				h.Answer <- s.answer
+			}
+		}
+		answerHeld := func(h rbdGroupHeld, s holdStep, v holdView, nativePhase string, runningBefore bool) {
+			hold := rbdGroupHoldEvidence{Action: action, Phase: s.phase, NotifyID: h.Event.NotifyID, Request: h.Request, ControlRunning: [2]bool{runningBefore, running()},
+				GroupSnapListHex: hex.EncodeToString(v.list), SnapContexts: map[string]string{}, LockInfos: map[string]string{}, SnapLimits: map[string]string{}, NativePhase: nativePhase,
+				HeldMS: float64(time.Since(h.Received).Microseconds()) / 1000, AnswerHex: hex.EncodeToString(s.answer), Omitted: s.omit}
 			for _, key := range []string{"a", "b"} {
 				hold.SnapContexts[key] = fmt.Sprint(v.snapc[key])
-				hold.LockInfos[key] = evidence.ClassOutputs[action+"_"+phase+"_lock_get_info_"+key]
+				hold.LockInfos[key] = evidence.ClassOutputs[action+"_"+s.phase+"_lock_get_info_"+key]
+				hold.SnapLimits[key] = fmt.Sprint(v.limits[key])
 			}
 			evidence.Holds = append(evidence.Holds, hold)
-			h.Answer <- ack
+			release(h, s)
 		}
 
-		// The quiesce: INCOMPLETE, written before it, with zero member
-		// snapshot IDs; no member snapshot or lock yet.
-		quiesce := waitHeld(t, rbdNotifyQuiesce)
-		before := running()
-		atQuiesce := read(t, "quiesce")
-		state, nativePhase, err := waitRBDGroupState(ctx, statePath, "incomplete-observed", finished, &controlErr)
-		if err != nil {
-			quiesce.Answer <- rbdResponseMessage(answer)
-			t.Fatal(err)
+		var initial rbdGroupHeld
+		var state nativeRBDGroupState
+		var held []rbdGroupExpectedAnswer
+		var phases []string
+		for i, s := range cell.steps {
+			h := waitHeld(t, s.op)
+			before := running()
+			answered := false
+			func() {
+				defer func() {
+					if !answered {
+						release(h, s)
+					}
+				}()
+				v := read(t, s.phase)
+				stepState, p := state, nativeRBDGroupCreationPhase{}
+				if s.native != "" {
+					var err error
+					if stepState, p, err = waitRBDGroupState(ctx, statePath, s.native, finished, &controlErr); err != nil {
+						t.Fatal(err)
+					}
+					phases = append(phases, s.native)
+				}
+				if i == 0 {
+					state, initial = stepState, h
+					if s.native != "incomplete-observed" || state.Token != token || state.Snapshot != cell.snapshot || state.GroupID != group.ID || state.NativeGlobalID == 0 ||
+						state.NativeGlobalID == gid || !reflect.DeepEqual(state.ImageIDs, imageIDs) || h.Request.Client.GID != state.NativeGlobalID ||
+						h.Event.NotifierGlobalID != state.NativeGlobalID || h.Request.Client.Handle == 0 {
+						t.Fatal("quiesce request does not come from the native creating client", action, state.NativeGlobalID, h.Request, h.Event.NotifierGlobalID)
+					}
+				} else if h.Request != initial.Request || h.Event.NotifierGlobalID != state.NativeGlobalID ||
+					slices.ContainsFunc(held, func(e rbdGroupExpectedAnswer) bool { return e.NotifyID == h.Event.NotifyID }) {
+					// A retried quiesce and the unquiesce carry the first
+					// quiesce's request ID in a new notification.
+					t.Fatal("request differs from its first quiesce", action, s.phase, h.Request, initial.Request, h.Event.NotifyID)
+				}
+				if s.native != "" {
+					sameAsNative(t, s.phase, v, p)
+				}
+				if s.native == "incomplete-observed" && (p.RollbackErrno == nil || *p.RollbackErrno != 22) {
+					t.Fatal("native librbd did not refuse a rollback to the INCOMPLETE group snapshot with EINVAL", action, p.RollbackErrno)
+				}
+				if v.limits["a"] != cell.limitA || v.limits["b"] != rbdGroupNoSnapLimit {
+					t.Fatal("member snapshot limits differ during the creation", action, s.phase, v.limits)
+				}
+				s.check(t, v, h, stepState, p)
+				// An answer must reach the OSD before its notify times
+				// out; an omitted one never does.
+				if !before || !running() || !s.omit && time.Since(h.Received) >= rbdNotifyTimeout {
+					t.Fatalf("%s: the %s hold is unproven (control running %v, held %v)", action, s.phase, before, time.Since(h.Received))
+				}
+				answered = true
+				answerHeld(h, s, v, p.Phase, before)
+			}()
+			held = append(held, rbdGroupExpectedAnswer{NotifyID: h.Event.NotifyID, Op: s.op, Ack: s.answer, Omitted: s.omit})
 		}
-		if !before || !running() || time.Since(quiesce.Received) >= rbdNotifyTimeout {
-			quiesce.Answer <- rbdResponseMessage(answer)
-			t.Fatalf("%s: the quiesce hold is unproven (control running %v, held %v)", action, before, time.Since(quiesce.Received))
-		}
-		answerHeld(quiesce, "quiesce", atQuiesce, nativePhase.Phase, rbdResponseMessage(answer), before)
-		if state.Token != token || state.Snapshot != snapshot || state.GroupID != group.ID || state.NativeGlobalID == 0 || state.NativeGlobalID == gid ||
-			!reflect.DeepEqual(state.ImageIDs, imageIDs) || quiesce.Request.Client.GID != state.NativeGlobalID || quiesce.Event.NotifierGlobalID != state.NativeGlobalID || quiesce.Request.Client.Handle == 0 {
-			t.Fatal("quiesce request does not come from the native creating client", action, state.NativeGlobalID, quiesce.Request, quiesce.Event.NotifierGlobalID)
-		}
-		sameAsNative(t, "quiesce", atQuiesce, nativePhase)
-		if nativePhase.RollbackErrno == nil || *nativePhase.RollbackErrno != 22 {
-			t.Fatal("native librbd did not refuse a rollback to the INCOMPLETE group snapshot with EINVAL", action, nativePhase.RollbackErrno)
-		}
-		created, ok := atQuiesce.records[snapshot]
-		if len(atQuiesce.records) != 2 || !ok || !reflect.DeepEqual(atQuiesce.records[plan.GroupSnapshot], first) || created.State != rbdGroupSnapStateIncomplete || created.ID == "" || created.ID == first.ID {
-			t.Fatal("at the quiesce the group must hold the first snapshot and the INCOMPLETE record", action, atQuiesce.records)
-		}
-		for key, spec := range memberSpecs(t, created) {
-			if spec.SnapID != 0 {
-				t.Fatal("INCOMPLETE record names a member snapshot before the quiesce answer", key, spec)
-			}
-		}
-		firstSpecs := memberSpecs(t, first)
-		for _, key := range []string{"a", "b"} {
-			if !slices.Equal(atQuiesce.snapc[key], []uint64{firstSpecs[key].SnapID}) || len(atQuiesce.locks[key].Lockers) != 0 {
-				t.Fatal("at the quiesce a member holds a new snapshot or a lock", action, key, atQuiesce.snapc[key], atQuiesce.locks[key])
-			}
-		}
-
-		// The unquiesce: the same request ID, answered empty.
-		unquiesce := waitHeld(t, rbdNotifyUnquiesce)
-		before = running()
-		atUnquiesceView := read(t, "unquiesce")
-		unquiesceState := state
-		if answer == 0 {
-			unquiesceState, nativePhase, err = waitRBDGroupState(ctx, statePath, "complete-observed", finished, &controlErr)
-			if err != nil {
-				unquiesce.Answer <- nil
-				t.Fatal(err)
-			}
-		}
-		if !before || !running() || time.Since(unquiesce.Received) >= rbdNotifyTimeout {
-			unquiesce.Answer <- nil
-			t.Fatalf("%s: the unquiesce hold is unproven (control running %v, held %v)", action, before, time.Since(unquiesce.Received))
-		}
-		answerHeld(unquiesce, "unquiesce", atUnquiesceView, map[bool]string{true: nativePhase.Phase}[answer == 0], nil, before)
-		if unquiesce.Request != quiesce.Request || unquiesce.Event.NotifyID == quiesce.Event.NotifyID {
-			t.Fatal("unquiesce request differs from its quiesce", action, unquiesce.Request, quiesce.Request)
-		}
-		if answer == 0 {
-			sameAsNative(t, "unquiesce", atUnquiesceView, nativePhase)
-		}
-		atUnquiesce(t, atUnquiesceView, unquiesce, unquiesceState)
 		select {
 		case <-finished:
 		case <-time.After(90 * time.Second):
-			t.Fatal("native creation did not return after both answers", action)
+			t.Fatal("native creation did not return after its held requests", action)
 		}
 		if controlErr != nil {
 			t.Fatal("native RBD group", action, controlErr)
 		}
-		n := receipt(t, action, stderr)
+		n := receipt(t, action, cell.stderr)
 		// The native return does not order the Go watcher's recording of
 		// the acknowledgements librbd waited for.
-		if _, err := settleRBDGroupCreation(ctx, responder, action, quiesce.Event.NotifyID, unquiesce.Event.NotifyID, state.NativeGlobalID, answer); err != nil {
+		if _, err := settleRBDGroupCreation(ctx, responder, action, held, state.NativeGlobalID, cell.locked, cell.compensated); err != nil {
 			t.Fatal(err)
 		}
 		cr := n.Creation
-		last := "incomplete-observed"
-		if answer == 0 {
-			last = "complete-observed"
-		}
-		final, _, err := waitRBDGroupState(ctx, statePath, last, finished, &controlErr)
-		if err != nil || cr == nil || cr.Snapshot != snapshot || cr.GroupID != group.ID || !reflect.DeepEqual(cr.ImageIDs, imageIDs) || final.Phase != last || !reflect.DeepEqual(cr.Phases, final.Phases) {
+		final, _, err := waitRBDGroupState(ctx, statePath, phases[len(phases)-1], finished, &controlErr)
+		if err != nil || cr == nil || cr.Snapshot != cell.snapshot || cr.GroupID != group.ID || !reflect.DeepEqual(cr.ImageIDs, imageIDs) || final.Phase != phases[len(phases)-1] ||
+			!reflect.DeepEqual(cr.Phases, final.Phases) || len(cr.Phases) != len(phases) {
 			t.Fatal("native creation record differs from its published state", action, cr, err)
+		}
+		for i, p := range cr.Phases {
+			if p.Phase != phases[i] {
+				t.Fatal("native creation observations differ from the held steps", action, i, p.Phase)
+			}
+		}
+		if cr.QuiesceAttempts != cell.attempts {
+			t.Fatal("native creating client's quiesce attempts differ", action, cr.QuiesceAttempts, cell.attempts)
 		}
 		evidence.CreationErrnos[action] = cr.Errno
 		return n
 	}
 
+	// snapIDs is each member's snapshot IDs from the given group records,
+	// newest first (get_snapcontext's order).
+	snapIDs := func(t *testing.T, records []rbdGroupSnapRecord) map[string][]uint64 {
+		t.Helper()
+		ids := map[string][]uint64{}
+		for _, rec := range records {
+			for key, spec := range memberSpecs(t, rec) {
+				ids[key] = append(ids[key], spec.SnapID)
+			}
+		}
+		for key := range ids {
+			slices.Sort(ids[key])
+			slices.Reverse(ids[key])
+		}
+		return ids
+	}
+	// pendingAt checks a hold at which the created record is INCOMPLETE,
+	// with zero member snapshot IDs, beside the prior records. The record
+	// must stay the same through the creation: *record keeps it.
+	pendingAt := func(t *testing.T, cell, snapshot string, v holdView, prior []rbdGroupSnapRecord, record *rbdGroupSnapRecord) {
+		t.Helper()
+		created, ok := v.records[snapshot]
+		if len(v.records) != len(prior)+1 || !ok || created.State != rbdGroupSnapStateIncomplete || created.ID == "" {
+			t.Fatal("the group must hold the prior records and the INCOMPLETE record", cell, v.records)
+		}
+		for _, rec := range prior {
+			if !reflect.DeepEqual(v.records[rec.Name], rec) || rec.ID == created.ID {
+				t.Fatal("a prior group record changed during the creation", cell, rec.Name)
+			}
+		}
+		for key, spec := range memberSpecs(t, created) {
+			if spec.SnapID != 0 {
+				t.Fatal("INCOMPLETE record names a member snapshot", cell, key, spec)
+			}
+		}
+		if record.ID != "" && !reflect.DeepEqual(created, *record) {
+			t.Fatal("INCOMPLETE record changed between holds", cell, created, *record)
+		}
+		*record = created
+	}
+	// untouchedAt checks that no member holds a snapshot beyond the prior
+	// records or a lock.
+	untouchedAt := func(t *testing.T, cell string, v holdView, prior []rbdGroupSnapRecord) {
+		t.Helper()
+		want := snapIDs(t, prior)
+		for _, key := range []string{"a", "b"} {
+			if !slices.Equal(v.snapc[key], want[key]) || len(v.locks[key].Lockers) != 0 {
+				t.Fatal("a member holds a new snapshot or a lock", cell, key, v.snapc[key], v.locks[key])
+			}
+		}
+	}
+	// lockedAt checks that native librbd's creating client holds both
+	// member exclusive locks: an "auto <handle>" cookie, exclusive with the
+	// internal tag. The quiesce came from member b's image watcher, so its
+	// ClientId handle is member b's lock cookie.
+	lockedAt := func(t *testing.T, cell string, v holdView, h rbdGroupHeld, state nativeRBDGroupState) {
+		t.Helper()
+		for _, key := range []string{"a", "b"} {
+			info := v.locks[key]
+			if len(info.Lockers) != 1 || info.Type != rbdLockExclusive || info.Tag != rbdLockTag {
+				t.Fatal("a member exclusive lock is not held", cell, key, info)
+			}
+			l := info.Lockers[0]
+			handle, cookie := rbdLockHandle(l.Cookie)
+			if l.NameType != rbdEntityClient || uint64(l.NameNumber) != state.NativeGlobalID || !cookie || l.Address.Endpoint.Addr().IsUnspecified() {
+				t.Fatal("member exclusive lock is not native librbd's", cell, key, l)
+			}
+			if key == "b" && handle != h.Request.Client.Handle {
+				t.Fatal("member b's lock cookie differs from its quiesce requester", cell, l.Cookie, h.Request)
+			}
+		}
+	}
+	// incomplete is the check of a hold at which the creation has taken no
+	// member snapshot or lock.
+	incomplete := func(cell, snapshot string, prior []rbdGroupSnapRecord, record *rbdGroupSnapRecord) func(*testing.T, holdView, rbdGroupHeld, nativeRBDGroupState, nativeRBDGroupCreationPhase) {
+		return func(t *testing.T, v holdView, _ rbdGroupHeld, _ nativeRBDGroupState, _ nativeRBDGroupCreationPhase) {
+			pendingAt(t, cell, snapshot, v, prior, record)
+			untouchedAt(t, cell, v, prior)
+		}
+	}
+	// complete is the check of an accepted creation's unquiesce: the same
+	// record, now COMPLETE, a new snapshot on both members and both locks.
+	complete := func(cell, snapshot string, prior []rbdGroupSnapRecord, record *rbdGroupSnapRecord) func(*testing.T, holdView, rbdGroupHeld, nativeRBDGroupState, nativeRBDGroupCreationPhase) {
+		return func(t *testing.T, v holdView, h rbdGroupHeld, state nativeRBDGroupState, _ nativeRBDGroupCreationPhase) {
+			rec, ok := v.records[snapshot]
+			if len(v.records) != len(prior)+1 || !ok || rec.State != rbdGroupSnapStateComplete || rec.ID != record.ID {
+				t.Fatal("at the accepted unquiesce the created record must be COMPLETE", cell, v.records)
+			}
+			for _, p := range prior {
+				if !reflect.DeepEqual(v.records[p.Name], p) {
+					t.Fatal("a prior group record changed during the creation", cell, p.Name)
+				}
+			}
+			*record = rec
+			specs, before := memberSpecs(t, rec), snapIDs(t, prior)
+			for _, key := range []string{"a", "b"} {
+				want := append([]uint64{specs[key].SnapID}, before[key]...)
+				if specs[key].SnapID <= slices.Max(before[key]) || !slices.Equal(v.snapc[key], want) {
+					t.Fatal("at the accepted unquiesce a member lacks its new snapshot", cell, key, v.snapc[key], want)
+				}
+			}
+			lockedAt(t, cell, v, h, state)
+		}
+	}
+	// after checks the Go and native views once a creation returned: the
+	// group holds exactly want and the member snapshots of want.
+	after := func(t *testing.T, cell string, n *nativeRBDGroup, want []rbdGroupSnapRecord) map[string]rbdGroupSnapRecord {
+		t.Helper()
+		var names []string
+		for _, rec := range want {
+			names = append(names, rec.Name)
+		}
+		records := observeGroup(t, cell, n, names)
+		for _, rec := range want {
+			if !reflect.DeepEqual(records[rec.Name], rec) {
+				t.Fatal("a group record differs after the creation", cell, rec.Name)
+			}
+		}
+		out := call(t, cell+"_after_group_snap_list", poolID, header, "rbd", "group_snap_list", pollInput, 0)
+		if listed := listRecords(t, out); len(listed) != len(want) || !reflect.DeepEqual(listed, records) {
+			t.Fatal("group records after the creation differ", cell, listed)
+		}
+		return records
+	}
+	headPhases := map[string][]string{"head": {"pre", "post"}, plan.GroupSnapshot: {"pre"}}
+	views := func(extra ...string) map[string][]string {
+		want := maps.Clone(headPhases)
+		for _, name := range extra {
+			want[name] = []string{"pre", "post"}
+		}
+		return want
+	}
+	quiesceOps := []uint32{rbdNotifyQuiesce, rbdNotifyUnquiesce}
+	lockOps := []uint32{rbdNotifyQuiesce, rbdNotifyUnquiesce, rbdNotifyAcquiredLock, rbdNotifyReleasedLock, rbdNotifyHeaderUpdate}
+	refusal, acceptance := rbdResponseMessage(rbdGroupQuiesceRefusal), rbdResponseMessage(0)
+	notComplete := "group snapshot is not complete"
+
 	// The refused creation: Go answers the quiesce with -EBUSY. librbd
 	// unquiesces before it removes the INCOMPLETE record, takes no lock and
 	// creates no member snapshot.
-	firstSpecs := memberSpecs(t, first)
 	var refusedRecord rbdGroupSnapRecord
 	t.Run("refused_quiesce_compensation", func(t *testing.T) {
-		n := creation(t, "refused", plan.RefusedSnapshot, rbdGroupQuiesceRefusal, []uint32{rbdNotifyQuiesce, rbdNotifyUnquiesce},
-			[]string{"failed to notify quiesce", "group snapshot is not complete"},
-			func(t *testing.T, v holdView, _ rbdGroupHeld, _ nativeRBDGroupState) {
+		prior := []rbdGroupSnapRecord{first}
+		cell := "refused"
+		n := creation(t, creationCell{action: cell, snapshot: plan.RefusedSnapshot, attempts: rbdGroupDefaultQuiesceAttempts, limitA: rbdGroupNoSnapLimit,
+			allowed: quiesceOps, stderr: []string{"failed to notify quiesce", notComplete}, steps: []holdStep{
+				{op: rbdNotifyQuiesce, phase: "quiesce", native: "incomplete-observed", answer: refusal, check: incomplete(cell, plan.RefusedSnapshot, prior, &refusedRecord)},
 				// Still INCOMPLETE at the unquiesce: the compensation
 				// removes the record only after the unquiesce returns.
-				refused, ok := v.records[plan.RefusedSnapshot]
-				evidence.Records["refused"] = refused
-				if len(v.records) != 2 || !ok || refused.State != rbdGroupSnapStateIncomplete || !reflect.DeepEqual(v.records[plan.GroupSnapshot], first) {
-					t.Fatal("at the refused unquiesce the INCOMPLETE record must remain", v.records)
-				}
-				refusedRecord = refused
-				for _, key := range []string{"a", "b"} {
-					if !slices.Equal(v.snapc[key], []uint64{firstSpecs[key].SnapID}) || len(v.locks[key].Lockers) != 0 {
-						t.Fatal("a refused creation took a member snapshot or lock", key, v.snapc[key], v.locks[key])
-					}
-				}
-			})
+				{op: rbdNotifyUnquiesce, phase: "unquiesce", check: incomplete(cell, plan.RefusedSnapshot, prior, &refusedRecord)},
+			}})
+		evidence.Records["refused"], evidence.Snapshots["refused"] = refusedRecord, refusedRecord.ID
 		if n.Creation.Errno != -rbdGroupQuiesceRefusal {
 			t.Fatal("refused group snapshot creation must return the quiesce answer's EBUSY", n.Creation.Errno)
 		}
-		evidence.Snapshots["refused"] = refusedRecord.ID
-		records := observeGroup(t, "refused", n, []string{plan.GroupSnapshot})
-		if !reflect.DeepEqual(records[plan.GroupSnapshot], first) {
-			t.Fatal("refused creation changed the first group snapshot")
-		}
+		records := after(t, cell, n, prior)
 		for i, image := range n.Images {
 			if !reflect.DeepEqual(image.Snapshots, modify.Images[i].Snapshots) {
 				t.Fatal("refused creation left a member snapshot", image.Key, image.Snapshots)
 			}
 		}
-		// The compensated record is gone from the server's listing.
-		out := call(t, "refused_after_group_snap_list", poolID, header, "rbd", "group_snap_list", pollInput, 0)
-		if after := listRecords(t, out); len(after) != 1 || !reflect.DeepEqual(after[plan.GroupSnapshot], first) {
-			t.Fatal("refused INCOMPLETE record remained after the creation returned", after)
-		}
-		checkData(t, "refused", n, records, map[string][]string{"head": {"pre", "post"}, plan.GroupSnapshot: {"pre"}})
+		checkData(t, cell, n, records, headPhases)
 		t.Logf("refused group snapshot %s: INCOMPLETE at quiesce and unquiesce, EBUSY returned, record removed", refusedRecord.ID)
 	})
 	if t.Failed() {
@@ -1886,50 +2220,163 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	// both exclusive locks, snapshots both members and writes COMPLETE
 	// before the unquiesce, and releases the locks when it closes.
 	var secondRecord rbdGroupSnapRecord
+	var accepted *nativeRBDGroup
 	t.Run("accepted_quiesce_ordering", func(t *testing.T) {
-		n := creation(t, "accepted", plan.SecondSnapshot, 0, []uint32{rbdNotifyQuiesce, rbdNotifyUnquiesce, rbdNotifyAcquiredLock, rbdNotifyReleasedLock, rbdNotifyHeaderUpdate},
-			[]string{"group snapshot is not complete"},
-			func(t *testing.T, v holdView, h rbdGroupHeld, state nativeRBDGroupState) {
-				rec, ok := v.records[plan.SecondSnapshot]
-				if len(v.records) != 2 || !ok || rec.State != rbdGroupSnapStateComplete || !reflect.DeepEqual(v.records[plan.GroupSnapshot], first) {
-					t.Fatal("at the accepted unquiesce the record must be COMPLETE", v.records)
-				}
-				secondRecord = rec
-				specs := memberSpecs(t, rec)
-				for _, key := range []string{"a", "b"} {
-					want := []uint64{specs[key].SnapID, firstSpecs[key].SnapID}
-					if specs[key].SnapID <= firstSpecs[key].SnapID || !slices.Equal(v.snapc[key], want) {
-						t.Fatal("at the accepted unquiesce a member lacks its new snapshot", key, v.snapc[key], want)
-					}
-					// librbd's exclusive lock: the creating client, an
-					// "auto <handle>" cookie, exclusive with the internal
-					// tag.
-					info := v.locks[key]
-					if len(info.Lockers) != 1 || info.Type != rbdLockExclusive || info.Tag != rbdLockTag {
-						t.Fatal("at the accepted unquiesce a member exclusive lock is not held", key, info)
-					}
-					l := info.Lockers[0]
-					handle, cookie := rbdLockHandle(l.Cookie)
-					if l.NameType != rbdEntityClient || uint64(l.NameNumber) != state.NativeGlobalID || !cookie || l.Address.Endpoint.Addr().IsUnspecified() {
-						t.Fatal("member exclusive lock is not native librbd's", key, l)
-					}
-					// The quiesce came from member b's image watcher: its
-					// ClientId handle is that member's lock cookie.
-					if key == "b" && handle != h.Request.Client.Handle {
-						t.Fatal("member b's lock cookie differs from its quiesce requester", l.Cookie, h.Request)
-					}
-				}
-			})
+		prior := []rbdGroupSnapRecord{first}
+		cell := "accepted"
+		n := creation(t, creationCell{action: cell, snapshot: plan.SecondSnapshot, attempts: rbdGroupDefaultQuiesceAttempts, limitA: rbdGroupNoSnapLimit,
+			allowed: lockOps, stderr: []string{notComplete}, locked: true, steps: []holdStep{
+				{op: rbdNotifyQuiesce, phase: "quiesce", native: "incomplete-observed", answer: acceptance, check: incomplete(cell, plan.SecondSnapshot, prior, &secondRecord)},
+				{op: rbdNotifyUnquiesce, phase: "unquiesce", native: "complete-observed", check: complete(cell, plan.SecondSnapshot, prior, &secondRecord)},
+			}})
 		if n.Creation.Errno != 0 {
 			t.Fatal("accepted group snapshot creation failed", n.Creation.Errno)
 		}
 		evidence.Records["second"], evidence.Snapshots["second"] = secondRecord, secondRecord.ID
-		records := observeGroup(t, "accepted", n, []string{plan.GroupSnapshot, plan.SecondSnapshot})
-		if !reflect.DeepEqual(records[plan.GroupSnapshot], first) || !reflect.DeepEqual(records[plan.SecondSnapshot], secondRecord) {
-			t.Fatal("group records after the accepted creation differ from the unquiesce reads")
-		}
-		checkData(t, "accepted", n, records, map[string][]string{"head": {"pre", "post"}, plan.GroupSnapshot: {"pre"}, plan.SecondSnapshot: {"pre", "post"}})
+		records := after(t, cell, n, []rbdGroupSnapRecord{first, secondRecord})
+		checkData(t, cell, n, records, views(plan.SecondSnapshot))
+		accepted = n
 		t.Logf("accepted group snapshot %s: INCOMPLETE at the quiesce, COMPLETE with both locks held at the unquiesce, locks released after", secondRecord.ID)
+	})
+	if t.Failed() {
+		return
+	}
+
+	// The timed-out creation: the creating client makes plan.QuiesceAttempts
+	// quiesce attempts and Go answers none. Each attempt's notify times out
+	// at the OSD after librbd's 5 s notify timeout, librbd retries with the
+	// same request ID while attempts remain, then fails the quiesce with
+	// ETIMEDOUT, unquiesces and removes the INCOMPLETE record without a lock
+	// or member snapshot (ceph/ceph/blob/v20.2.4/src/librbd/ImageWatcher.cc
+	// notify_quiesce, ceph/ceph/blob/v20.2.4/src/librbd/watcher/Notifier.cc,
+	// ceph/ceph/blob/v20.2.4/src/librbd/api/Group.cc snap_create).
+	t.Run("timed_out_quiesce_compensation", func(t *testing.T) {
+		prior := []rbdGroupSnapRecord{first, secondRecord}
+		cell := "timed-out"
+		var record rbdGroupSnapRecord
+		steps := []holdStep{{op: rbdNotifyQuiesce, phase: "quiesce", native: "incomplete-observed", omit: true, check: incomplete(cell, plan.TimedOutSnapshot, prior, &record)}}
+		for i := 2; i <= plan.QuiesceAttempts; i++ {
+			steps = append(steps, holdStep{op: rbdNotifyQuiesce, phase: fmt.Sprint("quiesce_attempt_", i), omit: true, check: incomplete(cell, plan.TimedOutSnapshot, prior, &record)})
+		}
+		steps = append(steps, holdStep{op: rbdNotifyUnquiesce, phase: "unquiesce", check: incomplete(cell, plan.TimedOutSnapshot, prior, &record)})
+		n := creation(t, creationCell{action: cell, snapshot: plan.TimedOutSnapshot, attempts: plan.QuiesceAttempts, limitA: rbdGroupNoSnapLimit,
+			allowed: quiesceOps, stderr: []string{"failed to notify quiesce: (110)", notComplete}, steps: steps})
+		evidence.Records["timed-out"], evidence.Snapshots["timed-out"] = record, record.ID
+		if n.Creation.Errno != rbdGroupQuiesceTimedOut {
+			t.Fatal("timed-out group snapshot creation must return ETIMEDOUT", n.Creation.Errno)
+		}
+		records := after(t, cell, n, prior)
+		for i, image := range n.Images {
+			if !reflect.DeepEqual(image.Snapshots, accepted.Images[i].Snapshots) {
+				t.Fatal("timed-out creation left a member snapshot", image.Key, image.Snapshots)
+			}
+		}
+		checkData(t, cell, n, records, views(plan.SecondSnapshot))
+		t.Logf("timed-out group snapshot %s: %d unanswered quiesce attempts, ETIMEDOUT returned, record removed", record.ID, plan.QuiesceAttempts)
+	})
+	if t.Failed() {
+		return
+	}
+
+	// The retried creation: Go leaves the first quiesce attempt to time out
+	// and accepts the retry, which carries the same request ID; librbd then
+	// locks, snapshots both members and writes COMPLETE. Go never answers
+	// the unquiesce: librbd ignores the unquiesce result, so after that
+	// notify times out the creation returns success and releases the locks.
+	var retriedRecord rbdGroupSnapRecord
+	var retried *nativeRBDGroup
+	t.Run("retried_quiesce_unanswered_unquiesce", func(t *testing.T) {
+		prior := []rbdGroupSnapRecord{first, secondRecord}
+		cell := "retried"
+		steps := []holdStep{{op: rbdNotifyQuiesce, phase: "quiesce", native: "incomplete-observed", omit: true, check: incomplete(cell, plan.RetriedSnapshot, prior, &retriedRecord)}}
+		for i := 2; i < plan.QuiesceAttempts; i++ {
+			steps = append(steps, holdStep{op: rbdNotifyQuiesce, phase: fmt.Sprint("quiesce_attempt_", i), omit: true, check: incomplete(cell, plan.RetriedSnapshot, prior, &retriedRecord)})
+		}
+		steps = append(steps,
+			holdStep{op: rbdNotifyQuiesce, phase: fmt.Sprint("quiesce_attempt_", plan.QuiesceAttempts), answer: acceptance, check: incomplete(cell, plan.RetriedSnapshot, prior, &retriedRecord)},
+			holdStep{op: rbdNotifyUnquiesce, phase: "unquiesce", native: "complete-observed", omit: true, check: complete(cell, plan.RetriedSnapshot, prior, &retriedRecord)})
+		n := creation(t, creationCell{action: cell, snapshot: plan.RetriedSnapshot, attempts: plan.QuiesceAttempts, limitA: rbdGroupNoSnapLimit,
+			allowed: lockOps, stderr: []string{notComplete}, locked: true, steps: steps})
+		if n.Creation.Errno != 0 {
+			t.Fatal("retried group snapshot creation failed", n.Creation.Errno)
+		}
+		evidence.Records["retried"], evidence.Snapshots["retried"] = retriedRecord, retriedRecord.ID
+		records := after(t, cell, n, []rbdGroupSnapRecord{first, secondRecord, retriedRecord})
+		checkData(t, cell, n, records, views(plan.SecondSnapshot, plan.RetriedSnapshot))
+		retried = n
+		t.Logf("retried group snapshot %s: first quiesce timed out, retry accepted, COMPLETE at the unanswered unquiesce, success returned", retriedRecord.ID)
+	})
+	if t.Failed() {
+		return
+	}
+
+	// The over-limit creation: native librbd first sets member a's snapshot
+	// limit to its snapshot count. Go accepts the quiesce; librbd locks both
+	// members and creates both member snapshots, cls_rbd refuses member a's
+	// with EDQUOT after member b's exists, and librbd unquiesces, removes
+	// member b's snapshot and the INCOMPLETE record and returns EDQUOT
+	// (ceph/ceph/blob/v20.2.4/src/librbd/api/Group.cc snap_create
+	// remove_image_snaps, ceph/ceph/blob/v20.2.4/src/cls/rbd/cls_rbd.cc
+	// snapshot_add). Native librbd removes the limit afterwards.
+	t.Run("over_limit_member_snapshot_compensation", func(t *testing.T) {
+		prior := []rbdGroupSnapRecord{first, secondRecord, retriedRecord}
+		cell := "over-limit"
+		var record rbdGroupSnapRecord
+		var compensated uint64
+		before := snapIDs(t, prior)
+		limit := uint64(len(before["a"]))
+		n := creation(t, creationCell{action: cell, snapshot: plan.OverLimitSnapshot, attempts: rbdGroupDefaultQuiesceAttempts, limitA: limit,
+			allowed: lockOps, stderr: []string{notComplete}, locked: true, compensated: true, steps: []holdStep{
+				{op: rbdNotifyQuiesce, phase: "quiesce", native: "incomplete-observed", answer: acceptance, check: incomplete(cell, plan.OverLimitSnapshot, prior, &record)},
+				{op: rbdNotifyUnquiesce, phase: "unquiesce", native: "member-snapshot-observed", check: func(t *testing.T, v holdView, h rbdGroupHeld, state nativeRBDGroupState, p nativeRBDGroupCreationPhase) {
+					// The record never became COMPLETE: it still has zero
+					// member snapshot IDs, member a has no new snapshot and
+					// member b's group snapshot exists. All of it is read
+					// before the unquiesce answer lets librbd remove it.
+					pendingAt(t, cell, plan.OverLimitSnapshot, v, prior, &record)
+					if !slices.Equal(v.snapc["a"], before["a"]) || len(v.snapc["b"]) != len(before["b"])+1 || !slices.Equal(v.snapc["b"][1:], before["b"]) ||
+						v.snapc["b"][0] <= slices.Max(before["b"]) {
+						t.Fatal("at the compensating unquiesce only member b holds a new snapshot", v.snapc)
+					}
+					compensated = v.snapc["b"][0]
+					label := cell + "_unquiesce_snapshot_get_b"
+					out := call(t, label, secondID, memberHeader("b"), "rbd", "snapshot_get", rbdLE64(compensated), 0)
+					if p.MemberSnapshotCall == nil {
+						t.Fatal("native observation lacks member b's snapshot")
+					}
+					sameCall(t, label, *p.MemberSnapshotCall, memberHeader("b"), "rbd", "snapshot_get", rbdLE64(compensated), out)
+					info, err := decodeRBDGroupSnapshotInfo(out)
+					if err != nil || info.ID != compensated || info.GroupPool != poolID || info.GroupID != group.ID || info.GroupSnapshotID != record.ID ||
+						info.Name != rbdGroupImageSnapName(poolID, group.ID, record.ID) || info.ImageSize != plan.Size || info.ChildCount != 0 {
+						t.Fatal("member b's snapshot is not the INCOMPLETE record's member snapshot", info, err)
+					}
+					lockedAt(t, cell, v, h, state)
+				}},
+			}})
+		evidence.Records["over-limit"], evidence.Snapshots["over-limit"] = record, record.ID
+		if n.Creation.Errno != rbdGroupSnapLimitExceeded {
+			t.Fatal("over-limit group snapshot creation must return cls_rbd's EDQUOT", n.Creation.Errno)
+		}
+		l := n.Creation.SnapLimit
+		limited := memberHeader("a")
+		if l == nil || l.Image != "a" || l.Snapshots != limit || l.Limit != limit || l.RemovedLimit != rbdGroupNoSnapLimit {
+			t.Fatal("native snapshot limit on member a differs", l)
+		}
+		sameCall(t, "over-limit limit set", l.SetCall, limited, "rbd", "snapshot_get_limit", nil, rbdLE64(limit))
+		out := call(t, cell+"_after_snapshot_get_limit_a", poolID, limited, "rbd", "snapshot_get_limit", nil, 0)
+		sameCall(t, "over-limit limit removed", l.RemovedCall, limited, "rbd", "snapshot_get_limit", nil, out)
+		if !bytes.Equal(out, rbdLE64(rbdGroupNoSnapLimit)) {
+			t.Fatal("member a's snapshot limit remained after the creation", out)
+		}
+		records := after(t, cell, n, prior)
+		for i, image := range n.Images {
+			if !reflect.DeepEqual(image.Snapshots, retried.Images[i].Snapshots) {
+				t.Fatal("over-limit creation left a member snapshot", image.Key, image.Snapshots)
+			}
+		}
+		call(t, cell+"_after_snapshot_get_b", secondID, memberHeader("b"), "rbd", "snapshot_get", rbdLE64(compensated), -2)
+		checkData(t, cell, n, records, views(plan.SecondSnapshot, plan.RetriedSnapshot))
+		t.Logf("over-limit group snapshot %s: member b's snapshot %d existed at the unquiesce, EDQUOT returned, snapshot and record removed", record.ID, compensated)
 	})
 	unwatch(t)
 	if t.Failed() {
@@ -1941,12 +2388,11 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 		if rollback.RolledBackTo != plan.GroupSnapshot {
 			t.Fatal("native rollback target differs", rollback.RolledBackTo)
 		}
-		records := observeGroup(t, "rollback", rollback, []string{plan.GroupSnapshot, plan.SecondSnapshot})
-		if !reflect.DeepEqual(records[plan.GroupSnapshot], first) || !reflect.DeepEqual(records[plan.SecondSnapshot], secondRecord) {
-			t.Fatal("rollback changed a group record")
-		}
-		checkData(t, "rollback", rollback, records, map[string][]string{"head": {"pre"}, plan.GroupSnapshot: {"pre"}, plan.SecondSnapshot: {"pre", "post"}})
-		t.Log("after the group rollback both heads read as the first snapshot; the second keeps the later contents")
+		records := after(t, "rollback", rollback, []rbdGroupSnapRecord{first, secondRecord, retriedRecord})
+		want := views(plan.SecondSnapshot, plan.RetriedSnapshot)
+		want["head"] = []string{"pre"}
+		checkData(t, "rollback", rollback, records, want)
+		t.Log("after the group rollback both heads read as the first snapshot; the later snapshots keep the later contents")
 	})
 	if t.Failed() {
 		return
@@ -1955,8 +2401,18 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	cleanup := native(t, "cleanup")
 	t.Run("native_removal", func(t *testing.T) {
 		r := cleanup.Removed
-		if r == nil || r.GroupID != group.ID || r.GroupHeader != header || len(r.GroupSnapshotsAfter) != 2 || len(r.GroupSnapshotsAfter[0]) != 1 ||
-			r.GroupSnapshotsAfter[0][0].Name != plan.GroupSnapshot || r.GroupSnapshotsAfter[0][0].ID != first.ID || len(r.GroupSnapshotsAfter[1]) != 0 || len(r.MembersAfter) != 0 ||
+		names := func(after []nativeRBDGroupSnap) []string {
+			var got []string
+			for _, s := range after {
+				got = append(got, s.Name)
+			}
+			slices.Sort(got)
+			return got
+		}
+		firstAndSecond := []string{plan.GroupSnapshot, plan.SecondSnapshot}
+		slices.Sort(firstAndSecond)
+		if r == nil || r.GroupID != group.ID || r.GroupHeader != header || len(r.GroupSnapshotsAfter) != 3 || !slices.Equal(names(r.GroupSnapshotsAfter[0]), firstAndSecond) ||
+			!slices.Equal(names(r.GroupSnapshotsAfter[1]), []string{plan.GroupSnapshot}) || r.GroupSnapshotsAfter[1][0].ID != first.ID || len(r.GroupSnapshotsAfter[2]) != 0 || len(r.MembersAfter) != 0 ||
 			r.GroupHeaderErrno != 2 || r.DirectoryCall.Code != -2 || r.DirectoryCall.InputHex != hex.EncodeToString(rbdGroupString(nil, plan.Group)) || len(r.Images) != 2 {
 			t.Fatal("native group snapshot, membership or group removal is not proven", r)
 		}
@@ -1974,7 +2430,7 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	t.Run("go_reads_after_removal", func(t *testing.T) {
 		call(t, "cleanup_dir_get_id", poolID, "rbd_group_directory", "rbd", "dir_get_id", rbdGroupString(nil, plan.Group), -2)
 		call(t, "cleanup_group_snap_list", poolID, header, "rbd", "group_snap_list", rbdGroupSnapListInput(rbdGroupSnapRecord{}, plan.ListPage), -2)
-		for _, rec := range []rbdGroupSnapRecord{first, secondRecord} {
+		for _, rec := range []rbdGroupSnapRecord{first, secondRecord, retriedRecord} {
 			for key, spec := range memberSpecs(t, rec) {
 				call(t, "cleanup_snapshot_get_"+key+"_"+rec.ID, spec.Pool, "rbd_header."+spec.ImageID, "rbd", "snapshot_get", rbdLE64(spec.SnapID), -2)
 			}
