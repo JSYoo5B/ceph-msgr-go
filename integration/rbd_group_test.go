@@ -32,6 +32,10 @@ import (
 const (
 	rbdGroupSnapStateComplete     = 1 // cls::rbd::GROUP_SNAPSHOT_STATE_COMPLETE
 	rbdSnapshotNamespaceTypeGroup = 1 // cls::rbd::SNAPSHOT_NAMESPACE_TYPE_GROUP
+	// cls_rbd's image_group_add sets RBD_OPERATION_FEATURE_GROUP, and with
+	// it RBD_FEATURE_OPERATIONS (rbd_clone_test.go), on every group member
+	// (ceph/ceph/blob/v20.2.4/src/include/rbd/features.h).
+	rbdOperationFeatureGroup = 1 << 2
 )
 
 type rbdGroupImageSnapSpec struct {
@@ -307,6 +311,7 @@ type nativeRBDGroupImage struct {
 		Prefix     string `json:"block_name_prefix"`
 	} `json:"stat"`
 	Features      uint64                        `json:"features"`
+	OpFeatures    uint64                        `json:"op_features"`
 	Snapshots     []nativeRBDGroupImageSnapshot `json:"snapshots"`
 	SnapshotCalls []nativeRBDGroupCall          `json:"snapshot_calls"`
 	Objects       []nativeRBDObject             `json:"objects"`
@@ -596,7 +601,8 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	imageIDs := map[string]string{}
 	for i, image := range setup.Images {
 		if image.Key != plan.Images[i].Key || image.Name != plan.Images[i].Name || image.Stat.Size != plan.Size || image.Stat.Order != plan.Order || image.Stat.Objects != objectCount ||
-			image.Stat.Prefix != "rbd_data."+image.ImageID || image.Features != plan.Features || image.HeaderObject != "rbd_header."+image.ImageID {
+			image.Stat.Prefix != "rbd_data."+image.ImageID || image.Features != plan.Features|rbdFeatureOperations || image.OpFeatures != rbdOperationFeatureGroup ||
+			image.HeaderObject != "rbd_header."+image.ImageID {
 			t.Fatal("native RBD group member image differs", image.Key, image.Stat)
 		}
 		imageIDs[image.Name] = image.ImageID

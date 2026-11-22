@@ -80,7 +80,7 @@ func rbdGroupSample(action, token string, plan rbdGroupPlan) rbdGroupNative {
 			n.Writes = append(n.Writes, rbdGroupWrite{Image: image.Key, Phase: phase, Offset: e.Offset, Length: e.Length, Written: e.Length, SHA256: sum})
 		}
 		id := fmt.Sprint("i", i)
-		v := rbdGroupImageView{Key: image.Key, Name: image.Name, ImageID: id, HeaderObject: "rbd_header." + id, IDObject: "rbd_id." + image.Name, Features: 1,
+		v := rbdGroupImageView{Key: image.Key, Name: image.Name, ImageID: id, HeaderObject: "rbd_header." + id, IDObject: "rbd_id." + image.Name, Features: 1 | rbdFeatureOperations, OpFeatures: rbdOperationFeatureGroup,
 			Stat:          &rbdBaseStat{Size: plan.Size, ObjectSize: 1 << plan.Order, Objects: plan.Size >> plan.Order, Order: plan.Order, Prefix: "rbd_data." + id, ParentPool: ^uint64(0)},
 			Snapshots:     []rbdGroupSnapshot{{ID: 4, Name: ".group.3_g1_s1", Size: plan.Size, Namespace: 1, Group: &rbdGroupNamespace{Pool: 3, Name: plan.Group, SnapName: plan.GroupSnapshot}}},
 			SnapshotCalls: []rbdWriteClassCall{call("rbd_header."+id, "snapshot_get")}, Blobs: map[string]rbdBaseBlob{}}

@@ -117,6 +117,15 @@ func (p rbdGroupPlan) owned(token string) bool {
 		!slices.ContainsFunc(p.Images, func(i rbdGroupImagePlan) bool { return len(i.PreWrites) == 0 || len(i.PostWrites) == 0 })
 }
 
+// A group member carries RBD_FEATURE_OPERATIONS with the
+// RBD_OPERATION_FEATURE_GROUP op feature, which cls_rbd's image_group_add
+// sets (ceph/ceph/blob/v20.2.4/src/cls/rbd/cls_rbd.cc,
+// ceph/ceph/blob/v20.2.4/src/include/rbd/features.h).
+const (
+	rbdFeatureOperations     = 1 << 8
+	rbdOperationFeatureGroup = 1 << 2
+)
+
 // rbdGroupState is the group control's part of the RBD base scope: its plan,
 // the last control request and the index of the next admitted action.
 type rbdGroupState struct {
@@ -243,7 +252,7 @@ def observe_image(ioctx, entry):
         stat = image.stat()
         view['image_id'] = text(image.id())
         view['stat'] = {k: text(stat[k]) for k in ('size', 'obj_size', 'num_objs', 'order', 'block_name_prefix', 'parent_pool', 'parent_name')}
-        view['features'] = image.features()
+        view['features'], view['op_features'] = image.features(), image.op_features()
         snaps = []
         for s in image.list_snaps():
             snap = {'id': s['id'], 'name': text(s['name']), 'size': s['size'], 'namespace': s['namespace']}
@@ -408,6 +417,7 @@ type rbdGroupImageView struct {
 	IDObject      string                 `json:"id_object"`
 	Stat          *rbdBaseStat           `json:"stat"`
 	Features      uint64                 `json:"features"`
+	OpFeatures    uint64                 `json:"op_features"`
 	Snapshots     []rbdGroupSnapshot     `json:"snapshots"`
 	SnapshotCalls []rbdWriteClassCall    `json:"snapshot_calls"`
 	Objects       []rbdBaseObject        `json:"objects"`
@@ -487,7 +497,8 @@ func rbdGroupImageViewValid(action string, v rbdGroupImageView, want rbdGroupIma
 	s := v.Stat
 	ok := v.Key == want.Key && v.Name == want.Name && rbdGroupIDValid(v.ImageID) && v.HeaderObject == "rbd_header."+v.ImageID && v.IDObject == "rbd_id."+want.Name &&
 		s != nil && s.Order == plan.Order && s.ObjectSize == 1<<plan.Order && s.Size == plan.Size && s.Objects == plan.Size>>plan.Order &&
-		s.Prefix == "rbd_data."+v.ImageID && s.ParentPool == ^uint64(0) && s.ParentName == "" && v.Features == plan.Features &&
+		s.Prefix == "rbd_data."+v.ImageID && s.ParentPool == ^uint64(0) && s.ParentName == "" &&
+		v.Features == plan.Features|rbdFeatureOperations && v.OpFeatures == rbdOperationFeatureGroup &&
 		len(v.Snapshots) == 1 && len(v.SnapshotCalls) == 1 && len(v.Objects) == int(s.Objects) && len(v.Blobs) == len(rbdGroupBlobViews)
 	for i, snap := range v.Snapshots {
 		ok = ok && snap.ID != 0 && len(snap.Name) <= 512 && rbdGroupCallValid(&v.SnapshotCalls[i], v.HeaderObject, "snapshot_get") &&
