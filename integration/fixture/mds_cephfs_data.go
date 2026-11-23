@@ -547,7 +547,10 @@ type mdsCephFSDataScope struct {
 	// drop's debug_ms window until its restore (runtime_config.go).
 	osdRuntime *runtimeConfig
 	// reader is the writeback-fence recipe's background native reader.
-	reader       *mdsCephFSDataReaderRun
+	reader *mdsCephFSDataReaderRun
+	// osdRestart is the one OSD restart of the persistence cell
+	// (mds_cephfs_data_osd_restart.go).
+	osdRestart   *mdsCephFSDataOSDRestart
 	logMark      int
 	logMarkGID   uint64
 	haveLogMark  bool
@@ -614,7 +617,7 @@ func parseMDSCephFSDataRequest(fields []string, token string, previousID int64) 
 		}
 		action.gid, action.nonce = gid, uint32(nonce)
 	case "debug-on", "debug-off", "log-pause", "blackhole-on", "client-drop-on", "log-resume", "flush-journal", "cap-log-mark", "osd-drop-on", "osd-drop-off",
-		"reader-start", "reader-status", "reader-wait":
+		"reader-start", "reader-status", "reader-wait", "osd-store", "osd-restart":
 		if len(fields) != 3 {
 			return 0, action, errors.New("DATA runtime action takes no caller argument")
 		}
@@ -705,6 +708,8 @@ type mdsCephFSDataResult struct {
 	FlushJournal    *mdsCephFSCompletionFlush `json:"flush_journal,omitempty"`
 	OSDDrop         *mdsCephFSDataOSDDrop     `json:"osd_drop,omitempty"`
 	OSDLog          *mdsCephFSDataOSDDropLog  `json:"osd_log,omitempty"`
+	OSDStore        *mdsCephFSDataOSDStore    `json:"osd_store,omitempty"`
+	OSDRestart      *mdsCephFSDataOSDRestart  `json:"osd_restart,omitempty"`
 	Reader          *mdsCephFSDataReader      `json:"reader,omitempty"`
 	Complete        bool                      `json:"complete"`
 	Error           string                    `json:"error,omitempty"`
@@ -725,7 +730,7 @@ func (c *fixtureCluster) mdsCephFSDataJournal() error {
 		"source_commit": mdsFreshSource, "token": s.token, "fsid": c.profile.fsid, "fs_name": s.name, "fscid": s.oracle.FSCID,
 		"client_identity": identity, "native_identity": native, "plan": x.plan, "baseline_blocklist": x.baselineBlocklist, "mutations": x.mutations,
 		"current_mds": x.current, "owned_session_addresses": x.owned, "restart": x.restart, "runtime": x.runtime, "baseline_config": x.baselineConfig, "flush_journal": x.flushJournal,
-		"osd_drop": x.osdDrop, "osd_drop_history": x.osdDropHistory,
+		"osd_drop": x.osdDrop, "osd_drop_history": x.osdDropHistory, "osd_restart": x.osdRestart,
 	})
 }
 
@@ -984,6 +989,8 @@ func (c *fixtureCluster) mdsCephFSDataAct(ctx context.Context, id int64, action 
 		return c.mdsCephFSDataRuntimeAct(ctx, id, action, result)
 	case "osd-drop-on", "osd-drop-off", "osd-log", "evict", "reader-start", "reader-status", "reader-wait":
 		return c.mdsCephFSDataWritebackAct(ctx, id, action, result)
+	case "osd-store", "osd-restart":
+		return c.mdsCephFSDataPersistAct(ctx, id, action, result)
 	}
 	if action.name == "restart-arm" {
 		return c.mdsCephFSDataRestartAct(ctx, id, action, result)
@@ -1067,6 +1074,8 @@ type mdsCephFSDataCleanup struct {
 	OSDDrop               *mdsCephFSDataOSDDrop      `json:"osd_drop,omitempty"`
 	OSDConfigRestored     bool                       `json:"osd_config_restored"`
 	OSDDropHistory        []*mdsCephFSDataOSDDrop    `json:"osd_drop_history,omitempty"`
+	OSDRestart            *mdsCephFSDataOSDRestart   `json:"osd_restart,omitempty"`
+	OSDRunning            bool                       `json:"osd_running"`
 	Reader                *mdsCephFSDataReader       `json:"reader,omitempty"`
 	ResidualSessions      []mdsSessionsNative        `json:"residual_owned_sessions"`
 	NamespaceChecked      bool                       `json:"namespace_checked"`
@@ -1118,6 +1127,8 @@ func (c *fixtureCluster) finishMDSCephFSData(ctx context.Context) error {
 		// The OSD override is restored before any native namespace readback.
 		fail(c.mdsCephFSDataRestoreOSDDrop(ctx, &receipt))
 		receipt.OSDDropHistory = x.osdDropHistory
+		// A stopped OSD is started again before any native readback.
+		fail(c.mdsCephFSDataRestoreOSDRestart(ctx, &receipt))
 		// A background reader ends before any other native work.
 		fail(x.reader.awaitCleanup(ctx, &receipt))
 		sessions, _, err := c.mdsCephFSDataSessions(ctx)
@@ -1199,6 +1210,7 @@ func (c *fixtureCluster) finishMDSCephFSData(ctx context.Context) error {
 		}
 	} else {
 		receipt.NamespaceChecked, receipt.NamespaceRestored, receipt.LayoutRestored, receipt.BlocklistRestored, receipt.ConfigRestored, receipt.OSDConfigRestored = true, true, true, true, true, true
+		receipt.OSDRunning = true
 		receipt.NamespaceNote = "preparation ended before any owned namespace mutation was possible"
 	}
 	remove := func(config *ceph.ClientConfig, intent bool, label string) bool {
@@ -1218,7 +1230,7 @@ func (c *fixtureCluster) finishMDSCephFSData(ctx context.Context) error {
 	for _, err := range errs {
 		receipt.Errors = append(receipt.Errors, err.Error())
 	}
-	receipt.Completed = len(errs) == 0 && receipt.ConfigRestored && receipt.OSDConfigRestored && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved
+	receipt.Completed = len(errs) == 0 && receipt.ConfigRestored && receipt.OSDConfigRestored && receipt.OSDRunning && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved
 	if !receipt.Completed && len(errs) == 0 {
 		errs = append(errs, errors.New("MDS CephFS data cleanup did not verify every check"))
 	}

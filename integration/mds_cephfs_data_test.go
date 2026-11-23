@@ -440,6 +440,8 @@ type nativeMDSCephFSDataReceipt struct {
 	} `json:"flush_journal,omitempty"`
 	OSDDrop       *nativeMDSCephFSDataOSDDrop    `json:"osd_drop,omitempty"`
 	OSDLog        *nativeMDSCephFSDataOSDDropLog `json:"osd_log,omitempty"`
+	OSDStore      *nativeMDSCephFSDataOSDStore   `json:"osd_store,omitempty"`
+	OSDRestart    *nativeMDSCephFSDataOSDRestart `json:"osd_restart,omitempty"`
 	Reader        *nativeMDSCephFSDataReader     `json:"reader,omitempty"`
 	Complete      bool                           `json:"complete"`
 	Error         string                         `json:"error"`
@@ -459,6 +461,41 @@ type nativeMDSCephFSDataOSDDrop struct {
 	LogMark         int               `json:"log_mark"`
 	RestoreReadback map[string]string `json:"restore_readback"`
 	Error           string            `json:"error"`
+}
+
+// nativeMDSCephFSDataOSDStore is the owned OSD's object store readback.
+type nativeMDSCephFSDataOSDStore struct {
+	OSD          string `json:"osd"`
+	ObjectStore  string `json:"osd_objectstore"`
+	FastShutdown string `json:"osd_fast_shutdown"`
+}
+
+// nativeMDSCephFSDataOSDState is one native view of the owned OSD.
+type nativeMDSCephFSDataOSDState struct {
+	Epoch        uint32 `json:"epoch"`
+	Up           bool   `json:"up"`
+	In           bool   `json:"in"`
+	UpFrom       uint32 `json:"up_from"`
+	PublicAddr   string `json:"public_addr"`
+	PGs          int    `json:"pgs"`
+	ActivePGs    int    `json:"active_pgs"`
+	ReportedFrom uint32 `json:"min_reported_epoch"`
+}
+
+// nativeMDSCephFSDataOSDRestart is the receipt of the one OSD restart of the
+// persistence cell.
+type nativeMDSCephFSDataOSDRestart struct {
+	OSD         string                       `json:"osd"`
+	RequestID   int64                        `json:"request_id"`
+	State       string                       `json:"state"`
+	Store       nativeMDSCephFSDataOSDStore  `json:"store"`
+	ContainerID string                       `json:"container_id"`
+	Before      *nativeMDSCephFSDataOSDState `json:"before"`
+	After       *nativeMDSCephFSDataOSDState `json:"after"`
+	StopMillis  int64                        `json:"stop_ms"`
+	StartMillis int64                        `json:"start_ms"`
+	WaitMillis  int64                        `json:"wait_ms"`
+	Error       string                       `json:"error"`
 }
 
 // nativeMDSCephFSDataReader is the fixture's background native reader of
@@ -625,6 +662,17 @@ func (x *mdsCephFSDataControl) request(ctx context.Context, action string, argum
 		if action == "osd-drop-on" && (d.State != "applied" || !maps.Equal(d.Readback, d.Settings)) ||
 			action == "osd-drop-off" && (d.State != "restored" || !maps.Equal(d.RestoreReadback, d.Baseline)) {
 			return result, errors.New("native data OSD drop was not read back")
+		}
+	case "osd-store":
+		if s := result.OSDStore; s == nil || s.OSD == "" || s.ObjectStore == "" || s.FastShutdown == "" {
+			return result, errors.New("native data OSD store readback differs")
+		}
+	case "osd-restart":
+		r := result.OSDRestart
+		if r == nil || r.State != "restarted" || r.Error != "" || r.Store.ObjectStore != "bluestore" || r.Before == nil || r.After == nil || !r.Before.Up ||
+			!r.After.Up || !r.After.In || r.After.UpFrom <= r.Before.UpFrom || r.After.Epoch <= r.Before.Epoch ||
+			r.After.PGs == 0 || r.After.ActivePGs != r.After.PGs || r.After.ReportedFrom < r.After.UpFrom {
+			return result, errors.New("native data OSD restart receipt differs")
 		}
 	case "osd-log":
 		if len(arguments) != 2 || arguments[0] != strconv.FormatUint(x.goGID, 10) || result.OSDLog == nil || result.OSDLog.GlobalID != x.goGID ||
