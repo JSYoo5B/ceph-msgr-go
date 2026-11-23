@@ -193,6 +193,7 @@ var _ = collectDiagnosticFiles(
 	"mds-cephfs-heldflock-split-dense-results.json",
 	"mds-cephfs-intrflock-recovery-results.json",
 	"mds-cephfs-noblob-recovery-results.json",
+	"mds-cephfs-ranks-heldflock-results.json",
 	"mds-cephfs-twoclient-recovery-results.json",
 	"mds-cephfs-waitflock-recovery-results.json",
 )

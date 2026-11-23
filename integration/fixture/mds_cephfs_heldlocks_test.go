@@ -21,11 +21,15 @@ type heldLockCellCapability struct {
 func heldLockCellCapabilities() []heldLockCellCapability {
 	metadata := func(p map[string]string) bool { return p["mds_fresh"] == "1" && p["mds_cephfs"] == "1" }
 	completion := func(p map[string]string) bool { return p["mds_fresh"] == "1" && p["mds_cephfs_completion"] == "1" }
+	ranks := func(p map[string]string) bool {
+		return p["mds_fresh"] == "1" && p["mds_cephfs_ranks"] == "1" && p["mds_cephfs_ranks_replay"] != "1"
+	}
 	return []heldLockCellCapability{
 		{capMDSHeldFcntlRanges, []string{"^TestCephMDSCephFSFcntlMergedRangeRecoveryIntegration$"}, []string{"fcntl-probe-ranges"}, admitMDSCephFSHeldLocks, metadata},
 		{capMDSHeldFlockWait, []string{"^TestCephMDSCephFSWaitingFlockRecoveryIntegration$", "^TestCephMDSCephFSInterruptedFlockRecoveryIntegration$"}, []string{"lock-inflight"}, admitMDSCephFSHeldLocks, metadata},
 		{capMDSHeldFcntlSplit, []string{"^TestCephMDSCephFSHeldFcntlSplitReconnectIntegration$"}, mdsCephFSHeldFcntlSplitActions, admitMDSCephFSHeldFlockSplit, completion},
 		{capMDSHeldFlockSplitDense, []string{"^TestCephMDSCephFSHeldFlockSplitDenseIntegration$"}, mdsCephFSHeldFlockSplitDenseActions, admitMDSCephFSHeldFlockSplit, completion},
+		{capMDSRanksHeldFlock, []string{"^TestCephMDSCephFSRanksHeldFlockTakeoverIntegration$"}, []string{"flock-ex-nb"}, admitMDSCephFSRanksHeldFlock, ranks},
 	}
 }
 
@@ -204,5 +208,57 @@ func TestMDSCephFSHeldLockCellOutputs(t *testing.T) {
 	}
 	if op, _, err := mdsCephFSFindBoundaryOp(data, 4711, 10); err != nil || op != nil {
 		t.Fatal("another TID was found in the in-flight dump", op, err)
+	}
+}
+
+// The two-rank lock probe names its one plan file and accepts only its own
+// output shape.
+func TestMDSCephFSRanksHeldFlockProbeIsClosed(t *testing.T) {
+	token := strings.Repeat("a1", 16)
+	plan := mdsCephFSRanksPlanFor(token, false)
+	if plan.flockTarget() != "mig/file-0" || (mdsCephFSRanksPlan{}).flockTarget() != "" {
+		t.Fatal("the lock probe target differs", plan.flockTarget())
+	}
+	id, action, err := parseMDSCephFSRanksRequest([]string{"5", token, "flock-ex-nb", "mig/file-0"}, token, plan, 2, false, 4)
+	if err != nil || id != 5 || action != (mdsCephFSRanksAction{name: "flock-ex-nb", target: "mig/file-0"}) {
+		t.Fatal("closed ranks lock probe refused", action, err)
+	}
+	for _, args := range [][]string{{}, {"mig/file-1"}, {"fwd/target"}, {"dir"}, {"mig/file-0", "x"}} {
+		if _, _, err := parseMDSCephFSRanksRequest(append([]string{"5", token, "flock-ex-nb"}, args...), token, plan, 2, false, 4); err == nil {
+			t.Fatal("caller-selected ranks lock probe admitted", args)
+		}
+	}
+	path, _ := plan.path("mig/file-0")
+	state := mdsCephFSFlockState{Ino: 7, MTime: 1}
+	output := func(edit func(*mdsCephFSRanksNative)) []byte {
+		n := mdsCephFSRanksNative{Action: "flock-ex-nb", Path: path, NativeGlobalID: 9, Flock: &mdsCephFSFlockProbe{Owner: mdsCephFSFlockOwner, Errno: 11, ElapsedNS: 1, Before: state, After: state}}
+		if edit != nil {
+			edit(&n)
+		}
+		data, _ := json.Marshal(n)
+		return data
+	}
+	if _, err := decodeMDSCephFSRanksNative("flock-ex-nb", path, nil, output(nil)); err != nil {
+		t.Fatal("ranks lock probe output refused", err)
+	}
+	for name, edit := range map[string]func(*mdsCephFSRanksNative){
+		"acquired not released": func(n *mdsCephFSRanksNative) { n.Flock.Errno, n.Flock.Acquired = 0, true },
+		"file not empty":        func(n *mdsCephFSRanksNative) { n.Flock.Before.Size, n.Flock.After.Size = 1, 1 },
+		"file changed":          func(n *mdsCephFSRanksNative) { n.Flock.After.MTime++ },
+		"other owner":           func(n *mdsCephFSRanksNative) { n.Flock.Owner++ },
+		"stat beside it":        func(n *mdsCephFSRanksNative) { n.Stat = &mdsCephFSStat{Exists: true, Ino: 7, Mode: 0o100644} },
+		"no probe":              func(n *mdsCephFSRanksNative) { n.Flock = nil },
+	} {
+		if _, err := decodeMDSCephFSRanksNative("flock-ex-nb", path, nil, output(edit)); err == nil {
+			t.Fatal("wrong ranks lock probe output accepted:", name)
+		}
+	}
+	stat, _ := json.Marshal(mdsCephFSRanksNative{Action: "stat", Path: path, NativeGlobalID: 9, Stat: &mdsCephFSStat{Exists: true, Ino: 7, Mode: 0o100644},
+		Flock: &mdsCephFSFlockProbe{Owner: mdsCephFSFlockOwner, ElapsedNS: 1}})
+	if _, err := decodeMDSCephFSRanksNative("stat", path, nil, stat); err == nil {
+		t.Fatal("a lock probe was accepted beside a stat")
+	}
+	if !strings.Contains(mdsCephFSRanksNativePython, "elif action == 'flock-ex-nb' and path == prefix + '/mig/file-0' and not extra:") {
+		t.Fatal("the ranks worker no longer bounds its lock probe to the plan file")
 	}
 }

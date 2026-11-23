@@ -22,6 +22,7 @@ CELLS = {
     "mds-cephfs-heldflock-split-dense": ("TestCephMDSCephFSHeldFlockSplitDenseIntegration", "mds_cephfs_completion",
                                          "mds-held-flock-split,mds-held-flock-split-dense,mds-held-flock-split-fragments"),
     "mds-cephfs-heldflock-split-cut": ("TestCephMDSCephFSHeldFlockSplitCutIntegration", "mds_cephfs_completion", "mds-held-flock-split"),
+    "mds-cephfs-ranks-heldflock": ("TestCephMDSCephFSRanksHeldFlockTakeoverIntegration", "mds_cephfs_ranks", "mds-ranks-held-flock"),
 }
 
 FIXTURES = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data")
@@ -55,13 +56,14 @@ class MDSHeldLockCellRowsTest(ci_row_catalog.RowsTestCase):
     def test_cell_selectors_reach_no_other_lock_test(self):
         tests = [test for test, _, _ in CELLS.values()] + [
             "TestCephMDSCephFSRecoveryIntegration", "TestCephMDSCephFSSharedFlockRecoveryIntegration", "TestCephMDSCephFSFcntlRangeRecoveryIntegration",
-            "TestCephMDSCephFSHeldFlockSplitReconnectIntegration", "TestCephMDSCephFSHeldFlockSplitFragmentsIntegration", "TestCephMDSCephFSMultiReconnectIntegration"]
+            "TestCephMDSCephFSHeldFlockSplitReconnectIntegration", "TestCephMDSCephFSHeldFlockSplitFragmentsIntegration", "TestCephMDSCephFSMultiReconnectIntegration",
+            "TestCephMDSCephFSRanksIntegration"]
         for test in tests:
             self.assertIn(test, self.declared)
             selector = re.compile("^" + test + "$")
             self.assertEqual([name for name in tests if selector.search(name)], [test])
         # The broad default selectors of the three fixtures reach no cell.
-        for default in ("^TestCephMDSCephFS(Push|Recovery)?Integration$", "^TestCephMDSCephFSCompletionIntegration$"):
+        for default in ("^TestCephMDSCephFS(Push|Recovery)?Integration$", "^TestCephMDSCephFSCompletionIntegration$", "^TestCephMDSCephFSRanksIntegration$"):
             selector = re.compile(default)
             for test, _, _ in CELLS.values():
                 self.assertIsNone(selector.search(test))
