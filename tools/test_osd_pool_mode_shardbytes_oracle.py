@@ -197,6 +197,23 @@ class Judge(unittest.TestCase):
         receipt = run([1, 3, 2, 0], expected, lambda after, record, files: (after.update(up=[1, NONE, 2, 0])))
         self.assertFalse(receipt["complete"])
 
+    def test_admits_only_the_scrub_store_diagnostics(self):
+        expected = shardbytes.shard_chunks(LOGICAL, 2, 2, 8)
+        scrub = ("Error getting attr on : 4.2s0_head,0#-6:e0000000:::deep_scrub_4.2s0:head#, (61) No data available\n"
+                 "Error getting attr on : 4.2s0_head,0#-6:e0000000:::scrub_4.2s0:head#, (61) No data available\n")
+        receipt = run([1, 3, 2, 0], expected, lambda after, record, files: record["shards"][0].update(list_stderr=scrub))
+        self.assertTrue(receipt["complete"], receipt["failures"])
+        self.assertEqual(len(receipt["shards"][0]["list_scrub_store_diagnostics"]), 2)
+        self.assertEqual(receipt["shards"][1]["list_scrub_store_diagnostics"], [])
+        for other in (scrub.replace("4.2s0:head", "4.2s1:head"), scrub.replace("#-6:", "#-5:"), scrub.replace("(61)", "(2)"),
+                      scrub + scrub, scrub.rstrip("\n"), scrub.replace("deep_scrub", "other"), scrub.replace("0#-6", "1#-6"),
+                      "Error getting attr on : 4.2s0_head,0#4:e0000000:::ec-bytes:head#, (61) No data available\n"):
+            with self.subTest(other=other):
+                receipt = run([1, 3, 2, 0], expected, lambda after, record, files: record["shards"][0].update(list_stderr=other))
+                self.assertFalse(receipt["complete"])
+        receipt = run([1, 3, 2, 0], expected, lambda after, record, files: record["shards"][0].update(bytes_stderr=scrub))
+        self.assertFalse(receipt["complete"])
+
     def test_references(self):
         self.assertEqual(shardbytes.parse_references([{"label": "before", "data": base64.b64encode(b"x").decode()}]), {"before": b"x"})
         for value in ([{"label": "native", "data": ""}], [{"label": "Before", "data": ""}], [{"label": "a", "data": "", "x": 1}],

@@ -68,6 +68,34 @@ class BytesError(ValueError):
     pass
 
 
+def scrub_store_diagnostics(stderr, spg, pool, shard):
+    """The listing's diagnostics when they name only the shard's scrub stores, as lines; None otherwise.
+
+    The tool reads every object's object_info while it walks the shard's
+    collection for the listing and prints a line for one without it, then
+    goes on (src/tools/ceph_objectstore_tool.cc:110-131). A primary's scrub
+    keeps its error stores as two temporary objects of that collection,
+    scrub_<spg> and deep_scrub_<spg> (src/osd/scrubber/ScrubStore.cc:105-117),
+    in the PG's temporary pool -2 - pool (pg_t::make_temp_ghobject), which
+    have none. Exactly those lines, each at most once, are admitted; any other
+    diagnostic is not.
+    """
+    if not isinstance(stderr, str):
+        return None
+    if stderr == "":
+        return []
+    lines = stderr.split("\n")
+    if lines[-1] != "":
+        return None
+    lines = lines[:-1]
+    pattern = re.compile(r"Error getting attr on : %s_head,%d#%d:[0-9a-f]{8}:::(deep_)?scrub_%s:head#, \(61\) No data available"
+                         % (re.escape(spg), shard, -2 - pool, re.escape(spg)))
+    kinds = [pattern.fullmatch(line) for line in lines]
+    if any(m is None for m in kinds) or len({m.group(1) for m in kinds}) != len(kinds):
+        return None
+    return lines
+
+
 def gf_mul(a, b):
     """Multiplication in GF(2^8) with the polynomial 0x11d (ISA-L gf_mul)."""
     product = 0
@@ -209,8 +237,13 @@ def _shard(index, osd, pgid, pool, name, record, files, expected):
     for op in ("list", "bytes"):
         if type(record[op + "_exit_code"]) is not int or record[op + "_exit_code"] != 0:
             failures.append("offline %s exited %r" % (op, record[op + "_exit_code"]))
-        if record[op + "_stderr"] != "":
-            failures.append("offline %s wrote diagnostics: %s" % (op, str(record[op + "_stderr"])[:200]))
+    if record["bytes_stderr"] != "":
+        failures.append("offline bytes wrote diagnostics: %s" % str(record["bytes_stderr"])[:200])
+    admitted = scrub_store_diagnostics(record["list_stderr"], spg, pool, index) if type(pool) is int else None
+    if admitted is None:
+        failures.append("offline list wrote diagnostics: %s" % str(record["list_stderr"])[:300])
+    else:
+        receipt["list_scrub_store_diagnostics"] = admitted
     if record["list_file"] != "osd-shard-bytes-s%d-list.json" % index or record["bytes_file"] != "osd-shard-bytes-s%d-data.bin" % index:
         failures.append("the capture names %r and %r as this shard's files" % (str(record["list_file"])[:60], str(record["bytes_file"])[:60]))
     receipt.update(whoami=record["whoami"], paused_ms=record["paused_ms"], store_archive_bytes=record["store_archive_bytes"])
