@@ -71,6 +71,18 @@ func rbdJournalConsumerSample() *rbdJournalLostAppendRecord {
 		return rbdJournalConsumerHeader{MinimumSet: minimum, ActiveSet: active, Image: rbdJournalClient{Positions: slices.Clone(image)},
 			Go: rbdJournalClient{ID: goClient, Data: goData, Positions: slices.Clone(goPositions), State: goState}, Oracle: rbdJournalClient{ID: oracle, Positions: []rbdJournalPosition{}, State: 1}}
 	}
+	// withSetup puts the setup's entry of tag 1 before the producer's in each
+	// object of set 0, as the journal objects hold them.
+	withSetup := func(entries []rbdJournalPosition) []rbdJournalPosition {
+		var all []rbdJournalPosition
+		for _, e := range entries {
+			if e.Object < rbdJournalSplay {
+				all = append(all, rbdJournalPosition{e.Object, 1, e.Object})
+			}
+			all = append(all, e)
+		}
+		return all
+	}
 	phase := func(name string, h rbdJournalConsumerHeader, exists []bool, entries []rbdJournalPosition, events int) *rbdJournalConsumerPhase {
 		return &rbdJournalConsumerPhase{Phase: name, IsOwner: true, Header: h, ObjectExists: slices.Clone(exists), ObjectSizes: sizes(exists), ObjectSHA256: digests(exists),
 			Entries: entries, WaitMet: true, WaitPolls: 3, Events: events}
@@ -79,7 +91,7 @@ func rbdJournalConsumerSample() *rbdJournalLostAppendRecord {
 		Registered:       &rbdJournalClient{ID: goClient, Data: goData, Positions: []rbdJournalPosition{}},
 		DisconnectOutput: []string{"client " + oracle + " disconnected"}, SetupTag: 1, ProducerTag: tag,
 		Phases: map[string]*rbdJournalConsumerPhase{
-			"produced":     phase("produced", header(0, 1, first, nil, 0), rbdJournalConsumerSets(0, 2), rbdJournalConsumerEntries(tag, 0, 7), 8),
+			"produced":     phase("produced", header(0, 1, first, nil, 0), rbdJournalConsumerSets(0, 2), withSetup(rbdJournalConsumerEntries(tag, 0, 7)), 8),
 			"trimmed":      phase("trimmed", header(1, 1, first, first, 0), rbdJournalConsumerSets(1, 2), rbdJournalConsumerEntries(tag, 4, 7), 0),
 			"disconnected": phase("disconnected", header(3, 3, last, first, 1), rbdJournalConsumerSets(3, 4), rbdJournalConsumerEntries(tag, 12, 15), 8)},
 		Reads: map[string][]rbdJournalTrimRead{}, CommitPositions: slices.Clone(first), Commit: attempt("client_commit"), Notified: true,
@@ -99,6 +111,10 @@ func rbdJournalConsumerSample() *rbdJournalLostAppendRecord {
 			}
 			x.Reads[stage] = append(x.Reads[stage], rd)
 		}
+	}
+	x.GoEntries = map[string][]rbdJournalPosition{}
+	for name, p := range x.Phases {
+		x.GoEntries[name] = slices.Clone(p.Entries)
 	}
 	r.Consumer = x
 	return r
@@ -154,6 +170,21 @@ func TestRBDJournalConsumerClaims(t *testing.T) {
 		"an absent object answered":  {"produced", func(r *rbdJournalLostAppendRecord) { read(r, "produced", "object_9").Code = 0 }},
 		"a header read twice": {"produced", func(r *rbdJournalLostAppendRecord) {
 			*read(r, "produced", "_get_active_set") = *read(r, "produced", "_get_minimum_set")
+		}},
+		"Go decoded another entry": {"produced", func(r *rbdJournalLostAppendRecord) { r.Consumer.GoEntries["produced"][3].Entry = 9 }},
+		"Go read no setup entry": {"produced", func(r *rbdJournalLostAppendRecord) {
+			r.Consumer.GoEntries["produced"] = r.Consumer.GoEntries["produced"][1:]
+		}},
+		"commit not from the Go reads": {"trimmed", func(r *rbdJournalLostAppendRecord) {
+			// The Go reads miss entry 7; a commit that names it came from elsewhere.
+			g := r.Consumer.GoEntries["produced"]
+			r.Consumer.GoEntries["produced"] = g[:len(g)-1]
+			r.Consumer.Phases["produced"].Entries = slices.Clone(r.Consumer.GoEntries["produced"])
+		}},
+		"late commit not from the Go reads": {"produce", func(r *rbdJournalLostAppendRecord) {
+			g := r.Consumer.GoEntries["disconnected"]
+			r.Consumer.GoEntries["disconnected"] = g[:len(g)-1]
+			r.Consumer.Phases["disconnected"].Entries = slices.Clone(r.Consumer.GoEntries["disconnected"])
 		}},
 		"commit past another position": {"trimmed", func(r *rbdJournalLostAppendRecord) { r.Consumer.CommitPositions = rbdJournalConsumerPosition(2, 6) }},
 		"commit refused":               {"trimmed", func(r *rbdJournalLostAppendRecord) { r.Consumer.Commit.Class = "refused" }},

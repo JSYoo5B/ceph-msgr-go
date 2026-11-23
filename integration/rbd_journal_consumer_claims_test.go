@@ -93,6 +93,19 @@ func rbdJournalConsumerPosition(tag, last uint64) []rbdJournalPosition {
 	return positions
 }
 
+// rbdJournalConsumerCommitOf is the commit position after previous of a
+// consumer that replayed the entries of tag among entries, in entry order.
+func rbdJournalConsumerCommitOf(previous, entries []rbdJournalPosition, tag uint64) []rbdJournalPosition {
+	var mine []rbdJournalEntry
+	for _, p := range entries {
+		if p.Tag == tag {
+			mine = append(mine, rbdJournalEntry{Object: p.Object, Tag: p.Tag, EntryID: p.Entry})
+		}
+	}
+	slices.SortStableFunc(mine, func(a, b rbdJournalEntry) int { return int(a.EntryID) - int(b.EntryID) })
+	return rbdJournalCommitPosition(previous, mine, rbdJournalSplay)
+}
+
 // rbdJournalConsumerTrimMarks are the producer trimmer's debug lines the
 // claims require, in this order (journal/JournalTrimmer.cc
 // handle_metadata_updated, remove_set at ceph/ceph/blob/v20.2.4/src/): the
@@ -192,8 +205,20 @@ func rbdJournalConsumerClaims(r *rbdJournalLostAppendRecord, stage string) []str
 		if want := rbdJournalConsumerSets(from, to); !slices.Equal(p.ObjectExists, want) {
 			fail("%s: the journal objects that exist are %v, want %v", name, p.ObjectExists, want)
 		}
-		if !reflect.DeepEqual(p.Entries, entries) {
-			fail("%s: the producer's entries are %v, want %v", name, p.Entries, entries)
+		// The Go client's own decoding of its reads of the phase must find
+		// what the test decodes from the producer's binary view; the
+		// producer's tag must hold exactly the planned entries.
+		if !reflect.DeepEqual(x.GoEntries[name], p.Entries) {
+			fail("%s: the Go client decoded the entries %v from its reads, the producer's view holds %v", name, x.GoEntries[name], p.Entries)
+		}
+		var mine []rbdJournalPosition
+		for _, e := range p.Entries {
+			if e.Tag == x.ProducerTag {
+				mine = append(mine, e)
+			}
+		}
+		if !reflect.DeepEqual(mine, entries) {
+			fail("%s: the producer's entries are %v, want %v", name, mine, entries)
 		}
 		return p
 	}
@@ -243,8 +268,8 @@ func rbdJournalConsumerClaims(r *rbdJournalLostAppendRecord, stage string) []str
 	}
 
 	// The Go client's commit and the trim of set 0.
-	if !reflect.DeepEqual(x.CommitPositions, first) {
-		fail("commit: the Go client's position is %v, want %v", x.CommitPositions, first)
+	if !reflect.DeepEqual(x.CommitPositions, first) || !reflect.DeepEqual(x.CommitPositions, rbdJournalConsumerCommitOf(nil, x.GoEntries["produced"], t)) {
+		fail("commit: the Go client's position is %v, want %v as its own reads give it", x.CommitPositions, first)
 	}
 	if a := x.Commit; a == nil || a.Class != "applied" || a.Code != 0 || a.Invocations != 1 || !x.Notified {
 		fail("commit: the Go client's commit was not answered 0 once and the header notified: %s", text(a))
@@ -271,8 +296,8 @@ func rbdJournalConsumerClaims(r *rbdJournalLostAppendRecord, stage string) []str
 	}
 
 	// The disconnected Go client's next commit.
-	if !reflect.DeepEqual(x.LatePositions, last) {
-		fail("late commit: the disconnected Go client's position is %v, want %v", x.LatePositions, last)
+	if !reflect.DeepEqual(x.LatePositions, last) || !reflect.DeepEqual(x.LatePositions, rbdJournalConsumerCommitOf(x.CommitPositions, x.GoEntries["disconnected"], t)) {
+		fail("late commit: the disconnected Go client's position is %v, want %v as its own reads give it", x.LatePositions, last)
 	}
 	if a := x.LateCommit; a == nil || a.Class != "applied" || a.Code != 0 || a.Invocations != 1 {
 		fail("late commit: the disconnected Go client's commit was not answered 0 once: %s", text(a))

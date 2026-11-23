@@ -49,9 +49,12 @@ import (
 //     handle_metadata_updated).
 //   - The Go client reads the journal header and every journal object and
 //     compares each answer with the producer's own exec and reads of that
-//     phase, decodes the entries, commits the position a consumer that
-//     replayed every entry would commit (one position per splay offset,
-//     entries 7 to 4) and notifies the journal header. The producer's
+//     phase. It takes the producer's tag from its own read of the image
+//     client's position, decodes the entries of its own object reads (they
+//     must equal what the test decodes from the producer's view), commits
+//     the position a consumer that replayed those entries would commit (one
+//     position per splay offset, entries 7 to 4) and notifies the journal
+//     header. The producer's
 //     trimmer then removes object set 0 and raises the minimum set to 1.
 //   - The producer's next eight writes are entries 8 to 15, in objects 8 to
 //     11 and 12 to 15. The active set 3 is then more than one object set
@@ -61,7 +64,8 @@ import (
 //     schedule_laggy_clients_disconnect); its trimmer, which skips
 //     disconnected clients, removes object sets 1 and 2.
 //   - The Go client finds its client record disconnected with its committed
-//     position; its next client_commit is answered 0 and leaves the record
+//     position; its next client_commit, of the position after the entries
+//     its own reads of the second batch found, is answered 0 and leaves the record
 //     disconnected (cls_journal.cc journal_client_commit does not look at
 //     the state).
 //
@@ -149,7 +153,8 @@ type rbdJournalConsumerPhase struct {
 	ObjectExists []bool
 	ObjectSizes  []uint64
 	ObjectSHA256 []string
-	// Entries are the producer tag's entries by object, in object order.
+	// Entries are the entries of every tag the producer's binary view
+	// holds, by object, in object order (decoded by the test).
 	Entries   []rbdJournalPosition
 	WaitMet   bool
 	WaitPolls int
@@ -166,12 +171,16 @@ type rbdJournalConsumer struct {
 	// DisconnectOutput is `rbd journal client disconnect`'s stdout lines.
 	DisconnectOutput []string
 	DisconnectCode   int
-	// SetupTag is the tag of the setup's entries, ProducerTag the
-	// producer's.
+	// SetupTag is the tag of the setup's entries as native librbd observed
+	// it; ProducerTag the tag the Go client's read of the image client's
+	// position names after the first batch.
 	SetupTag, ProducerTag uint64
 	Phases                map[string]*rbdJournalConsumerPhase
-	// Reads are the Go reads compared with the producer's, by stage.
-	Reads map[string][]rbdJournalTrimRead
+	// Reads are the Go reads compared with the producer's, by stage, and
+	// GoEntries the entries the Go client decoded from its own object reads
+	// of each stage, every tag, by object.
+	Reads     map[string][]rbdJournalTrimRead
+	GoEntries map[string][]rbdJournalPosition
 	// Commit is the Go client's commit after the first batch with
 	// CommitPositions, Notify the header notification after it;
 	// LateCommit the commit after it was disconnected with LatePositions,
@@ -213,8 +222,8 @@ type rbdJournalConsumerSteps struct {
 
 // rbdJournalConsumerPhaseOf projects one producer phase: the header from its
 // exec outputs (rbd_journal.go journal_calls order), the objects and the
-// producer tag's entries decoded from its binary view.
-func rbdJournalConsumerPhaseOf(dir string, p nativeRBDJournalProducePhase, producer uint64) (*rbdJournalConsumerPhase, []byte, error) {
+// entries decoded from its binary view.
+func rbdJournalConsumerPhaseOf(dir string, p nativeRBDJournalProducePhase) (*rbdJournalConsumerPhase, []byte, error) {
 	v := &rbdJournalConsumerPhase{Phase: p.Phase, IsOwner: p.IsOwner, Entries: []rbdJournalPosition{}, Events: len(p.Events)}
 	if p.Wait != nil {
 		v.WaitMet, v.WaitPolls = p.Wait.Met, p.Wait.Polls
@@ -258,9 +267,7 @@ func rbdJournalConsumerPhaseOf(dir string, p nativeRBDJournalProducePhase, produ
 			return nil, nil, err
 		}
 		for _, en := range entries {
-			if en.Tag == producer {
-				v.Entries = append(v.Entries, rbdJournalPosition{en.Object, en.Tag, en.EntryID})
-			}
+			v.Entries = append(v.Entries, rbdJournalPosition{en.Object, en.Tag, en.EntryID})
 		}
 	}
 	return v, blob, nil
@@ -270,7 +277,7 @@ func rbdJournalConsumerPhaseOf(dir string, p nativeRBDJournalProducePhase, produ
 func runRBDJournalConsumer(t *testing.T, s rbdJournalConsumerSteps) {
 	r, x := s.record, s.record.Consumer
 	ctx := s.ctx
-	x.Phases, x.Reads = map[string]*rbdJournalConsumerPhase{}, map[string][]rbdJournalTrimRead{}
+	x.Phases, x.Reads, x.GoEntries = map[string]*rbdJournalConsumerPhase{}, map[string][]rbdJournalTrimRead{}, map[string][]rbdJournalPosition{}
 	classOp := func(class, method string, mode cephmsgr.OSDCallMode, input []byte) cephmsgr.OSDOperation {
 		return cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: class, Method: method, Mode: mode, MaxOutputBytes: 65536}}
 	}
@@ -319,10 +326,10 @@ func runRBDJournalConsumer(t *testing.T, s rbdJournalConsumerSteps) {
 	}
 	s.judge(t, "disconnect-oracle")
 
-	// The setup's tag is the last tag before the producer opened the image;
-	// the producer's own tag is the next one.
+	// The setup's tag as native librbd's observation of the setup shows it,
+	// kept for comparison only: the producer's tag is what the Go client's
+	// own read of the image client's position names.
 	x.SetupTag = r.Views["setup"].LastTag.TID
-	x.ProducerTag = x.SetupTag + 1
 
 	// The producer, one native action that waits for three proceed signals.
 	statePath := filepath.Join(s.dir, "rbd-journal-state.json")
@@ -369,7 +376,7 @@ func runRBDJournalConsumer(t *testing.T, s rbdJournalConsumerSteps) {
 					if state.Token != s.token || state.NativeGlobalID == 0 || state.NativeGlobalID == s.gid {
 						t.Fatal("native producer scope differs", state.Token, state.NativeGlobalID)
 					}
-					v, blob, err := rbdJournalConsumerPhaseOf(s.dir, p, x.ProducerTag)
+					v, blob, err := rbdJournalConsumerPhaseOf(s.dir, p)
 					if err != nil {
 						t.Fatal(phase, err)
 					}
@@ -395,9 +402,13 @@ func runRBDJournalConsumer(t *testing.T, s rbdJournalConsumerSteps) {
 		}
 	}
 	// reads compares the journal header calls and the journal objects, read
-	// by the Go client, with what the producer read in the same phase.
-	reads := func(t *testing.T, stage string, objects []nativeRBDJournalObject, calls []nativeRBDWriteClassCall, blob []byte) {
+	// by the Go client, with what the producer read in the same phase, and
+	// returns what the Go client decoded from its own answers: the entries of
+	// every journal object it read and the image client's record. Its commits
+	// are computed from these; the producer's reads are the comparison.
+	reads := func(t *testing.T, stage string, objects []nativeRBDJournalObject, calls []nativeRBDWriteClassCall, blob []byte) ([]rbdJournalPosition, rbdJournalClient) {
 		t.Helper()
+		entries, image := []rbdJournalPosition{}, rbdJournalClient{}
 		route := s.route(t, s.journalHeader)
 		for _, c := range []struct {
 			index  int
@@ -419,6 +430,11 @@ func runRBDJournalConsumer(t *testing.T, s rbdJournalConsumerSteps) {
 				read.Detail = fmt.Sprintf("go %v, native %s %d", err, nc.Method, nc.Code)
 			} else {
 				read.Equal = hex.EncodeToString(reply.Operations[0].Data) == nc.OutputHex
+				if c.index == 6 {
+					if image, err = decodeRBDJournalClient(reply.Operations[0].Data); err != nil {
+						t.Fatal("Go read of the image journal client", stage, err)
+					}
+				}
 			}
 			x.Reads[stage] = append(x.Reads[stage], read)
 		}
@@ -442,7 +458,30 @@ func runRBDJournalConsumer(t *testing.T, s rbdJournalConsumerSteps) {
 				read.Detail = fmt.Sprint(err)
 			}
 			x.Reads[stage] = append(x.Reads[stage], read)
+			if err == nil && reply.Code == 0 && len(reply.Operations) == 2 {
+				decoded, err := decodeRBDJournalObject(no.Number, reply.Operations[1].Data)
+				if err != nil {
+					t.Fatal("Go read of journal object", no.Number, err)
+				}
+				for _, en := range decoded {
+					entries = append(entries, rbdJournalPosition{en.Object, en.Tag, en.EntryID})
+				}
+			}
 		}
+		x.GoEntries[stage] = entries
+		return entries, image
+	}
+	// producerEntries are the entries of the producer's tag among entries,
+	// in entry order.
+	producerEntries := func(entries []rbdJournalPosition) []rbdJournalEntry {
+		var mine []rbdJournalEntry
+		for _, p := range entries {
+			if p.Tag == x.ProducerTag {
+				mine = append(mine, rbdJournalEntry{Object: p.Object, Tag: p.Tag, EntryID: p.Entry})
+			}
+		}
+		slices.SortStableFunc(mine, func(a, b rbdJournalEntry) int { return int(a.EntryID) - int(b.EntryID) })
+		return mine
 	}
 	notify := func(t *testing.T, label string) {
 		t.Helper()
@@ -467,14 +506,13 @@ func runRBDJournalConsumer(t *testing.T, s rbdJournalConsumerSteps) {
 	// The first batch: the Go client reads what the producer read, decodes
 	// the producer's entries and commits past object set 0.
 	objects, calls, blob := waitPhase(t, "produced")
-	reads(t, "produced", objects, calls, blob)
-	s.judge(t, "produced")
-	var replayed []rbdJournalEntry
-	for _, p := range x.Phases["produced"].Entries {
-		replayed = append(replayed, rbdJournalEntry{Object: p.Object, Tag: p.Tag, EntryID: p.Entry})
+	goEntries, imageClient := reads(t, "produced", objects, calls, blob)
+	if len(imageClient.Positions) == 0 {
+		t.Fatal("the Go client's read of the image client names no position")
 	}
-	slices.SortStableFunc(replayed, func(a, b rbdJournalEntry) int { return int(a.EntryID) - int(b.EntryID) })
-	x.CommitPositions = rbdJournalCommitPosition(nil, replayed, rbdJournalSplay)
+	x.ProducerTag = imageClient.Positions[0].Tag
+	s.judge(t, "produced")
+	x.CommitPositions = rbdJournalCommitPosition(nil, producerEntries(goEntries), rbdJournalSplay)
 	_, commit := call(t, "client_commit", "client_commit", cephmsgr.OSDCallWrite, append(rbdString(s.plan.GoClient), rbdJournalPositionsEncode(x.CommitPositions)...))
 	x.Commit = &commit
 	if commit.Class != "applied" || commit.Code != 0 {
@@ -490,15 +528,11 @@ func runRBDJournalConsumer(t *testing.T, s rbdJournalConsumerSteps) {
 	proceed(t, 2)
 
 	objects, calls, blob = waitPhase(t, "disconnected")
-	reads(t, "disconnected", objects, calls, blob)
+	goEntries, _ = reads(t, "disconnected", objects, calls, blob)
 	s.judge(t, "disconnected")
-	// The disconnected client commits the position after the second batch.
-	replayed = replayed[:0]
-	for _, p := range x.Phases["disconnected"].Entries {
-		replayed = append(replayed, rbdJournalEntry{Object: p.Object, Tag: p.Tag, EntryID: p.Entry})
-	}
-	slices.SortStableFunc(replayed, func(a, b rbdJournalEntry) int { return int(a.EntryID) - int(b.EntryID) })
-	x.LatePositions = rbdJournalCommitPosition(x.CommitPositions, replayed, rbdJournalSplay)
+	// The disconnected client commits the position after the entries its own
+	// reads of the second batch found.
+	x.LatePositions = rbdJournalCommitPosition(x.CommitPositions, producerEntries(goEntries), rbdJournalSplay)
 	_, late := call(t, "client_commit_disconnected", "client_commit", cephmsgr.OSDCallWrite, append(rbdString(s.plan.GoClient), rbdJournalPositionsEncode(x.LatePositions)...))
 	x.LateCommit = &late
 	x.LateRecord = readClient(t, "get_client_disconnected")
