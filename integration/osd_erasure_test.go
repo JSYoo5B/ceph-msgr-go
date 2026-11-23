@@ -250,10 +250,9 @@ func erasureScenario(t *testing.T, width erasureWidth, optimized bool, plugin st
 		_, err := send(30*time.Second, nil, cephmsgr.OSDOperation{Code: cephmsgr.OSDSetOmapValues, Omap: cephmsgr.OSDOmapInput{Entries: []cephmsgr.OSDOmapEntry{{Key: "k", Value: []byte("v")}}}})
 		var server *cephmsgr.OSDError
 		var unknown *cephmsgr.OutcomeUnknownError
-		if !errors.As(err, &server) || errors.As(err, &unknown) {
-			t.Fatal("OMAP write on an EC pool was not a known refusal", err)
+		if !errors.As(err, &server) || errors.As(err, &unknown) || server.Code != -95 {
+			t.Fatal("OMAP write on an EC pool was not the known refusal -EOPNOTSUPP", err)
 		}
-		t.Logf("OMAP on EC pool: %d", server.Code)
 	})
 
 	if hash {
