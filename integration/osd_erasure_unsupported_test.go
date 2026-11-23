@@ -191,7 +191,7 @@ func erasureOwnedPool(t *testing.T, ctx context.Context, width erasureWidth, opt
 			t.Error("owned erasure-code profile was not removed", width.profile)
 		}
 	})
-	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": 8, "hashpspool": true, "erasure": true, "width": width.name, "optimized": optimized, "plugin": "isa", "overwrites": overwrites})
+	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": 8, "hashpspool": isReplicatedPGFixtureProfile(), "erasure": true, "width": width.name, "optimized": optimized, "plugin": "isa", "overwrites": overwrites})
 	if created.PoolType != 3 || created.Size != width.size() || created.ECOptimized != optimized || created.Width != width.name || created.ErasureCodeProfile != width.profile ||
 		created.ECOverwrites == nil || *created.ECOverwrites != overwrites {
 		t.Fatal("pool is not the requested erasure-coded shape", created.PoolType, created.Size, created.ECOptimized, created.Width, created.ErasureCodeProfile, created.ECOverwrites)
