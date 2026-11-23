@@ -476,6 +476,22 @@ class ErasureWidthTest(unittest.TestCase):
             # No step is retried after a failed check.
             self.assertLessEqual(sum(c["prefix"] == "osd erasure-code-profile set" for c in rados.commands), 1)
 
+    def test_a_pool_without_overwrites_skips_the_flag_and_reads_its_absence_back(self):
+        rados = FakeErasureRados(overwrites=False)
+        result = create(rados, width="k2m2", plugin="isa", overwrites=False)
+        self.assertIs(result["ec_overwrites"], False)
+        self.assertNotIn("ec_overwrites", result["flag_names"].split(","))
+        self.assertEqual([c.get("var") for c in rados.commands if c["prefix"] == "osd pool set"], [])
+        # A pool that has the flag although none was asked for is refused.
+        with self.assertRaises(RuntimeError):
+            create(FakeErasureRados(overwrites=True), width="k2m2", plugin="isa", overwrites=False)
+
+    def test_without_overwrites_inputs_are_closed(self):
+        for request in (dict(width="k2m2", plugin="isa", overwrites="no"), dict(width="k2m2", plugin="isa", overwrites=False, optimized=True),
+                        dict(width="k2m1", overwrites=False), dict(width="", erasure=False, size=3, min_size=2, overwrites=False)):
+            with self.subTest(request=request), self.assertRaises(ValueError):
+                create(FakeErasureRados(overwrites=False), **request)
+
     def test_optimized_k2m2_reads_back_the_pinned_nonprimary_shards(self):
         rados = FakeErasureRados()
         result = create(rados, width="k2m2", plugin="isa", optimized=True)
