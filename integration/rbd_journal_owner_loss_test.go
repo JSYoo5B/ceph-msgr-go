@@ -389,7 +389,7 @@ func rbdJournalTakeoverClaims(r *rbdJournalLostAppendRecord, v, before, locked, 
 		next = append(next, rbdJournalLostAppendEvent{Type: n.Type, Offset: n.Offset, Length: n.Length})
 	}
 	if v.InspectTotal == nil || v.InspectErrors == nil || setup.InspectTotal == nil || *v.InspectTotal != *setup.InspectTotal+1+len(planned) || *v.InspectErrors != 0 ||
-		len(v.InspectOwned) != 1 || v.InspectOwned[0] != want || !reflect.DeepEqual(next, planned) {
+		len(v.InspectOwned) != 1 || v.InspectOwned[0] != want || !reflect.DeepEqual(next, planned) || !slices.Equal(v.InspectOther, setup.InspectOther) {
 		fail("takeover: rbd journal inspect does not show the setup entries, the owned entry once and then only the takeover's entries (owned %s, next %s)", text(v.InspectOwned), text(v.InspectNext))
 	}
 	// Replay before the writes.

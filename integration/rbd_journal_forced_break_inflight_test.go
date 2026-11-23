@@ -200,7 +200,7 @@ func rbdJournalForcedInflightClaims(r *rbdJournalLostAppendRecord, stage string)
 	want := rbdJournalLostAppendEvent{Type: "AioWrite", Offset: e.ImageOffset, Length: e.ImageLength,
 		Timestamp: time.Unix(int64(e.Timestamp.Seconds), int64(e.Timestamp.Nanoseconds)/1000*1000).UTC().Format(time.RFC3339Nano)}
 	if checkpoint.InspectTotal == nil || checkpoint.InspectErrors == nil || setup.InspectTotal == nil || *checkpoint.InspectTotal != *setup.InspectTotal+1 ||
-		*checkpoint.InspectErrors != 0 || len(checkpoint.InspectOwned) != 1 || checkpoint.InspectOwned[0] != want {
+		*checkpoint.InspectErrors != 0 || len(checkpoint.InspectOwned) != 1 || checkpoint.InspectOwned[0] != want || !slices.Equal(checkpoint.InspectOther, setup.InspectOther) {
 		fail("checkpoint: rbd journal inspect does not replay the setup entries and the owned entry once (%v)", checkpoint.InspectOwned)
 	}
 	if r.PendingAfterCheckpoint == nil || !*r.PendingAfterCheckpoint {

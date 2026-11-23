@@ -482,7 +482,8 @@ func rbdJournalForcedPendingClaims(r *rbdJournalLostAppendRecord, stage string) 
 		next = append(next, rbdJournalLostAppendEvent{Type: n.Type, Offset: n.Offset, Length: n.Length})
 	}
 	if takeover.InspectTotal == nil || takeover.InspectErrors == nil || setup.InspectTotal == nil || *takeover.InspectTotal != *setup.InspectTotal+2+len(fp.TakeoverEvents) ||
-		*takeover.InspectErrors != 0 || !slices.Equal(takeover.InspectOwned, []rbdJournalLostAppendEvent{event(e), event(*pr)}) || !reflect.DeepEqual(next, fp.TakeoverEvents) {
+		*takeover.InspectErrors != 0 || !slices.Equal(takeover.InspectOwned, []rbdJournalLostAppendEvent{event(e), event(*pr)}) || !reflect.DeepEqual(next, fp.TakeoverEvents) ||
+		!slices.Equal(takeover.InspectOther, setup.InspectOther) {
 		fail("takeover: rbd journal inspect does not show the setup entries, the owned entry and the new-connection entry, then only the takeover's entries (owned %s, next %s)",
 			text(takeover.InspectOwned), text(takeover.InspectNext))
 	}

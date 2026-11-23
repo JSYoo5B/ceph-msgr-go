@@ -222,6 +222,10 @@ type rbdJournalLostAppendView struct {
 	// InspectNext are the entries of the tag after the subject's: native
 	// librbd's own entries once it replayed the journal and wrote.
 	InspectNext []rbdJournalLostAppendEvent
+	// InspectOther are the entries of every other tag, in replay order
+	// (before the owned entry is built, every entry): the setup's entries,
+	// which a later inspection must show again, each one by identity.
+	InspectOther []rbdJournalInspectEntry
 	// Blocklist is the OSDMap blocklist the action read, nil when it read
 	// none.
 	Blocklist []rbdLockOwnerLossBlock
@@ -230,6 +234,16 @@ type rbdJournalLostAppendView struct {
 	// position, in the order listed.
 	MinimumSet, ActiveSet uint64
 	Clients               []rbdJournalClientView
+}
+
+// rbdJournalInspectEntry is one entry of `rbd journal inspect` outside the
+// subject's tags: its tag and its event as printed (offset and length 0 for
+// an event without them).
+type rbdJournalInspectEntry struct {
+	Tag            uint64
+	Type           string
+	Offset, Length uint64
+	Timestamp      string
 }
 
 // rbdJournalClientView is one registered journal client and its commit
@@ -436,7 +450,7 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		want := rbdJournalLostAppendEvent{Type: "AioWrite", Offset: e.ImageOffset, Length: e.ImageLength,
 			Timestamp: time.Unix(int64(e.Timestamp.Seconds), int64(e.Timestamp.Nanoseconds)/1000*1000).UTC().Format(time.RFC3339Nano)}
 		if v.InspectTotal == nil || v.InspectErrors == nil || setup.InspectTotal == nil || *v.InspectTotal != *setup.InspectTotal+1 || *v.InspectErrors != 0 ||
-			len(v.InspectOwned) != 1 || v.InspectOwned[0] != want {
+			len(v.InspectOwned) != 1 || v.InspectOwned[0] != want || !slices.Equal(v.InspectOther, setup.InspectOther) {
 			fail("%s: rbd journal inspect does not replay the setup entries and the owned entry once (%v)", name, v.InspectOwned)
 		}
 	}
@@ -763,6 +777,11 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 				return nil, errors.New("native rbd journal inspect commit tids are not contiguous")
 			}
 			if entry == nil || ne.TagID != entry.Tag && ne.TagID != entry.Tag+1 {
+				other := rbdJournalInspectEntry{Tag: ne.TagID, Type: ne.Event.Type, Timestamp: ne.Event.Timestamp}
+				if ne.Event.Offset != nil && ne.Event.Length != nil {
+					other.Offset, other.Length = *ne.Event.Offset, *ne.Event.Length
+				}
+				v.InspectOther = append(v.InspectOther, other)
 				continue
 			}
 			ts, err := time.Parse("2006-01-02T15:04:05.000000-0700", ne.Event.Timestamp)

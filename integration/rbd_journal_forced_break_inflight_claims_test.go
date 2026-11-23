@@ -71,6 +71,14 @@ func TestRBDJournalForcedInflightClaims(t *testing.T) {
 	}
 	type change = func(*rbdJournalLostAppendRecord)
 	cases := map[string]change{
+		"setup entry duplicated at the checkpoint": func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["checkpoint"]
+			v.InspectOther = append([]rbdJournalInspectEntry{v.InspectOther[0]}, v.InspectOther[:len(v.InspectOther)-1]...)
+		},
+		"setup entry duplicated at the takeover": func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["takeover"]
+			v.InspectOther = append([]rbdJournalInspectEntry{v.InspectOther[0]}, v.InspectOther[:len(v.InspectOther)-1]...)
+		},
 		// The owner was live and the caller pending at the checkpoint.
 		"no ping before the append":       func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.PingBefore = nil },
 		"ping refused":                    func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.PingBefore.Class = "refused" },
