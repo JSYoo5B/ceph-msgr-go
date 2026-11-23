@@ -72,10 +72,13 @@ import (
 // (src/osd/OSD.cc:3879, 5012).
 
 // copyStagingSnapshot is the receipt of one complete listing of one PG
-// collection on one OSD (tools/osd_pool_mode_copystaging_oracle.py).
+// collection on one OSD (tools/osd_pool_mode_copystaging_oracle.py): the
+// shard's collection of an erasure-coded PG, the PG's of a replicated one
+// (shard -1).
 type copyStagingSnapshot struct {
 	OSD        int32    `json:"osd"`
 	PGID       string   `json:"pgid"`
+	Shard      int      `json:"shard"`
 	Collection string   `json:"collection"`
 	Max        int      `json:"max"`
 	Objects    int      `json:"objects"`
@@ -99,13 +102,36 @@ type copyChunkSetting struct {
 	Failures []string `json:"failures"`
 }
 
-// copyStaging lists the destination PG collection on one OSD.
-func copyStaging(t *testing.T, ctx context.Context, osd int32, pgid string) copyStagingSnapshot {
+// copyStagingShard is the shard osd holds of route's PG: its index in the
+// acting set of an erasure-coded route without pg_temp, -1 for a replicated
+// route, and an error when osd holds none.
+func copyStagingShard(route osdFixtureOracle, osd int32) (int, error) {
+	if route.Shard < 0 {
+		return -1, nil
+	}
+	shard := slices.Index(route.Acting, osd)
+	if route.PGTemp || shard < 0 {
+		return -1, fmt.Errorf("osd.%d holds no shard of %s by its acting set %v (pg_temp %t)", osd, route.PGID, route.Acting, route.PGTemp)
+	}
+	return shard, nil
+}
+
+// copyStaging lists route's PG collection on one OSD: the collection of the
+// shard that OSD holds of an erasure-coded PG.
+func copyStaging(t *testing.T, ctx context.Context, osd int32, route osdFixtureOracle) copyStagingSnapshot {
 	t.Helper()
+	in := map[string]any{"osd": osd, "pgid": route.PGID}
+	shard, err := copyStagingShard(route, osd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shard >= 0 {
+		in["shard"] = shard
+	}
 	var result struct {
 		Staging copyStagingSnapshot `json:"copy_staging"`
 	}
-	nativePoolResult(t, ctx, "copystaging", map[string]any{"osd": osd, "pgid": pgid}, &result)
+	nativePoolResult(t, ctx, "copystaging", in, &result)
 	return result.Staging
 }
 
@@ -124,16 +150,33 @@ func copyChunk(t *testing.T, ctx context.Context, osd int32, action string) copy
 // name a primary (role 0) generated for the destination PG.
 func copyTempPrefix(pool int64) string { return "#" + strconv.FormatInt(-2-pool, 10) + ":" }
 
-// checkCopyTemp says whether one complete listing of the destination PG
-// holds exactly the temporary objects in want, which the primary of pgid
-// generated for pool.
-func checkCopyTemp(s copyStagingSnapshot, osd int32, pool int64, pgid string, want int) (string, error) {
-	if !s.Complete || len(s.Failures) != 0 || s.OSD != osd || s.PGID != pgid || s.Collection != pgid+"_head" || s.Objects == 0 || s.Objects >= s.Max {
-		return "", fmt.Errorf("the listing of %s on osd.%d is not complete: osd.%d %s %d/%d objects %q", pgid, osd, s.OSD, s.Collection, s.Objects, s.Max, s.Failures)
+// checkCopyTemp says whether one complete listing of route's PG on osd holds
+// exactly the temporary objects in want, which the primary of route's PG
+// generated for its pool. On an erasure-coded route the listing is the
+// collection of osd's shard, whose entries are printed with that shard in
+// hexadecimal, and the primary names its temporary objects after its own
+// <pgid>s<shard> (generate_temp_object prints info.pgid, a spg_t). An entry
+// with a generation (an erasure-coded rollback copy) is not a staging object.
+// It returns the one temporary object without the shard, so the listings of
+// every shard of one PG name it alike.
+func checkCopyTemp(s copyStagingSnapshot, osd int32, route osdFixtureOracle, want int) (string, error) {
+	pgid, prefix, owner := route.PGID, copyTempPrefix(route.Pool), route.PGID
+	shard, err := copyStagingShard(route, osd)
+	if err != nil {
+		return "", err
+	}
+	collection := pgid + "_head"
+	if shard >= 0 {
+		collection = fmt.Sprintf("%ss%d_head", pgid, shard)
+		prefix = strconv.FormatInt(int64(shard), 16) + prefix
+		owner = fmt.Sprintf("%ss%d", pgid, route.Shard)
+	}
+	if !s.Complete || len(s.Failures) != 0 || s.OSD != osd || s.PGID != pgid || s.Shard != shard || s.Collection != collection || s.Objects == 0 || s.Objects >= s.Max {
+		return "", fmt.Errorf("the listing of %s on osd.%d is not complete: osd.%d %s shard %d %d/%d objects %q", collection, osd, s.OSD, s.Collection, s.Shard, s.Objects, s.Max, s.Failures)
 	}
 	for _, entry := range s.Temp {
-		if !strings.HasPrefix(entry, copyTempPrefix(pool)) || !strings.Contains(entry, ":::temp_"+pgid+"_0_") || !strings.HasSuffix(entry, ":head#") {
-			return "", fmt.Errorf("osd.%d lists a temporary object %q that is not a copy staging object of %s", osd, entry, pgid)
+		if !strings.HasPrefix(entry, prefix) || !strings.Contains(entry, ":::temp_"+owner+"_0_") || !strings.HasSuffix(entry, ":head#") {
+			return "", fmt.Errorf("osd.%d lists a temporary object %q that is not a copy staging object of %s", osd, entry, owner)
 		}
 	}
 	if len(s.Temp) != want {
@@ -142,7 +185,7 @@ func checkCopyTemp(s copyStagingSnapshot, osd int32, pool int64, pgid string, wa
 	if want == 0 {
 		return "", nil
 	}
-	return s.Temp[0], nil
+	return strings.TrimPrefix(s.Temp[0], strings.TrimSuffix(prefix, copyTempPrefix(route.Pool))), nil
 }
 
 // checkSourceWriteHeld judges one bracketed snapshot of the source primary
@@ -431,7 +474,7 @@ func copyChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery
 		t.Fatal("native destination seed", seeded.Code)
 	}
 	for _, osd := range r.dstRoute.Acting {
-		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute.PGID), osd, pools.ids[2], r.dstRoute.PGID, 0); err != nil {
+		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute), osd, r.dstRoute, 0); err != nil {
 			t.Fatal("before the copy:", err)
 		}
 	}
@@ -455,7 +498,7 @@ func copyChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery
 	// The restarted OSD cleared every temporary object when it started; the
 	// others removed theirs at the interval change or the final rename.
 	for _, osd := range r.dstRoute.Acting {
-		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute.PGID), osd, pools.ids[2], r.dstRoute.PGID, 0); err != nil {
+		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute), osd, r.dstRoute, 0); err != nil {
 			t.Fatal("after recovery:", err)
 		}
 		receipt.TempAfter = append(receipt.TempAfter, osd)
@@ -463,15 +506,35 @@ func copyChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery
 }
 
 // separatePrimaries gives the source a fresh name whose primary is not the
-// destination primary, when the first one shares it, and returns that source
-// primary and the third OSD, which replicates both PGs. The one-PG legacy
-// owned pools cannot separate them, so the subtest is skipped there.
+// destination primary (separateSource) and returns that source primary and
+// the third OSD, which replicates both PGs.
 func (r *copyPrimaryChangeRun) separatePrimaries() (int32, int32) {
+	t := r.t
+	t.Helper()
+	primary, sourcePrimary := r.dstRoute.ID, r.separateSource()
+	var paused int32 = -1
+	for _, osd := range r.dstRoute.Acting {
+		if osd != primary && osd != sourcePrimary {
+			paused = osd
+		}
+	}
+	if paused < 0 || len(r.srcRoute.Acting) != 3 || !slices.Contains(r.srcRoute.Acting, paused) || !slices.Contains(r.dstRoute.Acting, sourcePrimary) {
+		t.Fatalf("no third OSD replicates both PGs: source %v (primary osd.%d), destination %v (primary osd.%d)", r.srcRoute.Acting, sourcePrimary, r.dstRoute.Acting, primary)
+	}
+	return sourcePrimary, paused
+}
+
+// separateSource gives the source a fresh name whose primary is not the
+// destination primary, when the first one shares it, and returns that source
+// primary. The one-PG legacy owned pools cannot separate them, so the
+// subtest is skipped there.
+func (r *copyPrimaryChangeRun) separateSource() int32 {
 	t, ctx := r.t, r.ctx
 	t.Helper()
 	primary := r.dstRoute.ID
 	if r.srcRoute.ID == primary {
-		// The paused replica must be neither primary, so they must differ.
+		// The OSD a barrier pauses or freezes must be neither primary, so
+		// they must differ.
 		if !isReplicatedPGFixtureProfile() {
 			t.Skipf("the one-PG legacy owned pools put the source and the destination on osd.%d", primary)
 		}
@@ -487,17 +550,7 @@ func (r *copyPrimaryChangeRun) separatePrimaries() (int32, int32) {
 			t.Fatalf("no fresh source name in 64 has a primary other than osd.%d", primary)
 		}
 	}
-	sourcePrimary := r.srcRoute.ID
-	var paused int32 = -1
-	for _, osd := range r.dstRoute.Acting {
-		if osd != primary && osd != sourcePrimary {
-			paused = osd
-		}
-	}
-	if paused < 0 || len(r.srcRoute.Acting) != 3 || !slices.Contains(r.srcRoute.Acting, paused) || !slices.Contains(r.dstRoute.Acting, sourcePrimary) {
-		t.Fatalf("no third OSD replicates both PGs: source %v (primary osd.%d), destination %v (primary osd.%d)", r.srcRoute.Acting, sourcePrimary, r.dstRoute.Acting, primary)
-	}
-	return sourcePrimary, paused
+	return r.srcRoute.ID
 }
 
 // copyChunkHold is the state of a copy held between its chunks.
@@ -649,8 +702,8 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 	// copy from going further, so the listings converge on one object.
 	for _, osd := range route.Acting {
 		for deadline := time.Now().Add(30 * time.Second); ; {
-			s := copyStaging(t, ctx, osd, route.PGID)
-			temp, err := checkCopyTemp(s, osd, route.Pool, route.PGID, 1)
+			s := copyStaging(t, ctx, osd, route)
+			temp, err := checkCopyTemp(s, osd, route, 1)
 			if err == nil && (h.temp == "" || temp == h.temp) {
 				h.temp = temp
 				receipt.StagingSHA256 = append(receipt.StagingSHA256, s.SHA256)
@@ -688,7 +741,7 @@ func (receipt *copyChunkLossReceipt) recordReply(reply cephmsgr.OSDReply) {
 func (r *copyPrimaryChangeRun) waitTempRemoved(osd int32, route osdFixtureOracle) {
 	r.t.Helper()
 	for deadline := time.Now().Add(60 * time.Second); ; {
-		_, err := checkCopyTemp(copyStaging(r.t, r.ctx, osd, route.PGID), osd, route.Pool, route.PGID, 0)
+		_, err := checkCopyTemp(copyStaging(r.t, r.ctx, osd, route), osd, route, 0)
 		if err == nil {
 			return
 		}
@@ -872,26 +925,28 @@ func TestCopyFromMultiChunkLossJudgements(t *testing.T) {
 	at.Epoch = 31
 
 	temp := "#-6:c7a5d36b:::temp_4.3_0_4123_1:head#"
-	listing := copyStagingSnapshot{OSD: 2, PGID: "4.3", Collection: "4.3_head", Max: 4096, Objects: 3, Complete: true, Temp: []string{temp}}
-	if got, err := checkCopyTemp(listing, 2, 4, "4.3", 1); err != nil || got != temp {
+	listing := copyStagingSnapshot{OSD: 2, PGID: "4.3", Shard: -1, Collection: "4.3_head", Max: 4096, Objects: 3, Complete: true, Temp: []string{temp}}
+	if got, err := checkCopyTemp(listing, 2, route, 1); err != nil || got != temp {
 		t.Fatal("staged temporary refused:", got, err)
 	}
 	empty := listing
 	empty.Temp, empty.Objects = nil, 2
-	if _, err := checkCopyTemp(empty, 2, 4, "4.3", 0); err != nil {
+	if _, err := checkCopyTemp(empty, 2, route, 0); err != nil {
 		t.Fatal("empty staging refused:", err)
 	}
 	for name, edit := range map[string]func(*copyStagingSnapshot) (int32, int){
-		"missing temporary":    func(s *copyStagingSnapshot) (int32, int) { s.Temp = nil; return 2, 1 },
-		"temporary left":       func(*copyStagingSnapshot) (int32, int) { return 2, 0 },
-		"two temporaries":      func(s *copyStagingSnapshot) (int32, int) { s.Temp = []string{temp, temp}; return 2, 1 },
-		"incomplete":           func(s *copyStagingSnapshot) (int32, int) { s.Complete = false; return 2, 1 },
-		"failure":              func(s *copyStagingSnapshot) (int32, int) { s.Failures = []string{"x"}; return 2, 1 },
-		"another OSD":          func(*copyStagingSnapshot) (int32, int) { return 1, 1 },
-		"another PG":           func(s *copyStagingSnapshot) (int32, int) { s.PGID = "4.4"; return 2, 1 },
-		"another collection":   func(s *copyStagingSnapshot) (int32, int) { s.Collection = "4.3s0_head"; return 2, 1 },
-		"empty listing":        func(s *copyStagingSnapshot) (int32, int) { s.Objects = 0; return 2, 1 },
-		"listing at its bound": func(s *copyStagingSnapshot) (int32, int) { s.Objects = 4096; return 2, 1 },
+		"missing temporary":     func(s *copyStagingSnapshot) (int32, int) { s.Temp = nil; return 2, 1 },
+		"temporary left":        func(*copyStagingSnapshot) (int32, int) { return 2, 0 },
+		"two temporaries":       func(s *copyStagingSnapshot) (int32, int) { s.Temp = []string{temp, temp}; return 2, 1 },
+		"incomplete":            func(s *copyStagingSnapshot) (int32, int) { s.Complete = false; return 2, 1 },
+		"failure":               func(s *copyStagingSnapshot) (int32, int) { s.Failures = []string{"x"}; return 2, 1 },
+		"another OSD":           func(*copyStagingSnapshot) (int32, int) { return 1, 1 },
+		"another PG":            func(s *copyStagingSnapshot) (int32, int) { s.PGID = "4.4"; return 2, 1 },
+		"another collection":    func(s *copyStagingSnapshot) (int32, int) { s.Collection = "4.3s0_head"; return 2, 1 },
+		"a shard's listing":     func(s *copyStagingSnapshot) (int32, int) { s.Shard = 0; return 2, 1 },
+		"not in the acting set": func(*copyStagingSnapshot) (int32, int) { return 3, 1 },
+		"empty listing":         func(s *copyStagingSnapshot) (int32, int) { s.Objects = 0; return 2, 1 },
+		"listing at its bound":  func(s *copyStagingSnapshot) (int32, int) { s.Objects = 4096; return 2, 1 },
 		"other pool temporary": func(s *copyStagingSnapshot) (int32, int) {
 			s.Temp = []string{"#-5:c7a5d36b:::temp_4.3_0_4123_1:head#"}
 			return 2, 1
@@ -911,8 +966,53 @@ func TestCopyFromMultiChunkLossJudgements(t *testing.T) {
 	} {
 		s := listing
 		osd, want := edit(&s)
-		if _, err := checkCopyTemp(s, osd, 4, "4.3", want); err == nil {
+		if _, err := checkCopyTemp(s, osd, route, want); err == nil {
 			t.Error("staging accepted:", name)
+		}
+	}
+	// An erasure-coded PG: osd.0 holds shard 1 of a PG whose primary osd.1
+	// holds shard 0 and named the temporary object after 4.3s0.
+	ec := route
+	ec.PoolType, ec.Shard, ec.Up, ec.Acting = 3, 0, []int32{1, 0, 2, 3}, []int32{1, 0, 2, 3}
+	if shard, err := copyStagingShard(ec, 0); err != nil || shard != 1 {
+		t.Fatal("EC shard of osd.0 misjudged:", shard, err)
+	}
+	if shard, err := copyStagingShard(route, 0); err != nil || shard != -1 {
+		t.Fatal("replicated shard misjudged:", shard, err)
+	}
+	ecTemp := "1#-6:c7a5d36b:::temp_4.3s0_0_4123_1:head#"
+	shardListing := copyStagingSnapshot{OSD: 0, PGID: "4.3", Shard: 1, Collection: "4.3s1_head", Max: 4096, Objects: 3, Complete: true, Temp: []string{ecTemp}}
+	if got, err := checkCopyTemp(shardListing, 0, ec, 1); err != nil || got != ecTemp[1:] {
+		t.Fatal("staged EC temporary refused:", got, err)
+	}
+	for name, edit := range map[string]func(*copyStagingSnapshot, *osdFixtureOracle) int32{
+		"the replicated listing": func(s *copyStagingSnapshot, _ *osdFixtureOracle) int32 {
+			s.Shard, s.Collection = -1, "4.3_head"
+			return 0
+		},
+		"another shard": func(s *copyStagingSnapshot, _ *osdFixtureOracle) int32 {
+			s.Shard, s.Collection = 2, "4.3s2_head"
+			return 0
+		},
+		"another shard's entry": func(s *copyStagingSnapshot, _ *osdFixtureOracle) int32 { s.Temp = []string{"2" + ecTemp[1:]}; return 0 },
+		"another primary shard": func(s *copyStagingSnapshot, _ *osdFixtureOracle) int32 {
+			s.Temp = []string{"1#-6:c7a5d36b:::temp_4.3s1_0_4123_1:head#"}
+			return 0
+		},
+		"an unsharded temporary": func(s *copyStagingSnapshot, _ *osdFixtureOracle) int32 {
+			s.Temp = []string{"1#-6:c7a5d36b:::temp_4.3_0_4123_1:head#"}
+			return 0
+		},
+		"a rollback generation":    func(s *copyStagingSnapshot, _ *osdFixtureOracle) int32 { s.Temp = []string{ecTemp + "1a"}; return 0 },
+		"the shard of another OSD": func(*copyStagingSnapshot, *osdFixtureOracle) int32 { return 2 },
+		"a pg_temp":                func(_ *copyStagingSnapshot, r *osdFixtureOracle) int32 { r.PGTemp = true; return 0 },
+		"not acting":               func(_ *copyStagingSnapshot, r *osdFixtureOracle) int32 { r.Acting = []int32{1, 4, 2, 3}; return 0 },
+	} {
+		s, r := shardListing, ec
+		r.Acting = slices.Clone(ec.Acting)
+		osd := edit(&s, &r)
+		if _, err := checkCopyTemp(s, osd, r, 1); err == nil {
+			t.Error("EC staging accepted:", name)
 		}
 	}
 

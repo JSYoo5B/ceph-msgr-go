@@ -274,7 +274,7 @@ func (r *copyPrimaryChangeRun) seedDestination() nativeXattrSnapshot {
 		t.Fatal("native destination seed", seeded.Code)
 	}
 	for _, osd := range r.dstRoute.Acting {
-		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute.PGID), osd, r.pools.ids[2], r.dstRoute.PGID, 0); err != nil {
+		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute), osd, r.dstRoute, 0); err != nil {
 			t.Fatal("before the copy:", err)
 		}
 	}
@@ -390,8 +390,8 @@ func (r *copyPrimaryChangeRun) holdAtChunk(request cephmsgr.OSDRequest, route, s
 		// the same one as after the earlier chunks.
 		for _, osd := range route.Acting {
 			for deadline := time.Now().Add(30 * time.Second); ; {
-				s := copyStaging(t, ctx, osd, route.PGID)
-				temp, err := checkCopyTemp(s, osd, route.Pool, route.PGID, 1)
+				s := copyStaging(t, ctx, osd, route)
+				temp, err := checkCopyTemp(s, osd, route, 1)
 				if err == nil && (h.temp == "" || temp == h.temp) {
 					h.temp = temp
 					step.StagingSHA256 = append(step.StagingSHA256, s.SHA256)
@@ -571,7 +571,7 @@ func copyThreeChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, rec
 	}
 	receipt.FinalOmap = omapDigest(t, final)
 	for _, osd := range r.dstRoute.Acting {
-		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute.PGID), osd, pools.ids[2], r.dstRoute.PGID, 0); err != nil {
+		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute), osd, r.dstRoute, 0); err != nil {
 			t.Fatal("after recovery:", err)
 		}
 		receipt.TempAfter = append(receipt.TempAfter, osd)
