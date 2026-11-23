@@ -35,10 +35,13 @@ import (
 // replica then answers both compounds of the subject with -EAGAIN before any
 // operation runs: the pinned do_op (PrimaryLogPG.cc at v20.2.4) replies
 // -EAGAIN to a replica read of an unreadable head before
-// find_object_context, so a read snap does not exempt the clone. That is a
-// known server code with untouched per-op results, no output, retry attempt
-// 0 and the next transaction ID on the same connection: the client neither
-// resends nor routes it elsewhere. A Go write of another object in the same
+// find_object_context, so a read snap does not exempt the clone. Each is a
+// known server code with untouched per-op results and no output, the reply
+// the client accepted is the attempt-0 reply to the request's transaction ID
+// on that replica's connection, and the next request on that connection gets
+// the next transaction ID. These checks observe the accepted reply and the
+// client's allocation, not the transmissions, so they do not show that the
+// request was sent only once. A Go write of another object in the same
 // PG after the rejoin rules out the unstable-write bounce of
 // TestCephOSDSparseReadCompoundReplicaReadIntegration. The primary and the other
 // replica serve the subject; each served compound's per-op unions, results,
@@ -164,22 +167,19 @@ func TestCephOSDSparseReadCompoundDegradedReplicaIntegration(t *testing.T) {
 	}
 	name := strconv.Itoa(int(victim))
 	// Recorded and registered first: a set or kill whose wait failed may still
-	// run, and the restore runs after it.
-	flagsSet, started := true, true
+	// run, and the restore runs after it. The hold refuses a cluster that
+	// already has either recovery flag and clears only what it set.
+	recovery, started := newRecoveryFlagHold(t), true
 	defer func() {
 		restore, stop := context.WithTimeout(context.Background(), 200*time.Second)
 		defer stop()
 		if !started {
 			testcluster.ControlDaemon(restore, dir, "start", "osd", name)
 		}
-		if flagsSet {
-			nativePool(t, restore, "osdflags", map[string]any{"action": "unset"})
-		}
+		recovery.release(restore)
 		waitOSDFixtureClean(t, restore, base)
 	}()
-	if flags := nativePool(t, ctx, "osdflags", map[string]any{"action": "set"}); !strings.Contains(strings.Join(flags.OSDMapFlags, ","), "norecover") {
-		t.Fatal("native norecover flag not set", flags.OSDMapFlags)
-	}
+	recovery.hold(ctx)
 	started = false
 	if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestCephOSDSparseReadCompoundDegradedReplicaIntegration(t *testing.T) {
 		defer stop()
 		return connect(r).Request(callCtx, request(r, configure, ops...))
 	}
-	// bounced requires -EAGAIN before any operation ran, without a resend,
+	// bounced requires an attempt-0 -EAGAIN reply before any operation ran,
 	// and the next transaction ID on the same connection for the next request.
 	bounced := func(t *testing.T, r osdFixtureOracle, configure func(*cephmsgr.OSDRequest), why string) {
 		t.Helper()
@@ -241,7 +241,7 @@ func TestCephOSDSparseReadCompoundDegradedReplicaIntegration(t *testing.T) {
 		var unknown *cephmsgr.OutcomeUnknownError
 		if !errors.As(err, &server) || errors.As(err, &unknown) || server.Code != -11 || reply.Code != -11 || reply.RetryAttempt != 0 || len(reply.RawData) != 0 ||
 			len(reply.Operations) != len(librbd) || reply.Submission.Transaction == 0 || reply.Transaction != reply.Submission.Transaction || reply.Object != subject {
-			t.Fatalf("osd.%d %s: expected a known -EAGAIN without a resend, got code %d: %v", r.ID, why, reply.Code, err)
+			t.Fatalf("osd.%d %s: expected a known attempt-0 -EAGAIN reply to the request's transaction ID, got code %d: %v", r.ID, why, reply.Code, err)
 		}
 		for i, got := range reply.Operations {
 			if got.Code != librbd[i].Code || got.Result != 0 || got.PayloadLength != 0 || got.Offset != librbd[i].Offset || got.Length != librbd[i].Length || got.SparseRead.Extents != nil {
@@ -250,7 +250,7 @@ func TestCephOSDSparseReadCompoundDegradedReplicaIntegration(t *testing.T) {
 		}
 		probe, err := send(r, flags[0].set, rd(0, 1))
 		if probe.Transaction != reply.Transaction+1 || probe.Submission.Transaction != probe.Transaction {
-			t.Fatal("the bounce consumed another transaction ID: a hidden resend", r.ID, reply.Transaction, probe.Transaction, err)
+			t.Fatal("the next request after the bounce did not get the next transaction ID", r.ID, reply.Transaction, probe.Transaction, err)
 		}
 	}
 	// served compares one compound served by one member with the native map.
@@ -379,8 +379,7 @@ func TestCephOSDSparseReadCompoundDegradedReplicaIntegration(t *testing.T) {
 	if t.Failed() {
 		return
 	}
-	nativePool(t, ctx, "osdflags", map[string]any{"action": "unset"})
-	flagsSet = false
+	recovery.release(ctx)
 	waitOSDFixtureClean(t, ctx, base)
 	// The primary's peer_info is the peers' state as of peering and is not
 	// what recovery reports, so only the PG state is read here.
