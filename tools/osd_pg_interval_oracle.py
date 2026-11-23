@@ -64,6 +64,8 @@ another primary. It says nothing about
 what any shard holds; that is read from the shards' own stores by the
 shard-history capture.
 """
+import re
+
 import osd_pg_history_oracle as history
 import osd_shard_history_oracle as shard_history
 
@@ -107,6 +109,21 @@ def _info(document, label):
             "partial_writes_last_complete_epoch": info["partial_writes_epoch"]}
 
 
+# One pg_shard_t as the pinned dump streams it: osd(shard) for an
+# erasure-coded PG (src/osd/osd_types.cc operator<< of pg_shard_t).
+SHARD_NAME = re.compile(r"(0|[1-9][0-9]{0,9})\((0|[1-9][0-9]{0,2})\)")
+TARGET_SETS = ("backfill_targets", "async_recovery_targets", "acting_recovery_backfill")
+
+
+def _targets(value, label):
+    """One optional target array of the reply; the dump omits an empty one."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 64 or any(not isinstance(v, str) or not SHARD_NAME.fullmatch(v) for v in value):
+        raise HistoryError("pg query has no usable %s array" % label)
+    return value
+
+
 def parse_query(raw):
     """The state, sets, interval and shard infos of one complete ``pg query`` reply."""
     document = history.strict_document(raw, MAX_QUERY_BYTES)
@@ -126,6 +143,10 @@ def parse_query(raw):
               "same_interval_since": _epoch(past.get("same_interval_since"), "same_interval_since"),
               "last_epoch_started": _epoch(past.get("last_epoch_started"), "last_epoch_started"),
               "info": _info(info, "info"), "peers": []}
+    # Pinned PeeringState::dump_peering_state (src/osd/PeeringState.cc
+    # :4559-4592) prints each of these sets only when it is not empty.
+    for name in TARGET_SETS:
+        parsed[name] = _targets(document.get(name), name)
     for peer in peers:
         if not isinstance(peer, dict) or not isinstance(peer.get("peer"), str) or len(peer["peer"]) > 40:
             raise HistoryError("pg query has an unexpected peer_info entry")

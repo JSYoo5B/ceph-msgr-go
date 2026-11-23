@@ -192,6 +192,11 @@ type pgIntervalQuery struct {
 	LastEpochStarted  uint32           `json:"last_epoch_started"`
 	Info              pgIntervalInfo   `json:"info"`
 	Peers             []pgIntervalInfo `json:"peers"`
+	// The target sets the primary prints when they are not empty, each
+	// member as osd(shard); the oracle reports an absent one as empty.
+	BackfillTargets        []string `json:"backfill_targets"`
+	AsyncRecoveryTargets   []string `json:"async_recovery_targets"`
+	ActingRecoveryBackfill []string `json:"acting_recovery_backfill"`
 }
 
 // pgIntervalObservation is two native placement records around one pg query

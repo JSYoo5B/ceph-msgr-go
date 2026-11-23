@@ -110,6 +110,20 @@ class ParseTest(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(interval.HistoryError):
                 interval.parse_query(data)
 
+    def test_reports_the_target_sets_the_reply_prints(self):
+        document = json.loads(query())
+        parsed = interval.parse_query(json.dumps(document).encode())
+        self.assertEqual([parsed[name] for name in interval.TARGET_SETS], [[], [], document["acting_recovery_backfill"]])
+        del document["acting_recovery_backfill"]
+        self.assertEqual(interval.parse_query(json.dumps(document).encode())["acting_recovery_backfill"], [])
+        document.update(async_recovery_targets=["2(1)"], acting_recovery_backfill=["0(3)", "1(2)", "2(1)", "3(0)"])
+        parsed = interval.parse_query(json.dumps(document).encode())
+        self.assertEqual((parsed["backfill_targets"], parsed["async_recovery_targets"], parsed["acting_recovery_backfill"]),
+                         ([], ["2(1)"], ["0(3)", "1(2)", "2(1)", "3(0)"]))
+        for value in ("2(1)", ["2"], ["2(1)x"], ["02(1)"], [2], ["2(1)"] * 65):
+            with self.subTest(value=value), self.assertRaises(interval.HistoryError):
+                interval.parse_query(json.dumps(dict(document, backfill_targets=value)).encode())
+
     def test_truncated_or_reshaped_replies_fail_closed(self):
         raw = query()
 
