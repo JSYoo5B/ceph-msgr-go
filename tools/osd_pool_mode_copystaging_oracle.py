@@ -19,7 +19,13 @@ Pinned source (Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964):
   hash and puts it in pool -2-<pool>, which sorts before every object of the
   PG's pool, so a listing from GHMIN reaches the temporary objects first.
   src/common/hobject.cc:523-535 prints an unsharded ghobject_t without
-  generation as ``#<hobject>#``, the hobject starting with its pool.
+  generation as ``#<hobject>#``, the hobject starting with its pool, and a
+  shard's object of an erasure-coded PG as ``<shard>#<hobject>#`` with the
+  shard in hexadecimal, followed by the generation in hexadecimal when it has
+  one. An erasure-coded PG keeps one collection per shard,
+  ``<pgid>s<shard>_head`` (src/osd/osd_types.h spg_t and coll_t), and
+  generate_temp_object names its temporary object after the primary's
+  ``<pgid>s<shard>``.
 
 A listing of fewer than ``max`` entries is the collection's whole committed
 content at that moment: it shows which temporary objects exist, and an
@@ -38,10 +44,14 @@ MAX_LIST_BYTES = 4 << 20
 MAX_TEMP = 64
 PGID = re.compile(r"(0|[1-9][0-9]{0,18})\.(0|[1-9a-f][0-9a-f]{0,7})")
 ENTRY = re.compile(r"#(-?(?:0|[1-9][0-9]{0,18})):[^\n]*#")
+SHARD_ENTRY = re.compile(r"(0|[1-9a-f][0-9a-f]?)#(-?(?:0|[1-9][0-9]{0,18})):[^\n]*#([0-9a-f]{0,16})")
+MAX_SHARD = 255
 
 
-def parse_listing(raw):
-    """(objects, temporary entries) of one listing, or ValueError."""
+def parse_listing(raw, shard=None):
+    """(objects, temporary entries) of one listing, or ValueError. A shard's
+    listing must name that shard in every entry; an entry with a generation
+    is still one object, and a temporary one is reported with it."""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -51,11 +61,18 @@ def parse_listing(raw):
         line = line.strip()
         if not line:
             continue
-        match = ENTRY.fullmatch(line)
+        if shard is None:
+            match = ENTRY.fullmatch(line)
+            pool = match[1] if match else None
+        else:
+            match = SHARD_ENTRY.fullmatch(line)
+            if match and int(match[1], 16) != shard:
+                raise ValueError("native object list names another shard")
+            pool = match[2] if match else None
         if not match:
             raise ValueError("native object list has an unparsable entry")
         objects += 1
-        if int(match[1]) <= -2:
+        if int(pool) <= -2:
             temporary.append(line)
     if len(temporary) > MAX_TEMP:
         raise ValueError("native object list holds more temporary objects than the bound")
@@ -65,14 +82,17 @@ def parse_listing(raw):
 @oracle_mode
 def mode_copystaging(rados, cluster, request, out):
     """List one PG collection of one OSD completely; read-only."""
-    if set(request) != {"osd", "pgid"}:
-        raise ValueError("copystaging takes exactly osd and pgid")
+    if set(request) not in ({"osd", "pgid"}, {"osd", "pgid", "shard"}):
+        raise ValueError("copystaging takes exactly osd, pgid and an optional shard")
     osd = integer(request["osd"], 0, (1 << 31) - 1, "osd")
     if not isinstance(request["pgid"], str) or not PGID.fullmatch(request["pgid"]):
         raise ValueError("invalid copystaging pgid")
-    collection = request["pgid"] + "_head"
-    receipt = {"osd": osd, "pgid": request["pgid"], "collection": collection, "max": MAX_LIST, "complete": False,
-               "objects": 0, "temp": [], "failures": []}
+    shard = None
+    if "shard" in request:
+        shard = integer(request["shard"], 0, MAX_SHARD, "shard")
+    collection = request["pgid"] + ("" if shard is None else "s%d" % shard) + "_head"
+    receipt = {"osd": osd, "pgid": request["pgid"], "shard": -1 if shard is None else shard, "collection": collection, "max": MAX_LIST,
+               "complete": False, "objects": 0, "temp": [], "failures": []}
     code, raw, status, oversized = rados.osd(cluster, osd, {"prefix": "bluestore collections"}, MAX_COLLECTIONS_BYTES)
     receipt["collections_code"] = code
     if code != 0 or oversized is not None:
@@ -90,7 +110,7 @@ def mode_copystaging(rados, cluster, request, out):
         return {"copy_staging": receipt}
     receipt["sha256"] = hashlib.sha256(raw).hexdigest()
     try:
-        receipt["objects"], receipt["temp"] = parse_listing(raw)
+        receipt["objects"], receipt["temp"] = parse_listing(raw, shard)
     except ValueError as error:
         receipt["failures"].append(str(error))
         return {"copy_staging": receipt}
