@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/moby/moby/api/types/container"
 )
 
 // The persistence cell of the writeback recipes (issue #10 checkpoint 2)
@@ -35,9 +37,10 @@ import (
 // epoch and every PG reports a state beginning with active from an epoch at
 // or after the new up_from (the PG stats the OSD sent after it booted).
 // Until then every native action, OSD drop and further restart is refused.
-// Cleanup starts a container that a failed restart left stopped and reads
-// the OSD back up: the same running container, up and in, and a newer
-// incarnation unless the stop was never issued.
+// Cleanup first proves that the resolved OSD is the restart's own (name and
+// container ID); only then does it start a container that a failed restart
+// left stopped, and it reads the OSD back up: the same running container, up
+// and in, and a newer incarnation unless the stop was never issued.
 //
 // References at mdsFreshSource (LGPL-2.1, no code copied): osd/OSD.cc
 // shutdown (osd_fast_shutdown and has_null_manager), os/memstore/MemStore.cc
@@ -324,7 +327,7 @@ func (c *fixtureCluster) mdsCephFSDataAwaitOSD(ctx context.Context, r *mdsCephFS
 
 // mdsCephFSDataRestoreOSDRestart runs at cleanup: a restart that stopped the
 // OSD and did not start it again is started, and the OSD must read back
-// running (osdRestartCleanupProof). A proven restart needs nothing.
+// running (restoreOSDRestart). A proven restart needs nothing.
 func (c *fixtureCluster) mdsCephFSDataRestoreOSDRestart(ctx context.Context, receipt *mdsCephFSDataCleanup) error {
 	r := c.mdsCephFSData.osdRestart
 	receipt.OSDRestart = r
@@ -333,39 +336,64 @@ func (c *fixtureCluster) mdsCephFSDataRestoreOSDRestart(ctx context.Context, rec
 		return nil
 	}
 	d, daemon, err := c.mdsCephFSDataOSD(ctx)
-	if err == nil && daemon != r.OSD {
-		err = errors.New("DATA OSD restart cleanup cannot prove its owned OSD")
-	}
 	if err != nil {
 		return err
+	}
+	dump := func(ctx context.Context) ([]byte, error) {
+		return c.cluster.Ceph(ctx, "osd", "dump", "--format", "json")
+	}
+	view, err := restoreOSDRestart(ctx, r, daemon, d.ID, d, dump, 500*time.Millisecond)
+	if err == nil {
+		r.CleanupView, receipt.OSDRunning = view, true
+	}
+	return errors.Join(err, c.mdsCephFSDataJournal())
+}
+
+// osdRestartCleanupDaemon is the part of the owned OSD's container handle
+// that cleanup uses.
+type osdRestartCleanupDaemon interface {
+	GetContainerID() string
+	Start(context.Context) error
+	State(context.Context) (*container.State, error)
+}
+
+// restoreOSDRestart is cleanup's order of side effects. The resolved daemon
+// must be the restart's owned OSD, by name and by container ID, before any
+// Start: a replacement container that resolves to the same osd.N is never
+// started. Only a restart that may have stopped the OSD without starting it
+// again issues the one Start. The live readback proof
+// (osdRestartCleanupProof) follows, polled every tick until ctx ends.
+func restoreOSDRestart(ctx context.Context, r *mdsCephFSDataOSDRestart, daemon string, id int, d osdRestartCleanupDaemon,
+	dump func(context.Context) ([]byte, error), tick time.Duration) (*mdsCephFSDataOSDState, error) {
+	if r == nil || daemon != r.OSD || d.GetContainerID() != r.ContainerID {
+		return nil, errors.New("DATA OSD restart cleanup cannot prove its owned OSD")
 	}
 	if slices.Contains([]string{"stopped", "stop-uncertain", "start-uncertain"}, r.State) {
 		r.CleanupStart = true
 		if err := d.Start(ctx); err != nil {
-			return errors.Join(err, c.mdsCephFSDataJournal())
+			return nil, err
 		}
 	}
-	tick := time.NewTicker(500 * time.Millisecond)
-	defer tick.Stop()
+	ticker := time.NewTicker(tick)
+	defer ticker.Stop()
 	for {
 		running, stateErr := d.State(ctx)
-		data, dumpErr := c.cluster.Ceph(ctx, "osd", "dump", "--format", "json")
+		data, dumpErr := dump(ctx)
 		var state mdsCephFSDataOSDState
 		proof := errors.Join(stateErr, dumpErr)
 		if proof == nil {
-			state, proof = parseMDSCephFSDataOSDDump(data, d.ID)
+			state, proof = parseMDSCephFSDataOSDDump(data, id)
 		}
 		if proof == nil {
 			proof = osdRestartCleanupProof(r, d.GetContainerID(), running != nil && running.Running, state)
 		}
 		if proof == nil {
-			r.CleanupView, receipt.OSDRunning = &state, true
-			return c.mdsCephFSDataJournal()
+			return &state, nil
 		}
 		select {
 		case <-ctx.Done():
-			return errors.Join(errors.New("DATA OSD did not read back running at cleanup"), proof, c.mdsCephFSDataJournal())
-		case <-tick.C:
+			return nil, errors.Join(errors.New("DATA OSD did not read back running at cleanup"), proof)
+		case <-ticker.C:
 		}
 	}
 }

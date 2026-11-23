@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/moby/moby/api/types/container"
 )
 
 const (
@@ -255,5 +258,72 @@ func TestMDSCephFSDataOSDRestartCleanupProof(t *testing.T) {
 	}
 	if osdRestartCleanupProof(nil, "owned", true, untouched) == nil || osdRestartCleanupProof(&mdsCephFSDataOSDRestart{State: "intended", ContainerID: "owned"}, "owned", true, untouched) == nil {
 		t.Fatal("cleanup accepted a restart without its receipt")
+	}
+}
+
+// recordingOSD is a fake owned OSD container handle that records Start.
+type recordingOSD struct {
+	id      string
+	running bool
+	starts  int
+}
+
+func (o *recordingOSD) GetContainerID() string { return o.id }
+func (o *recordingOSD) Start(context.Context) error {
+	o.starts++
+	o.running = true
+	return nil
+}
+func (o *recordingOSD) State(context.Context) (*container.State, error) {
+	return &container.State{Running: o.running}, nil
+}
+
+// Cleanup's side-effect order: the container ID is checked before any
+// Start, so a replacement container that resolves to the same osd.N is never
+// started, whatever the restart state; the owned container of a state that
+// may have stopped it is started once and then proven by the readback.
+func TestMDSCephFSDataOSDRestartCleanupChecksOwnershipBeforeStart(t *testing.T) {
+	before := &mdsCephFSDataOSDState{Epoch: 28, Up: true, In: true, UpFrom: 5}
+	dump := func(upFrom uint32) func(context.Context) ([]byte, error) {
+		return func(context.Context) ([]byte, error) {
+			return []byte(`{"epoch":40,"osds":[{"osd":0,"up":1,"in":1,"up_from":` + itoa(int(upFrom)) + `,"public_addr":"v2:192.0.2.1:6802/9"}]}`), nil
+		}
+	}
+	for _, state := range []string{"intended", "stopped", "stop-uncertain", "started", "start-uncertain", "wait-uncertain"} {
+		r := &mdsCephFSDataOSDRestart{OSD: "osd.0", State: state, ContainerID: "owned", Before: before}
+		replacement := &recordingOSD{id: "replacement"}
+		ctx, stop := context.WithTimeout(context.Background(), time.Second)
+		if _, err := restoreOSDRestart(ctx, r, "osd.0", 0, replacement, dump(39), time.Millisecond); err == nil || replacement.starts != 0 || r.CleanupStart {
+			t.Fatal("cleanup acted on a replacement container", state, err, replacement.starts)
+		}
+		renamed := &recordingOSD{id: "owned"}
+		if _, err := restoreOSDRestart(ctx, r, "osd.1", 1, renamed, dump(39), time.Millisecond); err == nil || renamed.starts != 0 {
+			t.Fatal("cleanup acted on another OSD name", state, err)
+		}
+		stop()
+	}
+	for state, wantStarts := range map[string]int{"stopped": 1, "stop-uncertain": 1, "start-uncertain": 1, "started": 0, "wait-uncertain": 0} {
+		r := &mdsCephFSDataOSDRestart{OSD: "osd.0", State: state, ContainerID: "owned", Before: before}
+		owned := &recordingOSD{id: "owned", running: wantStarts == 0}
+		ctx, stop := context.WithTimeout(context.Background(), time.Second)
+		view, err := restoreOSDRestart(ctx, r, "osd.0", 0, owned, dump(39), time.Millisecond)
+		stop()
+		if err != nil || view == nil || view.UpFrom != 39 || owned.starts != wantStarts || r.CleanupStart != (wantStarts == 1) {
+			t.Fatal("cleanup of the owned OSD differs", state, err, owned.starts)
+		}
+	}
+	// The untouched OSD of a never-issued stop is proven without a Start; a
+	// stale incarnation of a stopped one is not.
+	untouched := &recordingOSD{id: "owned", running: true}
+	ctx, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	if _, err := restoreOSDRestart(ctx, &mdsCephFSDataOSDRestart{OSD: "osd.0", State: "intended", ContainerID: "owned", Before: before}, "osd.0", 0, untouched, dump(5), time.Millisecond); err != nil || untouched.starts != 0 {
+		t.Fatal("cleanup of an untouched OSD differs", err, untouched.starts)
+	}
+	stale := &recordingOSD{id: "owned"}
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := restoreOSDRestart(short, &mdsCephFSDataOSDRestart{OSD: "osd.0", State: "stopped", ContainerID: "owned", Before: before}, "osd.0", 0, stale, dump(5), time.Millisecond); err == nil || stale.starts != 1 {
+		t.Fatal("cleanup accepted a stale incarnation", err, stale.starts)
 	}
 }
