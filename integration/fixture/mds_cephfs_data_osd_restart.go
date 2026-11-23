@@ -36,7 +36,8 @@ import (
 // or after the new up_from (the PG stats the OSD sent after it booted).
 // Until then every native action, OSD drop and further restart is refused.
 // Cleanup starts a container that a failed restart left stopped and reads
-// the OSD back up.
+// the OSD back up: the same running container, up and in, and a newer
+// incarnation unless the stop was never issued.
 //
 // References at mdsFreshSource (LGPL-2.1, no code copied): osd/OSD.cc
 // shutdown (osd_fast_shutdown and has_null_manager), os/memstore/MemStore.cc
@@ -322,8 +323,8 @@ func (c *fixtureCluster) mdsCephFSDataAwaitOSD(ctx context.Context, r *mdsCephFS
 }
 
 // mdsCephFSDataRestoreOSDRestart runs at cleanup: a restart that stopped the
-// OSD and did not start it again is started, and the OSD must read back up.
-// A proven restart needs nothing.
+// OSD and did not start it again is started, and the OSD must read back
+// running (osdRestartCleanupProof). A proven restart needs nothing.
 func (c *fixtureCluster) mdsCephFSDataRestoreOSDRestart(ctx context.Context, receipt *mdsCephFSDataCleanup) error {
 	r := c.mdsCephFSData.osdRestart
 	receipt.OSDRestart = r
@@ -332,7 +333,7 @@ func (c *fixtureCluster) mdsCephFSDataRestoreOSDRestart(ctx context.Context, rec
 		return nil
 	}
 	d, daemon, err := c.mdsCephFSDataOSD(ctx)
-	if err == nil && (daemon != r.OSD || d.GetContainerID() != r.ContainerID) {
+	if err == nil && daemon != r.OSD {
 		err = errors.New("DATA OSD restart cleanup cannot prove its owned OSD")
 	}
 	if err != nil {
@@ -344,25 +345,54 @@ func (c *fixtureCluster) mdsCephFSDataRestoreOSDRestart(ctx context.Context, rec
 			return errors.Join(err, c.mdsCephFSDataJournal())
 		}
 	}
-	data, err := c.cluster.Ceph(ctx, "osd", "dump", "--format", "json")
-	if err != nil {
-		return err
-	}
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		state, err := parseMDSCephFSDataOSDDump(data, d.ID)
-		if err == nil && state.Up && state.UpFrom > r.Before.UpFrom {
+		running, stateErr := d.State(ctx)
+		data, dumpErr := c.cluster.Ceph(ctx, "osd", "dump", "--format", "json")
+		var state mdsCephFSDataOSDState
+		proof := errors.Join(stateErr, dumpErr)
+		if proof == nil {
+			state, proof = parseMDSCephFSDataOSDDump(data, d.ID)
+		}
+		if proof == nil {
+			proof = osdRestartCleanupProof(r, d.GetContainerID(), running != nil && running.Running, state)
+		}
+		if proof == nil {
 			r.CleanupView, receipt.OSDRunning = &state, true
 			return c.mdsCephFSDataJournal()
 		}
 		select {
 		case <-ctx.Done():
-			return errors.Join(errors.New("DATA OSD did not read back up at cleanup"), err, c.mdsCephFSDataJournal())
+			return errors.Join(errors.New("DATA OSD did not read back running at cleanup"), proof, c.mdsCephFSDataJournal())
 		case <-tick.C:
 		}
-		if data, err = c.cluster.Ceph(ctx, "osd", "dump", "--format", "json"); err != nil {
-			return err
-		}
 	}
+}
+
+// osdRestartMayHaveStopped reports a restart state in which the stop may
+// have been issued. "intended" is stored before the intent is journaled and
+// before the stop: a failed journal write leaves it with the OSD untouched.
+func osdRestartMayHaveStopped(state string) bool {
+	return state != "intended"
+}
+
+// osdRestartCleanupProof decides whether cleanup's readback proves the owned
+// OSD running: the same owned container, running, up and in. Where the stop
+// may have been issued the OSD must also be a newer incarnation (a later
+// up_from); an OSD whose stop was never issued is the existing one.
+func osdRestartCleanupProof(r *mdsCephFSDataOSDRestart, containerID string, running bool, state mdsCephFSDataOSDState) error {
+	switch {
+	case r == nil || r.Before == nil:
+		return errors.New("DATA OSD restart cleanup has no receipt to prove")
+	case containerID != r.ContainerID:
+		return errors.New("DATA OSD restart cleanup found another container than the owned OSD's")
+	case !running:
+		return errors.New("DATA OSD container is not running at cleanup")
+	case !state.Up || !state.In:
+		return errors.New("DATA OSD is not up and in at cleanup")
+	case osdRestartMayHaveStopped(r.State) && state.UpFrom <= r.Before.UpFrom:
+		return errors.New("DATA OSD whose stop may have been issued is not a newer incarnation at cleanup")
+	}
+	return nil
 }

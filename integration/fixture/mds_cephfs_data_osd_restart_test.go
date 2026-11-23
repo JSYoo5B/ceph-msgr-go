@@ -213,3 +213,47 @@ func TestMDSCephFSDataOSDRestartViews(t *testing.T) {
 		}
 	}
 }
+
+// Cleanup's proof: an OSD whose stop was never issued (the intent's journal
+// write failed while the state was "intended") is the existing incarnation
+// and needs only the same running container, up and in; where the stop may
+// have been issued, a newer up_from is required as well.
+func TestMDSCephFSDataOSDRestartCleanupProof(t *testing.T) {
+	before := &mdsCephFSDataOSDState{Epoch: 28, Up: true, In: true, UpFrom: 5}
+	untouched := mdsCephFSDataOSDState{Epoch: 28, Up: true, In: true, UpFrom: 5}
+	newer := mdsCephFSDataOSDState{Epoch: 32, Up: true, In: true, UpFrom: 31}
+	receipt := func(state string) *mdsCephFSDataOSDRestart {
+		return &mdsCephFSDataOSDRestart{OSD: "osd.0", State: state, ContainerID: "owned", Before: before}
+	}
+	if err := osdRestartCleanupProof(receipt("intended"), "owned", true, untouched); err != nil {
+		t.Fatal("cleanup refused the untouched OSD of a restart whose stop was never issued", err)
+	}
+	for name, tc := range map[string]struct {
+		container string
+		running   bool
+		state     mdsCephFSDataOSDState
+	}{
+		"another container": {"other", true, untouched},
+		"stopped container": {"owned", false, untouched},
+		"OSD down":          {"owned", true, mdsCephFSDataOSDState{Epoch: 29, Up: false, In: true, UpFrom: 5}},
+		"OSD out":           {"owned", true, mdsCephFSDataOSDState{Epoch: 29, Up: true, In: false, UpFrom: 5}},
+	} {
+		if osdRestartCleanupProof(receipt("intended"), tc.container, tc.running, tc.state) == nil {
+			t.Fatal("cleanup accepted an intended restart:", name)
+		}
+	}
+	for _, state := range []string{"stopped", "stop-uncertain", "started", "start-uncertain", "wait-uncertain"} {
+		if osdRestartCleanupProof(receipt(state), "owned", true, untouched) == nil {
+			t.Fatal("cleanup accepted the old incarnation where the stop may have been issued", state)
+		}
+		if err := osdRestartCleanupProof(receipt(state), "owned", true, newer); err != nil {
+			t.Fatal("cleanup refused a newer incarnation", state, err)
+		}
+		if osdRestartCleanupProof(receipt(state), "other", true, newer) == nil || osdRestartCleanupProof(receipt(state), "owned", false, newer) == nil {
+			t.Fatal("cleanup accepted another or a stopped container", state)
+		}
+	}
+	if osdRestartCleanupProof(nil, "owned", true, untouched) == nil || osdRestartCleanupProof(&mdsCephFSDataOSDRestart{State: "intended", ContainerID: "owned"}, "owned", true, untouched) == nil {
+		t.Fatal("cleanup accepted a restart without its receipt")
+	}
+}
