@@ -50,7 +50,9 @@ import (
 // splay offset 3 is entry 3, still in object set 0) and the oracle client at
 // its empty position. The subject's own class reads of the journal header
 // (get_minimum_set, get_active_set, client_list, get_client) and of every
-// journal object return the bytes native librados exec and reads returned.
+// journal object return the bytes native librados exec and reads returned;
+// each method and input and each object number is read exactly once per
+// compared stage and judged by that identity and its result code.
 // Native `rbd journal client disconnect` then flags the oracle client
 // disconnected (tools/rbd/action/Journal.cc), so that only the image client's
 // position can keep an object set: JournalTrimmer::handle_metadata_updated
@@ -136,12 +138,74 @@ type rbdJournalTrimAppend struct {
 }
 
 // rbdJournalTrimRead is one subject or observer read compared with what
-// native librados returned in the same observation.
+// native librados returned in the same observation. A journal header read
+// is named by its class method and input (Number -1), a journal object
+// read by the object's number. Code is the OSD's answer (0, or the
+// OSDError code), NativeExists whether native librados found the object,
+// and Equal whether the answer matched native: the same output or bytes,
+// or ENOENT for an object native librados did not find.
 type rbdJournalTrimRead struct {
-	Label, Object string
-	Equal         bool
-	Code          int32
-	Detail        string
+	Label, Object    string
+	Method, InputHex string
+	Number           int
+	NativeExists     bool
+	Equal            bool
+	Code             int32
+	Detail           string
+}
+
+// rbdJournalTrimHeaderRead is one journal header read every compared stage
+// carries exactly once.
+type rbdJournalTrimHeaderRead struct{ Method, InputHex string }
+
+// rbdJournalTrimHeaderReads are the header reads of a compared stage: the
+// mutable metadata, the client list and the two registered clients, with
+// the inputs native exec used (rbd_journal.go journal_calls).
+func rbdJournalTrimHeaderReads(oracle string) []rbdJournalTrimHeaderRead {
+	return []rbdJournalTrimHeaderRead{{"get_minimum_set", ""}, {"get_active_set", ""}, {"client_list", hex.EncodeToString(rbdJournalClientListInput())},
+		{"get_client", hex.EncodeToString(rbdString(""))}, {"get_client", hex.EncodeToString(rbdString(oracle))}}
+}
+
+// rbdJournalTrimReadsClaims checks one compared stage: exactly one read of
+// each header method and input and of each journal object 0 to
+// 2*splay-1, nothing else, each on its own object and matching native. The
+// header reads answer 0; an object answers 0 unless gone[n], when native
+// librados did not find it and the OSD answered ENOENT.
+func rbdJournalTrimReadsClaims(name string, reads []rbdJournalTrimRead, header, prefix, oracle string, gone []bool, fail func(string, ...any)) {
+	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+	seenHeader, seenObject := map[rbdJournalTrimHeaderRead]int{}, map[int]int{}
+	for _, rd := range reads {
+		if rd.Number < 0 {
+			key := rbdJournalTrimHeaderRead{rd.Method, rd.InputHex}
+			seenHeader[key]++
+			if !slices.Contains(rbdJournalTrimHeaderReads(oracle), key) || rd.Object != header || rd.Code != 0 || !rd.Equal {
+				fail("%s: header read %s is not an expected method answered 0 with native's output: %s", name, rd.Label, text(rd))
+			}
+			continue
+		}
+		seenObject[rd.Number]++
+		if rd.Number >= len(gone) {
+			fail("%s: read of an unexpected journal object: %s", name, text(rd))
+			continue
+		}
+		code := int32(0)
+		if gone[rd.Number] {
+			code = -2
+		}
+		if rd.Object != prefix+strconv.Itoa(rd.Number) || rd.NativeExists == gone[rd.Number] || rd.Code != code || !rd.Equal {
+			fail("%s: read of journal object %d is not answered %d in agreement with native librados: %s", name, rd.Number, code, text(rd))
+		}
+	}
+	for _, key := range rbdJournalTrimHeaderReads(oracle) {
+		if seenHeader[key] != 1 {
+			fail("%s: header read %s with input %s observed %d times, want once", name, key.Method, key.InputHex, seenHeader[key])
+		}
+	}
+	for n := range gone {
+		if seenObject[n] != 1 {
+			fail("%s: journal object %d read %d times, want once", name, n, seenObject[n])
+		}
+	}
 }
 
 // rbdJournalTrim is the trimming variant's own record. The lock record
@@ -156,10 +220,10 @@ type rbdJournalTrim struct {
 	// and ActiveSet the set_active_set after the refusal.
 	Appends   []rbdJournalTrimAppend
 	ActiveSet *rbdLockOwnerLossAttempt
-	// Applied counts the image data writes; Commit is the client_commit of
-	// the image client's position after entry 6, CommitPositions that
-	// position.
-	Applied         int
+	// Applied are the entries whose image data write was answered 0, in the
+	// order written; Commit is the client_commit of the image client's
+	// position after entry 6, CommitPositions that position.
+	Applied         []uint64
 	Commit          *rbdLockOwnerLossAttempt
 	CommitPositions []rbdJournalPosition
 	Notifies        []string
@@ -307,7 +371,7 @@ func runRBDJournalTrim(t *testing.T, s rbdJournalTrimSteps) {
 			t.Fatal("Go image data write", label, reply.Code, err)
 		}
 		copy(image[e.ImageOffset:], data)
-		x.Applied++
+		x.Applied = append(x.Applied, e.EntryTID)
 	}
 	x.ExpectedHeadCommitted = rbdJournalDigest(image)
 	s.done("applied")
@@ -339,7 +403,11 @@ func runRBDJournalTrim(t *testing.T, s rbdJournalTrimSteps) {
 			label := fmt.Sprintf("%s_%s_%d", stage, c.method, c.index)
 			s.keep(label, route, req, reply, err)
 			native := n.ClassCalls[c.index]
-			read := rbdJournalTrimRead{Label: label, Object: s.journalHeader, Code: reply.Code}
+			read := rbdJournalTrimRead{Label: label, Object: s.journalHeader, Method: c.method, InputHex: hex.EncodeToString(c.input), Number: -1, NativeExists: true, Code: reply.Code}
+			var server *cephmsgr.OSDError
+			if errors.As(err, &server) {
+				read.Code = server.Code
+			}
 			if err != nil || len(reply.Operations) != 1 || native.Method != c.method || native.InputHex != hex.EncodeToString(c.input) || native.Code != 0 {
 				read.Detail = fmt.Sprintf("go %v, native %s %d", err, native.Method, native.Code)
 			} else {
@@ -354,16 +422,16 @@ func runRBDJournalTrim(t *testing.T, s rbdJournalTrimSteps) {
 			reply, err := o.Request(ctx, req)
 			label := fmt.Sprintf("%s_read_journal_object_%d", stage, no.Number)
 			s.keep(label, route, req, reply, err)
-			read := rbdJournalTrimRead{Label: label, Object: no.Object, Code: reply.Code}
+			read := rbdJournalTrimRead{Label: label, Object: no.Object, Number: int(no.Number), NativeExists: no.Exists, Code: reply.Code}
 			var server *cephmsgr.OSDError
+			if errors.As(err, &server) {
+				read.Code = server.Code
+			}
 			switch {
 			case !no.Exists:
-				if errors.As(err, &server) {
-					read.Code = server.Code
-				}
 				read.Equal = read.Code == -2
 			case err == nil && len(reply.Operations) == 2:
-				read.Equal = bytes.Equal(reply.Operations[1].Data, nativeBlob[no.Offset:no.Offset+no.Size])
+				read.Equal = reply.Code == 0 && bytes.Equal(reply.Operations[1].Data, nativeBlob[no.Offset:no.Offset+no.Size])
 			default:
 				read.Detail = fmt.Sprint(err)
 			}
@@ -553,11 +621,9 @@ func rbdJournalTrimClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 			fail("%s: the journal objects are not the setup bytes followed by exactly the subject's entries (sizes %v, want %v)", name, v.ObjectSizes, x.SizesAppended)
 		}
 	}
-	readsEqual := func(name string, want int) {
-		got := x.Reads[name]
-		if len(got) != want || slices.ContainsFunc(got, func(rd rbdJournalTrimRead) bool { return !rd.Equal }) {
-			fail("%s: the Go reads of the journal header and objects differ from native librados: %s", name, text(got))
-		}
+	prefix := e.ObjectName[:len(e.ObjectName)-1]
+	reads := func(name string, gone []bool) {
+		rbdJournalTrimReadsClaims(name, x.Reads[name], r.JournalHeader, prefix, oracle, gone, fail)
 	}
 	blocked := func(name string, blocks []rbdLockOwnerLossBlock, want bool) {
 		if blocks == nil || rbdJournalBlocked(blocks, ol.LockerAddress) != want {
@@ -606,8 +672,8 @@ func rbdJournalTrimClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	if a := x.ActiveSet; a == nil || a.Class != "applied" || a.Code != 0 || !slices.Equal(x.Notifies, []string{"journal_notify_active_set", "journal_notify_commit"}) {
 		fail("append: the active set was not raised once after the overflow and the header notified: %s, notifies %v", text(a), x.Notifies)
 	}
-	if len(x.Entries) != 8 || x.Applied != 7 {
-		fail("append: not eight entries journaled and seven applied (%d, %d)", len(x.Entries), x.Applied)
+	if len(x.Entries) != 8 || !slices.Equal(x.Applied, []uint64{0, 1, 2, 3, 4, 5, 6}) {
+		fail("append: not eight entries journaled and entries 0 to 6 applied once each in order (%d, %v)", len(x.Entries), x.Applied)
 	} else {
 		for i, en := range x.Entries {
 			if en.Tag != e.Tag || en.EntryTID != uint64(i) || en.Object != uint64(i) || en.Offset >= int(x.SoftMax) || en.Length <= 0 {
@@ -628,7 +694,7 @@ func rbdJournalTrimClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	if committed.ImageHeadSHA256 != x.ExpectedHeadCommitted || x.ExpectedHeadCommitted == r.ExpectedHeadBefore || committed.NextTag != e.Tag+1 || committed.LastTag.TID != e.Tag {
 		fail("observe-committed: image or tags differ from entries 0 to 6 applied (head=%s next tag=%d)", committed.ImageHeadSHA256, committed.NextTag)
 	}
-	readsEqual("observe-committed", 5+2*splay)
+	reads("observe-committed", make([]bool, 2*splay))
 	if reached < 1 {
 		return problems
 	}
@@ -702,7 +768,6 @@ func rbdJournalTrimClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	if !x.TrimWaitMoved || x.TrimWaitMinimum != 1 || x.TrimWaitPolls < 1 {
 		fail("trim: the takeover did not see the journal's minimum set move to 1 while its image was open (moved=%v minimum=%d polls=%d)", x.TrimWaitMoved, x.TrimWaitMinimum, x.TrimWaitPolls)
 	}
-	prefix := e.ObjectName[:len(e.ObjectName)-1]
 	if x.TrimLogTruncated || !rbdJournalSubsequence(x.TrimLog, rbdJournalTrimMarks(prefix, splay)) || slices.Contains(x.TrimLog, "remove_set: removing object set 1") {
 		fail("trim: the takeover's journal trimmer log does not show set 0 alone removed and the minimum set raised: %s", text(x.TrimLog))
 	}
@@ -740,7 +805,7 @@ func rbdJournalTrimClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	if takeover.LastTag != (rbdJournalLostAppendTag{e.Tag + 1, true, e.Tag, 7}) || takeover.NextTag != e.Tag+2 {
 		fail("takeover: native tag differs (tag=%+v next=%d)", takeover.LastTag, takeover.NextTag)
 	}
-	readsEqual("takeover", 5+2*splay)
+	reads("takeover", []bool{true, true, true, true, false, false, false, false})
 	// The trimming is native: the subject never removed an object or moved
 	// the minimum set.
 	for _, req := range r.Requests {

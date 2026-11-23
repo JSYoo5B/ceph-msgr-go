@@ -24,7 +24,7 @@ func rbdJournalTrimSample() *rbdJournalLostAppendRecord {
 	writes := []nativeRBDExtent{{4 << 10, 3 << 10}, {12 << 10, 3 << 10}, {20 << 10, 3 << 10}, {28 << 10, 3 << 10}, {80 << 10, 3 << 10}, {88 << 10, 3 << 10}, {96 << 10, 3 << 10},
 		{104 << 10, 3 << 10}}
 	setupSizes := []uint64{2110, 2110, 1086, 93, 0, 0, 0, 0}
-	x := &rbdJournalTrim{SoftMax: 4096, Reads: map[string][]rbdJournalTrimRead{}, Notifies: []string{"journal_notify_active_set", "journal_notify_commit"}, Applied: 7,
+	x := &rbdJournalTrim{SoftMax: 4096, Reads: map[string][]rbdJournalTrimRead{}, Notifies: []string{"journal_notify_active_set", "journal_notify_commit"}, Applied: []uint64{0, 1, 2, 3, 4, 5, 6},
 		ExpectedHeadCommitted: hash("c"), ExpectedHeadTakeover: hash("d"), DisconnectOutput: []string{"client " + oracle + " disconnected"},
 		TrimWaitPolls: 3, TrimWaitNS: 400e6, TrimWaitMinimum: 1, TrimWaitMoved: true,
 		TrimLog:        append([]string{"handle_metadata_updated", "trim_objects: min_set=1"}, append(rbdJournalTrimMarks(prefix, 4)[1:], "handle_metadata_updated")...),
@@ -61,8 +61,16 @@ func rbdJournalTrimSample() *rbdJournalLostAppendRecord {
 	x.Object4Tail = []rbdJournalEntry{{Object: 4, ObjectOffset: 0, Tag: tag + 1, EntryID: 0, Length: 1100}}
 	x.Object4TailEvents = slices.Clone(x.TakeoverEvents)
 	for _, stage := range []string{"observe-committed", "takeover"} {
-		for i := range 13 {
-			x.Reads[stage] = append(x.Reads[stage], rbdJournalTrimRead{Label: fmt.Sprintf("%s_%d", stage, i), Equal: true})
+		for _, h := range rbdJournalTrimHeaderReads(oracle) {
+			x.Reads[stage] = append(x.Reads[stage], rbdJournalTrimRead{Label: stage + "_" + h.Method, Object: "journal.ab", Method: h.Method, InputHex: h.InputHex, Number: -1,
+				NativeExists: true, Equal: true})
+		}
+		for n := range 8 {
+			rd := rbdJournalTrimRead{Label: fmt.Sprintf("%s_read_journal_object_%d", stage, n), Object: prefix + fmt.Sprint(n), Number: n, NativeExists: true, Equal: true}
+			if stage == "takeover" && n < 4 {
+				rd.NativeExists, rd.Code = false, -2
+			}
+			x.Reads[stage] = append(x.Reads[stage], rd)
 		}
 	}
 	client := func(id, state string, positions []rbdJournalPosition) rbdJournalClientView {
@@ -101,7 +109,7 @@ func rbdJournalTrimSample() *rbdJournalLostAppendRecord {
 	takeover := free(view("takeover", takenSizes, takenSHA, []bool{false, false, false, false, true, true, true, true}, 1, 1, x.ExpectedCommitTakeover, "disconnected", hash("d")))
 	takeover.NextTag, takeover.LastTag = tag+2, rbdJournalLostAppendTag{tag + 1, true, tag, 7}
 	takeover.InspectTotal, takeover.InspectErrors, takeover.InspectOwned = n(0), n(0), []rbdJournalLostAppendEvent{}
-	r := &rbdJournalLostAppendRecord{Token: token, SubjectGlobalID: subject, ObserverGlobalID: 4300, ConnectionMode: "crc", WatchCookie: cookie, LockCookie: "auto 77",
+	r := &rbdJournalLostAppendRecord{Token: token, JournalHeader: "journal.ab", SubjectGlobalID: subject, ObserverGlobalID: 4300, ConnectionMode: "crc", WatchCookie: cookie, LockCookie: "auto 77",
 		Entry: x.Entries[0], Order: slices.Clone(rbdJournalTrimOrder), ExpectedHeadBefore: hash("a"), Trim: x,
 		Views: map[string]*rbdJournalLostAppendView{"setup": setup, "observe-locked": locked, "observe-committed": committed, "disconnect-oracle": disconnected,
 			"force-break": broke, "takeover": takeover},
@@ -164,7 +172,9 @@ func TestRBDJournalTrimClaims(t *testing.T) {
 		"append past the soft limit":    func(r *rbdJournalLostAppendRecord) { r.Trim.Appends[0].Offset = 4096 },
 		"active set not raised":         func(r *rbdJournalLostAppendRecord) { r.Trim.ActiveSet = nil },
 		"header not notified":           func(r *rbdJournalLostAppendRecord) { r.Trim.Notifies = r.Trim.Notifies[:1] },
-		"entry 7 applied":               func(r *rbdJournalLostAppendRecord) { r.Trim.Applied = 8 },
+		"entry 7 applied":               func(r *rbdJournalLostAppendRecord) { r.Trim.Applied = append(r.Trim.Applied, 7) },
+		"entry 7 applied in place of 6": func(r *rbdJournalLostAppendRecord) { r.Trim.Applied[6] = 7 },
+		"entry 2 applied twice":         func(r *rbdJournalLostAppendRecord) { r.Trim.Applied[3] = 2 },
 		"commit after entry 7": func(r *rbdJournalLostAppendRecord) {
 			r.Trim.CommitPositions = []rbdJournalPosition{{7, 2, 7}, {6, 2, 6}, {5, 2, 5}, {4, 2, 4}}
 		},
@@ -188,6 +198,49 @@ func TestRBDJournalTrimClaims(t *testing.T) {
 		"go header read differs": func(r *rbdJournalLostAppendRecord) { r.Trim.Reads["observe-committed"][2].Equal = false },
 		"go object read missing": func(r *rbdJournalLostAppendRecord) {
 			r.Trim.Reads["observe-committed"] = r.Trim.Reads["observe-committed"][:12]
+		},
+		// The reads are judged by identity, not by count.
+		"every read a copy of the first": func(r *rbdJournalLostAppendRecord) {
+			for _, stage := range []string{"observe-committed", "takeover"} {
+				reads := r.Trim.Reads[stage]
+				for i := range reads {
+					reads[i] = reads[0]
+				}
+			}
+		},
+		"header read duplicated in place of another": func(r *rbdJournalLostAppendRecord) {
+			reads := r.Trim.Reads["takeover"]
+			reads[1] = reads[0]
+		},
+		"object read duplicated in place of another": func(r *rbdJournalLostAppendRecord) {
+			reads := r.Trim.Reads["takeover"]
+			reads[5+7] = reads[5+6]
+		},
+		"oracle client read missing": func(r *rbdJournalLostAppendRecord) {
+			r.Trim.Reads["observe-committed"] = slices.Delete(r.Trim.Reads["observe-committed"], 4, 5)
+		},
+		"header read of another input": func(r *rbdJournalLostAppendRecord) { r.Trim.Reads["observe-committed"][4].InputHex = "00" },
+		"header read refused":          func(r *rbdJournalLostAppendRecord) { r.Trim.Reads["observe-committed"][0].Code = -2 },
+		"header read on another object": func(r *rbdJournalLostAppendRecord) {
+			r.Trim.Reads["observe-committed"][0].Object = "journal_data.3.ab.0"
+		},
+		"trimmed object answered": func(r *rbdJournalLostAppendRecord) {
+			rd := &r.Trim.Reads["takeover"][5+1]
+			rd.Code = 0
+		},
+		"trimmed object found natively": func(r *rbdJournalLostAppendRecord) { r.Trim.Reads["takeover"][5+2].NativeExists = true },
+		"kept object answered ENOENT":   func(r *rbdJournalLostAppendRecord) { r.Trim.Reads["takeover"][5+5].Code = -2 },
+		"object absent before the trim": func(r *rbdJournalLostAppendRecord) {
+			rd := &r.Trim.Reads["observe-committed"][5+0]
+			rd.NativeExists, rd.Code = false, -2
+		},
+		"object read under another name": func(r *rbdJournalLostAppendRecord) {
+			r.Trim.Reads["observe-committed"][5+3].Object = "journal_data.3.ab.4"
+		},
+		"extra object read": func(r *rbdJournalLostAppendRecord) {
+			rd := r.Trim.Reads["takeover"][5+4]
+			rd.Number = 8
+			r.Trim.Reads["takeover"] = append(r.Trim.Reads["takeover"], rd)
 		},
 		"oracle still connected":       func(r *rbdJournalLostAppendRecord) { r.Views["disconnect-oracle"].Clients[1].State = "connected" },
 		"disconnect named nothing":     func(r *rbdJournalLostAppendRecord) { r.Trim.DisconnectOutput = nil },
