@@ -154,7 +154,7 @@ func mdsCephFSDataNativeCaps(fsName string) ceph.ClientCaps {
 // six files, the three planned snapshots and their admitted file views.
 // Payloads are regenerated from the plan seeds; nothing else reaches it.
 // Object views use the python rados binding (stat, and for object-bytes one
-// whole-object read) and, for clones, the rados CLI's listsnaps on the same
+// whole-object read and that read's object version) and, for clones, the rados CLI's listsnaps on the same
 // identity. Sources: pybind/cephfs/cephfs.pyx,
 // pybind/rados/rados.pyx and tools/rados/rados.cc at mdsFreshSource;
 // independent driver, no code copied.
@@ -254,6 +254,8 @@ def objects(ino, count, snaps, content=False):
                     if len(data) != entry['size']:
                         raise IOError('native object read length differs from its stat')
                     entry['digest'] = digest(data)
+                    # The object's user version, from the read's reply.
+                    entry['version'] = ioctx.get_last_version()
                 if snaps and entry['exists']:
                     proc = subprocess.run(['rados', '-c', CONF, '--id', rid, '--keyring', native_keyring_file(identity), '-p', pool, '--format', 'json', 'listsnaps', name],
                                           stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
@@ -386,9 +388,11 @@ type mdsCephFSDataObject struct {
 	Exists bool                `json:"exists"`
 	Size   uint64              `json:"size"`
 	Snaps  *mdsCephFSDataSnaps `json:"snaps,omitempty"`
-	// Digest is the head object's whole content, only in the object-bytes
-	// view of the mixed-extent writeback recipe.
-	Digest *mdsCephFSDataDigest `json:"digest,omitempty"`
+	// Digest is the head object's whole content and Version its user
+	// version (the read reply's), only in the object-bytes view of the
+	// writeback recipes.
+	Digest  *mdsCephFSDataDigest `json:"digest,omitempty"`
+	Version uint64               `json:"version,omitempty"`
 }
 
 type mdsCephFSDataEntry struct {
@@ -508,9 +512,9 @@ func decodeMDSCephFSDataNative(action, target, path, pool string, plan mdsCephFS
 			}
 			// object-bytes carries the content of exactly the existing objects.
 			if action == "objects" || !o.Exists {
-				ok = ok && o.Digest == nil
+				ok = ok && o.Digest == nil && o.Version == 0
 			} else {
-				ok = ok && validMDSCephFSDataDigest(o.Digest) && o.Digest.Length == o.Size && o.Size <= plan.ObjectSize
+				ok = ok && validMDSCephFSDataDigest(o.Digest) && o.Digest.Length == o.Size && o.Size <= plan.ObjectSize && o.Version != 0
 			}
 		}
 	}

@@ -386,8 +386,10 @@ type nativeMDSCephFSDataObject struct {
 		Seq    uint64                     `json:"seq"`
 		Clones []nativeMDSCephFSDataClone `json:"clones"`
 	} `json:"snaps"`
-	// Digest is the head content, only in the object-bytes view.
-	Digest *nativeMDSCephFSDataDigest `json:"digest"`
+	// Digest is the head content and Version the object's user version,
+	// only in the object-bytes view.
+	Digest  *nativeMDSCephFSDataDigest `json:"digest"`
+	Version uint64                     `json:"version"`
 }
 
 type nativeMDSCephFSDataOutput struct {
