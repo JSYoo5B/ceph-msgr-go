@@ -149,9 +149,9 @@ func TestMDSCephFSDataUnprovenOSDRestartRefusesOtherWork(t *testing.T) {
 	}
 }
 
-// Only a BlueStore readback admits the restart: MemStore keeps its objects
-// only through MemStore::umount, which OSD::shutdown skips under
-// osd_fast_shutdown.
+// BlueStore admits the restart, and MemStore only without fast shutdown:
+// MemStore keeps its objects only through MemStore::umount, which
+// OSD::shutdown skips under osd_fast_shutdown.
 func TestMDSCephFSDataOSDRestartStoreAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		store mdsCephFSDataOSDStore
@@ -160,7 +160,8 @@ func TestMDSCephFSDataOSDRestartStoreAdmission(t *testing.T) {
 		{mdsCephFSDataOSDStore{"osd.0", "bluestore", "true"}, true},
 		{mdsCephFSDataOSDStore{"osd.0", "bluestore", "false"}, true},
 		{mdsCephFSDataOSDStore{"osd.0", "memstore", "true"}, false},
-		{mdsCephFSDataOSDStore{"osd.0", "memstore", "false"}, false},
+		{mdsCephFSDataOSDStore{"osd.0", "memstore", "false"}, true},
+		{mdsCephFSDataOSDStore{"osd.0", "memstore", ""}, false},
 		{mdsCephFSDataOSDStore{"osd.0", "bluestore", ""}, false},
 		{mdsCephFSDataOSDStore{"osd.0", "", "true"}, false},
 	} {

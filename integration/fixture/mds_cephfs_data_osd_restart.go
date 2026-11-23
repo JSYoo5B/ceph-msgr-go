@@ -18,30 +18,32 @@ import (
 //
 //   - osd-store: a read-only admin socket readback of osd_objectstore and
 //     osd_fast_shutdown of the owned OSD.
-//   - osd-restart: one stop and start of that OSD's container, refused
-//     unless the readback names bluestore. With osd_fast_shutdown=true (the
-//     default) OSD::shutdown calls _exit(0) without unmounting the store
-//     unless the store has a null freelist manager, and MemStore writes its
-//     objects to its directory only in MemStore::umount (_save), so a MemStore
-//     OSD comes back empty. Persistence across a restart therefore has no
-//     bounded state on a MemStore row, and the fixture refuses it there
-//     instead of destroying the owned filesystem's pools. BlueStore keeps a
-//     committed transaction across the same exit.
+//   - osd-restart: one stop (SIGTERM, then SIGKILL after 30 s) and start of
+//     that OSD's container, admitted only for a store the readback shows
+//     keeping its objects across the stop. With osd_fast_shutdown=true (the
+//     Ceph default) OSD::shutdown calls _exit(0) without unmounting the
+//     store unless it has a null freelist manager; BlueStore keeps a
+//     committed transaction across that exit. MemStore writes its objects to
+//     its directory only in MemStore::umount (_save), which only the orderly
+//     shutdown reaches: ceph-testcontainers-go turns osd_fast_shutdown off
+//     for its MemStore OSDs for that reason, and the restart of a MemStore
+//     OSD is refused unless the readback shows it off. An admitted MemStore
+//     restart is an orderly unmount and load, not a crash.
 //
 // The restart runs only where native work may (nativeReady), never beside an
 // OSD drop, and waits until the OSD map shows the OSD up again from a later
 // epoch and every PG reports a state beginning with active from an epoch at
-// or after the new up_from (the PG stats the OSD sent after it booted). Until then
-// every native action, OSD drop and further restart is refused. Cleanup
-// starts a container that a failed restart left stopped and reads the OSD
-// back up.
+// or after the new up_from (the PG stats the OSD sent after it booted).
+// Until then every native action, OSD drop and further restart is refused.
+// Cleanup starts a container that a failed restart left stopped and reads
+// the OSD back up.
 //
 // References at mdsFreshSource (LGPL-2.1, no code copied): osd/OSD.cc
 // shutdown (osd_fast_shutdown and has_null_manager), os/memstore/MemStore.cc
 // mount (_load) and umount (_save), mon/PGMap.cc dump_filtered_pg_stats and
 // osd/osd_types.cc pg_stat_t::dump.
 var capMDSWritebackPersist = defineCapability("mds-writeback-persist",
-	"restart the single owned OSD of the MDS CephFS data fixture once, refused unless it is a BlueStore OSD",
+	"restart the single owned OSD of the MDS CephFS data fixture once, refused unless its store keeps objects across the stop",
 	"MDS_FRESH=1 MDS_CEPHFS_DATA=1 +mds-writeback-fence", nil)
 
 // mdsCephFSDataOSDRestartWait bounds the wait for the restarted OSD.
@@ -55,10 +57,15 @@ type mdsCephFSDataOSDStore struct {
 }
 
 // restartable admits a restart only of an OSD whose store keeps committed
-// objects across OSD::shutdown: BlueStore, whatever osd_fast_shutdown says.
+// objects across OSD::shutdown: BlueStore, whatever osd_fast_shutdown says,
+// or MemStore with osd_fast_shutdown=false, whose orderly shutdown unmounts
+// and saves it.
 func (s mdsCephFSDataOSDStore) restartable() error {
-	if s.ObjectStore != "bluestore" || s.FastShutdown != "true" && s.FastShutdown != "false" {
-		return fmt.Errorf("DATA OSD restart requires a BlueStore OSD: %s reads back osd_objectstore=%s osd_fast_shutdown=%s, and such a store does not keep its objects across OSD::shutdown", s.OSD, s.ObjectStore, s.FastShutdown)
+	switch {
+	case s.ObjectStore == "bluestore" && (s.FastShutdown == "true" || s.FastShutdown == "false"):
+	case s.ObjectStore == "memstore" && s.FastShutdown == "false":
+	default:
+		return fmt.Errorf("DATA OSD restart requires a store that keeps its objects across OSD::shutdown: %s reads back osd_objectstore=%s osd_fast_shutdown=%s", s.OSD, s.ObjectStore, s.FastShutdown)
 	}
 	return nil
 }

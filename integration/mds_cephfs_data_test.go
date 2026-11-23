@@ -672,7 +672,8 @@ func (x *mdsCephFSDataControl) request(ctx context.Context, action string, argum
 		}
 	case "osd-restart":
 		r := result.OSDRestart
-		if r == nil || r.State != "restarted" || r.Error != "" || r.Store.ObjectStore != "bluestore" || r.Before == nil || r.After == nil || !r.Before.Up ||
+		if r == nil || r.State != "restarted" || r.Error != "" || r.Before == nil || r.After == nil || !r.Before.Up ||
+			r.Store.ObjectStore != "bluestore" && (r.Store.ObjectStore != "memstore" || r.Store.FastShutdown != "false") ||
 			!r.After.Up || !r.After.In || r.After.UpFrom <= r.Before.UpFrom || r.After.Epoch <= r.Before.Epoch ||
 			r.After.PGs == 0 || r.After.ActivePGs != r.After.PGs || r.After.ReportedFrom < r.After.UpFrom {
 			return result, errors.New("native data OSD restart receipt differs")
@@ -1149,11 +1150,12 @@ func TestCephMDSCephFSWritebackOutcomesIntegration(t *testing.T) {
 // the owned rank-0 MDS restarts. After reconnect both UPDATEs are recovered
 // explicitly and applied as new flushes of A's end. Native statx and a native
 // read show A alone; the native object view shows A and C on object 0 and D
-// after a hole on object 1, at the versions of their completed writes. On a
-// BlueStore row the owned OSD is then restarted and the objects, versions,
-// file metadata and Go reads by the new OSD map are unchanged; on a MemStore
-// row the OSD store is read back and the restart is not run, since MemStore
-// keeps no objects across OSD::shutdown under osd_fast_shutdown.
+// after a hole on object 1, at the versions of their completed writes. The
+// owned OSD is then stopped and started, and the objects, versions, file
+// metadata and Go reads by the new OSD map are unchanged. The BlueStore OSD
+// exits without unmounting (osd_fast_shutdown=true); the fixture's MemStore
+// OSD runs with osd_fast_shutdown=false, so its orderly shutdown saves the
+// objects (MemStore::umount) and the MemStore row is no crash test.
 //
 //scenario:row mds-cephfs-uncertain-prefix.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsuncertainprefixflush key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence,mds-writeback-mixed,mds-writeback-persist
 //scenario:row mds-cephfs-uncertain-prefix.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsuncertainprefixflush key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence,mds-writeback-mixed,mds-writeback-persist
@@ -3824,8 +3826,12 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 		facts["osd_restart"] = pr
 		store := req(t, "osd-store", "").OSDStore
 		pr["store"] = store
-		if want := os.Getenv("CEPH_MSGR_TEST_OSD_STORE"); store.ObjectStore != want || store.FastShutdown != "true" {
-			t.Fatalf("native OSD store %+v differs from the row's %s with osd_fast_shutdown=true", store, want)
+		// The row's store and the shutdown mode the provider sets for it:
+		// BlueStore keeps Ceph's fast shutdown, MemStore saves its objects
+		// only through the orderly unmount.
+		fast := map[string]string{"bluestore": "true", "memstore": "false"}[store.ObjectStore]
+		if want := os.Getenv("CEPH_MSGR_TEST_OSD_STORE"); store.ObjectStore != want || fast == "" || store.FastShutdown != fast {
+			t.Fatalf("native OSD store %+v differs from the row's %s", store, want)
 		}
 		check := func(t *testing.T, label string) {
 			t.Helper()
@@ -3843,17 +3849,6 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 			}
 			pr["native_object_bytes_"+label] = content.Objects
 			nativeRead(t, f, f.Name, o.Images[0][:o.Committed])
-		}
-		if store.ObjectStore != "bluestore" {
-			// No bounded state: with osd_fast_shutdown=true OSD::shutdown
-			// exits before MemStore::umount, the only place MemStore saves
-			// its objects, so the OSD would come back empty together with the
-			// owned filesystem's pools. The fixture refuses osd-restart for
-			// this readback (a refused control ends the control loop, so it
-			// is not requested here); the confirmed objects are only read.
-			pr["not_run"] = "osd_objectstore=" + store.ObjectStore + " osd_fast_shutdown=" + store.FastShutdown
-			check(t, "without_restart")
-			return
 		}
 		before, err := recoveryObjectPlacement(ctx, client, oracle.DataPoolName, cephfsObjectName(f.Ino, 0))
 		if err != nil {
