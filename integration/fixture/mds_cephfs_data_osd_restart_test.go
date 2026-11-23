@@ -14,6 +14,46 @@ const (
 	mdsCephFSUncertainPrefixSelector   = "^TestCephMDSCephFSUncertainPrefixFlushIntegration$"
 )
 
+func persistProfileEnv(selector, capabilities string) map[string]string {
+	env := mdsCephFSDataProfileEnv()
+	env["CEPH_MSGR_TEST_RUN"], env["CEPH_MSGR_TEST_CAPABILITIES"] = selector, capabilities
+	return env
+}
+
+// The rows declare their capabilities, and only the uncertain-prefix rows
+// admit the OSD store and restart controls.
+func TestMDSCephFSWritebackPersistCapabilityAdmission(t *testing.T) {
+	if got := catalogCapabilities(t, mdsCephFSWritebackOutcomesSelector); got != "mds-writeback-fence,mds-writeback-mixed" {
+		t.Fatal("the writeback outcomes rows declare", got)
+	}
+	if got := catalogCapabilities(t, mdsCephFSUncertainPrefixSelector); got != "mds-writeback-fence,mds-writeback-mixed,mds-writeback-persist" {
+		t.Fatal("the uncertain-prefix rows declare", got)
+	}
+	env := persistProfileEnv(mdsCephFSUncertainPrefixSelector, "mds-writeback-fence,mds-writeback-mixed,mds-writeback-persist")
+	p, err := loadProfile(func(k string) string { return env[k] })
+	if err != nil || p.testRun != mdsCephFSUncertainPrefixSelector || !p.admits(capMDSWritebackPersist) || !p.admits(capMDSWritebackMixed) || !p.admits(capMDSWritebackFence) {
+		t.Fatal("the uncertain-prefix selector was not admitted with its capabilities", p, err)
+	}
+	env = persistProfileEnv(mdsCephFSWritebackOutcomesSelector, "mds-writeback-fence,mds-writeback-mixed")
+	if p, err := loadProfile(func(k string) string { return env[k] }); err != nil || !p.admits(capMDSWritebackMixed) || p.admits(capMDSWritebackPersist) {
+		t.Fatal("the writeback outcomes profile differs", err)
+	}
+	for _, change := range []map[string]string{
+		// The restart extends the OSD drop controls.
+		{"CEPH_MSGR_TEST_CAPABILITIES": "mds-writeback-persist"},
+		{"CEPH_MSGR_TEST_MDS_CEPHFS_DATA": "0"},
+		{"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFS(UncertainPrefixFlush|Data)Integration$"},
+	} {
+		env := persistProfileEnv(mdsCephFSUncertainPrefixSelector, "mds-writeback-fence,mds-writeback-mixed,mds-writeback-persist")
+		for k, v := range change {
+			env[k] = v
+		}
+		if p, err := loadProfile(func(k string) string { return env[k] }); err == nil || p != (profile{}) {
+			t.Fatal("unsafe persistence profile accepted", change, p, err)
+		}
+	}
+}
+
 func TestMDSCephFSDataOSDRestartRequestIsClosed(t *testing.T) {
 	token := strings.Repeat("c4", 16)
 	for _, name := range []string{"osd-store", "osd-restart"} {
