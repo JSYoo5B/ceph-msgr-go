@@ -77,8 +77,16 @@ const (
 // misdirected and never answered; after a primary change the new primary
 // holds a different shard, so derive both from the new map. Operations travel
 // unchanged and the pool decides what it supports (an EC pool refuses OMAP
-// writes with -95 EOPNOTSUPP). The object-hash profile sends no shard and the
-// OSD maps the raw hash to the primary shard itself.
+// writes with -95 EOPNOTSUPP). One shape is refused before submission with
+// ErrUnsupportedOSDOperation for an erasure-coded placement: a vector that
+// combines an extent read (READ, SPARSE_READ, CHECKSUM, CMPEXT) with an
+// operation that returns output (STAT, GETXATTR, GETXATTRS, the OMAP reads,
+// CALL), because the pinned EC primary runs such a vector again after the
+// read and, depending on the order, returns that output once per run and
+// runs a CALL's method each time. The
+// object-hash profile sends no shard and the OSD maps the raw hash to the
+// primary shard itself; it names no placement, so the client cannot refuse
+// that shape there.
 type OSDPlacement struct {
 	PG      OSDPG
 	Primary int32
