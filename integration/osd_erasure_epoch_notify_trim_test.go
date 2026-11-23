@@ -12,9 +12,9 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
-// TestCephOSDErasureOptimizedK2M2DisconnectedNotifyIntegration: notifications
-// to a Go watch registration of the optimized pool while no connection holds
-// it. The registration is made at the shard-0 primary, whose OSD is then
+// erasureDisconnectedNotifyScenario: notifications to a Go watch
+// registration of an optimized pool of the given width while no connection
+// holds it. The registration is made at the shard-0 primary, whose OSD is then
 // killed; the replacement under the primary-first pg_temp loads it as a
 // disconnected watch (src/osd/PrimaryLogPG.cc populate_obc_watchers), and the
 // native watcher list still lists it. A notify through the replacement with a
@@ -25,12 +25,10 @@ import (
 // notifications still in progress (Watch::connect), and complete with the
 // caller's ACK. The timed-out notification is not delivered. After the
 // UNWATCH the list is empty at the replacement and at the returned primary.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2disconnectednotify key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
-//scenario:covers CLIENT to OSD
-//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
-func TestCephOSDErasureOptimizedK2M2DisconnectedNotifyIntegration(t *testing.T) {
-	r := startECEpochRun(t, erasureK2M2, 900*time.Second)
+// The replacement on parity shard k loads the registration from the object
+// state it holds (erasureWatchFailoverScenario).
+func erasureDisconnectedNotifyScenario(t *testing.T, width erasureWidth) {
+	r := startECEpochRun(t, width, 900*time.Second)
 	const (
 		object      = "ec-disconnected-notify"
 		incarnation = 71
@@ -131,8 +129,43 @@ func TestCephOSDErasureOptimizedK2M2DisconnectedNotifyIntegration(t *testing.T) 
 	r.heldThrough("the watcher list at the returned primary", object, back)
 }
 
-// TestCephOSDErasureOptimizedK2M2SnapTrimFailoverIntegration: a self-managed
-// snapshot removed while the optimized pool's PG is led by a replacement
+// TestCephOSDErasureOptimizedK2M2DisconnectedNotifyIntegration is
+// erasureDisconnectedNotifyScenario on optimized isa k=2,m=2
+// (four OSDs; parity shard 2 leads after the loss of shard 0).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2disconnectednotify key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK2M2DisconnectedNotifyIntegration(t *testing.T) {
+	erasureDisconnectedNotifyScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1DisconnectedNotifyIntegration is
+// erasureDisconnectedNotifyScenario on optimized isa k=3,m=1
+// (four OSDs; nonprimary shards {1,2}, so parity shard 3 leads after the loss
+// of shard 0).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1disconnectednotify key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK3M1DisconnectedNotifyIntegration(t *testing.T) {
+	erasureDisconnectedNotifyScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2DisconnectedNotifyIntegration is
+// erasureDisconnectedNotifyScenario on optimized isa k=4,m=2
+// (six OSDs; nonprimary shards {1,2,3}, so parity shard 4 leads after the
+// loss of shard 0).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2disconnectednotify key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK4M2DisconnectedNotifyIntegration(t *testing.T) {
+	erasureDisconnectedNotifyScenario(t, erasureK4M2)
+}
+
+// erasureSnapTrimFailoverScenario: a self-managed snapshot removed while
+// the PG of an optimized pool of the given width is led by a replacement
 // primary is trimmed only after the PG is clean again. A clone for the first
 // snapshot id is made through the shard-0 primary; its OSD is killed, and
 // with the PG active under the first parity shard's OSD with the
@@ -144,12 +177,8 @@ func TestCephOSDErasureOptimizedK2M2DisconnectedNotifyIntegration(t *testing.T) 
 // original primary returns and every PG is clean, the returned primary must
 // trim it: only the second clone and the head remain, with their bytes and
 // the head's user version, in Go and native reads.
-//
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2snaptrimfailover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
-//scenario:covers CLIENT to OSD
-//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
-func TestCephOSDErasureOptimizedK2M2SnapTrimFailoverIntegration(t *testing.T) {
-	r := startECEpochRun(t, erasureK2M2, 900*time.Second)
+func erasureSnapTrimFailoverScenario(t *testing.T, width erasureWidth) {
+	r := startECEpochRun(t, width, 900*time.Second)
 	const object = "ec-snaptrim-failover"
 	first := bytes.Repeat([]byte("ec-trim-first\x00\xff"), 400)
 	second := bytes.Repeat([]byte("ec-trim-second\x01"), 300)
@@ -245,4 +274,38 @@ func TestCephOSDErasureOptimizedK2M2SnapTrimFailoverIntegration(t *testing.T) {
 	t.Logf("snapshot %d trimmed by osd.%d (%s, %s at epoch %d): purged %v, queue %v; clone %d and the head remain",
 		s1, back.ID, trimmed.PGID, copyPurgedPhase(trimmed, s1), trimmed.Epoch, trimmed.PurgedSnaps, trimmed.RemovedSnapQueue, s2)
 	r.heldThrough("the trim and the reads at the returned primary", object, back)
+}
+
+// TestCephOSDErasureOptimizedK2M2SnapTrimFailoverIntegration is
+// erasureSnapTrimFailoverScenario on optimized isa k=2,m=2
+// (four OSDs).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2snaptrimfailover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK2M2SnapTrimFailoverIntegration(t *testing.T) {
+	erasureSnapTrimFailoverScenario(t, erasureK2M2)
+}
+
+// TestCephOSDErasureOptimizedK3M1SnapTrimFailoverIntegration is
+// erasureSnapTrimFailoverScenario on optimized isa k=3,m=1
+// (four OSDs; the removal is queued while three shards are active at
+// min_size 3).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1snaptrimfailover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK3M1SnapTrimFailoverIntegration(t *testing.T) {
+	erasureSnapTrimFailoverScenario(t, erasureK3M1)
+}
+
+// TestCephOSDErasureOptimizedK4M2SnapTrimFailoverIntegration is
+// erasureSnapTrimFailoverScenario on optimized isa k=4,m=2
+// (six OSDs; the removal is queued under parity shard 4).
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2snaptrimfailover key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated kills the primary OSD; restart waits osd-ready clean, which does not prove no pg_temp
+func TestCephOSDErasureOptimizedK4M2SnapTrimFailoverIntegration(t *testing.T) {
+	erasureSnapTrimFailoverScenario(t, erasureK4M2)
 }
