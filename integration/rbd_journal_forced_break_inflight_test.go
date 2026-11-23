@@ -13,15 +13,25 @@ import (
 
 // TestCephRBDJournalForcedBreakInflightIntegration breaks the lock of a live
 // Go owner of a journaling image while the outcome of its journal append is
-// in flight: the OSD has applied the append and answered it, and the answer
-// has not reached the Go caller. It runs the lost-append sequence of
+// in flight: the OSD has applied the append and nothing has reached the Go
+// caller. It runs the lost-append sequence of
 // TestCephRBDJournalLostAppendReplyIntegration with a live owner: the subject
 // takes the image's exclusive lock, allocates its tag, renews its watch and
-// sends one AioWrite entry with `journal.append`, once, on the connection
-// that sent lock.lock. A test-only gate on that connection withholds the
-// reply (in CRC mode it holds the MOSDOpReply frame of the append's
-// transaction; on the secure row it withholds every received byte once the
-// object size shows the entry). A native checkpoint, with `rbd journal
+// invokes one AioWrite entry with `journal.append`, once, on the connection
+// that sent lock.lock. A test-only gate on that connection withholds what
+// comes back, and what it observes differs by row. On the CRC row it decodes
+// the stream: it counts the MOSDOp frames that carry the entry (one), binds
+// to that frame's transaction and holds the MOSDOpReply frame of the same
+// transaction, so the OSD's answer is observed and withheld. On the secure
+// row it cannot read frames: it binds to the first write of at least its
+// threshold (the one such write of the run, which the test checks) and,
+// armed from before that write leaves, intercepts every byte received on
+// that connection afterwards; it identifies no request or reply frame and
+// no transaction. There the object size that the observer client polls
+// until it shows the entry establishes the application, independently of
+// the interception, and the gate reports that received bytes were
+// intercepted while the call was pending, not that they were the reply. A
+// native checkpoint, with `rbd journal
 // inspect`, shows the entry applied once while the subject still holds the
 // lock with its watch listed and its call still pending. Native librbd then
 // breaks the lock with lock_break, as in
@@ -43,6 +53,9 @@ import (
 // The disposition is "applied once" for native clients and "unknown" for
 // the caller, kept apart: the break neither undid nor refused an append the
 // OSD had already executed, and the caller does not learn that from the OSD.
+// The frame-level transmission count (one marked request, its reply held)
+// is a CRC-row claim; on the secure row the claim is one caller invocation,
+// one write of the threshold size and bytes intercepted after it.
 //
 // What this does not hold: an append that is still executing inside the OSD
 // when the blocklist entry arrives. At ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc
@@ -121,7 +134,7 @@ func runRBDJournalForcedBreakInflightEnd(t *testing.T, r *rbdJournalLostAppendRe
 // one stage. It keeps apart what native clients saw while the owner held the
 // lock and the caller was pending ("checkpoint"), the break with the reply
 // still withheld, what the caller recorded and the fence ("observe-fenced"),
-// and the transmission count with the native takeover ("takeover").
+// and the gate's record of the append with the native takeover ("takeover").
 func rbdJournalForcedInflightClaims(r *rbdJournalLostAppendRecord, stage string) []string {
 	var problems []string
 	fail := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
@@ -255,7 +268,10 @@ func rbdJournalForcedInflightClaims(r *rbdJournalLostAppendRecord, stage string)
 		return problems
 	}
 
-	// Transmission: one append on one connection; no other dial.
+	// Transmission: one caller invocation on one connection and no other
+	// dial; what the gate saw of it is judged by mode (rbdJournalGateClaims:
+	// the marked frame and its held reply in CRC mode, the one write of the
+	// threshold size and the intercepted bytes in secure mode).
 	g := r.Gate
 	if g == nil {
 		fail("transmission: gate state missing")

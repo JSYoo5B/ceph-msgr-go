@@ -559,10 +559,13 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 }
 
 // rbdJournalGateClaims checks what the subject's reply gate saw of the
-// withheld append o: large writes of the append's size, the binding to
-// connection bound and, by mode, the held reply of the marked request's
-// transaction (decoded) or the withheld received bytes and the polled
-// barrier (undecoded).
+// withheld append o: the writes of at least its threshold (large) and the
+// binding to connection bound and, by mode, the frames that carry the entry
+// with the held reply of their transaction (decoded, CRC), or the received
+// bytes intercepted on the bound connection and the polled barrier
+// (undecoded, secure). An undecoded gate identifies no frame and no
+// transaction: there the claim is one write of the threshold size and
+// intercepted bytes, not one transmitted request or a withheld reply.
 func rbdJournalGateClaims(r *rbdJournalLostAppendRecord, g *testcluster.OSDReplyGateState, o *rbdJournalLostAppendOutcome, bound, large int, marked []int, fail func(string, ...any)) {
 	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
 	e := r.Entry
@@ -588,7 +591,7 @@ func rbdJournalGateClaims(r *rbdJournalLostAppendRecord, g *testcluster.OSDReply
 		// bound connection while the call was pending. A flag that is
 		// present but false means no post-bind read was intercepted.
 		if g.WithheldBytesSeen == nil || !*g.WithheldBytesSeen || r.WithheldBeforeCancel == nil || !*r.WithheldBeforeCancel {
-			fail("transmission: the undecoded gate did not withhold received bytes before the wait was canceled: at cancellation %s, finally %s", text(r.WithheldBeforeCancel), text(g.WithheldBytesSeen))
+			fail("transmission: the undecoded gate did not intercept received bytes on the bound connection before the wait was canceled: at cancellation %s, finally %s", text(r.WithheldBeforeCancel), text(g.WithheldBytesSeen))
 		}
 	}
 }

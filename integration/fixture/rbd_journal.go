@@ -168,18 +168,20 @@ var rbdJournalForcedBreakPendingActions = []string{"setup", "observe-locked", "o
 	"observe-new-connection", "takeover"}
 
 // capRBDJournalForcedBreakInflight admits the forced-break sequence in which
-// the Go owner's journal append has been applied by the OSD and its reply is
-// withheld from the Go caller when the lock is broken: its test runs alone
+// the Go owner's journal append has been applied by the OSD and nothing of
+// its outcome has reached the Go caller when the lock is broken (the test's
+// reply gate holds the reply frame on CRC connections and intercepts the
+// received bytes on secure ones): its test runs alone
 // on a fresh RBD fixture, and the journal control replaces the ordinary
 // sequence with rbdJournalForcedBreakInflightActions.
 var capRBDJournalForcedBreakInflight = defineExclusiveCapability(fixtureRBD, "rbd-journal-forced-break-inflight",
-	"run one test alone on a fresh RBD fixture with the journal forced-break sequence with an append whose reply is in flight (native lock break and blocklist)",
+	"run one test alone on a fresh RBD fixture with the journal forced-break sequence with an append whose outcome is in flight (native lock break and blocklist)",
 	"RBD=1", nil)
 
 // rbdJournalForcedBreakInflightActions is the lost-append-reply sequence up
 // to its checkpoint (taken while the Go owner still holds the lock and the
-// reply to its applied append is withheld), then `force-break` while that
-// reply is still withheld, `observe-fenced` after the Go caller recorded its
+// outcome of its applied append has not reached it), then `force-break`
+// while that is still so, `observe-fenced` after the Go caller recorded its
 // unknown outcome, and the `takeover` of the forced-break sequence.
 var rbdJournalForcedBreakInflightActions = []string{"setup", "observe-locked", "checkpoint", "force-break", "observe-fenced", "takeover"}
 
