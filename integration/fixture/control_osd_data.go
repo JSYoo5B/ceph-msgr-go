@@ -626,6 +626,7 @@ var _ = collectDiagnosticFiles(
 
 var _ = collectDiagnosticFiles(
 	"osd-watch-notify-command.json",
+	"osd-watch-notify-go.json",
 	"osd-watch-notify-input.json",
 	"osd-watch-notify-result.json",
 	"osd-watch-notify-results.json",

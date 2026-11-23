@@ -166,6 +166,7 @@ var _ = collectDiagnosticFiles(
 var _ = collectDiagnosticFiles(
 	"osd-copyfrom-classification-results.json",
 	"osd-copyfrom-compound-results.json",
+	"osd-copyfrom-results.json",
 	"osd-copyfrom-snap-truncate-results.json",
 )
 
