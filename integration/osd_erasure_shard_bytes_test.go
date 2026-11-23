@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -263,7 +264,25 @@ func (r *ecEpochRun) stripeWidth() int {
 	return r.facts.chunk * r.width.k
 }
 
-// shardBytes captures and checks the object's shard bytes on route (checkShardBytes).
+// shardBytesAttributed requires one observation of the PG taken after a
+// capture to show route's interval still holding (heldThrough) at an epoch
+// not before the capture's second bracket. The brackets alone compare the
+// placement, which a repeer into a new interval keeps; an interval start
+// only grows, so a held interval after the capture covers the capture and
+// every request since route was judged.
+func shardBytesAttributed(s shardBytesSnapshot, o pgIntervalObservation, route osdFixtureOracle) error {
+	if err := o.heldThrough(route); err != nil {
+		return err
+	}
+	if o.Before.Epoch < s.After.Epoch {
+		return fmt.Errorf("the observation at epoch %d precedes the capture's second bracket at epoch %d", o.Before.Epoch, s.After.Epoch)
+	}
+	return nil
+}
+
+// shardBytes captures and checks the object's shard bytes on route
+// (checkShardBytes) and attributes them to route's interval
+// (shardBytesAttributed).
 func (r *ecEpochRun) shardBytes(label, object string, route osdFixtureOracle, contents map[string][]byte, want []string) shardBytesSnapshot {
 	r.t.Helper()
 	references := map[string][]byte{}
@@ -276,12 +295,18 @@ func (r *ecEpochRun) shardBytes(label, object string, route osdFixtureOracle, co
 	if err := checkShardBytes(s, route, r.width, r.stripeWidth(), contents, want); err != nil {
 		r.t.Fatalf("shard bytes %s: %v", label, err)
 	}
+	held := r.heldThrough("the shard-bytes capture "+label, object, route)
+	if err := shardBytesAttributed(s, held, route); err != nil {
+		r.t.Fatalf("shard bytes %s: %v", label, err)
+	}
 	r.t.Logf("shard bytes %s: %v", label, want)
 	return s
 }
 
-// readContent sends one Go READ of the whole object exactly once through
-// route's primary and requires data at the user version.
+// readContent sends one Go READ of the whole object through route's
+// primary, requires data at the user version and then route's interval to
+// have held through the read (heldThrough): equal bytes from a later
+// interval would pass the reply checks alone.
 func (r *ecEpochRun) readContent(label string, route osdFixtureOracle, data []byte, version uint64) {
 	r.t.Helper()
 	o := mutationConnection(r.t, r.c, r.ctx, route)
@@ -290,6 +315,7 @@ func (r *ecEpochRun) readContent(label string, route osdFixtureOracle, data []by
 	if err != nil || reply.Code != 0 || len(reply.Operations) != 1 || reply.Operations[0].Result != 0 || !bytes.Equal(reply.Operations[0].Data, data) || reply.UserVersion != version {
 		r.t.Fatalf("%s: err=%v code=%d version %d (want %d)", label, err, reply.Code, reply.UserVersion, version)
 	}
+	r.heldThrough(label, route.Name, route)
 }
 
 // requireContent reads the object natively in route's interval and requires
@@ -354,8 +380,9 @@ func positions(size int, label string, overrides map[int]string) []string {
 //  5. The primary returns and leads again in a clean PG: its shard 0 holds
 //     its chunk of the third content, recovered.
 //
-// Each write is answered ONDISK once and read back natively and through the
-// Go client in its interval, which must hold around the write. Not
+// Each write has one accepted ONDISK reply at attempt 0, and it is read back
+// natively and through the Go client; route's interval must hold around the
+// write, each read and each capture. Not
 // established: which chunks any read used, partial stripes, appends, other
 // plugins or techniques, chunk mappings, and a capture while a shard is being
 // recovered.
@@ -573,5 +600,31 @@ func TestCheckShardBytes(t *testing.T) {
 	}
 	if err := checkShardBytes(shardBytesReceipt(route, data, erasureK2M2, 16), route, erasureK2M2, 16, contents, positions(4, "second", nil)); err == nil {
 		t.Error("an unknown content accepted")
+	}
+}
+
+// A repeer starts a new interval on the same placement. The capture's own
+// brackets and the placement comparison before it cannot see that; the
+// observation after the capture must.
+func TestShardBytesAttributedToTheJudgedInterval(t *testing.T) {
+	receipt, route := pgIntervalChange()
+	s := shardBytesReceipt(route, stripedContent(1, 2, 2, 8), erasureK2M2, 16)
+	s.Before.Epoch, s.After.Epoch = 28, 28
+	// What the capture alone checked: the same placement at a newer epoch.
+	if !samePlacement(s.Before, route) || s.Before.Epoch < route.Epoch {
+		t.Fatal("the synthetic capture is not on the judged placement")
+	}
+	if err := shardBytesAttributed(s, heldAt(receipt.OriginObservation, 28, 24), route); err != nil {
+		t.Fatal("a capture in the judged interval refused:", err)
+	}
+	repeered := heldAt(receipt.OriginObservation, 28, 27)
+	if !samePlacement(*repeered.Before, route) {
+		t.Fatal("the repeered observation does not keep the placement")
+	}
+	if err := shardBytesAttributed(s, repeered, route); !errors.Is(err, errIntervalChanged) {
+		t.Fatal("a capture after a repeer into a new interval was attributed to the judged one:", err)
+	}
+	if err := shardBytesAttributed(s, heldAt(receipt.OriginObservation, 27, 24), route); err == nil {
+		t.Fatal("an observation before the capture's second bracket was accepted")
 	}
 }
