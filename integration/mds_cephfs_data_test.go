@@ -1132,7 +1132,11 @@ func TestCephMDSCephFSMixedWritebackRecoveryIntegration(t *testing.T) {
 // alone and the native object view, with object versions, shows A and C on
 // object 0 and B alone on object 1. Writer 1 is then evicted: its next object
 // write is fenced with -EBLOCKLISTED and the objects and versions stay
-// unchanged with C in place. No write is resent.
+// unchanged with C in place. The test consumer invokes every object write
+// once and its ledger refuses a retry of every completed or unknown one. What
+// the client sent below that invocation is not counted: the object versions,
+// read after each unknown call, rule out a later application of that write,
+// not a duplicate of the same request identity that the OSD suppressed.
 //
 //scenario:row mds-cephfs-writeback-outcomes.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfswritebackoutcomes key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence,mds-writeback-mixed
 //scenario:row mds-cephfs-writeback-outcomes.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfswritebackoutcomes key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_data=1 capabilities=mds-writeback-fence,mds-writeback-mixed
@@ -3297,7 +3301,8 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 		// 3. Writer 2's B: the OSD applies the write and the reply is
 		// withheld on the client side, so the bounded local wait ends with an
 		// unknown outcome. The connection is opened (and wrapped) before the
-		// fault is armed, and writer 2 sees A on its own.
+		// fault is armed, and writer 2 sees A on its own. B's object does not
+		// exist before the call.
 		osdIO2 := &cephfsDataIO{ctx: ctx, client: client2, pool: oracle.DataPool, poolName: oracle.DataPoolName, addresses: osdIO.addresses, leaf: osdIO.leaf}
 		defer osdIO2.reset()
 		if exists, size, err := osdIO2.stat(f.Ino, 0); err != nil || !exists || size != m.A[1] {
@@ -3306,6 +3311,8 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 		if fault2.dialsTo(endpoint) != 1 {
 			t.Fatal("writer 2's OSD connection was not wrapped once", fault2.dialsTo(endpoint))
 		}
+		imagesA := cephfsObjectImages(layout, []cephfsFileWrite{{m.A[0], dataA}})
+		ox["native_before_withheld_reply"] = objectBytes(t, 0, imagesA, [2]uint64{w1.Writes[0].IO.UserVersion, 0})
 		fault2.arm(endpoint, true, false)
 		timeB := newMTime(f.Ino)
 		out := w2.writeback(osdIO2, "b", f.Ino, layout, m.B[0], dataB, snapContext, timeB, trunc, 5*time.Second)
@@ -3322,8 +3329,11 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 			t.Fatalf("withheld write identity differs: %+v", uncertain)
 		}
 		ox["withheld_write"] = uncertain
-		// Independent observation: B is on object 1 although writer 2 never
-		// learned it; the file size is untouched.
+		// Independent observation: B is on object 1, created by this one
+		// invocation, although writer 2 never learned its outcome; the file
+		// size is untouched. Writer 2's ledger refuses a retry. Whether the
+		// client transmitted B's request more than once below the invocation
+		// is not observed.
 		imagesAB := cephfsObjectImages(layout, []cephfsFileWrite{{m.A[0], dataA}, {m.B[0], dataB}})
 		afterB := objectBytes(t, 0, imagesAB, [2]uint64{w1.Writes[0].IO.UserVersion, 0})
 		versionB := afterB[extB.ObjectNo].Version
@@ -3434,9 +3444,11 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 			t.Fatal("Go head bytes differ from A, B, C and no D", err)
 		}
 
-		// 8. The consumer's rules: nothing completed is repeated, nothing
-		// unknown is resent, and no cap message or max_size request of either
-		// writer reported more than the bound. A native read waits until the
+		// 8. The consumer's rules: each object write was invoked once, the
+		// ledgers refuse a retry of every completed or unknown write, and no
+		// cap message or max_size request of either writer reported more than
+		// the bound. The versions read after each unknown call did not change,
+		// so no later application of those writes happened. A native read waits until the
 		// writer closed the file: while a client holds Fw the native reader
 		// has no Fc, and Client::_read_sync then returns object bytes past
 		// the file size until a short object read.
@@ -3448,7 +3460,7 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 			}
 		}
 		if writes1, writes2 := writesOf(osdIO), writesOf(osdIO2); len(writes1) != 4 || len(writes2) != 1 {
-			t.Fatal("object writes were repeated", len(writes1), len(writes2))
+			t.Fatal("the consumer invoked an object write more than once", len(writes1), len(writes2))
 		} else {
 			ox["object_writes"] = map[string]any{"writer1": writes1, "writer2": writes2}
 		}
@@ -3651,7 +3663,8 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 
 		// 1. The mixed ledger: A completes, B is dropped by the owned OSD after
 		// Messenger receipt and stays unknown, C beyond B completes after the
-		// drop is restored. B is never resent.
+		// drop is restored. The owned OSD's drop log shows exactly one
+		// received request of this client, and the consumer invokes B once.
 		timeA := newMTime(f.Ino)
 		if out := ledger.writeback(osdIO, "a", f.Ino, layout, m.A[0], dataA, snapContext, timeA, trunc, 30*time.Second); !slices.Equal(out, []string{cephfsWriteCompleted}) {
 			t.Fatal("A did not complete", out, ledger.Writes)
@@ -3765,7 +3778,7 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 		writes := leafWrites()
 		if len(writes) != 4 || len(ledger.Writes) != 4 || ledger.count(cephfsWriteCompleted, "a") != 1 || ledger.count(cephfsWriteUncertain, "b") != 1 ||
 			ledger.count(cephfsWriteCompleted, "c") != 1 || ledger.count(cephfsWriteCompleted, "d") != 1 {
-			t.Fatal("object writes were repeated or misclassified", len(writes), ledger.Writes)
+			t.Fatal("the consumer invoked an object write more than once or misclassified one", len(writes), ledger.Writes)
 		}
 		images := cephfsObjectImages(layout, []cephfsFileWrite{{m.A[0], dataA}, {m.C[0], dataC}, {m.D[0], dataD}})
 		versions := [2]uint64{ledger.Writes[2].IO.UserVersion, ledger.Writes[3].IO.UserVersion}
