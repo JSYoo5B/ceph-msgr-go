@@ -377,9 +377,11 @@ type OSDRequest struct {
 	// PG log with the original result and versions (osd/PrimaryLogPG.cc
 	// do_op). The entry replicates with the write and follows a PG split or
 	// merge, so a replacement primary or child PG reached by your new
-	// placement answers from its own copy. A trimmed entry no longer
-	// deduplicates and the write runs again, so this is never an exactly-once
-	// guarantee; reads need no deduplication. A late reply to an earlier
+	// placement answers from its own copy. A trimmed entry still answers
+	// while it is one of the PG log's bounded duplicate records
+	// (osd_pg_log_dups_tracked); once it is dropped from those too the write
+	// runs again, so this is never an exactly-once guarantee; reads need no
+	// deduplication. A late reply to an earlier
 	// attempt differs only by its echoed attempt and fails the session as an
 	// unknown outcome, so resubmit on a fresh connection after the original's
 	// ended. Nothing resubmits automatically.

@@ -35,9 +35,12 @@ A complete snapshot reports where an exact identity occurs on the primary at
 that bracketed epoch. Absence from one snapshot is not evidence that the
 identity is absent from other shards, other epochs or the PG's history in
 general; this module does not make that claim. ``RetryAttempt`` is not part
-of the request key. The native calibration exercises only the ordinary ``log``
-tier; ``dups`` positions are pinned only by synthetic cluster-free tests. No
-PG-log retention bound, trim boundary or replay safety follows from a match.
+of the request key. The native calibrations exercise the ordinary ``log``
+and ``extra_reqids`` tiers; the duplicate-tier control
+(integration/osd_pglog_dups_test.go) also reaches ``dups`` under lowered
+PG-log bounds and decides absence itself, from the complete raw dump and the
+requests it made. No PG-log retention bound, trim boundary or replay safety
+follows from a match here.
 The offline ``ceph-objectstore-tool --op log`` is not used here: its mount
 policy (src/tools/ceph_objectstore_tool.cc:3992-4011) does not list ``log`` as
 a read-only operation.
