@@ -45,65 +45,8 @@ import (
 //     recovered, the primary puts its targets back into the acting set
 //     (src/osd/PeeringState.cc:6454-6470), a new interval.
 //
-// The flags discipline is local to this file: a native baseline with either
-// flag already set is refused, the set is read back by its exact tokens, and
-// a cleanup unsets them until a separate readback shows both gone. It
-// belongs in the shared recovery-flag holder of the recovery-flag tests once
-// that holder is on main. These consumer helpers are test-only.
-
-// recoveryFlags is one owned hold of the norecover and nobackfill OSDMap
-// flags (owned-pool oracle mode osdflags).
-type recoveryFlags struct {
-	r *ecEpochRun
-	// held says that the flags may be set; the cleanup unsets them while it
-	// is true.
-	held bool
-}
-
-// flagTokens reports whether the map's flag list holds norecover and
-// nobackfill as exact tokens.
-func flagTokens(flags []string) (norecover, nobackfill bool) {
-	return slices.Contains(flags, "norecover"), slices.Contains(flags, "nobackfill")
-}
-
-// holdRecoveryFlags refuses a native baseline with either flag set, arms the
-// cleanup, sets both and reads them back.
-func (r *ecEpochRun) holdRecoveryFlags() *recoveryFlags {
-	r.t.Helper()
-	baseline := nativePool(r.t, r.ctx, "osdflags", map[string]any{"action": "show"}).OSDMapFlags
-	if a, b := flagTokens(baseline); a || b {
-		r.t.Fatalf("the native baseline already has recovery flags %v; this test owns no hold it did not set", baseline)
-	}
-	h := &recoveryFlags{r: r, held: true}
-	r.t.Cleanup(func() {
-		if !h.held {
-			return
-		}
-		cleanup, stop := context.WithTimeout(context.Background(), 60*time.Second)
-		defer stop()
-		nativePool(r.t, cleanup, "osdflags", map[string]any{"action": "unset"})
-		if a, b := flagTokens(nativePool(r.t, cleanup, "osdflags", map[string]any{"action": "show"}).OSDMapFlags); a || b {
-			r.t.Error("the recovery flags are still set after the cleanup")
-		}
-	})
-	set := nativePool(r.t, r.ctx, "osdflags", map[string]any{"action": "set"}).OSDMapFlags
-	if a, b := flagTokens(set); !a || !b {
-		r.t.Fatalf("the recovery flags read back as %v", set)
-	}
-	r.t.Logf("norecover and nobackfill set: %v (baseline %v)", set, baseline)
-	return h
-}
-
-// release unsets both flags and requires a separate readback without them.
-func (h *recoveryFlags) release() {
-	h.r.t.Helper()
-	nativePool(h.r.t, h.r.ctx, "osdflags", map[string]any{"action": "unset"})
-	shown := nativePool(h.r.t, h.r.ctx, "osdflags", map[string]any{"action": "show"}).OSDMapFlags
-	if a, b := flagTokens(shown); a || b {
-		h.r.t.Fatalf("the recovery flags read back as %v after the unset", shown)
-	}
-	h.held = false
-}
+// The flags are held with the shared recovery-flag hold
+// (osd_recovery_flags_test.go). These consumer helpers are test-only.
 
 // asyncRecoveryCost is the oracle's receipt of mode asyncrecoverycost.
 type asyncRecoveryCost struct {
@@ -333,7 +276,8 @@ func erasureRecoveryTargetWriteScenario(t *testing.T, width erasureWidth, kind r
 	} else {
 		restore = r.lowerAsyncRecoveryCost()
 	}
-	flags := r.holdRecoveryFlags()
+	flags := newRecoveryFlagHold(t)
+	flags.hold(r.ctx)
 	victim := r.facts.nonprimary[len(r.facts.nonprimary)-1]
 	outage := r.kill(route.Acting[victim])
 	absent := r.waitState("active without the data shard", object, func(o pgIntervalObservation) error { return o.activeWithout(route, []int{victim}, since) })
@@ -394,7 +338,7 @@ func erasureRecoveryTargetWriteScenario(t *testing.T, width erasureWidth, kind r
 		map[string][]byte{"native": contents[2], "first": contents[0], "second": contents[1]}, positions(size, "native", map[int]string{victim: "first"}))
 	t.Logf("shard %d (osd.%d) still holds the first content's chunk after the acknowledged write: its sub-write carried no bytes", victim, route.Acting[victim])
 
-	flags.release()
+	flags.release(r.ctx)
 	r.clean()
 	var back osdFixtureOracle
 	r.waitState("clean with the target back in the acting set", object, func(o pgIntervalObservation) error {
@@ -572,11 +516,5 @@ func TestErasureRemappedTargetOn(t *testing.T) {
 		if err := o.remappedTargetOn(origin, 0, 27, kind); err == nil {
 			t.Error(kind.name, "the primary's position accepted as a target")
 		}
-	}
-	if a, b := flagTokens([]string{"sortbitwise", "norecover", "nobackfill"}); !a || !b {
-		t.Error("flag tokens")
-	}
-	if a, b := flagTokens([]string{"norecover_x", "nobackfills"}); a || b {
-		t.Error("flag tokens matched substrings")
 	}
 }
