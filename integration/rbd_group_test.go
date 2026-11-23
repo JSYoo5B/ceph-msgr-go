@@ -731,15 +731,24 @@ func (r *rbdGroupResponder) begin(action string, allowed ...uint32) {
 	r.mu.Unlock()
 }
 
-// receive opens the record of one notification: it is in flight until
-// record appends it.
-func (r *rbdGroupResponder) receive(received, started time.Time, event cephmsgr.OSDWatchEvent) (rbdGroupNotification, []uint32) {
+// rbdGroupArrival is one watch event as the Go client delivered it: its
+// arrival time and the notification record receive opened for it.
+type rbdGroupArrival struct {
+	event    cephmsgr.OSDWatchEvent
+	received time.Time
+	n        rbdGroupNotification
+	allowed  []uint32
+}
+
+// receive opens the record of one notification when it arrives: it is in
+// flight until record appends it.
+func (r *rbdGroupResponder) receive(received, started time.Time, event cephmsgr.OSDWatchEvent) rbdGroupArrival {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ledger.receive(event.NotifyID)
 	n := rbdGroupNotification{Action: r.action, AfterMS: float64(received.Sub(started).Microseconds()) / 1000, NotifyID: event.NotifyID,
 		NotifierGlobalID: event.NotifierGlobalID, Cookie: event.Cookie, PayloadHex: hex.EncodeToString(event.Payload)}
-	return n, slices.Clone(r.allowed)
+	return rbdGroupArrival{event: event, received: received, n: n, allowed: slices.Clone(r.allowed)}
 }
 
 // record appends a received notification with its acknowledgement.
@@ -762,9 +771,8 @@ func (r *rbdGroupResponder) settle(ctx context.Context, ids ...uint64) ([]rbdGro
 	}, ids)
 }
 
-func (r *rbdGroupResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, epoch uint32, started time.Time, event cephmsgr.OSDWatchEvent) {
-	received := time.Now()
-	n, allowed := r.receive(received, started, event)
+func (r *rbdGroupResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, epoch uint32, a rbdGroupArrival) {
+	event, received, n, allowed := a.event, a.received, a.n, a.allowed
 	defer func() { r.record(n) }()
 	if event.Opcode != cephmsgr.OSDWatchNotification || event.Cookie != w.Cookie() {
 		n.Unexpected = true
@@ -1049,7 +1057,7 @@ func TestRBDGroupCreationSettlement(t *testing.T) {
 				if notifier == 0 {
 					notifier = native
 				}
-				n, _ := r.receive(time.Now(), started, cephmsgr.OSDWatchEvent{Opcode: cephmsgr.OSDWatchNotification, NotifyID: s.id, NotifierGlobalID: notifier, Cookie: 1})
+				n := r.receive(time.Now(), started, cephmsgr.OSDWatchEvent{Opcode: cephmsgr.OSDWatchNotification, NotifyID: s.id, NotifierGlobalID: notifier, Cookie: 1}).n
 				n.Op, n.AckHex, n.AckDisposition = s.op, hex.EncodeToString(s.ack), rbdAckDispositionOf(s.omit, s.ack, nil)
 				return n
 			}
@@ -1780,37 +1788,65 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 	respondCtx, stopResponding := context.WithCancel(ctx)
 	responderDone := make(chan struct{})
 	responderStarted := time.Now()
+	// The watch is read on its own goroutine, which stamps each event when
+	// the Go client delivers it, so a notification that arrives while an
+	// earlier one is held keeps its arrival time; one goroutine answers the
+	// events in arrival order and another pings the watch.
+	arrivals := make(chan rbdGroupArrival, 64)
+	var responding sync.WaitGroup
+	responding.Add(3)
 	go func() {
-		defer close(responderDone)
-		lastPing := time.Now()
+		responding.Wait()
+		close(responderDone)
+	}()
+	go func() {
+		defer responding.Done()
 		for {
-			if time.Since(lastPing) >= rbdLockPingInterval {
-				_, err := w.Ping(respondCtx, wr.Epoch)
-				if respondCtx.Err() != nil {
-					return
-				}
-				lastPing = time.Now()
-				responder.mu.Lock()
-				responder.pings++
-				if err != nil {
-					responder.pingErrors = append(responder.pingErrors, err.Error())
-				}
-				responder.mu.Unlock()
+			select {
+			case <-respondCtx.Done():
+				return
+			case <-time.After(rbdLockPingInterval):
 			}
-			wait, stop := context.WithDeadline(respondCtx, lastPing.Add(rbdLockPingInterval))
-			event, err := w.Next(wait)
-			stop()
+			_, err := w.Ping(respondCtx, wr.Epoch)
 			if respondCtx.Err() != nil {
 				return
 			}
-			if errors.Is(err, context.DeadlineExceeded) {
-				continue
+			responder.mu.Lock()
+			responder.pings++
+			if err != nil {
+				responder.pingErrors = append(responder.pingErrors, err.Error())
+			}
+			responder.mu.Unlock()
+		}
+	}()
+	go func() {
+		defer responding.Done()
+		defer close(arrivals)
+		for {
+			event, err := w.Next(respondCtx)
+			if respondCtx.Err() != nil {
+				return
 			}
 			if err != nil {
 				responder.fail(fmt.Errorf("member header watch ended: %w", err))
 				return
 			}
-			responder.handle(respondCtx, w, wr.Epoch, responderStarted, event)
+			a := responder.receive(time.Now(), responderStarted, event)
+			select {
+			case arrivals <- a:
+			default:
+				responder.fail(fmt.Errorf("member header watch queued more than %d unanswered notifications", cap(arrivals)))
+				return
+			}
+		}
+	}()
+	go func() {
+		defer responding.Done()
+		for a := range arrivals {
+			if respondCtx.Err() != nil {
+				return
+			}
+			responder.handle(respondCtx, w, wr.Epoch, a)
 		}
 	}()
 	watching := true
@@ -2020,9 +2056,15 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 					t.Fatal("member snapshot limits differ during the creation", action, s.phase, v.limits)
 				}
 				s.check(t, v, h, stepState, p)
-				// An answer must reach the OSD before its notify times
-				// out; an omitted one never does.
-				if !before || !running() || !s.omit && time.Since(h.Received) >= rbdNotifyTimeout {
+				// The reads belong to this notification only while the
+				// OSD still waits for its answer: the notify times out
+				// no earlier than rbdNotifyTimeout after the OSD sent it,
+				// which precedes its arrival at the Go watch. After that
+				// librbd may already have sent the next attempt or the
+				// unquiesce, which leaves the same group record, snap
+				// contexts, locks and limits, so an omitted answer is
+				// bounded as an acknowledged one is.
+				if !before || !running() || time.Since(h.Received) >= rbdNotifyTimeout {
 					t.Fatalf("%s: the %s hold is unproven (control running %v, held %v)", action, s.phase, before, time.Since(h.Received))
 				}
 				answered = true
