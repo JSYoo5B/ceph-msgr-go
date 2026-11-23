@@ -274,7 +274,7 @@ func (r *copyPrimaryChangeRun) seedDestination() nativeXattrSnapshot {
 		t.Fatal("native destination seed", seeded.Code)
 	}
 	for _, osd := range r.dstRoute.Acting {
-		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute.PGID), osd, r.pools.ids[2], r.dstRoute.PGID, 0); err != nil {
+		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute), osd, r.dstRoute, 0); err != nil {
 			t.Fatal("before the copy:", err)
 		}
 	}
@@ -390,8 +390,8 @@ func (r *copyPrimaryChangeRun) holdAtChunk(request cephmsgr.OSDRequest, route, s
 		// the same one as after the earlier chunks.
 		for _, osd := range route.Acting {
 			for deadline := time.Now().Add(30 * time.Second); ; {
-				s := copyStaging(t, ctx, osd, route.PGID)
-				temp, err := checkCopyTemp(s, osd, route.Pool, route.PGID, 1)
+				s := copyStaging(t, ctx, osd, route)
+				temp, err := checkCopyTemp(s, osd, route, 1)
 				if err == nil && (h.temp == "" || temp == h.temp) {
 					h.temp = temp
 					step.StagingSHA256 = append(step.StagingSHA256, s.SHA256)
@@ -571,7 +571,7 @@ func copyThreeChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, rec
 	}
 	receipt.FinalOmap = omapDigest(t, final)
 	for _, osd := range r.dstRoute.Acting {
-		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute.PGID), osd, pools.ids[2], r.dstRoute.PGID, 0); err != nil {
+		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute), osd, r.dstRoute, 0); err != nil {
 			t.Fatal("after recovery:", err)
 		}
 		receipt.TempAfter = append(receipt.TempAfter, osd)
@@ -636,20 +636,10 @@ type copySourceChangeReceipt struct {
 // the unchanged clone, so the copy succeeds with the clone's user version
 // and the destination becomes the clone.
 func judgeSourceChange(snapshot bool, reply cephmsgr.OSDReply, tid, cloneUser uint64) error {
-	if reply.Transaction != tid || reply.RetryAttempt != 0 || len(reply.Operations) != 1 {
-		return fmt.Errorf("the answer is tid %d attempt %d with %d ops; want tid %d, attempt 0, one op", reply.Transaction, reply.RetryAttempt, len(reply.Operations), tid)
+	if snapshot {
+		return judgeChunkAnswer(0, reply, tid, cloneUser)
 	}
-	if !snapshot {
-		if reply.Code != -34 || reply.Operations[0].Result != -115 {
-			return fmt.Errorf("the head copy answered %d (per-op %d); want -ERANGE with per-op -EINPROGRESS", reply.Code, reply.Operations[0].Result)
-		}
-		return nil
-	}
-	if reply.Code != 0 || reply.Operations[0].Result != 0 || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || reply.UserVersion != cloneUser {
-		return fmt.Errorf("the snapshot copy answered %d (per-op %d, flags %#x, user %d); want a committed 0 with the clone's user version %d",
-			reply.Code, reply.Operations[0].Result, reply.Flags, reply.UserVersion, cloneUser)
-	}
-	return nil
+	return judgeChunkAnswer(-34, reply, tid, 0)
 }
 
 // For COPY_FROM and COPY_FROM2, a 64 KiB source is copied onto a natively

@@ -492,20 +492,7 @@ func TestCephOSDSnapshotLifecycleReadIntegration(t *testing.T) {
 
 	// Pending: nosnaptrim keeps s1 in the PG's snap_trimq; paused MGRs keep
 	// it queued after the trim.
-	flagged := false
-	t.Cleanup(func() {
-		if flagged {
-			restore, stop := context.WithTimeout(context.Background(), 30*time.Second)
-			defer stop()
-			if err := copyMonCommand(restore, c, `{"prefix":"osd unset","key":"nosnaptrim"}`); err != nil {
-				t.Error("osd unset nosnaptrim", err)
-			}
-		}
-	})
-	flagged = true
-	if err := copyMonCommand(ctx, c, `{"prefix":"osd set","key":"nosnaptrim"}`); err != nil {
-		t.Fatal("osd set nosnaptrim", err)
-	}
+	snapTrim := holdSnapTrim(t, ctx, c)
 	var dump struct {
 		ActiveName string `json:"active_name"`
 		Standbys   []struct {
@@ -582,11 +569,7 @@ func TestCephOSDSnapshotLifecycleReadIntegration(t *testing.T) {
 		return
 	}
 
-	flagged = false
-	if err := copyMonCommand(ctx, c, `{"prefix":"osd unset","key":"nosnaptrim"}`); err != nil {
-		flagged = true
-		t.Fatal("osd unset nosnaptrim", err)
-	}
+	snapTrim.release(t, ctx)
 	wait(t, "trimmed", []string{"pending"}, "purged", 120*time.Second)
 	phase("trimmed", "purged", true)
 	if t.Failed() {

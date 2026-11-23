@@ -226,10 +226,14 @@ type OSDOperation struct {
 // because a native client would resend it; this client leaves that to the
 // caller. A copy may lead only SetXattr/RemoveXattr operations, which the OSD
 // applies in the same transaction. The destination receives the source's
-// user version, and the OSD does not copy a source's empty OMAP key. The
-// target SnapContext loses the removed snapshots its PG still trims or lists
-// as purged but keeps its sequence, so a context naming only such snapshots
-// makes no clone. A snapshot whose removal record the MON has pruned is no
+// user version, and the OSD does not copy a source's empty OMAP key. A source
+// the OSD reads in several chunks fails the copy with ERANGE when its head is
+// written between chunks and with ENOENT when its head or the copied snapshot
+// is removed; a copy at a snapshot keeps reading the clone. An erasure-coded
+// target fails a source with OMAP entries or an OMAP header with EOPNOTSUPP.
+// The target SnapContext loses the removed snapshots its PG still trims or
+// lists as purged but keeps its sequence, so a context naming only such
+// snapshots makes no clone. A snapshot whose removal record the MON has pruned is no
 // longer dropped: a context naming it can make a clone that lists the removed
 // snapshot. That clone is readable at its id right after the copy; whether a
 // later purged-snapshot scrub requeues and trims it is not verified.
