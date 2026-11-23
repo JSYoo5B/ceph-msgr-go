@@ -625,8 +625,9 @@ type rbdGroupNotification struct {
 	Op               uint32
 	Request          *rbdAsyncRequestID `json:",omitempty"`
 	// Held marks a quiesce or unquiesce request whose answer waited for the
-	// test's reads; HeldMS is that wait. An omitted answer
-	// (AckDisposition omitted) was never sent.
+	// test's reads; HeldMS is that wait, measured from the request's
+	// arrival at the Go watch. An omitted answer (AckDisposition omitted)
+	// was never sent.
 	Held           bool
 	HeldMS         float64
 	AckDisposition string
@@ -635,7 +636,12 @@ type rbdGroupNotification struct {
 	Unexpected     bool
 }
 
-// rbdGroupHoldEvidence is what the Go test read while it held one answer.
+// rbdGroupHoldEvidence is what the Go test read after one quiesce or
+// unquiesce request arrived and before it answered it or gave up answering
+// it, while the native creation was running. HeldMS is receiver-side
+// timing from that arrival; the OSD-side wait is not observed, so the reads
+// are not attributed to the interval in which the OSD still waited for
+// this request's answer.
 type rbdGroupHoldEvidence struct {
 	Action, Phase    string
 	NotifyID         uint64
@@ -2056,14 +2062,17 @@ func TestCephRBDGroupSnapshotIntegration(t *testing.T) {
 					t.Fatal("member snapshot limits differ during the creation", action, s.phase, v.limits)
 				}
 				s.check(t, v, h, stepState, p)
-				// The reads belong to this notification only while the
-				// OSD still waits for its answer: the notify times out
-				// no earlier than rbdNotifyTimeout after the OSD sent it,
-				// which precedes its arrival at the Go watch. After that
-				// librbd may already have sent the next attempt or the
-				// unquiesce, which leaves the same group record, snap
-				// contexts, locks and limits, so an omitted answer is
-				// bounded as an acknowledged one is.
+				// Every hold, answered or omitted, is judged within
+				// rbdNotifyTimeout of the request's arrival at the Go
+				// watch, while the native creation is running. This is a
+				// receiver-side bound. The OSD starts the notify timeout
+				// when it sends the notification, and the delay before
+				// arrival is not observed, so the bound does not place the
+				// reads before the OSD timed this request out; the next
+				// attempt or the unquiesce leaves the same group record,
+				// snap contexts, locks and limits. The reads are recorded
+				// as the state during the creation, after this request
+				// arrived, in the observed notification sequence.
 				if !before || !running() || time.Since(h.Received) >= rbdNotifyTimeout {
 					t.Fatalf("%s: the %s hold is unproven (control running %v, held %v)", action, s.phase, before, time.Since(h.Received))
 				}
