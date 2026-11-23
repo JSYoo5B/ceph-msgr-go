@@ -670,7 +670,7 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 		return err
 	}
 	token := hex.EncodeToString(raw[:])
-	x := &rbdBaseScope{out: out, token: token, plan: rbdBasePlanFor(token), writePlan: rbdWritePlanFor(token), lockPlan: rbdLockPlanFor(token), clonePlan: rbdClonePlanFor(token), journalPlan: rbdJournalPlanFor(token), poolID: -1}
+	x := &rbdBaseScope{out: out, token: token, plan: rbdBasePlanFor(token), writePlan: rbdWritePlanFor(token), lockPlan: rbdLockPlanFor(token), clonePlan: rbdClonePlanFor(token), journalPlan: rbdJournalPlanFor(token, p.admits(capRBDJournalTrim)), poolID: -1}
 	if !x.plan.owned(token) || !x.writePlan.owned(token) || !x.lockPlan.owned(token) || !x.clonePlan.owned(token) || !x.journalPlan.owned(token) {
 		return errors.New("RBD base plan is not bound to its token")
 	}

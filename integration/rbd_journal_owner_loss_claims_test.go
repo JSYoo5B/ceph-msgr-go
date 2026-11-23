@@ -163,6 +163,10 @@ func TestRBDJournalOwnerLossClaims(t *testing.T) {
 	type change = func(*rbdJournalLostAppendRecord)
 	tk := func(r *rbdJournalLostAppendRecord) *rbdJournalLostAppendView { return r.Views["takeover"] }
 	for name, mutate := range map[string]change{
+		"setup entry duplicated at the takeover": func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["takeover"]
+			v.InspectOther = append([]rbdJournalInspectEntry{v.InspectOther[0]}, v.InspectOther[:len(v.InspectOther)-1]...)
+		},
 		"takeover missing":               func(r *rbdJournalLostAppendRecord) { delete(r.Views, "takeover") },
 		"takeover output missing":        func(r *rbdJournalLostAppendRecord) { r.OwnerLoss.Takeover = nil },
 		"reconnected after the loss":     func(r *rbdJournalLostAppendRecord) { r.DialsTotal, r.Gate.Connections = n(2), 2 },
@@ -331,6 +335,10 @@ func TestRBDJournalForcedBreakClaims(t *testing.T) {
 	}
 	type change = func(*rbdJournalLostAppendRecord)
 	for name, mutate := range map[string]change{
+		"setup entry duplicated at the takeover": func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["takeover"]
+			v.InspectOther = append([]rbdJournalInspectEntry{v.InspectOther[0]}, v.InspectOther[:len(v.InspectOther)-1]...)
+		},
 		// Before the break.
 		"append unanswered": func(r *rbdJournalLostAppendRecord) {
 			r.Outcome.Class, r.Outcome.UnknownOutcome, r.Outcome.ReplyTransaction = "uncertain", true, 0

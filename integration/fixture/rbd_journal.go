@@ -167,9 +167,54 @@ var capRBDJournalForcedBreakPending = defineExclusiveCapability(fixtureRBD, "rbd
 var rbdJournalForcedBreakPendingActions = []string{"setup", "observe-locked", "observe-appended", "observe-pending", "force-break", "advance-map", "observe-fenced",
 	"observe-new-connection", "takeover"}
 
+// capRBDJournalForcedBreakInflight admits the forced-break sequence in which
+// the Go owner's journal append has been applied by the OSD and nothing of
+// its outcome has reached the Go caller when the lock is broken (the test's
+// reply gate holds the reply frame on CRC connections and intercepts the
+// received bytes on secure ones): its test runs alone
+// on a fresh RBD fixture, and the journal control replaces the ordinary
+// sequence with rbdJournalForcedBreakInflightActions.
+var capRBDJournalForcedBreakInflight = defineExclusiveCapability(fixtureRBD, "rbd-journal-forced-break-inflight",
+	"run one test alone on a fresh RBD fixture with the journal forced-break sequence with an append whose outcome is in flight (native lock break and blocklist)",
+	"RBD=1", nil)
+
+// rbdJournalForcedBreakInflightActions is the lost-append-reply sequence up
+// to its checkpoint (taken while the Go owner still holds the lock and the
+// outcome of its applied append has not reached it), then `force-break`
+// while that is still so, `observe-fenced` after the Go caller recorded its
+// unknown outcome, and the `takeover` of the forced-break sequence.
+var rbdJournalForcedBreakInflightActions = []string{"setup", "observe-locked", "checkpoint", "force-break", "observe-fenced", "takeover"}
+
+// capRBDJournalTrim admits the journal trimming sequence: its test runs alone
+// on a fresh RBD fixture whose journaling image is created with the trim
+// plan (rbdJournalTrimOrder, rbdJournalPlanFor), and the journal control
+// replaces the ordinary sequence with rbdJournalTrimActions.
+var capRBDJournalTrim = defineExclusiveCapability(fixtureRBD, "rbd-journal-trim",
+	"run one test alone on a fresh RBD fixture with the journal trimming sequence (small journal objects, native oracle client disconnect, lock break and blocklist, native trim)",
+	"RBD=1", nil)
+
+// rbdJournalTrimActions is the trimming sequence. After the setup the Go
+// test takes the image's exclusive lock and appends until the first object
+// set is full, advances the active set and appends to the next one, applies
+// and commits all but its last entry. `observe-committed` is the read-only
+// observation of that journal. `disconnect-oracle` flags the native oracle
+// client disconnected with `rbd journal client disconnect`, so that only the
+// image client's commit position can keep an object set
+// (journal/JournalTrimmer.cc handle_metadata_updated skips disconnected
+// clients). `force-break` breaks the live Go owner's lock as in the
+// forced-break sequence. `takeover` takes the free lock, replays the entry
+// Go did not commit, journals its own write and, with the trim plan, keeps
+// the image open until its own journal trimmer has raised the journal's
+// minimum set or a bound passes (trim_wait).
+var rbdJournalTrimActions = []string{"setup", "observe-locked", "observe-committed", "disconnect-oracle", "force-break", "takeover"}
+
 // rbdJournalActionsFor returns the action sequence the profile admits.
 func rbdJournalActionsFor(p profile) []string {
 	switch {
+	case p.admits(capRBDJournalForcedBreakInflight):
+		return rbdJournalForcedBreakInflightActions
+	case p.admits(capRBDJournalTrim):
+		return rbdJournalTrimActions
 	case p.admits(capRBDJournalLostAppend):
 		return rbdJournalLostAppendActions
 	case p.admits(capRBDJournalPrimaryChange):
@@ -415,7 +460,8 @@ func (c *fixtureCluster) rbdJournalMarkInOps() (in func(context.Context, int) er
 
 // rbdJournalInspected names the actions that run `rbd journal inspect`.
 func rbdJournalInspected(action string) bool {
-	return action == "setup" || action == "inspect" || action == "replay" || action == "concurrent" || action == "checkpoint" || action == "takeover"
+	return action == "setup" || action == "inspect" || action == "replay" || action == "concurrent" || action == "checkpoint" || action == "takeover" ||
+		action == "disconnect-oracle"
 }
 
 // rbdJournalPhases is the ordered phase list the concurrent action publishes
@@ -473,6 +519,9 @@ type rbdJournalEvent struct {
 // TakeoverEvents are the librbd writes of the takeover action of the
 // owner-loss and forced-break sequences.
 type rbdJournalPlan struct {
+	// JournalOrder is the journal data object order the setup creates the
+	// image's journal with; 0 leaves librbd's rbd_journal_order default.
+	JournalOrder int               `json:"journal_order"`
 	Pool         string            `json:"pool"`
 	BaseImage    string            `json:"base_image"`
 	Image        string            `json:"image"`
@@ -504,8 +553,11 @@ type rbdJournalPlan struct {
 // Go's first extent, so the image shows which owner wrote last. The
 // takeover write covers the first half of Go's first appended extent, so
 // the image shows that the replay of that entry came before it.
-func rbdJournalPlanFor(token string) rbdJournalPlan {
+func rbdJournalPlanFor(token string, trim bool) rbdJournalPlan {
 	const k = 1 << 10
+	if trim {
+		return rbdJournalTrimPlanFor(token)
+	}
 	return rbdJournalPlan{Pool: "ceph-msgr-rbd-" + token, BaseImage: "ceph-msgr-image-" + token, Image: "ceph-msgr-journal-" + token,
 		Order: 16, Size: 256 * k, Features: rbdJournalFeatures,
 		OracleClient: "ceph-msgr-oracle-" + token[:8], GoClient: "ceph-msgr-mirror-" + token[:8],
@@ -518,8 +570,37 @@ func rbdJournalPlanFor(token string) rbdJournalPlan {
 		TakeoverEvents:        []rbdJournalEvent{{"write", 40 * k, 2 * k}}}
 }
 
+// rbdJournalTrimOrder is the journal object order of the trim plan: 4 KiB
+// journal data objects, the smallest order librbd accepts
+// (librbd/journal/CreateRequest.cc, rbd_journal_order in
+// common/options/rbd.yaml.in at rbdBaseSource). An append to an object that
+// already holds at least that many bytes is refused with -EOVERFLOW
+// (cls/journal/cls_journal.cc journal_object_append), which is how an
+// appender learns that an object set is full.
+const rbdJournalTrimOrder = 12
+
+// rbdJournalTrimPlanFor is the plan of the trimming sequence. The setup
+// journals one small entry at each splay offset of object set 0 (three
+// writes of at most 2 KiB and one whole-object discard), so that no setup
+// entry fills an object. The eight Go writes of 3 KiB are entries 0 to 7 of
+// the Go tag: with a 4 KiB object soft limit entries 0 to 3 fit in set 0,
+// entry 4 finds journal object 0 full, and entries 4 to 7 go to object set
+// 1, one per splay offset. The takeover write covers the start of the last
+// Go extent, the entry that only the takeover's replay applies. The other
+// fields are those of the ordinary plan; the trimming sequence does not use
+// them.
+func rbdJournalTrimPlanFor(token string) rbdJournalPlan {
+	const k = 1 << 10
+	p := rbdJournalPlanFor(token, false)
+	p.JournalOrder = rbdJournalTrimOrder
+	p.SetupEvents = []rbdJournalEvent{{"write", 0, 2 * k}, {"write", 72 * k, 2 * k}, {"write", 136 * k, 1 * k}, {"discard", 192 * k, 64 * k}}
+	p.GoWrites = []rbdBaseExtent{{4 * k, 3 * k}, {12 * k, 3 * k}, {20 * k, 3 * k}, {28 * k, 3 * k}, {80 * k, 3 * k}, {88 * k, 3 * k}, {96 * k, 3 * k}, {104 * k, 3 * k}}
+	p.TakeoverEvents = []rbdJournalEvent{{"write", 104 * k, 1 * k}}
+	return p
+}
+
 func (p rbdJournalPlan) owned(token string) bool {
-	return len(token) == 32 && p.Pool == "ceph-msgr-rbd-"+token && p.BaseImage == "ceph-msgr-image-"+token && p.Image == "ceph-msgr-journal-"+token &&
+	return len(token) == 32 && (p.JournalOrder == 0 || p.JournalOrder == rbdJournalTrimOrder) && p.Pool == "ceph-msgr-rbd-"+token && p.BaseImage == "ceph-msgr-image-"+token && p.Image == "ceph-msgr-journal-"+token &&
 		p.Order == 16 && p.Size == 256<<10 && p.Features == rbdJournalFeatures && p.OracleClient == "ceph-msgr-oracle-"+token[:8] &&
 		p.GoClient == "ceph-msgr-mirror-"+token[:8] && len(p.SetupEvents) > 0 && len(p.WriteEvents) > 0 && len(p.GoWrites) > 0 &&
 		len(p.ConcurrentOwnerEvents) > 0 && len(p.GoConcurrentWrites) > 0 && len(p.ConcurrentEvents) > 0 &&
@@ -543,12 +624,12 @@ identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
 ACTIONS = ('setup', 'observe-registered', 'write', 'observe-committed', 'inspect', 'replay', 'concurrent',
            'observe-locked', 'checkpoint', 'observe-recorded', 'change-primary', 'observe-resubmitted',
-           'observe-appended', 'force-break', 'observe-fenced', 'takeover', 'observe-pending', 'observe-new-connection')
+           'observe-appended', 'force-break', 'observe-fenced', 'takeover', 'observe-pending', 'observe-new-connection', 'disconnect-oracle')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('image') != 'ceph-msgr-journal-' + token or plan.get('features') != 69
         or plan.get('oracle_client') != 'ceph-msgr-oracle-' + token[:8] or plan.get('go_client') != 'ceph-msgr-mirror-' + token[:8]
-        or action not in ACTIONS or not request_id.isdecimal()):
+        or plan.get('journal_order') not in (0, 12) or action not in ACTIONS or not request_id.isdecimal()):
     raise ValueError('native RBD journal driver scope is not owned')
 OUT = '/out'
 CONF = '/tmp/ceph-msgr-test/ceph.conf'
@@ -556,6 +637,9 @@ OBJECTS = 8
 OBJECT_LIMIT = 256 * 1024
 pool, name = plan['pool'], plan['image']
 PREFIX = 'rbd-journal-%s-' % action
+# The trim plan creates the journal with small objects; its takeover waits
+# for its own journal trimmer and keeps the trimmer's debug lines.
+TRIM = plan['journal_order'] != 0
 
 def lstr(value):
     data = value.encode() if isinstance(value, str) else value
@@ -691,7 +775,7 @@ def observe(ioctx, out):
     spec = pool + '/' + image_id
     out['info'] = cli(['journal', 'info', '--format', 'json', spec], json.loads)
     out['status'] = cli(['journal', 'status', '--format', 'json', spec], json.loads)
-    if action in ('setup', 'inspect', 'replay', 'concurrent', 'checkpoint', 'takeover'):
+    if action in ('setup', 'inspect', 'replay', 'concurrent', 'checkpoint', 'takeover', 'disconnect-oracle'):
         out['inspect'] = cli(['journal', 'inspect', '--verbose', spec], parse_inspect)
     if action in ('observe-appended', 'observe-pending', 'force-break', 'observe-fenced', 'observe-new-connection', 'takeover'):
         out['blocklist'] = blocklist()
@@ -753,6 +837,20 @@ def wait_proceed(step):
         if time.monotonic() > deadline:
             raise TimeoutError('proceed signal %d missing' % step)
         time.sleep(0.02)
+
+def trim_wait(ioctx, header):
+    # The takeover's journal trimmer removes an object set and then raises
+    # the journal header's minimum set (journal/JournalTrimmer.cc
+    # handle_set_removed); the image stays open until the minimum set has
+    # moved or the bound passes.
+    started, deadline, polls = time.monotonic_ns(), time.monotonic() + 60, 0
+    while True:
+        polls += 1
+        length, output = ioctx.execute(header, 'journal', 'get_minimum_set', b'', 64)
+        minimum = struct.unpack('<Q', bytes(output)[:8])[0]
+        if minimum != 0 or time.monotonic() > deadline:
+            return {'polls': polls, 'waited_ns': time.monotonic_ns() - started, 'minimum_set': minimum, 'moved': minimum != 0}
+        time.sleep(0.2)
 
 def concurrent(ioctx, out):
     # One read-write image instance for the whole session. Its first
@@ -823,9 +921,20 @@ LOCK_LOG = '/tmp/ceph-msgr-rbd-journal-%s-%s.log' % (token, request_id)
 LOCK_COMPONENTS = ('librbd::ManagedLock', 'librbd::ExclusiveLock', 'librbd::ImageWatcher', 'librbd::managed_lock::AcquireRequest', 'librbd::managed_lock::BreakRequest')
 LOCK_LINES, LOCK_TEXT, LOCK_BYTES = 320, 240, 64 << 20
 LOG_LINE = re.compile(r'^\S+ +[0-9a-f]+ +(-?[0-9]+) (librbd::[A-Za-z_:]+): (.*)$')
+# journal/JournalTrimmer.cc logs every step at level 20 under the prefix
+# "JournalTrimmer: <this> " (subsystem journaler).
+TRIM_LINE = re.compile(r'^\S+ +[0-9a-f]+ +(-?[0-9]+) JournalTrimmer: 0x[0-9a-f]+ (.*)$')
+TRIM_LINES = 64
+trim_lines, trim_matched = [], [0]
 conf = {'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'}
 if action in ('force-break', 'takeover'):
     conf.update(debug_rbd='10/10', log_to_file='true', log_file=LOCK_LOG)
+if TRIM and action == 'takeover':
+    conf.update(debug_journaler='20/20')
+if TRIM and action == 'setup':
+    # librbd/image/CreateRequest.cc reads rbd_journal_order when the
+    # journaling feature is enabled at creation.
+    conf.update(rbd_journal_order=str(plan['journal_order']))
 
 def lock_log():
     # Pointers become per-run ordinals (@0, @1, ...), so that one request
@@ -842,7 +951,14 @@ def lock_log():
     data = data[:LOCK_BYTES]
     lines, matched, pointers = [], 0, {}
     for raw in data.split(b'\n'):
-        found = LOG_LINE.match(raw.decode('utf-8', 'replace'))
+        line = raw.decode('utf-8', 'replace')
+        trimmed = TRIM_LINE.match(line)
+        if trimmed is not None:
+            trim_matched[0] += 1
+            if len(trim_lines) < TRIM_LINES:
+                trim_lines.append({'level': int(trimmed.group(1)), 'text': trimmed.group(2)[:LOCK_TEXT]})
+            continue
+        found = LOG_LINE.match(line)
         if found is None or found.group(2) not in LOCK_COMPONENTS:
             continue
         if found.group(2) == 'librbd::ImageWatcher' and 'lock' not in found.group(3):
@@ -923,11 +1039,20 @@ try:
                 out['events'] = [apply(image, 'takeover', e) for e in plan['takeover_events']]
                 out['write_ns'] = time.monotonic_ns() - started
                 out['owner'] = image.is_exclusive_lock_owner()
+                if TRIM:
+                    out['trim_wait'] = trim_wait(ioctx, 'journal.' + text(image.id()))
             finally:
                 started = time.monotonic_ns()
                 image.close()
                 out['close_ns'] = time.monotonic_ns() - started
             out['blocklist_before'] = before
+        elif action == 'disconnect-oracle':
+            # tools/rbd/action/Journal.cc do_disconnect_journal_client: the
+            # client's state becomes DISCONNECTED, then a header notify.
+            with rbd.Image(ioctx, name, read_only=True) as image:
+                image_id = text(image.id())
+            out['disconnect'] = cli(['journal', 'client', 'disconnect', '--client-id', plan['oracle_client'], pool + '/' + image_id],
+                                    lambda stdout: stdout.rstrip('\n').split('\n'))
         elif action == 'replay':
             # Acquiring the exclusive lock opens the journal, which replays
             # every entry after the image client's commit position.
@@ -948,6 +1073,8 @@ finally:
     cluster.shutdown()
 if action in ('force-break', 'takeover'):
     out['lock_log'] = lock_log()
+if TRIM and action == 'takeover':
+    out['trim_log'] = {'matched': trim_matched[0], 'truncated': trim_matched[0] > len(trim_lines), 'lines': trim_lines}
 out['finished_ns'] = time.time_ns()
 print(json.dumps(out, sort_keys=True))
 `
@@ -1056,6 +1183,53 @@ type rbdJournalNative struct {
 	// LockLog is the lock state machines' part of librbd's debug log of the
 	// force-break and takeover actions.
 	LockLog *rbdJournalLockLog `json:"lock_log,omitempty"`
+	// Disconnect is the disconnect-oracle action's `rbd journal client
+	// disconnect`.
+	Disconnect *rbdJournalCLI `json:"disconnect,omitempty"`
+	// TrimWait and TrimLog belong to the takeover of the trim plan: how long
+	// the open image waited for its journal trimmer to raise the minimum
+	// set, and that trimmer's debug lines.
+	TrimWait *rbdJournalTrimWait `json:"trim_wait,omitempty"`
+	TrimLog  *rbdJournalTrimLog  `json:"trim_log,omitempty"`
+}
+
+// rbdJournalTrimWait is the takeover's wait for the journal's minimum set to
+// move, polled with `get_minimum_set` on the journal header.
+type rbdJournalTrimWait struct {
+	Polls      int    `json:"polls"`
+	WaitedNS   int64  `json:"waited_ns"`
+	MinimumSet uint64 `json:"minimum_set"`
+	Moved      bool   `json:"moved"`
+}
+
+// rbdJournalTrimLines bounds the trimmer lines the driver keeps (TRIM_LINES).
+const rbdJournalTrimLines = 64
+
+// rbdJournalTrimLog is the journal/JournalTrimmer.cc part of the takeover's
+// debug log, pointers removed; Matched counts every such line read.
+type rbdJournalTrimLog struct {
+	Matched   int  `json:"matched"`
+	Truncated bool `json:"truncated"`
+	Lines     []struct {
+		Level int    `json:"level"`
+		Text  string `json:"text"`
+	} `json:"lines"`
+}
+
+func (w *rbdJournalTrimWait) valid() bool {
+	return w != nil && w.Polls > 0 && w.WaitedNS >= 0 && w.Moved == (w.MinimumSet != 0)
+}
+
+func (l *rbdJournalTrimLog) valid() bool {
+	if l == nil || l.Lines == nil || len(l.Lines) > rbdJournalTrimLines || l.Matched < len(l.Lines) || l.Truncated != (l.Matched > len(l.Lines)) {
+		return false
+	}
+	for _, line := range l.Lines {
+		if len(line.Text) > rbdJournalLockLogText || line.Level < -1 || line.Level > 30 {
+			return false
+		}
+	}
+	return true
 }
 
 // rbdJournalLockLogLines, rbdJournalLockLogText and rbdJournalLockLogBytes
@@ -1245,6 +1419,10 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 	ok = ok && (action == "takeover") == (result.BlocklistBefore != nil) && (action != "takeover" || rbdLockBlocklistValid(result.BlocklistBefore))
 	ok = ok && (action == "takeover") == (result.Boundary != nil) && (action != "takeover" || result.Boundary.valid())
 	ok = ok && rbdJournalLockLogged(action) == (result.LockLog != nil) && (!rbdJournalLockLogged(action) || result.LockLog.valid())
+	ok = ok && (action == "disconnect-oracle") == (result.Disconnect != nil) &&
+		(action != "disconnect-oracle" || rbdJournalCLIValid(result.Disconnect, "client", "disconnect", "--client-id", plan.OracleClient, spec))
+	trimmed := action == "takeover" && plan.JournalOrder != 0
+	ok = ok && trimmed == (result.TrimWait != nil) && trimmed == (result.TrimLog != nil) && (!trimmed || result.TrimWait.valid() && result.TrimLog.valid())
 	if result.OracleRegister != nil {
 		ok = ok && rbdLockCallValid(result.OracleRegister, result.JournalHeader, "journal", "client_register") && result.OracleRegister.Code == 0
 	}
@@ -1361,6 +1539,8 @@ func rbdJournalTarget(plan rbdJournalPlan, action string) string {
 		return plan.Image + ":exclusive-lock-break,osd-blocklist,journal-replay,native-write"
 	case "advance-map":
 		return plan.Pool + ":pool-flag-" + rbdLockAdvanceFlag + ",osdmap-epoch"
+	case "disconnect-oracle":
+		return plan.Image + ",journal-client:" + plan.OracleClient + ":disconnected"
 	}
 	return plan.Image
 }
@@ -1441,7 +1621,8 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	// The Go lock owner of the owner-loss and forced-break sequences is
 	// blocklisted by whoever breaks its lock; the cleanup removes that
 	// entry.
-	if action == "observe-locked" && (c.profile.admits(capRBDJournalOwnerLoss) || c.profile.admits(capRBDJournalForcedBreak) || c.profile.admits(capRBDJournalForcedBreakPending)) &&
+	if action == "observe-locked" && (c.profile.admits(capRBDJournalOwnerLoss) || c.profile.admits(capRBDJournalForcedBreak) || c.profile.admits(capRBDJournalForcedBreakPending) ||
+		c.profile.admits(capRBDJournalForcedBreakInflight) || c.profile.admits(capRBDJournalTrim)) &&
 		native.Lockers != nil {
 		for _, l := range native.Lockers.Lockers {
 			x.lockOwnerAddresses = append(x.lockOwnerAddresses, l.Address)
@@ -1458,7 +1639,10 @@ var _ = collectDiagnosticFiles(
 	"rbd-journal-advance-map.json",
 	"rbd-journal-change-primary.json",
 	"rbd-journal-checkpoint.json",
+	"rbd-journal-disconnect-oracle.json",
 	"rbd-journal-force-break.json",
+	"rbd-journal-forced-break-inflight-outcome.json",
+	"rbd-journal-forced-break-inflight-results.json",
 	"rbd-journal-forced-break-pending-results.json",
 	"rbd-journal-forced-break-results.json",
 	"rbd-journal-inspect.json",
@@ -1481,5 +1665,6 @@ var _ = collectDiagnosticFiles(
 	"rbd-journal-results.json",
 	"rbd-journal-setup.json",
 	"rbd-journal-takeover.json",
+	"rbd-journal-trim-results.json",
 	"rbd-journal-write.json",
 )

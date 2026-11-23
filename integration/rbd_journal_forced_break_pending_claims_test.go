@@ -144,6 +144,10 @@ func TestRBDJournalForcedPendingClaims(t *testing.T) {
 	fp := func(r *rbdJournalLostAppendRecord) *rbdJournalForcedPending { return r.ForcedPending }
 	view := func(r *rbdJournalLostAppendRecord, name string) *rbdJournalLostAppendView { return r.Views[name] }
 	for name, mutate := range map[string]change{
+		"setup entry duplicated at the takeover": func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["takeover"]
+			v.InspectOther = append([]rbdJournalInspectEntry{v.InspectOther[0]}, v.InspectOther[:len(v.InspectOther)-1]...)
+		},
 		// The held appends before the break.
 		"held append applied before the break": func(r *rbdJournalLostAppendRecord) { view(r, "observe-pending").ObjectSizes[1] += 4173 },
 		"blocklisted while held": func(r *rbdJournalLostAppendRecord) {
