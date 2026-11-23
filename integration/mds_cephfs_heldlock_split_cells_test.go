@@ -114,14 +114,20 @@ func TestCephMDSCephFSHeldFlockSplitDenseIntegration(t *testing.T) {
 
 // TestCephMDSCephFSHeldFlockSplitCutIntegration is the one-lock split cell
 // with the reconnect's connection cut between fragments. The test's own dial
-// of the replacement passes the first reconnect fragment (the first frame of
-// at least 4 KiB) and closes the connection instead of writing the next
-// frame. The Messenger session resumes on a new connection (stateful
-// reconnect, unacknowledged messages sent again), and the MDS must handle
-// every fragment exactly once: its handler and per-capability log show the
-// "(more)"/final sequence with every inode once, the session opens, and the
-// lock is restored and released as in the one-lock cell. Not covered: a cut
-// before the first fragment completes and a cut that forces a new session.
+// of the replacement passes the first reconnect fragment once the daemon
+// connection accepted all of it and refuses the next write unsent, closing
+// the connection (mds_cephfs_split_cut_test.go). On the crc row both writes
+// are decoded: the passed one is the first MClientReconnect, marked "more",
+// the refused one the MClientReconnect of the next sequence, and their
+// inodes must equal the first two fragments of the replacement's
+// per-capability log. On the secure row frames are encrypted, so only the
+// write lengths bound the two fragments. The Messenger session resumes on a
+// new connection (stateful reconnect, unacknowledged messages sent again),
+// and the MDS must handle every fragment exactly once: its handler and
+// per-capability log show the "(more)"/final sequence with every inode once,
+// the session opens, and the lock is restored and released as in the
+// one-lock cell. Not covered: a cut before the first fragment completes and a
+// cut that forces a new session.
 //
 //scenario:row mds-cephfs-heldflock-split-cut.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsheldflocksplitcut key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=mds-held-flock-split
 //scenario:row mds-cephfs-heldflock-split-cut.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsheldflocksplitcut key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=mds-held-flock-split
