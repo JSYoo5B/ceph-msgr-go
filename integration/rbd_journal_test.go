@@ -123,6 +123,12 @@ type nativeRBDJournalPlan struct {
 	GoConcurrentWrites    []nativeRBDExtent       `json:"go_concurrent_writes"`
 	ConcurrentEvents      []nativeRBDJournalEvent `json:"concurrent_events"`
 	TakeoverEvents        []nativeRBDJournalEvent `json:"takeover_events"`
+
+	// The consumer plan only (rbd_journal_consumer_test.go): the producer's
+	// two batches and its laggy-client bound.
+	ProduceEvents           []nativeRBDJournalEvent `json:"produce_events"`
+	LaggyEvents             []nativeRBDJournalEvent `json:"laggy_events"`
+	MaxConcurrentObjectSets int                     `json:"max_concurrent_object_sets"`
 }
 
 type nativeRBDJournalApplied struct {
@@ -245,6 +251,17 @@ type nativeRBDJournal struct {
 			Text  string `json:"text"`
 		} `json:"lines"`
 	} `json:"trim_log"`
+	// The consumer sequence's producer only (rbd_journal_consumer_test.go):
+	// its laggy-client debug lines and its published phases.
+	LaggyLog *struct {
+		Matched   int  `json:"matched"`
+		Truncated bool `json:"truncated"`
+		Lines     []struct {
+			Level int    `json:"level"`
+			Text  string `json:"text"`
+		} `json:"lines"`
+	} `json:"laggy_log"`
+	ProducePhases []nativeRBDJournalProducePhase `json:"phases_produce"`
 }
 
 // nativeRBDJournalLockLog is the driver's filtered librbd debug log at level

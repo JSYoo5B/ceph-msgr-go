@@ -322,12 +322,22 @@ type rbdJournalLostAppendRecord struct {
 	Inflight *rbdJournalForcedInflight
 	// Trim is set in the trimming variant (rbd_journal_trim_test.go) only.
 	Trim *rbdJournalTrim
+	// Held is set in the held-request variants (rbd_journal_held_test.go)
+	// only.
+	Held *rbdJournalHeld
+	// Consumer is set in the consumer variant (rbd_journal_consumer_test.go)
+	// only.
+	Consumer *rbdJournalConsumer
 }
 
 // rbdJournalLostAppendPlan returns the stages and the step order of the
 // variant the record belongs to.
 func rbdJournalLostAppendPlan(r *rbdJournalLostAppendRecord) (stages, order []string) {
 	switch {
+	case r.Consumer != nil:
+		return rbdJournalConsumerStages, rbdJournalConsumerOrder
+	case r.Held != nil:
+		return rbdJournalHeldPlan(r.Held.Mode)
 	case r.Trim != nil:
 		return rbdJournalTrimStages, rbdJournalTrimOrder
 	case r.Inflight != nil:
@@ -360,6 +370,12 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 	fail := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	// Records hold optional fields as pointers; print them as their JSON.
 	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+	if r.Consumer != nil {
+		return rbdJournalConsumerClaims(r, stage)
+	}
+	if r.Held != nil {
+		return rbdJournalHeldClaims(r, stage)
+	}
 	if r.Trim != nil {
 		return rbdJournalTrimClaims(r, stage)
 	}
@@ -857,11 +873,13 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	primaryChange, ownerLoss, forced := variant == rbdJournalVariantPrimaryChange, variant == rbdJournalVariantOwnerLoss, variant == rbdJournalVariantForcedBreak
 	forcedPending := variant == rbdJournalVariantForcedBreakPending
 	inflight, trim := variant == rbdJournalVariantForcedBreakInflight, variant == rbdJournalVariantTrim
+	held := variant == rbdJournalVariantReplicaHold || variant == rbdJournalVariantHeldPrimaryChange || variant == rbdJournalVariantDeadPrimary
+	consumer := variant == rbdJournalVariantConsumer
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
 		t.Skip("requires the opt-in disposable RBD fixture (CEPH_MSGR_TEST_RBD=1) under its exact selector")
 	}
-	if primaryChange && (os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore") {
+	if (primaryChange || held) && (os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore") {
 		t.Skip("requires the RBD fixture on three replicated BlueStore OSDs")
 	}
 	var oracle nativeRBDOracle
@@ -905,6 +923,10 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		results, outcomeFile = "rbd-journal-forced-break-inflight-results.json", "rbd-journal-forced-break-inflight-outcome.json"
 	case rbdJournalVariantTrim:
 		results = "rbd-journal-trim-results.json"
+	case rbdJournalVariantConsumer:
+		results = "rbd-journal-consumer-results.json"
+	case rbdJournalVariantReplicaHold, rbdJournalVariantHeldPrimaryChange, rbdJournalVariantDeadPrimary:
+		results, outcomeFile = "rbd-journal-"+variant+"-results.json", "rbd-journal-"+variant+"-outcome.json"
 	}
 
 	// The observer is a second Go client with its own connections. It
@@ -964,6 +986,12 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	if trim {
 		record.Trim = &rbdJournalTrim{}
 	}
+	if held {
+		record.Held = &rbdJournalHeld{Mode: variant, Replica: -1}
+	}
+	if consumer {
+		record.Consumer = &rbdJournalConsumer{}
+	}
 	publish := func() error {
 		record.Timings["total"] = time.Since(started).String()
 		state := gate.State()
@@ -997,6 +1025,9 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	var plan nativeRBDJournalPlan
 	var entry *rbdJournalLostAppendEntry
 	var cookie uint64
+	// nativeRead judges the receipt of one completed native action; native
+	// requests the action first.
+	var nativeRead func(t *testing.T, action string) *nativeRBDJournal
 	native := func(t *testing.T, action string) *nativeRBDJournal {
 		t.Helper()
 		receipt := filepath.Join(dir, "rbd-journal-"+action+".json")
@@ -1008,6 +1039,11 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 			t.Fatal("native RBD journal", action, err)
 		}
 		record.Timings["native_"+action] = time.Since(begun).String()
+		return nativeRead(t, action)
+	}
+	nativeRead = func(t *testing.T, action string) *nativeRBDJournal {
+		t.Helper()
+		receipt := filepath.Join(dir, "rbd-journal-"+action+".json")
 		var result nativeRBDJournalResult
 		if err := readMDSFreshJSON(receipt, &result); err != nil {
 			t.Fatal(err)
@@ -1104,11 +1140,12 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	order, splay, _, minimumSet, activeSet := md.u8(), md.u8(), md.u64(), md.u64(), md.u64()
 	// The trim plan creates the journal with rbdJournalTrimJournalOrder, every other
 	// plan with librbd's default.
-	wantOrder := rbdJournalOrder
-	if trim {
+	wantOrder, small := rbdJournalOrder, trim || consumer
+	if small {
 		wantOrder = rbdJournalTrimJournalOrder
 	}
-	if err := md.done(); err != nil || order != uint8(wantOrder) || plan.JournalOrder != map[bool]int{true: rbdJournalTrimJournalOrder}[trim] || splay != rbdJournalSplay || minimumSet != 0 || activeSet != 0 {
+	if err := md.done(); err != nil || order != uint8(wantOrder) || plan.JournalOrder != map[bool]int{true: rbdJournalTrimJournalOrder}[small] || splay != rbdJournalSplay || minimumSet != 0 || activeSet != 0 ||
+		consumer != (len(plan.ProduceEvents) != 0) {
 		t.Fatal("journal metadata differs", order, splay, minimumSet, activeSet, plan.JournalOrder, err)
 	}
 	imageOutput, err := hex.DecodeString(setup.ClassCalls[6].OutputHex)
@@ -1225,6 +1262,11 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		}
 		return reply
 	}
+	if consumer {
+		runRBDJournalConsumer(t, rbdJournalConsumerSteps{ctx: ctx, record: &record, plan: plan, token: token, dir: dir, gid: gid, setup: setup, journalHeader: journalHeader,
+			prefix: prefix, before: expected, route: route, request: request, keep: keep, now: now, connect: connect, native: native, nativeRead: nativeRead, judge: judge, done: done})
+		return
+	}
 	headerRoute := route(t, header)
 	first := connect(t, headerRoute)
 
@@ -1333,6 +1375,21 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	}
 	if s := gate.State(); s.LargeWrites != 0 || s.Bound || s.Connections != len(conns) {
 		t.Fatal("the subject already wrote a frame of the append's size, so the gate cannot single out the append", s)
+	}
+	if held {
+		writeOutcome := func() error {
+			outcome, err := json.Marshal(map[string]any{"token": token, "image_id": imageID, "subject_global_id": gid, "entry": record.Entry, "outcome": record.Outcome})
+			if err != nil {
+				return err
+			}
+			return testcluster.WritePublicEvidence(filepath.Join(dir, outcomeFile), outcome)
+		}
+		runRBDJournalHeld(t, rbdJournalHeldSteps{rbdJournalForcedBreakSteps: rbdJournalForcedBreakSteps{ctx: ctx, record: &record, entry: entry, header: header, plan: plan,
+			token: token, gid: gid, w: w, conn: first, appendInput: append(rbdLE64(1<<order), rbdJournalBL(entryBytes)...), splay: uint64(splay), locked: lockedNative,
+			route: route, request: request, keep: keep, now: now, send: send, native: native, judge: judge, done: done, released: func() { unlocked = true }},
+			mode: variant, dir: dir, observer: observer, dials: &osdDials, dialOf: func(o *cephmsgr.OSDConnection) int { return dialOf[o] }, closeAll: closeAll, connect: connect,
+			outcome: writeOutcome, unlocked: func() { unlocked = true }})
+		return
 	}
 	if trim {
 		runRBDJournalTrim(t, rbdJournalTrimSteps{rbdJournalForcedBreakSteps: rbdJournalForcedBreakSteps{ctx: ctx, record: &record, entry: entry, header: header, plan: plan, token: token,
