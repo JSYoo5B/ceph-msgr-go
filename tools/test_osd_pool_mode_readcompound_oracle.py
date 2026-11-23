@@ -185,6 +185,8 @@ class Output(unittest.TestCase):
         raw = (2).to_bytes(4, "little") + (7).to_bytes(4, "little") + (9).to_bytes(4, "little")
         slot = {"action": {"op": "checksum"}, "prval": C.c_int(0), "buffer": C.create_string_buffer(raw, len(raw)), "width": 4, "chunks": 2}
         self.assertEqual(self.output(slot)["values"], [7, 9])
+        slot["prval"] = C.c_int(1)
+        self.assertEqual(self.output(slot)["values"], [7, 9])
         slot["prval"] = C.c_int(-22)
         self.assertEqual(self.output(slot)["values"], [])
         too_many = (3).to_bytes(4, "little") + bytes(8)

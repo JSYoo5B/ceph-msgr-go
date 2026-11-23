@@ -18,9 +18,12 @@ result where the API exposes one (assert and cmpxattr have none) and the
 outputs it filled. These are convenience API outputs, not raw wire rvals: a
 callback decodes an operation's output, so an operation after the first
 failure, which the OSD leaves with rval 0 and no output, can report a decode
-error, and its buffers are reported as they were left. A native C vector
-carries no GETXATTR, SPARSE_READ, MAPEXT or OMAP header read; the C API has
-no such read-op builder. Nothing is retried, and execute changes nothing.
+error, and its buffers are reported as they were left. A successful
+operation's callback result may be positive: the OSD's running result
+carries a true CMPXATTR's 1 into the operations after it that do not set
+their own, and outputs are read for every non-negative result. A native C
+vector carries no GETXATTR, SPARSE_READ, MAPEXT or OMAP header read; the C
+API has no such read-op builder. Nothing is retried, and execute changes nothing.
 """
 import ctypes as C
 import struct
@@ -216,10 +219,10 @@ class Native(omapwrite.Native):
             row.update(size=slot["size"].value, seconds=slot["stamp"].tv_sec, nanos=slot["stamp"].tv_nsec,
                        unchanged=slot["size"].value == UNSET and slot["stamp"].tv_sec == -7 and slot["stamp"].tv_nsec == -11)
         elif op == "getxattrs":
-            row["attributes"] = self.entries(slot["iterator"]) if prval == 0 and slot["iterator"].value else None
+            row["attributes"] = self.entries(slot["iterator"]) if prval >= 0 and slot["iterator"].value else None
         elif op in ("keys", "vals", "bykeys"):
             entries = None
-            if prval == 0 and slot["iterator"].value:
+            if prval >= 0 and slot["iterator"].value:
                 entries = self.omap_entries(slot["iterator"], op == "keys")
                 if len(entries) > MAX_ENTRIES:
                     raise ValueError("native OMAP read exceeds bound")
@@ -234,7 +237,7 @@ class Native(omapwrite.Native):
             raw = slot["buffer"].raw
             row["unchanged"] = raw == bytes([0xcc]) * len(raw)
             values = []
-            if not row["unchanged"] and prval == 0:
+            if not row["unchanged"] and prval >= 0:
                 n = struct.unpack_from("<I", raw)[0]
                 if n > slot["chunks"]:
                     raise ValueError("native checksum count exceeds bound")
