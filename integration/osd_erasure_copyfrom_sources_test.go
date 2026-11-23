@@ -187,6 +187,7 @@ type copyHeldCommit struct {
 	BlockerShard     int      `json:"blocker_read_shard"`
 	Frozen           int32    `json:"frozen_osd"`
 	IntervalEpoch    uint32   `json:"cache_discarded_by_epoch"`
+	IntervalSince    uint32   `json:"destination_interval_since"`
 	BlockerReqid     string   `json:"blocker_reqid"`
 	BlockerPoint     string   `json:"blocker_flag_point"`
 	CopyPoint        string   `json:"copy_flag_point"`
@@ -532,7 +533,11 @@ func checkCommitHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot,
 // bracketed snapshots then show the source read complete (no op of the
 // source in the primary's Objecter), the copy's client op unanswered, and
 // the temporary object still listed in the primary's own shard collection:
-// the final transaction was not applied there. The primary is SIGKILLed,
+// the final transaction was not applied there. Those reads are bracketed by
+// placement only, so a copyinterval observation after the second round
+// must show the PG still in the interval the copy was sent in (a same-member
+// interval change would have canceled the copy, emptying the Objecter while
+// the staged object stays listed). The primary is SIGKILLed,
 // the frozen OSD resumed, and the primary marked down.
 //
 // The copy's wait ends as an unknown outcome with the barrier's
@@ -619,21 +624,27 @@ func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPoo
 		reply, err := o.Request(call, request)
 		blocked <- copyChunkOutcome{reply, err}
 	}()
+	seen, raw := -1, ""
 	for {
+		if copyBudgetSpent(work) {
+			t.Fatalf("the blocker write was not in flight within the freeze budget: the last snapshot held %d of its ops\nop tracker: %s", seen, raw)
+		}
 		ops := copyOpsInFlight(t, work, 2, blocker, nil, r.gid, copyHeldBlockerIncarnation)
 		if ops.Complete && !ops.AbsenceEstablished && len(ops.Ops) == 1 && !slices.Contains(ops.Ops[0].Events, "commit_sent") && work.Err() == nil {
 			held.BlockerReqid, held.BlockerPoint = ops.Ops[0].Reqid, ops.Ops[0].FlagPoint
 			break
 		}
-		if work.Err() != nil {
-			t.Fatalf("the blocker write was not in flight before the freeze budget expired: %d ops (%v)\nop tracker: %s", len(ops.Ops), work.Err(), boundedRaw(ops.Raw))
-		}
+		seen, raw = len(ops.Ops), boundedRaw(ops.Raw)
 		time.Sleep(100 * time.Millisecond)
 	}
 	r.recovery.clearPauseReads(t, work)
 	var first time.Time
+	verdict, raws := errors.New("no observation"), ""
 	for held.Observations < 2 {
 		h.pending(t, "while its final transaction was held")
+		if copyBudgetSpent(work) {
+			t.Fatalf("the final copy transaction was not held within the freeze budget: %v%s", verdict, raws)
+		}
 		select {
 		case got := <-blocked:
 			t.Fatalf("the blocker write was answered while osd.%d was frozen: code %d err %v", frozen, got.reply.Code, got.err)
@@ -652,14 +663,16 @@ func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPoo
 			}
 			continue
 		}
-		if work.Err() != nil {
-			t.Fatalf("the final copy transaction was not held before the freeze budget expired: %v (%v)\nop tracker: %s\nobjecter: %s", err, work.Err(), boundedRaw(ops.Raw), boundedRaw(objecter.Raw))
-		}
 		if held.Observations != 0 {
 			t.Fatalf("the hold ended before the loss: %v", err)
 		}
+		verdict, raws = err, fmt.Sprintf("\nop tracker: %s\nobjecter: %s", boundedRaw(ops.Raw), boundedRaw(objecter.Raw))
 		time.Sleep(100 * time.Millisecond)
 	}
+	// Each round's reads are bracketed by placement only. The interval the
+	// copy was sent in must have held through both rounds: its start only
+	// grows, so one observation after the second round covers them.
+	held.IntervalSince = r.requireIntervalHeld(work, route, "the held final transaction")
 	held.HeldFor = time.Since(first).Round(10 * time.Millisecond).String()
 	t.Logf("source read complete and final transaction held on osd.%d for %s: copy %s at %q, blocker %s at %q, temporary %s still listed",
 		primary, held.HeldFor, h.op.Reqid, held.CopyPoint, held.BlockerReqid, held.BlockerPoint, h.temp)

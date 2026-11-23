@@ -64,6 +64,12 @@ import (
 //     source primary frozen again sends exactly that op, and the step
 //     repeats. Each freeze is a fixture-owned lease well inside the
 //     heartbeat grace and the read lease.
+//   - The barrier's reads are bracketed by placement only, which a
+//     same-member interval change keeps; such a change cancels the copy and
+//     requeues its client op (on_change, 13125-13216), and a pinned copy's
+//     restarted first copy-get prints like a later chunk's. So after each
+//     chunk's reads a copyinterval observation must show the destination PG
+//     still in the interval the copy was sent in (copyIntervalHeld).
 //   - src/osd/PrimaryLogPG.cc:6529-6542 (ASSERT_VER) fails a later chunk
 //     with -ERANGE once a write raised the source's user version.
 //     CopyFromCallback::finish (344-368) answers an error other than
@@ -140,6 +146,9 @@ type copyChunkStep struct {
 	NextCursor    int      `json:"next_cursor_omap_offset_bytes"`
 	Temporary     string   `json:"temporary_object"`
 	StagingSHA256 []string `json:"staging_sha256"`
+	// IntervalSince is the destination PG's interval start after the
+	// barrier's reads (copyIntervalHeld).
+	IntervalSince uint32 `json:"destination_interval_since"`
 }
 
 // copyChunkShape says whether ops is exactly a copy-get of the lowered chunk,
@@ -297,16 +306,19 @@ func (r *copyPrimaryChangeRun) placeForCopy() (osdFixtureOracle, osdFixtureOracl
 func (r *copyPrimaryChangeRun) waitChunkSent(work context.Context, h *copyChunkHold, paused bool, version uint64, omapOffset int, tid uint64) objecterRequestsOp {
 	t := r.t
 	t.Helper()
+	err, raw := errors.New("no observation"), ""
 	for {
 		h.pending(t, "while a copy-get was in flight")
+		if copyBudgetSpent(work) {
+			t.Fatalf("no copy-get in flight (paused %t) within the freeze budget: %v\nobjecter: %s", paused, err, raw)
+		}
 		objecter := copyObjecterRequests(t, work, 2, r.dest, nil, r.pools.ids[1], r.source)
-		read, err := checkChunkSent(objecter, h.route, h.source.ID, paused, h.max, version, omapOffset, tid, h.served)
+		var read objecterRequestsOp
+		read, err = checkChunkSent(objecter, h.route, h.source.ID, paused, h.max, version, omapOffset, tid, h.served)
 		if err == nil && work.Err() == nil {
 			return read
 		}
-		if work.Err() != nil {
-			t.Fatalf("no copy-get in flight (paused %t) before the freeze budget expired: %v (%v)\nobjecter: %s", paused, err, work.Err(), boundedRaw(objecter.Raw))
-		}
+		raw = boundedRaw(objecter.Raw)
 		time.Sleep(100 * time.Millisecond)
 	}
 }
@@ -319,7 +331,7 @@ func (r *copyPrimaryChangeRun) waitChunkSent(work context.Context, h *copyChunkH
 // k carries a cursor whose OMAP position is exactly cursors[k-1] bytes
 // (copyCursorInput). After each chunk the next copy-get must be held paused
 // and never sent, with one temporary object of the same name listed on every
-// OSD of the destination PG.
+// OSD of the destination PG, all in the interval the copy was sent in.
 func (r *copyPrimaryChangeRun) holdAtChunk(request cephmsgr.OSDRequest, route, source osdFixtureOracle, held int, first, later uint64, cursors []int, steps *[]copyChunkStep) *copyChunkHold {
 	t, ctx := r.t, r.ctx
 	t.Helper()
@@ -408,6 +420,9 @@ func (r *copyPrimaryChangeRun) holdAtChunk(request cephmsgr.OSDRequest, route, s
 			}
 		}
 		step.Temporary = h.temp
+		// The reads above are bracketed by placement only; the interval the
+		// copy was sent in must have held through them.
+		step.IntervalSince = r.requireIntervalHeld(ctx, route, fmt.Sprintf("barrier after chunk %d", chunk))
 		*steps = append(*steps, step)
 		t.Logf("barrier after chunk %d on osd.%d: op %s flag point %q; objecter tid %d paused %t attempts %d ops %q; temporary %s on osd %v",
 			chunk, route.ID, h.op.Reqid, h.op.FlagPoint, h.read.TID, h.read.Paused, h.read.Attempts, h.read.OSDOps, h.temp, route.Acting)
