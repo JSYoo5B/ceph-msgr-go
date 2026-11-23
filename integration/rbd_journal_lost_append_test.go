@@ -504,6 +504,37 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 				text(g), text(r.DialsBeforeClose), text(r.DialsTotal), pc.AppendConnection, pc.ResubmitConnection)
 		}
 	}
+	rbdJournalGateClaims(r, g, o, bound, large, marked, fail)
+
+	if dead {
+		rbdJournalTakeoverClaims(r, replay, checkpoint, locked, setup, fail)
+		return problems
+	}
+
+	// Replay: native librbd applied the entry once and nothing was appended.
+	if !reflect.DeepEqual(replay.ObjectSHA256, checkpoint.ObjectSHA256) || !reflect.DeepEqual(replay.ObjectSizes, checkpoint.ObjectSizes) {
+		fail("replay: journal objects changed after the checkpoint")
+	}
+	entryAt("replay", replay)
+	inspected("replay", replay)
+	if replay.ImageHeadSHA256 != r.ExpectedHeadAfter || r.ExpectedHeadAfter == r.ExpectedHeadBefore || len(r.ExpectedCommitAfter) == 0 ||
+		r.ExpectedCommitAfter[0] != (rbdJournalPosition{e.Object, e.Tag, e.EntryTID}) || !reflect.DeepEqual(replay.ImageCommit, r.ExpectedCommitAfter) {
+		fail("replay: image or image client commit position differs from one native replay of the owned entry (head=%s commit=%v)", replay.ImageHeadSHA256, replay.ImageCommit)
+	}
+	if replay.LastTag != (rbdJournalLostAppendTag{e.Tag + 1, true, e.Tag, e.EntryTID}) || replay.NextTag != e.Tag+2 || !replay.LockFree || replay.SubjectWatcher {
+		fail("replay: native tag, lock or watchers differ (tag=%+v next=%d free=%v subject watcher=%v)", replay.LastTag, replay.NextTag, replay.LockFree, replay.SubjectWatcher)
+	}
+	return problems
+}
+
+// rbdJournalGateClaims checks what the subject's reply gate saw of the
+// withheld append o: large writes of the append's size, the binding to
+// connection bound and, by mode, the held reply of the marked request's
+// transaction (decoded) or the withheld received bytes and the polled
+// barrier (undecoded).
+func rbdJournalGateClaims(r *rbdJournalLostAppendRecord, g *testcluster.OSDReplyGateState, o *rbdJournalLostAppendOutcome, bound, large int, marked []int, fail func(string, ...any)) {
+	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+	e := r.Entry
 	if !g.Bound || g.BoundConnection != bound || g.LargeWrites != large || g.Error != "" || g.Threshold != rbdJournalLostAppendThreshold || g.BoundWriteBytes < e.Length {
 		fail("transmission: not %d write(s) of the append size with the gate bound on subject connection %d: gate %s", large, bound, text(g))
 	}
@@ -529,26 +560,6 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 			fail("transmission: the undecoded gate did not withhold received bytes before the wait was canceled: at cancellation %s, finally %s", text(r.WithheldBeforeCancel), text(g.WithheldBytesSeen))
 		}
 	}
-
-	if dead {
-		rbdJournalTakeoverClaims(r, replay, checkpoint, locked, setup, fail)
-		return problems
-	}
-
-	// Replay: native librbd applied the entry once and nothing was appended.
-	if !reflect.DeepEqual(replay.ObjectSHA256, checkpoint.ObjectSHA256) || !reflect.DeepEqual(replay.ObjectSizes, checkpoint.ObjectSizes) {
-		fail("replay: journal objects changed after the checkpoint")
-	}
-	entryAt("replay", replay)
-	inspected("replay", replay)
-	if replay.ImageHeadSHA256 != r.ExpectedHeadAfter || r.ExpectedHeadAfter == r.ExpectedHeadBefore || len(r.ExpectedCommitAfter) == 0 ||
-		r.ExpectedCommitAfter[0] != (rbdJournalPosition{e.Object, e.Tag, e.EntryTID}) || !reflect.DeepEqual(replay.ImageCommit, r.ExpectedCommitAfter) {
-		fail("replay: image or image client commit position differs from one native replay of the owned entry (head=%s commit=%v)", replay.ImageHeadSHA256, replay.ImageCommit)
-	}
-	if replay.LastTag != (rbdJournalLostAppendTag{e.Tag + 1, true, e.Tag, e.EntryTID}) || replay.NextTag != e.Tag+2 || !replay.LockFree || replay.SubjectWatcher {
-		fail("replay: native tag, lock or watchers differ (tag=%+v next=%d free=%v subject watcher=%v)", replay.LastTag, replay.NextTag, replay.LockFree, replay.SubjectWatcher)
-	}
-	return problems
 }
 
 // rbdJournalPrimaryChangeClaims checks what the primary-change variant adds:
