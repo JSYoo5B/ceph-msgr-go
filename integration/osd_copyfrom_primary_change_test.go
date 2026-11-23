@@ -424,10 +424,12 @@ func (r *copyPrimaryRecovery) clearPauseReads(t *testing.T, ctx context.Context)
 	if err := copyMonCommand(ctx, r.c, `{"prefix":"osd unset","key":"pause"}`); err != nil {
 		t.Fatal("osd unset pause", err)
 	}
-	r.pauserd = false
+	// pauserd stays armed for restore until the native readback shows the
+	// flags gone.
 	if flags := nativePool(t, ctx, "osdflags", map[string]any{"action": "show"}); slices.Contains(flags.OSDMapFlags, "pauserd") || slices.Contains(flags.OSDMapFlags, "pausewr") {
 		t.Fatalf("native OSDMap still carries a pause flag at epoch %d: %v", flags.Epoch, flags.OSDMapFlags)
 	}
+	r.pauserd = false
 }
 
 func sortedOSDs(set map[int32]bool) []int32 {
@@ -539,6 +541,13 @@ const (
 
 func newCopyPrimaryChangeRun(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, label string) *copyPrimaryChangeRun {
 	t.Helper()
+	// pause is a cluster-wide flag and restore clears it whenever pauserd is
+	// armed, so a run starts only from a native OSDMap without it (an
+	// earlier test's failed cleanup is reported, not cleared). It runs before
+	// any read of the pools, which a left pause would hold until timeout.
+	if flags := nativePool(t, ctx, "osdflags", map[string]any{"action": "show"}); recovery.pauserd || slices.Contains(flags.OSDMapFlags, "pauserd") || slices.Contains(flags.OSDMapFlags, "pausewr") {
+		t.Fatalf("a pause flag is already set at epoch %d before this run sets it (armed %t): %v", flags.Epoch, recovery.pauserd, flags.OSDMapFlags)
+	}
 	r := &copyPrimaryChangeRun{t: t, ctx: ctx, pools: pools, recovery: recovery, blocked: make(chan struct{}, 1)}
 	r.armed = map[string]*atomic.Bool{}
 	options := integrationOptions(t)

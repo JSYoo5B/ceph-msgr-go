@@ -521,11 +521,13 @@ func holdSnapTrim(t *testing.T, ctx context.Context, c *cephmsgr.Client) *snapTr
 	return h
 }
 
-// release clears nosnaptrim before the test ends, so snapshots trim.
+// release clears nosnaptrim before the test ends, so snapshots trim. The
+// hold is released only once the native readback shows the flag gone: a
+// failed unset or readback ends the test with cleanup still armed.
 func (h *snapTrimHold) release(t *testing.T, ctx context.Context) {
 	t.Helper()
-	h.released = true
 	h.clear(t, ctx, t.Fatalf)
+	h.released = true
 }
 
 func (h *snapTrimHold) clear(t *testing.T, ctx context.Context, fail func(string, ...any)) {
