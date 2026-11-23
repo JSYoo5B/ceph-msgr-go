@@ -21,7 +21,7 @@ import (
 // a primary answers a write whose full request identity (entity,
 // incarnation, TID) it still finds in its log with the original result and
 // versions instead of executing it (src/osd/PrimaryLogPG.cc:2274-2300 do_op,
-// src/osd/PG.cc:781-794, src/osd/PGLog.h:401-470 get_request: the ordinary
+// src/osd/PG.cc:781-794, src/osd/PGLog.h:401-463 get_request: the ordinary
 // entries, their extra request IDs, then the duplicate records). A trimmed
 // entry becomes a duplicate record, and each of its extra request IDs a
 // separate record with the entry's own version, while it is within
@@ -440,10 +440,13 @@ func requireLocations(t *testing.T, s pgHistorySnapshot, target int, tier, versi
 // records), a PG interval change, the default bounds, or any other
 // operation than APPEND and COPY_FROM2.
 func dupHistoryScenario(t *testing.T, width *erasureWidth) {
-	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "4" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
-		t.Skip("needs the four-OSD BlueStore topology")
+	shards, topology := width != nil, "3"
+	if shards {
+		topology = width.topology
 	}
-	shards := width != nil
+	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
+		t.Skipf("needs the BlueStore OSD topology %q", topology)
+	}
 	if shards && os.Getenv("CEPH_MSGR_NATIVE_SHARD_HISTORY") != "1" {
 		t.Skip("requires the fixture-selected exclusive shard-history capture marker")
 	}
@@ -483,11 +486,12 @@ func dupHistoryScenario(t *testing.T, width *erasureWidth) {
 		t.Fatal("owned source pool is not a separate replicated pool", replicated.PoolID, replicated.PoolType)
 	}
 	// One PG holds every subject object.
-	spec := map[string]any{"slot": slot, "pg_num": 1, "size": base.Replicas, "min_size": base.MinSize, "hashpspool": hash}
+	var created poolReceipt
 	if shards {
-		spec = map[string]any{"slot": slot, "pg_num": 1, "hashpspool": hash, "erasure": true, "width": width.name, "optimized": true, "plugin": "isa"}
+		created = nativePool(t, ctx, "create", map[string]any{"slot": slot, "pg_num": 1, "hashpspool": hash, "erasure": true, "width": width.name, "optimized": true, "plugin": "isa"})
+	} else {
+		created = nativePool(t, ctx, "create", map[string]any{"slot": slot, "pg_num": 1, "size": base.Replicas, "min_size": base.MinSize, "hashpspool": hash})
 	}
-	created := nativePool(t, ctx, "create", spec)
 	if created.PoolID == replicated.PoolID || created.PGNum != 1 {
 		t.Fatal("subject pool is not a separate one-PG pool", created.PoolID, created.PGNum)
 	}
@@ -816,10 +820,11 @@ func TestCephOSDErasureOptimizedK2M2DupHistoryIntegration(t *testing.T) {
 }
 
 // TestCephOSDReplicatedDupHistoryIntegration is dupHistoryScenario on an
-// owned replicated pool of the fixture's replica count (four OSDs), live
-// primary only.
+// owned replicated pool of the fixture's replica count (three BlueStore
+// OSDs), live primary only.
 //
-//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osdreplicatedduphistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdreplicatedduphistory key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
+//scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdreplicatedduphistory key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:covers CLIENT to OSD
 //fixture:shareable I/O in its own pools only; checked restores put back the PG-log bounds on every OSD and remove the pools
 func TestCephOSDReplicatedDupHistoryIntegration(t *testing.T) {
