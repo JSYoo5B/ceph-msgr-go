@@ -509,21 +509,6 @@ func TestCephOSDCopyFromChunkSourceRemovalIntegration(t *testing.T) {
 	}
 }
 
-// holdSnapTrim sets nosnaptrim until the subtest ends.
-func holdSnapTrim(t *testing.T, ctx context.Context, c *cephmsgr.Client) {
-	t.Helper()
-	t.Cleanup(func() {
-		restore, stop := context.WithTimeout(context.Background(), 60*time.Second)
-		defer stop()
-		if err := copyMonCommand(restore, c, `{"prefix":"osd unset","key":"nosnaptrim"}`); err != nil {
-			t.Error("osd unset nosnaptrim", err)
-		}
-	})
-	if err := copyMonCommand(ctx, c, `{"prefix":"osd set","key":"nosnaptrim"}`); err != nil {
-		t.Fatal("osd set nosnaptrim", err)
-	}
-}
-
 // snapTrimState observes where removed snapshots of the source pool are for
 // the source's PG, listing objects natively (no object while pauserd is set:
 // listsnaps is a read).

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -483,4 +484,57 @@ func TestCephOSDPoolSnapshotIntegration(t *testing.T) {
 			t.Fatalf("head after rollback is not the original: %x", after.Data)
 		}
 	})
+}
+
+// snapTrimHold is a cluster-wide nosnaptrim flag owned by one test. The flag
+// is shared by every pool, so holdSnapTrim refuses a baseline that already
+// carries it (for example after an earlier test's failed cleanup in a broad
+// suite) instead of clearing a flag it did not set, and every change is read
+// back from the native OSDMap.
+type snapTrimHold struct {
+	c        *cephmsgr.Client
+	released bool
+}
+
+// holdSnapTrim sets nosnaptrim until release or the end of the test, after a
+// native readback shows it absent, and confirms natively that it is set.
+func holdSnapTrim(t *testing.T, ctx context.Context, c *cephmsgr.Client) *snapTrimHold {
+	t.Helper()
+	if flags := nativePool(t, ctx, "osdflags", map[string]any{"action": "show"}); slices.Contains(flags.OSDMapFlags, "nosnaptrim") {
+		t.Fatalf("nosnaptrim is already set at epoch %d before this test sets it: %v", flags.Epoch, flags.OSDMapFlags)
+	}
+	h := &snapTrimHold{c: c}
+	t.Cleanup(func() {
+		if h.released {
+			return
+		}
+		restore, stop := context.WithTimeout(context.Background(), 60*time.Second)
+		defer stop()
+		h.clear(t, restore, t.Errorf)
+	})
+	if err := copyMonCommand(ctx, c, `{"prefix":"osd set","key":"nosnaptrim"}`); err != nil {
+		t.Fatal("osd set nosnaptrim", err)
+	}
+	if flags := nativePool(t, ctx, "osdflags", map[string]any{"action": "show"}); !slices.Contains(flags.OSDMapFlags, "nosnaptrim") || flags.Epoch == 0 {
+		t.Fatalf("native OSDMap does not carry nosnaptrim: epoch %d flags %v", flags.Epoch, flags.OSDMapFlags)
+	}
+	return h
+}
+
+// release clears nosnaptrim before the test ends, so snapshots trim.
+func (h *snapTrimHold) release(t *testing.T, ctx context.Context) {
+	t.Helper()
+	h.released = true
+	h.clear(t, ctx, t.Fatalf)
+}
+
+func (h *snapTrimHold) clear(t *testing.T, ctx context.Context, fail func(string, ...any)) {
+	t.Helper()
+	if err := copyMonCommand(ctx, h.c, `{"prefix":"osd unset","key":"nosnaptrim"}`); err != nil {
+		fail("osd unset nosnaptrim: %v", err)
+		return
+	}
+	if flags := nativePool(t, ctx, "osdflags", map[string]any{"action": "show"}); slices.Contains(flags.OSDMapFlags, "nosnaptrim") {
+		fail("native OSDMap still carries nosnaptrim at epoch %d: %v", flags.Epoch, flags.OSDMapFlags)
+	}
 }
