@@ -13,6 +13,32 @@ import (
 // with SIGKILL.
 const rbdJournalHeldKilledExit = 137
 
+// The op tracker's flag points and events of a held append on its primary
+// (osd/OpRequest.h and the mark_* calls of osd/OSD.cc, osd/PrimaryLogPG.cc
+// and osd/ReplicatedBackend.cc at ceph/ceph/blob/v20.2.4/src/): the steps
+// before the op reaches its PG, the PG's steps up to the sub-writes, and the
+// flag points of an op that reached none and of one waiting for sub-writes.
+var (
+	rbdJournalHeldPrePG = []string{"initiated", "header_read", "throttled", "all_read", "dispatched"}
+	rbdJournalHeldInPG  = []string{"queued_for_pg", "reached_pg", "started"}
+)
+
+const (
+	rbdJournalHeldNoFlag     = "no flag points reached"
+	rbdJournalHeldSubOpsFlag = "waiting for sub ops"
+)
+
+// rbdJournalHeldEvents says whether events are exactly the pre-PG steps, then
+// the steps of then in order, then each of last once in any order.
+func rbdJournalHeldEvents(events, then []string, last ...string) bool {
+	head := append(slices.Clone(rbdJournalHeldPrePG), then...)
+	if len(events) != len(head)+len(last) || !slices.Equal(events[:len(head)], head) {
+		return false
+	}
+	tail := slices.Sorted(slices.Values(events[len(head):]))
+	return slices.Equal(tail, slices.Sorted(slices.Values(last)))
+}
+
 // rbdJournalHeldClaims checks a held-request record up to one stage. It
 // keeps apart what the OSDs listed while the caller was pending (held, from
 // "observe-held" on), what the caller was told and how often it asked
@@ -137,15 +163,6 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		}
 		return ops
 	}
-	count := func(events []string, event string) int {
-		n := 0
-		for _, ev := range events {
-			if ev == event {
-				n++
-			}
-		}
-		return n
-	}
 	g := r.Gate
 	if g == nil {
 		fail("transmission: gate state missing")
@@ -223,14 +240,17 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	waiting := fmt.Sprintf("waiting for subops from %d,%d", replicas[0], replicas[1])
 	if replica || dead {
 		// Applied on P and sent to both replicas; exactly one replica's
-		// commit recorded; never answered.
-		if count(op.Events, waiting) != 1 || count(op.Events, "sub_op_commit_rec") != 1 || count(op.Events, "op_commit") != 1 || slices.Contains(op.Events, "commit_sent") {
+		// commit recorded; never answered: the op tracker's flag point is the
+		// replica wait, and its events are the pre-PG steps, the PG's own
+		// steps up to the sub-writes, then the local commit and one replica
+		// commit in either order, nothing else.
+		if op.FlagPoint != rbdJournalHeldSubOpsFlag || !rbdJournalHeldEvents(op.Events, append(slices.Clone(rbdJournalHeldInPG), waiting), "op_commit", "sub_op_commit_rec") {
 			fail("observe-held: the append is not waiting for one of its two replica commits on the primary: %s", text(op))
 		}
-	} else if slices.ContainsFunc(op.Events, func(ev string) bool {
-		return strings.HasPrefix(ev, "waiting for subops") || ev == "sub_op_commit_rec" || ev == "commit_sent"
-	}) {
-		fail("observe-held: the append held for its map was already executed: %s", text(op))
+	} else if op.FlagPoint != rbdJournalHeldNoFlag || !rbdJournalHeldEvents(op.Events, nil) {
+		// Held for its map: no flag point and no event past dispatch, so the
+		// op has not reached its PG.
+		fail("observe-held: the append held for its map has progressed into its PG: %s", text(op))
 	}
 	if !h.PendingAfterHeld {
 		fail("observe-held: the caller was not pending after the held observation")
@@ -375,7 +395,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 			return mine
 		}
 		before, after := heldBy(a.OpsBefore), heldBy(a.OpsAfter)
-		if len(before) != 1 || before[0].OSD != int(h.Primary) || before[0].Transaction != op.Transaction || len(after) != 0 {
+		if len(before) != 1 || before[0].OSD != int(h.Primary) || before[0].Transaction != op.Transaction || before[0].Description != op.Description || len(after) != 0 {
 			fail("advance-map: the old primary osd.%d did not list the held append once before the advance and none after: before %s, after %s", h.Primary, text(before), text(after))
 		}
 		if a.Pool != r.Pool || a.EpochBefore <= h.SentAtEpoch || a.EpochBefore >= h.NamedEpoch || a.EpochAfter < h.NamedEpoch || a.EpochAfter < a.EpochTarget || a.FlagFinally ||

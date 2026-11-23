@@ -231,7 +231,27 @@ func TestRBDJournalHeldClaims(t *testing.T) {
 		"replay twice":           {"*", "replay", func(r *rbdJournalLostAppendRecord) { r.Views["replay"].LockFree = false }},
 		"replay of another head": {"*", "replay", func(r *rbdJournalLostAppendRecord) { r.Views["replay"].ImageHeadSHA256 = strings.Repeat("f", 64) }},
 		// Replica hold.
-		"replica not waited for":   {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = op(r).Events[:8] }},
+		"replica not waited for": {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = op(r).Events[:8] }},
+		"replica commit not yet": {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = op(r).Events[:10] }},
+		"local commit missing": {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			op(r).Events = slices.DeleteFunc(op(r).Events, func(e string) bool { return e == "op_commit" })
+		}},
+		"commits in either order": {rbdJournalVariantDeadPrimary, "", func(r *rbdJournalLostAppendRecord) {
+			n := len(op(r).Events)
+			op(r).Events[n-2], op(r).Events[n-1] = op(r).Events[n-1], op(r).Events[n-2]
+		}},
+		"replica wait flag missing": {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).FlagPoint = "commit sent; apply or cleanup" }},
+		"held op skipped a step":    {rbdJournalVariantDeadPrimary, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = slices.Delete(op(r).Events, 5, 6) }},
+		"an unknown event":          {rbdJournalVariantDeadPrimary, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = append(op(r).Events, "done") }},
+		"held op reached its PG": {rbdJournalVariantHeldPrimaryChange, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			op(r).Events = append(op(r).Events, "queued_for_pg", "reached_pg")
+		}},
+		"held op started":           {rbdJournalVariantHeldPrimaryChange, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).FlagPoint = "started" }},
+		"held op committed locally": {rbdJournalVariantHeldPrimaryChange, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = append(op(r).Events, "op_commit") }},
+		"held op before dispatch":   {rbdJournalVariantHeldPrimaryChange, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = op(r).Events[:3] }},
+		"another op sampled": {rbdJournalVariantHeldPrimaryChange, "observe-recorded", func(r *rbdJournalLostAppendRecord) {
+			r.Held.Advance.OpsBefore[0].Description = "osd_op(x)"
+		}},
 		"both replicas committed":  {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = append(op(r).Events, "sub_op_commit_rec") }},
 		"answered while held":      {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = append(op(r).Events, "commit_sent") }},
 		"another replica paused":   {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) { r.Held.Replica, r.Held.Lease.Daemon = 1, "osd.1" }},
@@ -305,13 +325,17 @@ func TestRBDJournalHeldClaims(t *testing.T) {
 			full := slices.Clone(r.Order)
 			// The stage named, and every later one, refuses the record; the
 			// earlier ones do not see the change.
+			// An empty stage marks a change the claims must accept.
 			at := slices.Index(stages, c.stage)
-			if at < 0 {
+			if at < 0 && c.stage != "" {
 				t.Fatalf("%s (%s): unknown stage %s", name, mode, c.stage)
 			}
 			for i, stage := range stages {
 				problems := judge(r, full, stage)
-				if i >= at && len(problems) == 0 {
+				if c.stage == "" && len(problems) != 0 {
+					t.Errorf("%s (%s): refused at %s: %v", name, mode, stage, problems)
+				}
+				if c.stage != "" && i >= at && len(problems) == 0 {
 					t.Errorf("%s (%s): accepted at %s", name, mode, stage)
 				}
 			}

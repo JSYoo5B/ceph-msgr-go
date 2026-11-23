@@ -68,9 +68,11 @@ import (
 // pause of one replica of the PG (the last member of the acting set) from
 // the fixture, sends the append to P and, while the caller is pending, the
 // fixture lists P's operations in flight: exactly one client op of the
-// subject on journal object 0, a `journal.append` call, with
-// "waiting for subops from" both replicas, its own commit and exactly one
-// "sub_op_commit_rec". The PG is still active+clean in the interval the
+// subject on journal object 0, a `journal.append` call, at the flag point
+// "waiting for sub ops", whose events are exactly the steps up to dispatch,
+// queued_for_pg, reached_pg, started, "waiting for subops from" both
+// replicas, then its own op_commit and one "sub_op_commit_rec" in either
+// order. The PG is still active+clean in the interval the
 // lock was taken in. The subject resumes the replica within the lease, well
 // inside the 20 s osd_heartbeat_grace, and the caller receives one known
 // answer 0 on disk for the transaction P listed. A PG read after the answer
@@ -93,8 +95,9 @@ func TestCephRBDJournalReplicaHoldIntegration(t *testing.T) {
 // TestCephRBDJournalHeldPrimaryChangeIntegration changes the acting primary
 // while the subject's append is held at it. The append names an epoch eight
 // above the one the subject read, so P holds it waiting for that map, and
-// the fixture lists it among P's operations in flight, before any PG event,
-// with the caller pending. The fixture's change-primary action then marks P
+// the fixture lists it among P's operations in flight with no flag point
+// reached and no event past dispatched (it has not reached its PG), with the
+// caller pending. The fixture's change-primary action then marks P
 // out (as in TestCephRBDJournalPrimaryChangeIntegration): in a newer epoch,
 // still below the named one, another member leads the PG and P is the last
 // member of the acting set. The fixture's advance-map then raises the epoch
