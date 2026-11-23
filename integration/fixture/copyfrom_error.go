@@ -305,11 +305,14 @@ func (c *fixtureCluster) copyFromErrorControl(ctx context.Context, out string, f
 // saveMetadata (diagnostics.go) collects these public receipts of this
 // file's controls when they exist.
 var _ = collectDiagnosticFiles(
+	"osd-copyfrom-chunk-omap-edit-results.json",
 	"osd-copyfrom-chunk-source-change-results.json",
+	"osd-copyfrom-chunk-source-removal-results.json",
 	"osd-copyfrom-destination-loss-results.json",
 	"osd-copyfrom-error-option.json",
 	"osd-copyfrom-late-error-results.json",
 	"osd-copyfrom-multichunk-loss-results.json",
 	"osd-copyfrom-multichunk-results.json",
 	"osd-copyfrom-three-chunk-loss-results.json",
+	"osd-erasure-copyfrom-chunks-results.json",
 )
