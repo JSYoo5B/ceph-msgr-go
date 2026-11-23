@@ -197,6 +197,8 @@ type rbdJournalLostAppendView struct {
 	ObservedUTC    string
 	ObjectSizes    []uint64
 	ObjectSHA256   []string
+	// ObjectExists says which journal objects native librados found.
+	ObjectExists []bool
 	// The owned entry's place in its journal object: the bytes before it,
 	// the entry itself when the object reaches that far, and how many bytes
 	// follow it.
@@ -220,6 +222,10 @@ type rbdJournalLostAppendView struct {
 	// InspectNext are the entries of the tag after the subject's: native
 	// librbd's own entries once it replayed the journal and wrote.
 	InspectNext []rbdJournalLostAppendEvent
+	// InspectOther are the entries of every other tag, in replay order
+	// (before the owned entry is built, every entry): the setup's entries,
+	// which a later inspection must show again, each one by identity.
+	InspectOther []rbdJournalInspectEntry
 	// Blocklist is the OSDMap blocklist the action read, nil when it read
 	// none.
 	Blocklist []rbdLockOwnerLossBlock
@@ -228,6 +234,16 @@ type rbdJournalLostAppendView struct {
 	// position, in the order listed.
 	MinimumSet, ActiveSet uint64
 	Clients               []rbdJournalClientView
+}
+
+// rbdJournalInspectEntry is one entry of `rbd journal inspect` outside the
+// subject's tags: its tag and its event as printed (offset and length 0 for
+// an event without them).
+type rbdJournalInspectEntry struct {
+	Tag            uint64
+	Type           string
+	Offset, Length uint64
+	Timestamp      string
 }
 
 // rbdJournalClientView is one registered journal client and its commit
@@ -301,12 +317,21 @@ type rbdJournalLostAppendRecord struct {
 	// ForcedPending is set in the forced-break variant with held appends
 	// (rbd_journal_forced_break_pending_test.go) only.
 	ForcedPending *rbdJournalForcedPending
+	// Inflight is set in the forced-break variant with an append whose reply
+	// is in flight (rbd_journal_forced_break_inflight_test.go) only.
+	Inflight *rbdJournalForcedInflight
+	// Trim is set in the trimming variant (rbd_journal_trim_test.go) only.
+	Trim *rbdJournalTrim
 }
 
 // rbdJournalLostAppendPlan returns the stages and the step order of the
 // variant the record belongs to.
 func rbdJournalLostAppendPlan(r *rbdJournalLostAppendRecord) (stages, order []string) {
 	switch {
+	case r.Trim != nil:
+		return rbdJournalTrimStages, rbdJournalTrimOrder
+	case r.Inflight != nil:
+		return rbdJournalForcedInflightStages, rbdJournalForcedInflightOrder
 	case r.ForcedPending != nil:
 		return rbdJournalForcedPendingStages, rbdJournalForcedPendingOrder
 	case r.PrimaryChange != nil:
@@ -335,6 +360,12 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 	fail := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	// Records hold optional fields as pointers; print them as their JSON.
 	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+	if r.Trim != nil {
+		return rbdJournalTrimClaims(r, stage)
+	}
+	if r.Inflight != nil {
+		return rbdJournalForcedInflightClaims(r, stage)
+	}
 	if r.ForcedPending != nil {
 		return rbdJournalForcedPendingClaims(r, stage)
 	}
@@ -419,7 +450,7 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		want := rbdJournalLostAppendEvent{Type: "AioWrite", Offset: e.ImageOffset, Length: e.ImageLength,
 			Timestamp: time.Unix(int64(e.Timestamp.Seconds), int64(e.Timestamp.Nanoseconds)/1000*1000).UTC().Format(time.RFC3339Nano)}
 		if v.InspectTotal == nil || v.InspectErrors == nil || setup.InspectTotal == nil || *v.InspectTotal != *setup.InspectTotal+1 || *v.InspectErrors != 0 ||
-			len(v.InspectOwned) != 1 || v.InspectOwned[0] != want {
+			len(v.InspectOwned) != 1 || v.InspectOwned[0] != want || !slices.Equal(v.InspectOther, setup.InspectOther) {
 			fail("%s: rbd journal inspect does not replay the setup entries and the owned entry once (%v)", name, v.InspectOwned)
 		}
 	}
@@ -504,6 +535,40 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 				text(g), text(r.DialsBeforeClose), text(r.DialsTotal), pc.AppendConnection, pc.ResubmitConnection)
 		}
 	}
+	rbdJournalGateClaims(r, g, o, bound, large, marked, fail)
+
+	if dead {
+		rbdJournalTakeoverClaims(r, replay, checkpoint, locked, setup, fail)
+		return problems
+	}
+
+	// Replay: native librbd applied the entry once and nothing was appended.
+	if !reflect.DeepEqual(replay.ObjectSHA256, checkpoint.ObjectSHA256) || !reflect.DeepEqual(replay.ObjectSizes, checkpoint.ObjectSizes) {
+		fail("replay: journal objects changed after the checkpoint")
+	}
+	entryAt("replay", replay)
+	inspected("replay", replay)
+	if replay.ImageHeadSHA256 != r.ExpectedHeadAfter || r.ExpectedHeadAfter == r.ExpectedHeadBefore || len(r.ExpectedCommitAfter) == 0 ||
+		r.ExpectedCommitAfter[0] != (rbdJournalPosition{e.Object, e.Tag, e.EntryTID}) || !reflect.DeepEqual(replay.ImageCommit, r.ExpectedCommitAfter) {
+		fail("replay: image or image client commit position differs from one native replay of the owned entry (head=%s commit=%v)", replay.ImageHeadSHA256, replay.ImageCommit)
+	}
+	if replay.LastTag != (rbdJournalLostAppendTag{e.Tag + 1, true, e.Tag, e.EntryTID}) || replay.NextTag != e.Tag+2 || !replay.LockFree || replay.SubjectWatcher {
+		fail("replay: native tag, lock or watchers differ (tag=%+v next=%d free=%v subject watcher=%v)", replay.LastTag, replay.NextTag, replay.LockFree, replay.SubjectWatcher)
+	}
+	return problems
+}
+
+// rbdJournalGateClaims checks what the subject's reply gate saw of the
+// withheld append o: the writes of at least its threshold (large) and the
+// binding to connection bound and, by mode, the frames that carry the entry
+// with the held reply of their transaction (decoded, CRC), or the received
+// bytes intercepted on the bound connection and the polled barrier
+// (undecoded, secure). An undecoded gate identifies no frame and no
+// transaction: there the claim is one write of the threshold size and
+// intercepted bytes, not one transmitted request or a withheld reply.
+func rbdJournalGateClaims(r *rbdJournalLostAppendRecord, g *testcluster.OSDReplyGateState, o *rbdJournalLostAppendOutcome, bound, large int, marked []int, fail func(string, ...any)) {
+	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+	e := r.Entry
 	if !g.Bound || g.BoundConnection != bound || g.LargeWrites != large || g.Error != "" || g.Threshold != rbdJournalLostAppendThreshold || g.BoundWriteBytes < e.Length {
 		fail("transmission: not %d write(s) of the append size with the gate bound on subject connection %d: gate %s", large, bound, text(g))
 	}
@@ -526,29 +591,9 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		// bound connection while the call was pending. A flag that is
 		// present but false means no post-bind read was intercepted.
 		if g.WithheldBytesSeen == nil || !*g.WithheldBytesSeen || r.WithheldBeforeCancel == nil || !*r.WithheldBeforeCancel {
-			fail("transmission: the undecoded gate did not withhold received bytes before the wait was canceled: at cancellation %s, finally %s", text(r.WithheldBeforeCancel), text(g.WithheldBytesSeen))
+			fail("transmission: the undecoded gate did not intercept received bytes on the bound connection before the wait was canceled: at cancellation %s, finally %s", text(r.WithheldBeforeCancel), text(g.WithheldBytesSeen))
 		}
 	}
-
-	if dead {
-		rbdJournalTakeoverClaims(r, replay, checkpoint, locked, setup, fail)
-		return problems
-	}
-
-	// Replay: native librbd applied the entry once and nothing was appended.
-	if !reflect.DeepEqual(replay.ObjectSHA256, checkpoint.ObjectSHA256) || !reflect.DeepEqual(replay.ObjectSizes, checkpoint.ObjectSizes) {
-		fail("replay: journal objects changed after the checkpoint")
-	}
-	entryAt("replay", replay)
-	inspected("replay", replay)
-	if replay.ImageHeadSHA256 != r.ExpectedHeadAfter || r.ExpectedHeadAfter == r.ExpectedHeadBefore || len(r.ExpectedCommitAfter) == 0 ||
-		r.ExpectedCommitAfter[0] != (rbdJournalPosition{e.Object, e.Tag, e.EntryTID}) || !reflect.DeepEqual(replay.ImageCommit, r.ExpectedCommitAfter) {
-		fail("replay: image or image client commit position differs from one native replay of the owned entry (head=%s commit=%v)", replay.ImageHeadSHA256, replay.ImageCommit)
-	}
-	if replay.LastTag != (rbdJournalLostAppendTag{e.Tag + 1, true, e.Tag, e.EntryTID}) || replay.NextTag != e.Tag+2 || !replay.LockFree || replay.SubjectWatcher {
-		fail("replay: native tag, lock or watchers differ (tag=%+v next=%d free=%v subject watcher=%v)", replay.LastTag, replay.NextTag, replay.LockFree, replay.SubjectWatcher)
-	}
-	return problems
 }
 
 // rbdJournalPrimaryChangeClaims checks what the primary-change variant adds:
@@ -669,7 +714,7 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 			return nil, errors.New("native journal object list differs from its binary view")
 		}
 		data := objects[o.Offset : o.Offset+o.Size]
-		v.ObjectSizes, v.ObjectSHA256 = append(v.ObjectSizes, o.Size), append(v.ObjectSHA256, digest(data))
+		v.ObjectSizes, v.ObjectSHA256, v.ObjectExists = append(v.ObjectSizes, o.Size), append(v.ObjectSHA256, digest(data)), append(v.ObjectExists, o.Exists)
 		if entry != nil && uint64(i) == entry.Object && len(data) >= entry.Offset {
 			prefix := digest(data[:entry.Offset])
 			v.PrefixSHA256 = &prefix
@@ -735,6 +780,11 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 				return nil, errors.New("native rbd journal inspect commit tids are not contiguous")
 			}
 			if entry == nil || ne.TagID != entry.Tag && ne.TagID != entry.Tag+1 {
+				other := rbdJournalInspectEntry{Tag: ne.TagID, Type: ne.Event.Type, Timestamp: ne.Event.Timestamp}
+				if ne.Event.Offset != nil && ne.Event.Length != nil {
+					other.Offset, other.Length = *ne.Event.Offset, *ne.Event.Length
+				}
+				v.InspectOther = append(v.InspectOther, other)
 				continue
 			}
 			ts, err := time.Parse("2006-01-02T15:04:05.000000-0700", ne.Event.Timestamp)
@@ -806,6 +856,7 @@ func TestCephRBDJournalPrimaryChangeIntegration(t *testing.T) {
 func runRBDJournalLostAppend(t *testing.T, variant string) {
 	primaryChange, ownerLoss, forced := variant == rbdJournalVariantPrimaryChange, variant == rbdJournalVariantOwnerLoss, variant == rbdJournalVariantForcedBreak
 	forcedPending := variant == rbdJournalVariantForcedBreakPending
+	inflight, trim := variant == rbdJournalVariantForcedBreakInflight, variant == rbdJournalVariantTrim
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
 		t.Skip("requires the opt-in disposable RBD fixture (CEPH_MSGR_TEST_RBD=1) under its exact selector")
@@ -850,6 +901,10 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		results = "rbd-journal-forced-break-results.json"
 	case rbdJournalVariantForcedBreakPending:
 		results = "rbd-journal-forced-break-pending-results.json"
+	case rbdJournalVariantForcedBreakInflight:
+		results, outcomeFile = "rbd-journal-forced-break-inflight-results.json", "rbd-journal-forced-break-inflight-outcome.json"
+	case rbdJournalVariantTrim:
+		results = "rbd-journal-trim-results.json"
 	}
 
 	// The observer is a second Go client with its own connections. It
@@ -897,11 +952,17 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	if primaryChange {
 		record.PrimaryChange = &rbdJournalPrimaryChange{}
 	}
-	if ownerLoss || forced || forcedPending {
-		record.OwnerLoss = &rbdJournalOwnerLoss{Forced: forced || forcedPending}
+	if ownerLoss || forced || forcedPending || inflight || trim {
+		record.OwnerLoss = &rbdJournalOwnerLoss{Forced: forced || forcedPending || inflight || trim}
 	}
 	if forcedPending {
 		record.ForcedPending = &rbdJournalForcedPending{}
+	}
+	if inflight {
+		record.Inflight = &rbdJournalForcedInflight{}
+	}
+	if trim {
+		record.Trim = &rbdJournalTrim{}
 	}
 	publish := func() error {
 		record.Timings["total"] = time.Since(started).String()
@@ -1041,8 +1102,14 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	}
 	md := &rbdDecoder{data: metadata}
 	order, splay, _, minimumSet, activeSet := md.u8(), md.u8(), md.u64(), md.u64(), md.u64()
-	if err := md.done(); err != nil || order != rbdJournalOrder || splay != rbdJournalSplay || minimumSet != 0 || activeSet != 0 {
-		t.Fatal("journal metadata differs", order, splay, minimumSet, activeSet, err)
+	// The trim plan creates the journal with rbdJournalTrimJournalOrder, every other
+	// plan with librbd's default.
+	wantOrder := rbdJournalOrder
+	if trim {
+		wantOrder = rbdJournalTrimJournalOrder
+	}
+	if err := md.done(); err != nil || order != uint8(wantOrder) || plan.JournalOrder != map[bool]int{true: rbdJournalTrimJournalOrder}[trim] || splay != rbdJournalSplay || minimumSet != 0 || activeSet != 0 {
+		t.Fatal("journal metadata differs", order, splay, minimumSet, activeSet, plan.JournalOrder, err)
 	}
 	imageOutput, err := hex.DecodeString(setup.ClassCalls[6].OutputHex)
 	if err != nil || setup.ClassCalls[6].InputHex != hex.EncodeToString(rbdString("")) {
@@ -1267,6 +1334,13 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	if s := gate.State(); s.LargeWrites != 0 || s.Bound || s.Connections != len(conns) {
 		t.Fatal("the subject already wrote a frame of the append's size, so the gate cannot single out the append", s)
 	}
+	if trim {
+		runRBDJournalTrim(t, rbdJournalTrimSteps{rbdJournalForcedBreakSteps: rbdJournalForcedBreakSteps{ctx: ctx, record: &record, entry: entry, header: header, plan: plan, token: token,
+			gid: gid, w: w, conn: first, splay: uint64(splay), locked: lockedNative, route: route, request: request, keep: keep, now: now, send: send, native: native, judge: judge,
+			done: done, released: func() { unlocked = true }}, observer: observer, setup: setup, journalHeader: journalHeader, prefix: prefix,
+			softMax: uint64(1) << order, imagePositions: imageClient.Positions, before: expected, imageOutput: imageOutput, dir: dir})
+		return
+	}
 	if forced || forcedPending {
 		steps := rbdJournalForcedBreakSteps{ctx: ctx, record: &record, entry: entry, header: header, plan: plan, token: token, gid: gid, w: w, conn: first,
 			appendInput: append(rbdLE64(1<<order), rbdJournalBL(entryBytes)...), splay: uint64(splay), locked: lockedNative, route: route, request: request, keep: keep,
@@ -1278,6 +1352,22 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		runRBDJournalForcedBreakPending(t, rbdJournalForcedPendingSteps{rbdJournalForcedBreakSteps: steps, dir: dir, closeAll: closeAll, connect: connect,
 			dials: func() int { return int(osdDials.Load()) }, after: after, timings: record.Timings})
 		return
+	}
+	if inflight {
+		// The owner is live: it renews its watch right before the append,
+		// on its own connection while that still delivers replies.
+		watchRequest := request(headerRoute)
+		watchRequest.Operations = nil
+		ping, err := w.Ping(ctx, headerRoute.Epoch)
+		keep("watch_ping", headerRoute, watchRequest, ping, err)
+		attempt := rbdLockOwnerLossOutcome("watch_ping", ping, err)
+		record.OwnerLoss.PingBefore = &attempt
+		if err != nil {
+			t.Fatal("subject watch ping before the append", err)
+		}
+		record.Inflight.PingedUTC = time.Now().UTC().Format(time.RFC3339Nano)
+		watched = time.Now()
+		done("ping")
 	}
 	if err := gate.Arm(entryBytes); err != nil {
 		t.Fatal(err)
@@ -1406,6 +1496,27 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		record.WithheldBeforeCancel = atCancel
 	}
 
+	if inflight {
+		// Native librbd breaks the live owner's lock while the reply to its
+		// applied append is still withheld from it.
+		if age := time.Since(watched); age > rbdJournalOwnerLossTakeoverStart {
+			t.Fatalf("the subject's watch was pinged %v ago; with its %d s timeout a break started now may no longer find it listed", age, rbdJournalLostAppendWatchTimeout)
+		}
+		unlocked = true
+		b, err := rbdJournalBreakOf(native(t, "force-break"), record.Views["force-break"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		record.OwnerLoss.Break = b
+		select {
+		case got := <-finished:
+			keep("journal_append", targetRoute, appendRequest, got.reply, got.err)
+			t.Fatal("the withheld append completed during the break", got.reply.Code, got.err)
+		default:
+			record.Inflight.PendingAfterBreak = true
+		}
+	}
+
 	// Outcome: cancel only the local wait and record what the caller was
 	// told, before anything else is done.
 	cancelCall()
@@ -1427,6 +1538,11 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		t.Fatal("the canceled append did not end with an unknown outcome and its submission", got.reply.Submission, got.err)
 	}
 	done("outcome_recorded")
+
+	if inflight {
+		runRBDJournalForcedBreakInflightEnd(t, &record, native, judge, done, closeAll, func() int { return int(osdDials.Load()) })
+		return
+	}
 
 	// Order: a second native observation after the record. The lock, the
 	// commit position, the tags and every journal byte are where they were.

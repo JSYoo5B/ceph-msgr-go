@@ -37,8 +37,10 @@ func rbdJournalLostAppendSample(mode string) *rbdJournalLostAppendRecord {
 		v.PrefixSHA256, v.EntrySHA256, v.TrailingBytes = p(hash("0")), p(hash("e")), u(0)
 		return v
 	}
+	setupEntries := []rbdJournalInspectEntry{{1, "AioWrite", 0, 8 << 10, "t0"}, {1, "AioWrite", 72 << 10, 8 << 10, "t1"}, {1, "AioWrite", 136 << 10, 4 << 10, "t2"},
+		{1, "AioWrite", 196 << 10, 8 << 10, "t3"}, {1, "AioDiscard", 192 << 10, 64 << 10, "t4"}}
 	inspect := func(v *rbdJournalLostAppendView, total int, owned ...rbdJournalLostAppendEvent) *rbdJournalLostAppendView {
-		v.InspectTotal, v.InspectErrors, v.InspectOwned = n(total), n(0), owned
+		v.InspectTotal, v.InspectErrors, v.InspectOwned, v.InspectOther = n(total), n(0), owned, slices.Clone(setupEntries)
 		return v
 	}
 	locked := held(before("observe-locked"))
@@ -105,6 +107,14 @@ func TestRBDJournalLostAppendClaims(t *testing.T) {
 	}
 	type change = func(*rbdJournalLostAppendRecord)
 	both := map[string]change{
+		"setup entry duplicated at the checkpoint": func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["checkpoint"]
+			v.InspectOther = append([]rbdJournalInspectEntry{v.InspectOther[0]}, v.InspectOther[:len(v.InspectOther)-1]...)
+		},
+		"setup entry duplicated at the replay": func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["replay"]
+			v.InspectOther = append([]rbdJournalInspectEntry{v.InspectOther[0]}, v.InspectOther[:len(v.InspectOther)-1]...)
+		},
 		// Application.
 		"entry absent at the checkpoint": func(r *rbdJournalLostAppendRecord) {
 			r.Views["checkpoint"].EntrySHA256, r.Views["checkpoint"].TrailingBytes = nil, nil
