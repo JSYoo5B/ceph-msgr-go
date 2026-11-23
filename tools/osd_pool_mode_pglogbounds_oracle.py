@@ -49,13 +49,13 @@ SETTLE_SECONDS = 30
 SETTLE_PAUSE = .5
 
 
-def entries(rados, cluster):
+def entries(rados, cluster, options=OPTIONS):
     """The osd section's unmasked central entry of each option, or None."""
     dump = json_mon(rados, cluster, {"prefix": "config dump"}, "config dump")
     if not isinstance(dump, list):
         raise ValueError("native config dump is not a list")
     found = {}
-    for name in OPTIONS:
+    for name in options:
         matches = [e for e in dump if isinstance(e, dict) and e.get("section") == SECTION and e.get("name") == name and not e.get("mask")]
         if len(matches) > 1:
             raise RuntimeError("native config dump lists %s twice" % name)
@@ -73,10 +73,10 @@ def up_osds(rados, cluster):
     return osds
 
 
-def effective(rados, cluster, osd):
+def effective(rados, cluster, osd, options=OPTIONS):
     """({option: value} or None, failure text or None) from `config get` of every option."""
     values = {}
-    for name in OPTIONS:
+    for name in options:
         code, raw, status, oversized = rados.osd(cluster, osd, {"prefix": "config get", "var": name, "format": "json"}, MAX_REPLY)
         if code != 0 or oversized is not None:
             return None, "osd.%d config get %s returned %s (%s): %s" % (osd, name, code, oversized, str(status)[:200])
@@ -91,7 +91,7 @@ def effective(rados, cluster, osd):
     return values, None
 
 
-def settle(rados, cluster, want, clock, sleep):
+def settle(rados, cluster, want, clock, sleep, options=OPTIONS):
     """Read every OSD of want ({osd: {option: value}}) until each shows its values.
 
     Returns ({osd: last values or None}, failures). Only reads are repeated.
@@ -100,7 +100,7 @@ def settle(rados, cluster, want, clock, sleep):
     while True:
         seen, failures = {}, []
         for osd in sorted(want):
-            values, failure = effective(rados, cluster, osd)
+            values, failure = effective(rados, cluster, osd, options)
             seen[str(osd)] = values
             if failure:
                 failures.append(failure)
@@ -111,16 +111,16 @@ def settle(rados, cluster, want, clock, sleep):
         sleep(SETTLE_PAUSE)
 
 
-def read_claim(out):
+def read_claim(out, claim=CLAIM, options=OPTIONS):
     """The recorded {"prior", "effective"} claim, or None."""
-    path = pathlib.Path(out) / CLAIM
+    path = pathlib.Path(out) / claim
     try:
         with path.open("rb") as file:
             data = file.read(MAX_CLAIM + 1)
     except FileNotFoundError:
         return None
     claim = json.loads(data) if len(data) <= MAX_CLAIM else None
-    if not isinstance(claim, dict) or set(claim) != {"prior", "effective"} or not isinstance(claim["prior"], dict) or set(claim["prior"]) != set(OPTIONS):
+    if not isinstance(claim, dict) or set(claim) != {"prior", "effective"} or not isinstance(claim["prior"], dict) or set(claim["prior"]) != set(options):
         raise ValueError("invalid PG-log bounds claim")
     if any(not (v is None or type(v) is str) for v in claim["prior"].values()):
         raise ValueError("invalid PG-log bounds claim")
@@ -128,7 +128,7 @@ def read_claim(out):
     if not isinstance(recorded, dict) or not 1 <= len(recorded) <= MAX_OSDS:
         raise ValueError("invalid PG-log bounds claim")
     for osd, values in recorded.items():
-        if not osd.isdigit() or not isinstance(values, dict) or set(values) != set(OPTIONS) or any(type(v) is not int for v in values.values()):
+        if not osd.isdigit() or not isinstance(values, dict) or set(values) != set(options) or any(type(v) is not int for v in values.values()):
             raise ValueError("invalid PG-log bounds claim")
     return claim
 
@@ -138,62 +138,70 @@ def mode_pglogbounds(rados, cluster, request, out, clock=time.monotonic, sleep=t
     """Lower the osd section's PG-log and duplicate bounds to BOUNDS, or restore them."""
     if set(request) != {"action"} or request["action"] not in ("lower", "restore", "show"):
         raise ValueError("pglogbounds takes only action lower, restore or show")
-    action = request["action"]
-    claim = read_claim(out)
-    receipt = {"action": action, "bounds": dict(BOUNDS), "claimed": claim is not None, "failures": []}
+    return {"pglog_bounds": owned_settings(rados, cluster, request["action"], out, BOUNDS, CLAIM, clock, sleep)}
+
+
+def owned_settings(rados, cluster, action, out, bounds, claim_name, clock, sleep):
+    """Action lower, restore or show of the osd section's entries of bounds, recorded in claim_name.
+
+    The receipt is the one this module's docstring describes for BOUNDS.
+    """
+    options = tuple(name for name, _ in bounds)
+    claim = read_claim(out, claim_name, options)
+    receipt = {"action": action, "bounds": dict(bounds), "claimed": claim is not None, "failures": []}
     if action == "show":
         osds = up_osds(rados, cluster)
-        receipt["entries"] = entries(rados, cluster)
-        receipt["effective"] = {str(osd): effective(rados, cluster, osd)[0] for osd in osds}
-        return {"pglog_bounds": receipt}
+        receipt["entries"] = entries(rados, cluster, options)
+        receipt["effective"] = {str(osd): effective(rados, cluster, osd, options)[0] for osd in osds}
+        return receipt
     if action == "lower":
         if claim is not None:
-            raise RuntimeError("the PG-log bounds are already claimed; restore them first")
-        prior, osds = entries(rados, cluster), up_osds(rados, cluster)
+            raise RuntimeError("the %s are already claimed; restore them first" % ", ".join(options))
+        prior, osds = entries(rados, cluster, options), up_osds(rados, cluster)
         recorded = {}
         for osd in osds:
-            values, failure = effective(rados, cluster, osd)
+            values, failure = effective(rados, cluster, osd, options)
             if failure:
                 raise RuntimeError(failure)
             recorded[str(osd)] = values
         receipt.update(prior=prior, prior_effective=recorded)
-        temporary = pathlib.Path(out) / (CLAIM + ".tmp")
+        temporary = pathlib.Path(out) / (claim_name + ".tmp")
         temporary.write_bytes(json.dumps({"prior": prior, "effective": recorded}).encode() + b"\n")
-        os.replace(temporary, pathlib.Path(out) / CLAIM)
+        os.replace(temporary, pathlib.Path(out) / claim_name)
         receipt["claimed"] = True
-        for name, value in BOUNDS:
+        for name, value in bounds:
             code, _ = rados.mon(cluster, {"prefix": "config set", "who": SECTION, "name": name, "value": str(value)})
             if code < 0:
                 receipt["failures"].append("native config set %s returned %d: %s" % (name, code, rados.last_status[:200]))
                 break
-        receipt["entries"] = entries(rados, cluster)
-        if receipt["entries"] != {name: str(value) for name, value in BOUNDS}:
+        receipt["entries"] = entries(rados, cluster, options)
+        if receipt["entries"] != {name: str(value) for name, value in bounds}:
             receipt["failures"].append("the central entries read back as %s" % receipt["entries"])
         if not receipt["failures"]:
-            receipt["effective"], failures = settle(rados, cluster, {osd: dict(BOUNDS) for osd in osds}, clock, sleep)
+            receipt["effective"], failures = settle(rados, cluster, {osd: dict(bounds) for osd in osds}, clock, sleep, options)
             receipt["failures"].extend(failures)
         receipt["lowered"] = not receipt["failures"]
-        return {"pglog_bounds": receipt}
+        return receipt
     if claim is None:
         receipt["restored"] = False
-        return {"pglog_bounds": receipt}
+        return receipt
     prior = receipt["prior"] = claim["prior"]
     # Reverse order: the maximum goes back before the minimum.
-    for name in reversed(OPTIONS):
+    for name in reversed(options):
         if prior[name] is None:
             code, _ = rados.mon(cluster, {"prefix": "config rm", "who": SECTION, "name": name})
         else:
             code, _ = rados.mon(cluster, {"prefix": "config set", "who": SECTION, "name": name, "value": prior[name]})
         if code < 0:
             receipt["failures"].append("native restore of %s returned %d: %s" % (name, code, rados.last_status[:200]))
-    receipt["entries"] = entries(rados, cluster)
+    receipt["entries"] = entries(rados, cluster, options)
     if receipt["entries"] != prior:
         receipt["failures"].append("the central entries read back as %s; recorded %s" % (receipt["entries"], prior))
     if not receipt["failures"]:
-        receipt["effective"], failures = settle(rados, cluster, {int(osd): values for osd, values in claim["effective"].items()}, clock, sleep)
+        receipt["effective"], failures = settle(rados, cluster, {int(osd): values for osd, values in claim["effective"].items()}, clock, sleep, options)
         receipt["failures"].extend(failures)
     receipt["restored"] = not receipt["failures"]
     if receipt["restored"]:
-        os.remove(pathlib.Path(out) / CLAIM)
+        os.remove(pathlib.Path(out) / claim_name)
         receipt["claimed"] = False
-    return {"pglog_bounds": receipt}
+    return receipt

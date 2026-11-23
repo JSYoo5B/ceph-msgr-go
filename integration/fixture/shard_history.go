@@ -91,12 +91,9 @@ func (p profile) pgIntervalSelected() bool {
 	return p.admits(capOSDPGInterval)
 }
 
-// shardHistoryShard is what the capture did for one index of the acting
-// vector. The owned-pool oracle judges it; nothing here is a history claim.
-type shardHistoryShard struct {
-	Index int    `json:"index"`
-	OSD   int    `json:"osd"`
-	SPG   string `json:"spg"`
+// shardStoreCopy is what a capture did to make and attribute one acting
+// OSD's private store copy, before any offline read of it.
+type shardStoreCopy struct {
 	// ReaderIsolated: the reader's only network mode is "none".
 	ReaderIsolated bool `json:"reader_isolated"`
 	Paused         bool `json:"paused"`
@@ -108,7 +105,18 @@ type shardHistoryShard struct {
 	Whoami string `json:"whoami"`
 	// Layout lists what the copy holds that the reader does not support: a
 	// block, block.db or block.wal that is not a regular file. Empty is good.
-	Layout     string `json:"unsupported_layout"`
+	Layout string `json:"unsupported_layout"`
+	// ReaderRemoved: Docker reports the reader, and the copy inside it, gone.
+	ReaderRemoved bool `json:"reader_removed"`
+}
+
+// shardHistoryShard is what the capture did for one index of the acting
+// vector. The owned-pool oracle judges it; nothing here is a history claim.
+type shardHistoryShard struct {
+	Index int    `json:"index"`
+	OSD   int    `json:"osd"`
+	SPG   string `json:"spg"`
+	shardStoreCopy
 	InfoCode   *int   `json:"info_exit_code"`
 	InfoBytes  int    `json:"info_bytes"`
 	InfoStderr string `json:"info_stderr"`
@@ -117,9 +125,7 @@ type shardHistoryShard struct {
 	LogBytes   int    `json:"log_bytes"`
 	LogStderr  string `json:"log_stderr"`
 	LogFile    string `json:"log_file"`
-	// ReaderRemoved: Docker reports the reader, and the copy inside it, gone.
-	ReaderRemoved bool   `json:"reader_removed"`
-	Failure       string `json:"failure,omitempty"`
+	Failure    string `json:"failure,omitempty"`
 }
 
 type shardHistoryReceipt struct {
@@ -191,15 +197,13 @@ type shardHistoryEngine interface {
 	copyStore(ctx context.Context, osd int, to shardHistoryReader) (int64, error)
 }
 
-// captureShardHistory copies and reads one acting shard. The OSD is resumed
-// and the reader removed on every path; a step is never repeated.
-func captureShardHistory(ctx context.Context, engine shardHistoryEngine, out, pgid string, index, osd int) (shard shardHistoryShard) {
-	shard = shardHistoryShard{Index: index, OSD: osd, SPG: pgid + "s" + strconv.Itoa(index)}
-	fail := func(step string, err error) {
-		if shard.Failure == "" {
-			shard.Failure = fmt.Sprintf("%s: %v", step, err)
-		}
-	}
+// withShardStoreCopy makes one attributed private copy of an OSD's store and
+// runs read on it: it starts an isolated reader, pauses the OSD only while
+// its data directory is streamed into the reader, resumes it on every path,
+// and checks the copy's whoami and block layout. The reader and its copy are
+// removed on every path; a step is never repeated. fail records the first
+// failure of a step; read runs only when no step failed.
+func withShardStoreCopy(ctx context.Context, engine shardHistoryEngine, osd int, record *shardStoreCopy, fail func(step string, err error), read func(reader shardHistoryReader)) {
 	reader, isolated, err := engine.reader(ctx)
 	if reader != nil {
 		defer func() {
@@ -209,48 +213,50 @@ func captureShardHistory(ctx context.Context, engine shardHistoryEngine, out, pg
 			if err := reader.remove(cleanup); err != nil {
 				fail("remove the reader and its copy", err)
 			} else {
-				shard.ReaderRemoved = true
+				record.ReaderRemoved = true
 			}
 		}()
 	}
 	if err != nil {
 		fail("start the isolated reader", err)
-		return shard
+		return
 	}
-	shard.ReaderIsolated = isolated
+	record.ReaderIsolated = isolated
 	if !isolated {
 		fail("start the isolated reader", errors.New("the reader has a network"))
-		return shard
+		return
 	}
 
 	resume, err := engine.pause(ctx, osd)
 	if err != nil {
 		fail("pause the OSD", err)
 		if resume == nil {
-			return shard
+			return
 		}
 	}
-	shard.Paused = true
+	record.Paused = true
 	started := time.Now()
+	failed := err != nil
 	if err == nil {
 		copying, stop := context.WithTimeout(ctx, shardHistoryCopyBudget)
-		shard.ArchiveBytes, err = engine.copyStore(copying, osd, reader)
+		record.ArchiveBytes, err = engine.copyStore(copying, osd, reader)
 		stop()
 		if err != nil {
 			fail("copy the paused OSD's data directory", err)
+			failed = true
 		}
 	}
 	resuming, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	err = resume(resuming)
 	stop()
-	shard.PausedMillis = time.Since(started).Milliseconds()
+	record.PausedMillis = time.Since(started).Milliseconds()
 	if err != nil {
 		fail("resume the OSD", err)
-		return shard
+		return
 	}
-	shard.Resumed = true
-	if shard.Failure != "" {
-		return shard
+	record.Resumed = true
+	if failed {
+		return
 	}
 
 	store := shardHistoryReaderRoot + "/ceph-" + strconv.Itoa(osd)
@@ -260,12 +266,12 @@ func captureShardHistory(ctx context.Context, engine shardHistoryEngine, out, pg
 	}
 	if err != nil {
 		fail("read the copy's whoami", err)
-		return shard
+		return
 	}
-	shard.Whoami = strings.TrimSpace(string(raw))
-	if shard.Whoami != strconv.Itoa(osd) {
-		fail("attribute the copy", fmt.Errorf("its whoami is %q, not osd.%d", shard.Whoami, osd))
-		return shard
+	record.Whoami = strings.TrimSpace(string(raw))
+	if record.Whoami != strconv.Itoa(osd) {
+		fail("attribute the copy", fmt.Errorf("its whoami is %q, not osd.%d", record.Whoami, osd))
+		return
 	}
 	// The reader opens one regular block file. A device or a separate DB or
 	// WAL would not have been copied as a store.
@@ -274,38 +280,50 @@ func captureShardHistory(ctx context.Context, engine shardHistoryEngine, out, pg
 	if err == nil && code != 0 {
 		err = fmt.Errorf("exit %d", code)
 	}
-	shard.Layout = strings.TrimSpace(string(raw))
-	if err == nil && shard.Layout != "" {
-		err = errors.New(shard.Layout)
+	record.Layout = strings.TrimSpace(string(raw))
+	if err == nil && record.Layout != "" {
+		err = errors.New(record.Layout)
 	}
 	if err != nil {
 		fail("check the copy's block layout", err)
-		return shard
+		return
 	}
+	read(reader)
+}
 
-	for _, op := range []string{"info", "log"} {
-		tool, stop := context.WithTimeout(ctx, shardHistoryToolBudget)
-		code, stdout, stderr, err := reader.run(tool, shardHistoryToolArgv(osd, shard.SPG, op), shardHistoryOutputLimit)
-		stop()
-		name := fmt.Sprintf("osd-shard-history-s%d-%s.json", index, op)
-		if err == nil {
-			err = os.WriteFile(filepath.Join(out, name), stdout, 0644)
-		}
-		if err != nil {
-			fail("offline "+op+" of "+shard.SPG, err)
-			return shard
-		}
-		// Diagnostics beside a zero exit code are recorded, not judged here.
-		if op == "info" {
-			shard.InfoCode, shard.InfoBytes, shard.InfoStderr, shard.InfoFile = &code, len(stdout), string(stderr), name
-		} else {
-			shard.LogCode, shard.LogBytes, shard.LogStderr, shard.LogFile = &code, len(stdout), string(stderr), name
-		}
-		if code != 0 {
-			fail("offline "+op+" of "+shard.SPG, fmt.Errorf("exit %d: %s", code, stderr))
-			return shard
+// captureShardHistory copies and reads one acting shard.
+func captureShardHistory(ctx context.Context, engine shardHistoryEngine, out, pgid string, index, osd int) (shard shardHistoryShard) {
+	shard = shardHistoryShard{Index: index, OSD: osd, SPG: pgid + "s" + strconv.Itoa(index)}
+	fail := func(step string, err error) {
+		if shard.Failure == "" {
+			shard.Failure = fmt.Sprintf("%s: %v", step, err)
 		}
 	}
+	withShardStoreCopy(ctx, engine, osd, &shard.shardStoreCopy, fail, func(reader shardHistoryReader) {
+		for _, op := range []string{"info", "log"} {
+			tool, stop := context.WithTimeout(ctx, shardHistoryToolBudget)
+			code, stdout, stderr, err := reader.run(tool, shardHistoryToolArgv(osd, shard.SPG, op), shardHistoryOutputLimit)
+			stop()
+			name := fmt.Sprintf("osd-shard-history-s%d-%s.json", index, op)
+			if err == nil {
+				err = os.WriteFile(filepath.Join(out, name), stdout, 0644)
+			}
+			if err != nil {
+				fail("offline "+op+" of "+shard.SPG, err)
+				return
+			}
+			// Diagnostics beside a zero exit code are recorded, not judged here.
+			if op == "info" {
+				shard.InfoCode, shard.InfoBytes, shard.InfoStderr, shard.InfoFile = &code, len(stdout), string(stderr), name
+			} else {
+				shard.LogCode, shard.LogBytes, shard.LogStderr, shard.LogFile = &code, len(stdout), string(stderr), name
+			}
+			if code != 0 {
+				fail("offline "+op+" of "+shard.SPG, fmt.Errorf("exit %d: %s", code, stderr))
+				return
+			}
+		}
+	})
 	return shard
 }
 

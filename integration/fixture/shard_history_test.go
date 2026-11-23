@@ -93,9 +93,10 @@ func TestCaptureShardHistoryCopiesPausedStoreAndReadsOnlyTheCopy(t *testing.T) {
 	}
 	zero := 0
 	shard.PausedMillis = 0
-	if !reflect.DeepEqual(shard, shardHistoryShard{Index: 1, OSD: 2, SPG: "4.2s1", ReaderIsolated: true, Paused: true, Resumed: true, ArchiveBytes: 4096,
-		Whoami: "2", InfoCode: &zero, InfoBytes: 15, InfoFile: "osd-shard-history-s1-info.json",
-		LogCode: &zero, LogBytes: 14, LogFile: "osd-shard-history-s1-log.json", ReaderRemoved: true}) {
+	if !reflect.DeepEqual(shard, shardHistoryShard{Index: 1, OSD: 2, SPG: "4.2s1",
+		shardStoreCopy: shardStoreCopy{ReaderIsolated: true, Paused: true, Resumed: true, ArchiveBytes: 4096, Whoami: "2", ReaderRemoved: true},
+		InfoCode:       &zero, InfoBytes: 15, InfoFile: "osd-shard-history-s1-info.json",
+		LogCode: &zero, LogBytes: 14, LogFile: "osd-shard-history-s1-log.json"}) {
 		t.Fatalf("capture record = %+v", shard)
 	}
 	for name, content := range map[string]string{"osd-shard-history-s1-info.json": `{"dump":"info"}`, "osd-shard-history-s1-log.json": `{"dump":"log"}`} {
