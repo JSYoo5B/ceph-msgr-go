@@ -70,13 +70,28 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 		current.Source != mdsFreshSource || current.Token != oracle.Token || current.Adopted != 0 || current.MDS.GID != fresh.MDS.GID || current.MDS.Nonce != fresh.MDS.Nonce {
 		t.Fatal("split reconnect oracle or closed file plan differs")
 	}
-	const frameLimit = 8 << 10
+	frameLimit, minFragments := uint32(8<<10), 2
+	if held != nil && held.FrameLimit != 0 {
+		frameLimit = held.FrameLimit
+	}
+	if held != nil && held.MinFragments != 0 {
+		minFragments = held.MinFragments
+	}
 	control := &mdsCephFSCompletionControl{dir: dir, token: oracle.Token, fresh: fresh, mds: current.MDS, goGIDs: map[uint64]bool{}}
 	target := func(d nativeMDSCephFSDaemon) cephmsgr.MDSTarget {
 		return cephmsgr.MDSTarget{FilesystemID: fresh.FSCID, Rank: 0, Address: fmt.Sprintf("v2:%s/%d", d.Endpoint, d.Nonce)}
 	}
 	dials := newRecoveryDials(false, current.MDS.Endpoint)
-	client := recoveryClient(t, ctx, identity, key, dials, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS = true, true })
+	var client *cephmsgr.Client
+	var cut *splitCut
+	if held != nil && held.Cut != nil {
+		// The connection-loss cell dials MDS endpoints through its own cut,
+		// not through the relay, so that it sees whole frames.
+		cut = &splitCut{record: held.Cut}
+		client = splitCutClient(t, ctx, identity, key, dials, cut)
+	} else {
+		client = recoveryClient(t, ctx, identity, key, dials, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS = true, true })
+	}
 	snap := client.Snapshot()
 	control.goGIDs[snap.GlobalID] = true
 	metadata := map[string]string{"entity_id": strings.TrimPrefix(identity, "client."), "hostname": "ceph-msgr-go-" + oracle.Token[:8] + "-split", "root": "/"}
@@ -227,14 +242,24 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 	}) {
 		return
 	}
-	// getFlock asks with an exclusive test lock of another owner which lock
-	// is in the way on the lock's inode.
+	// getFlock asks with an exclusive whole-file test lock of another owner
+	// which lock of the lock's rule is in the way on the lock's inode: the
+	// first one of that rule the file still holds (heldLockGetCheck), or
+	// none.
 	getFlock := func(t *testing.T, name string, l *splitHeldLock) cephfsFilelock {
 		t.Helper()
-		first, _ := submit(t, name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock, Path: cephmsgr.MDSFilePath{Ino: l.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner+1)})
+		first, _ := submit(t, name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock, Path: cephmsgr.MDSFilePath{Ino: l.Ino}, Args: heldLockGetTest(l.rule())})
 		got, err := cephfsDecodeFilelock(first.Extra)
-		if err != nil || got != l.Lock {
-			t.Fatalf("GETFILELOCK (%s) does not identify the owned Go lock %+v: %+v %v", name, l.Lock, got, err)
+		_, still := held.fileLocks(l.Member)
+		var stillHeld []heldLock
+		for _, s := range still {
+			stillHeld = append(stillHeld, s.held())
+		}
+		if err == nil {
+			err = heldLockGetCheck(l.rule(), got, stillHeld, snap.GlobalID)
+		}
+		if err != nil {
+			t.Fatalf("GETFILELOCK (%s) does not identify the first owned Go lock still held: %+v %v", name, got, err)
 		}
 		return got
 	}
@@ -244,25 +269,21 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 			// The create handles of the lock files are still open read-write.
 			held.Directory, held.MDSBefore = oracle.Plan.Directory, control.mds
 			for _, l := range held.Locks {
-				l.File = oracle.Plan.SplitFiles[0]
-				if l.Final {
-					l.File = oracle.Plan.SplitFiles[len(oracle.Plan.SplitFiles)-1]
-				}
-				l.Ino, l.Lock = inodes[l.File], cephfsFilelock{Client: snap.GlobalID, Owner: l.Owner, Type: cephFlockExclusive}
+				l.File = oracle.Plan.SplitFiles[l.Member]
+				l.Ino, l.Lock = inodes[l.File], l.filelock(snap.GlobalID)
 			}
 			for _, l := range held.Locks {
-				submitWith(t, "split flock acquire "+l.Name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock, Path: cephmsgr.MDSFilePath{Ino: l.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, l.Owner)},
+				submitWith(t, "split flock acquire "+l.Name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock, Path: cephmsgr.MDSFilePath{Ino: l.Ino}, Args: l.args(l.kind())},
 					func(tid uint64) { held.acceptFlock(l, false, tid) }, func(r cephmsgr.MDSReply, err error) { l.settleFlock(false, r, err) })
 			}
-			errnos, err := splitFlockProbeAll(ctx, control, held, false, func(*splitHeldLock) int { return 11 })
+			errnos, err := splitFlockProbeAll(ctx, control, held, false)
 			if err != nil {
 				t.Fatal("native nonblocking probes do not see every Go lock on its split file: errnos ", errnos, ": ", err)
 			}
 			for _, l := range held.Locks {
 				lock := getFlock(t, "split flock get "+l.Name+" before restart", l)
 				l.GetBefore = &lock
-				t.Logf("held-lock split: %s lock, inode %#x locked by Go owner %#x TID %d; native probe errno %d, native version %d",
-					l.Name, l.Ino, l.Owner, l.AcquireTID, l.ProbeBefore[0].Receipt.Probe.Errno, l.ProbeBefore[0].Receipt.Probe.Before.Version)
+				t.Logf("held-lock split: %s lock, inode %#x locked by Go owner %#x TID %d; native probes %v", l.Name, l.Ino, l.Owner, l.AcquireTID, errnos)
 			}
 		}) {
 			return
@@ -307,10 +328,13 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 			t.Fatal(err)
 		}
 		fullBytes := 41 + len(full.Front) + len(full.Middle) + len(full.Data)
-		if fullBytes <= frameLimit {
+		if fullBytes <= int(frameLimit) {
 			t.Fatal("real reconnect state fits in one frame", fullBytes)
 		}
 		facts["reconnect_caps"], facts["reconnect_realms"], facts["unsplit_bytes"], facts["lost"] = caps, rs, fullBytes, lost.Status()
+		if held != nil && held.FrameLimit != 0 {
+			facts["reconnect_message_limit"] = frameLimit
+		}
 		var next *nativeMDSCephFSDaemon
 		until := time.Now().Add(60 * time.Second)
 		for next == nil {
@@ -334,6 +358,11 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 			t.Fatal(err)
 		}
 		dials.allowMDS(next.Endpoint)
+		if cut != nil {
+			// The next dial of the replacement's endpoint carries the
+			// reconnect; its second large frame is refused unsent.
+			cut.arm(next.Endpoint)
+		}
 		connection, err = client.OpenMDS(ctx, target(*next))
 		if err != nil {
 			t.Fatal(err)
@@ -369,8 +398,8 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 				nativeLines = append(nativeLines, line)
 			}
 		}
-		if len(nativeLines) < 2 {
-			t.Fatal("native MDS handled fewer than two reconnect fragments", nativeLines)
+		if len(nativeLines) < minFragments {
+			t.Fatalf("native MDS handled %d reconnect fragments, fewer than %d: %v", len(nativeLines), minFragments, nativeLines)
 		}
 		for i, line := range nativeLines {
 			if strings.HasSuffix(strings.TrimSpace(line), " (more)") != (i < len(nativeLines)-1) {
@@ -395,6 +424,16 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 			var perFragment []int
 			for _, f := range held.Fragments {
 				perFragment = append(perFragment, len(f.Inodes))
+			}
+			if held.SharedFragment {
+				if err := splitHeldLocksShareFragment(held); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if cut != nil {
+				if err := cut.check(connection.Resumes()); err != nil {
+					t.Fatal(err)
+				}
 			}
 			t.Logf("held-lock split: %d caps and %d unsplit bytes in %d fragments; native capability lines per fragment %v", len(caps), fullBytes, len(held.Fragments), perFragment)
 			for _, l := range held.Locks {
@@ -432,7 +471,7 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 		}
 		// Every lock file is probed before any check fails, so a lock that
 		// was not restored is reported beside the state of the others.
-		errnos, err := splitFlockProbeAll(ctx, control, held, true, func(*splitHeldLock) int { return 11 })
+		errnos, err := splitFlockProbeAll(ctx, control, held, true)
 		if err != nil {
 			t.Fatal("native nonblocking probes do not see every restored lock on its split file: errnos ", errnos, ": ", err)
 		}
@@ -444,15 +483,10 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 		// One explicit unlock at a time: the native probe then acquires that
 		// file and is still refused on every file whose lock is still held.
 		for i, l := range held.Locks {
-			submitWith(t, "split flock unlock "+l.Name+" after restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock, Path: cephmsgr.MDSFilePath{Ino: l.Ino}, Args: cephfsFlockArgs(cephFlockUnlock, l.Owner)},
+			submitWith(t, "split flock unlock "+l.Name+" after restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock, Path: cephmsgr.MDSFilePath{Ino: l.Ino}, Args: l.args(cephFlockUnlock)},
 				func(tid uint64) { held.acceptFlock(l, true, tid) }, func(r cephmsgr.MDSReply, err error) { l.settleFlock(true, r, err) })
-			released := held.Locks[:i+1]
-			errnos, err := splitFlockProbeAll(ctx, control, held, true, func(p *splitHeldLock) int {
-				if slices.Contains(released, p) {
-					return 0
-				}
-				return 11
-			})
+			l.released = true
+			errnos, err := splitFlockProbeAll(ctx, control, held, true)
 			if err != nil {
 				t.Fatal("native probes after the explicit unlock of the ", l.Name, " lock differ: errnos ", errnos, ": ", err)
 			}

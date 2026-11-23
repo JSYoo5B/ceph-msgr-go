@@ -18,6 +18,10 @@ CELLS = {
     "mds-cephfs-twoclient-recovery": ("TestCephMDSCephFSTwoClientFlockRecoveryIntegration", "mds_cephfs", "exclusive-mds-cephfs"),
     "mds-cephfs-dirtyflock-recovery": ("TestCephMDSCephFSDirtyFlockRecoveryIntegration", "mds_cephfs", "exclusive-mds-cephfs"),
     "mds-cephfs-noblob-recovery": ("TestCephMDSCephFSFlockWithoutBlobRecoveryIntegration", "mds_cephfs", "exclusive-mds-cephfs"),
+    "mds-cephfs-heldfcntl-split": ("TestCephMDSCephFSHeldFcntlSplitReconnectIntegration", "mds_cephfs_completion", "mds-held-fcntl-split,mds-held-flock-split"),
+    "mds-cephfs-heldflock-split-dense": ("TestCephMDSCephFSHeldFlockSplitDenseIntegration", "mds_cephfs_completion",
+                                         "mds-held-flock-split,mds-held-flock-split-dense,mds-held-flock-split-fragments"),
+    "mds-cephfs-heldflock-split-cut": ("TestCephMDSCephFSHeldFlockSplitCutIntegration", "mds_cephfs_completion", "mds-held-flock-split"),
 }
 
 FIXTURES = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data")

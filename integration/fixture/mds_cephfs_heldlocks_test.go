@@ -20,9 +20,12 @@ type heldLockCellCapability struct {
 
 func heldLockCellCapabilities() []heldLockCellCapability {
 	metadata := func(p map[string]string) bool { return p["mds_fresh"] == "1" && p["mds_cephfs"] == "1" }
+	completion := func(p map[string]string) bool { return p["mds_fresh"] == "1" && p["mds_cephfs_completion"] == "1" }
 	return []heldLockCellCapability{
 		{capMDSHeldFcntlRanges, []string{"^TestCephMDSCephFSFcntlMergedRangeRecoveryIntegration$"}, []string{"fcntl-probe-ranges"}, admitMDSCephFSHeldLocks, metadata},
 		{capMDSHeldFlockWait, []string{"^TestCephMDSCephFSWaitingFlockRecoveryIntegration$", "^TestCephMDSCephFSInterruptedFlockRecoveryIntegration$"}, []string{"lock-inflight"}, admitMDSCephFSHeldLocks, metadata},
+		{capMDSHeldFcntlSplit, []string{"^TestCephMDSCephFSHeldFcntlSplitReconnectIntegration$"}, mdsCephFSHeldFcntlSplitActions, admitMDSCephFSHeldFlockSplit, completion},
+		{capMDSHeldFlockSplitDense, []string{"^TestCephMDSCephFSHeldFlockSplitDenseIntegration$"}, mdsCephFSHeldFlockSplitDenseActions, admitMDSCephFSHeldFlockSplit, completion},
 	}
 }
 
@@ -119,9 +122,11 @@ func TestMDSCephFSHeldLockCellRequestsAreClosed(t *testing.T) {
 		mdsCephFSFcntlProbeSet("flock-ex-nb") != nil || mdsCephFSFcntlProbeSet("lock-inflight") != nil {
 		t.Fatal("an action maps to another FCNTL probe set")
 	}
-	// The shared driver function is part of the worker.
-	if strings.Count(mdsCephFSNativePython, "def fcntl_probe(extra):") != 1 || strings.Count(mdsCephFSNativePython, "fcntl_probe(extra)") != 2 {
-		t.Fatal("the FCNTL probe driver is not defined and called once")
+	// The shared driver function is part of both workers.
+	for name, script := range map[string]string{"cephfs": mdsCephFSNativePython, "completion": mdsCephFSCompletionNativePython} {
+		if strings.Count(script, "def fcntl_probe(extra):") != 1 || strings.Count(script, "fcntl_probe(extra)") != 2 {
+			t.Fatal("the FCNTL probe driver is not defined and called once in", name)
+		}
 	}
 	if !strings.Contains(mdsCephFSNativePython, "elif action in ('fcntl-probe', 'fcntl-probe-ranges') and path == prefix + '/go-file' and 0 < len(extra) <= 8:") {
 		t.Fatal("the metadata worker no longer bounds its FCNTL probes to go-file")
@@ -158,6 +163,30 @@ func TestMDSCephFSHeldLockCellOutputs(t *testing.T) {
 		if _, err := decodeMDSCephFSNative(tc.action, file, plan, tc.data); err == nil {
 			t.Fatal("wrong FCNTL probe output accepted:", name)
 		}
+	}
+	// Completion: the FCNTL probe of the first split file.
+	cplan := mdsCephFSCompletionPlanFor(strings.Repeat("a1", 16))
+	first, _ := cplan.path(cplan.splitLockFile())
+	last, _ := cplan.path(cplan.splitFinalLockFile())
+	split := func(path string, size int) []byte {
+		var probes []any
+		for _, p := range mdsCephFSFcntlProbes {
+			probes = append(probes, map[string]any{"type": p.Type, "start": p.Start, "len": p.Length, "errno": 0, "acquired": true, "unlocked": true,
+				"getlk": map[string]any{"type": "u", "start": p.Start, "len": p.Length, "pid": 0}})
+		}
+		s := map[string]any{"ino": 1099511627777, "size": size, "version": 0, "mtime": 1, "data_hex": strings.Repeat("00", size)}
+		data, _ := json.Marshal(map[string]any{"action": "fcntl-probe", "path": path, "native_global_id": 7,
+			"fcntl": map[string]any{"owner": mdsCephFSFlockOwner, "global_id": 8, "probes": probes, "elapsed_ns": 5, "before": s, "after": s}})
+		return data
+	}
+	if _, err := decodeMDSCephFSCompletionNative("fcntl-probe", first, cplan, split(first, 0)); err != nil {
+		t.Fatal("split FCNTL probe output refused", err)
+	}
+	if _, err := decodeMDSCephFSCompletionNative("fcntl-probe", last, cplan, split(last, 0)); err == nil {
+		t.Fatal("a split FCNTL probe of the last split file was accepted")
+	}
+	if _, err := decodeMDSCephFSCompletionNative("fcntl-probe", first, cplan, split(first, 1)); err == nil {
+		t.Fatal("a split FCNTL probe of a nonempty file was accepted")
 	}
 	// The in-flight read is refused for a session that was never observed.
 	c := &fixtureCluster{mdsCephFS: &mdsCephFSScope{owned: map[string]uint64{"v1:10.0.0.1:0/7": 4711}}}

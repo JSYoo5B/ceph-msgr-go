@@ -188,6 +188,9 @@ def fcntl_probe(extra):
 var _ = collectDiagnosticFiles(
 	"mds-cephfs-dirtyflock-recovery-results.json",
 	"mds-cephfs-fcntlranges-recovery-results.json",
+	"mds-cephfs-heldfcntl-split-results.json",
+	"mds-cephfs-heldflock-split-cut-results.json",
+	"mds-cephfs-heldflock-split-dense-results.json",
 	"mds-cephfs-intrflock-recovery-results.json",
 	"mds-cephfs-noblob-recovery-results.json",
 	"mds-cephfs-twoclient-recovery-results.json",
