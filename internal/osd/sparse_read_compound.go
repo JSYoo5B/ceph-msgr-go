@@ -26,7 +26,11 @@ import (
 // head newer than its pg_committed_to exists (:2346-2357, PeeringState.cc
 // can_serve_replica_read, PGLog.h has_write_since, which compares heads, so a
 // read snap does not exempt a clone); otherwise it answers -EAGAIN before
-// find_object_context, like any early error. Each operation then reads the
+// find_object_context, like any early error. A replica that is still missing
+// the head (it rejoined and its recovery has not pushed the object) answers
+// -EAGAIN earlier still (do_op's is_unreadable_object check of the head,
+// before the committed-point check), at the head and at any read snap; it
+// serves the objects of the same PG that it holds. Each operation then reads the
 // replica's own committed object as on the primary.
 // LGPL-2.1; independently translated, no source copied.
 //

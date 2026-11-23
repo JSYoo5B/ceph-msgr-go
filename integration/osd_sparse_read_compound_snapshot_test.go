@@ -64,8 +64,9 @@ func poolSparseMapAt(t *testing.T, ctx context.Context, object, snap string) poo
 //
 // The same compound with a replica-read flag, at the head and at a snapshot,
 // is TestCephOSDSparseReadCompoundReplicaReadIntegration's. Not verified:
-// self-managed snapshots, removed or trimmed snapshots, EC, mid-vector daemon
-// errors, faults and resubmission.
+// self-managed snapshots, removed or trimmed snapshots, EC, faults and
+// resubmission; no stock daemon answers this compound with a later
+// operation's error (TestCephOSDReadCompoundLaterErrorIntegration).
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdsparsereadcompoundsnapshot key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-request-v9-reply-v8.t-osdsparsereadcompoundsnapshot key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-request-v9-reply-v8

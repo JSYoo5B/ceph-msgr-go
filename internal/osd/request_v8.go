@@ -76,6 +76,9 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 	if (ChecksumCompound(r.Operations) || SparseReadCompound(r.Operations)) && r.Shard != -1 {
 		return msgr.MessageData{}, ErrRequest
 	}
+	if ErasureReexecutedVector(r.Operations) && r.Shard != -1 {
+		return msgr.MessageData{}, ErrOperation
+	}
 	if (r.IgnoreCache || IsSetChunk(r.Operations) || IsTierRequest(r.Operations)) && r.Shard != -1 {
 		return msgr.MessageData{}, ErrRequest
 	}

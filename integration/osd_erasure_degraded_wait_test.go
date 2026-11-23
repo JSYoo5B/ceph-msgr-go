@@ -122,9 +122,9 @@ type degradedObject struct {
 	data    []byte
 	// returned is the OSD of the shard that is missing the object.
 	returned int32
-	// flagged reports that the recovery flags are set; the run's cleanup
-	// unsets them while it is true.
-	flagged *bool
+	// recovery holds norecover and nobackfill; its cleanup clears them
+	// until a release has read them back cleared.
+	recovery *recoveryFlagHold
 }
 
 // degradedObject seeds object and another object of its PG, kills the OSD of
@@ -134,7 +134,7 @@ type degradedObject struct {
 func (r *ecEpochRun) degradedObject(object string, seeded, degradedAt uint32) degradedObject {
 	t := r.t
 	t.Helper()
-	d := degradedObject{object: object, flagged: new(bool)}
+	d := degradedObject{object: object}
 	route, _ := r.healthy(object)
 	other := ""
 	for i := range 64 {
@@ -159,20 +159,10 @@ func (r *ecEpochRun) degradedObject(object string, seeded, degradedAt uint32) de
 	d.written = r.write("overwrite while the shard is away", *absent.After, d.data, degradedAt, cephmsgr.OSDSnapContext{})
 	r.heldThrough("the overwrite while the shard is away", object, *absent.After)
 
-	// Registered after the run's own cleanups, so it runs before their
-	// recovery, which waits for clean PGs.
-	t.Cleanup(func() {
-		if *d.flagged {
-			cleanup, stop := context.WithTimeout(context.Background(), 60*time.Second)
-			defer stop()
-			nativePool(t, cleanup, "osdflags", map[string]any{"action": "unset"})
-		}
-	})
-	*d.flagged = true
-	flags := nativePool(t, r.ctx, "osdflags", map[string]any{"action": "set"})
-	if !slices.Contains(flags.OSDMapFlags, "norecover") || !slices.Contains(flags.OSDMapFlags, "nobackfill") {
-		t.Fatal("recovery flags were not set", flags.OSDMapFlags)
-	}
+	// Registered after the run's own cleanups, so its cleanup runs before
+	// their recovery, which waits for clean PGs.
+	d.recovery = newRecoveryFlagHold(t)
+	d.recovery.hold(r.ctx)
 	r.start(parity)
 	d.returned = parity.osd
 	seen := r.waitState("degraded on the returned shard", object, func(o pgIntervalObservation) error { return o.degradedOn(route, absent.Query.SameIntervalSince) })
@@ -189,11 +179,10 @@ func (r *ecEpochRun) degradedObject(object string, seeded, degradedAt uint32) de
 	return d
 }
 
-// unsetFlags clears norecover and nobackfill.
+// unsetFlags clears norecover and nobackfill and reads them back cleared.
 func (r *ecEpochRun) unsetFlags(d degradedObject) {
 	r.t.Helper()
-	nativePool(r.t, r.ctx, "osdflags", map[string]any{"action": "unset"})
-	*d.flagged = false
+	d.recovery.release(r.ctx)
 }
 
 // pause pauses the OSD under a lease that the fixture ends by

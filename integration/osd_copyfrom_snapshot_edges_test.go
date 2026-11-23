@@ -400,20 +400,7 @@ func TestCephOSDCopyFromSnapshotEdgesIntegration(t *testing.T) {
 
 	// Pending trim: nosnaptrim is set before s1 and s3 are removed, so every
 	// PG keeps them in its snap_trimq and the source clone s1 stays on disk.
-	if err := copyMonCommand(ctx, c, `{"prefix":"osd set","key":"nosnaptrim"}`); err != nil {
-		t.Fatal("osd set nosnaptrim", err)
-	}
-	trimming := false
-	t.Cleanup(func() {
-		if trimming {
-			return
-		}
-		restore, stop := context.WithTimeout(context.Background(), 30*time.Second)
-		defer stop()
-		if err := copyMonCommand(restore, c, `{"prefix":"osd unset","key":"nosnaptrim"}`); err != nil {
-			t.Error("osd unset nosnaptrim", err)
-		}
-	})
+	snapTrim := holdSnapTrim(t, ctx, c)
 	epoch := uint32(0)
 	for _, snap := range []uint64{s1, s3} {
 		removed, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: uint32(base.Pool), Op: cephmsgr.SelfManagedSnapshotRemove, Snapshot: snap})
@@ -487,10 +474,7 @@ func TestCephOSDCopyFromSnapshotEdgesIntegration(t *testing.T) {
 	}
 
 	// Trimmed: clear nosnaptrim and wait until the source clone is gone.
-	trimming = true
-	if err := copyMonCommand(ctx, c, `{"prefix":"osd unset","key":"nosnaptrim"}`); err != nil {
-		t.Fatal("osd unset nosnaptrim", err)
-	}
+	snapTrim.release(t, ctx)
 	started := time.Now()
 	for {
 		receipt.Trimmed = list(t, src)

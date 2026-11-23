@@ -45,7 +45,7 @@ import (
 // Bounce: after a further Go write of the clone's head, which is then the
 // last write of its PG, every replica answers both the head and the snapshot
 // compound with -EAGAIN before any operation runs, a known server code with
-// untouched per-op results and no resend, while the primary serves the new
+// untouched per-op results at attempt 0, while the primary serves the new
 // head with the flag. After the next write in the PG every replica serves
 // the new head and the unchanged clone. A compound without a flag at a
 // replica is refused locally on the replicated-PG profiles, whose placement
@@ -59,9 +59,12 @@ import (
 // legacy three-replica BlueStore suites run it too. The request-v9 fixture
 // admits one OSD only, so v9 replica reads have native codec vectors
 // (TestSparseReadCompoundReplicaMatches12FreshNativeRequests) and no daemon
-// evidence. Not verified: EC, MemStore allocation maps, a degraded or
-// recovering replica, the pool option pct_update_delay, mid-vector daemon
-// errors, faults and resubmission.
+// evidence. A replica that rejoined missing the object is
+// TestCephOSDSparseReadCompoundDegradedReplicaIntegration's. Not verified:
+// EC, MemStore allocation maps, a replica during a push of the object, the
+// pool option pct_update_delay, faults and resubmission; no stock daemon
+// answers this compound with a later operation's error
+// (TestCephOSDReadCompoundLaterErrorIntegration).
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdsparsereadcompoundreplicaread key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdsparsereadcompoundreplicaread key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
@@ -296,7 +299,7 @@ func TestCephOSDSparseReadCompoundReplicaReadIntegration(t *testing.T) {
 		var server *cephmsgr.OSDError
 		var unknown *cephmsgr.OutcomeUnknownError
 		if !errors.As(err, &server) || errors.As(err, &unknown) || server.Code != -11 || reply.Code != -11 || reply.RetryAttempt != 0 || len(reply.RawData) != 0 || len(reply.Operations) != len(tc.ops) || reply.Submission.Transaction == 0 {
-			t.Fatalf("osd.%d %s: expected a known -EAGAIN without a resend, got code %d: %v", route.ID, tc.name, reply.Code, err)
+			t.Fatalf("osd.%d %s: expected a known -EAGAIN reply at attempt 0, got code %d: %v", route.ID, tc.name, reply.Code, err)
 		}
 		for i, got := range reply.Operations {
 			if got.Result != 0 || got.PayloadLength != 0 || got.Offset != tc.ops[i].Offset || got.Length != tc.ops[i].Length || got.SparseRead.Extents != nil {
