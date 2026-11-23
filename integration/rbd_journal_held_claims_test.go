@@ -176,8 +176,8 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		return problems
 	}
 	acting := pl.Objects[0].Acting
-	if len(acting) != 3 || len(slices.Compact(members(acting))) != 3 || h.Primary != acting[0] || h.Primary < 0 {
-		fail("observe-placed: the PG is not on three distinct members led by the recorded primary osd.%d: %v", h.Primary, acting)
+	if len(acting) != 3 || len(slices.Compact(members(acting))) != 3 || h.Primary != acting[0] || h.Primary < 0 || !slices.Equal(h.GoActing, acting) {
+		fail("observe-placed: the PG is not on three distinct members led by osd.%d as the subject placed it (%v): %v", h.Primary, h.GoActing, acting)
 		return problems
 	}
 	placedOn("observe-placed", pl, acting, h.Primary)

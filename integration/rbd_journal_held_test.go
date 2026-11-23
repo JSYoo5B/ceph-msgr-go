@@ -267,9 +267,11 @@ type rbdJournalHeldKill struct {
 // rbdJournalHeld is the held-request variants' own record.
 type rbdJournalHeld struct {
 	Mode string
-	// Primary is P, the PG's primary at observe-placed; Replica the member
-	// that was paused (-1 when none was).
+	// Primary is P and GoActing the acting set, both as the subject's own
+	// placement of journal object 0 named them before the append; Replica
+	// is the member that was paused (-1 when none was).
 	Primary, Replica int32
+	GoActing         []int32
 	// The fixture's reads; Settled in the replica-hold and held
 	// primary-change modes and Lost in the dead-primary mode only.
 	Placed, Held, Settled, Lost *nativeRBDJournalHeldRead
@@ -382,17 +384,21 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 	if len(h.Placed.Objects) != 3 || len(h.Placed.Objects[0].Acting) != 3 {
 		t.Fatal("the PG is not on three acting members", h.Placed.Objects)
 	}
-	h.Primary, h.Replica = h.Placed.Objects[0].ActingPrimary, -1
+	// The OSDs the test acts on come from the subject's own placement (the
+	// observer's MON command), not from the fixture's read; the claims
+	// compare the two.
 	targetRoute := s.route(t, e.ObjectName)
-	if targetRoute.Primary != h.Primary || headerRoute.Primary != h.Primary {
-		t.Fatalf("the subject's placement (osd.%d and osd.%d) is not the fixture's primary osd.%d", headerRoute.Primary, targetRoute.Primary, h.Primary)
+	goPlacement, err := recoveryObjectPlacement(ctx, s.observer, s.plan.Pool, e.ObjectName)
+	if err != nil || len(goPlacement.Acting) != 3 || goPlacement.Primary != targetRoute.Primary || headerRoute.Primary != targetRoute.Primary {
+		t.Fatalf("the subject's placement of the journal object and the header is not one three-member acting set (%v, osd.%d, osd.%d): %v", goPlacement.Acting, targetRoute.Primary, headerRoute.Primary, err)
 	}
+	h.Primary, h.Replica, h.GoActing = targetRoute.Primary, -1, goPlacement.Acting
 	h.SentAtEpoch = targetRoute.Epoch
 
 	// The replica modes pause the last acting member under a lease.
 	var pause *heldPause
 	if s.mode != rbdJournalVariantHeldPrimaryChange {
-		h.Replica = h.Placed.Objects[0].Acting[2]
+		h.Replica = h.GoActing[2]
 		pause = startHeldPause(t, ctx, s.dir, "osd", strconv.Itoa(int(h.Replica)), time.Now().Add(rbdJournalHeldLeaseBudget), rbdJournalHeldLeaseReserve)
 		h.Lease = &rbdJournalHeldLease{Daemon: pause.daemon(), Deadline: pause.lease.Deadline.UnixNano()}
 		s.done("replica_paused")

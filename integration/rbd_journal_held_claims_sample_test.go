@@ -92,7 +92,7 @@ func rbdJournalHeldSample(mode string) *rbdJournalLostAppendRecord {
 	if change {
 		op.FlagPoint, op.Events, last = "no flag points reached", []string{"initiated", "header_read", "throttled", "all_read", "dispatched"}, "29'51"
 	}
-	h := &rbdJournalHeld{Mode: mode, Primary: 0, Replica: -1, SentAtEpoch: 30, NamedEpoch: named, SubmittedUTC: "2026-11-23T13:33:49.500000000Z", PendingAfterHeld: true, AppendConnection: 1,
+	h := &rbdJournalHeld{Mode: mode, Primary: 0, Replica: -1, GoActing: []int32{0, 1, 2}, SentAtEpoch: 30, NamedEpoch: named, SubmittedUTC: "2026-11-23T13:33:49.500000000Z", PendingAfterHeld: true, AppendConnection: 1,
 		PingBefore: &rbdLockOwnerLossAttempt{Label: "watch_ping", Invocations: 1, Class: "applied"},
 		Placed:     &nativeRBDJournalHeldRead{Objects: placements(30, clean), PGID: "3.0", Query: query("active+clean", 30, clean, "29'51", 21, 1, 2), OSD: -1, Epoch: 30, Down: []int32{}, Settled: true, Polls: 1},
 		Held: &nativeRBDJournalHeldRead{Objects: placements(30, clean), PGID: "3.0", Query: query("active+clean", 30, clean, last, 21, 1, 2), OSD: 0, Ops: []nativeRBDJournalHeldOp{op},
@@ -196,6 +196,7 @@ func TestRBDJournalHeldClaims(t *testing.T) {
 	cases := map[string]mutation{
 		// Held, in every mode.
 		"placed on another primary":   {"*", "observe-held", func(r *rbdJournalLostAppendRecord) { r.Held.Primary = 1 }},
+		"subject placed another set":  {"*", "observe-held", func(r *rbdJournalLostAppendRecord) { r.Held.GoActing = []int32{0, 2, 1} }},
 		"PG not clean before":         {"*", "observe-held", func(r *rbdJournalLostAppendRecord) { r.Held.Placed.Query.State = "active+recovering" }},
 		"an OSD down before":          {"*", "observe-held", func(r *rbdJournalLostAppendRecord) { r.Held.Placed.Down = []int32{2} }},
 		"a peer behind before":        {"*", "observe-held", func(r *rbdJournalLostAppendRecord) { r.Held.Placed.Query.Peers[0].LastUpdate = "20'1" }},
