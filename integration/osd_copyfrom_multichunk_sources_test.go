@@ -636,20 +636,10 @@ type copySourceChangeReceipt struct {
 // the unchanged clone, so the copy succeeds with the clone's user version
 // and the destination becomes the clone.
 func judgeSourceChange(snapshot bool, reply cephmsgr.OSDReply, tid, cloneUser uint64) error {
-	if reply.Transaction != tid || reply.RetryAttempt != 0 || len(reply.Operations) != 1 {
-		return fmt.Errorf("the answer is tid %d attempt %d with %d ops; want tid %d, attempt 0, one op", reply.Transaction, reply.RetryAttempt, len(reply.Operations), tid)
+	if snapshot {
+		return judgeChunkAnswer(0, reply, tid, cloneUser)
 	}
-	if !snapshot {
-		if reply.Code != -34 || reply.Operations[0].Result != -115 {
-			return fmt.Errorf("the head copy answered %d (per-op %d); want -ERANGE with per-op -EINPROGRESS", reply.Code, reply.Operations[0].Result)
-		}
-		return nil
-	}
-	if reply.Code != 0 || reply.Operations[0].Result != 0 || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || reply.UserVersion != cloneUser {
-		return fmt.Errorf("the snapshot copy answered %d (per-op %d, flags %#x, user %d); want a committed 0 with the clone's user version %d",
-			reply.Code, reply.Operations[0].Result, reply.Flags, reply.UserVersion, cloneUser)
-	}
-	return nil
+	return judgeChunkAnswer(-34, reply, tid, 0)
 }
 
 // For COPY_FROM and COPY_FROM2, a 64 KiB source is copied onto a natively
