@@ -225,6 +225,14 @@ func rbdJournalActionsFor(p profile) []string {
 		return rbdJournalForcedBreakActions
 	case p.admits(capRBDJournalForcedBreakPending):
 		return rbdJournalForcedBreakPendingActions
+	case p.admits(capRBDJournalReplicaHold):
+		return rbdJournalReplicaHoldActions
+	case p.admits(capRBDJournalHeldPrimaryChange):
+		return rbdJournalHeldPrimaryChangeActions
+	case p.admits(capRBDJournalDeadPrimary):
+		return rbdJournalDeadPrimaryActions
+	case p.admits(capRBDJournalConsumer):
+		return rbdJournalConsumerActions
 	}
 	return rbdJournalActions
 }
@@ -538,6 +546,12 @@ type rbdJournalPlan struct {
 	GoConcurrentWrites    []rbdBaseExtent   `json:"go_concurrent_writes"`
 	ConcurrentEvents      []rbdJournalEvent `json:"concurrent_events"`
 	TakeoverEvents        []rbdJournalEvent `json:"takeover_events"`
+
+	// The consumer plan's producer batches and laggy-client bound
+	// (rbd_journal_consumer.go); empty and zero in every other plan.
+	ProduceEvents           []rbdJournalEvent `json:"produce_events,omitempty"`
+	LaggyEvents             []rbdJournalEvent `json:"laggy_events,omitempty"`
+	MaxConcurrentObjectSets int               `json:"max_concurrent_object_sets,omitempty"`
 }
 
 // rbdJournalPlanFor places a 256 KiB, four-object image: setup writes
@@ -606,7 +620,7 @@ func (p rbdJournalPlan) owned(token string) bool {
 		len(p.ConcurrentOwnerEvents) > 0 && len(p.GoConcurrentWrites) > 0 && len(p.ConcurrentEvents) > 0 &&
 		!slices.ContainsFunc(p.ConcurrentOwnerEvents, func(e rbdJournalEvent) bool { return e.Kind != "write" }) &&
 		!slices.ContainsFunc(p.ConcurrentEvents, func(e rbdJournalEvent) bool { return e.Kind != "write" }) &&
-		len(p.TakeoverEvents) > 0 && !slices.ContainsFunc(p.TakeoverEvents, func(e rbdJournalEvent) bool { return e.Kind != "write" })
+		len(p.TakeoverEvents) > 0 && !slices.ContainsFunc(p.TakeoverEvents, func(e rbdJournalEvent) bool { return e.Kind != "write" }) && p.consumerOwned()
 }
 
 // The fixed native journal driver. The fixture passes only the token-bound
@@ -624,7 +638,8 @@ identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
 ACTIONS = ('setup', 'observe-registered', 'write', 'observe-committed', 'inspect', 'replay', 'concurrent',
            'observe-locked', 'checkpoint', 'observe-recorded', 'change-primary', 'observe-resubmitted',
-           'observe-appended', 'force-break', 'observe-fenced', 'takeover', 'observe-pending', 'observe-new-connection', 'disconnect-oracle')
+           'observe-appended', 'force-break', 'observe-fenced', 'takeover', 'observe-pending', 'observe-new-connection', 'disconnect-oracle',
+           'observe-answered', 'produce')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('image') != 'ceph-msgr-journal-' + token or plan.get('features') != 69
@@ -633,7 +648,10 @@ if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or ident
     raise ValueError('native RBD journal driver scope is not owned')
 OUT = '/out'
 CONF = '/tmp/ceph-msgr-test/ceph.conf'
-OBJECTS = 8
+# The consumer plan journals into four object sets; every other plan stays in
+# the first two.
+CONSUMER = bool(plan.get('produce_events'))
+OBJECTS = 16 if CONSUMER else 8
 OBJECT_LIMIT = 256 * 1024
 pool, name = plan['pool'], plan['image']
 PREFIX = 'rbd-journal-%s-' % action
@@ -852,6 +870,112 @@ def trim_wait(ioctx, header):
             return {'polls': polls, 'waited_ns': time.monotonic_ns() - started, 'minimum_set': minimum, 'moved': minimum != 0}
         time.sleep(0.2)
 
+def parse_client(data):
+    # cls::journal::Client (cls/journal/cls_journal_types.cc): ENCODE_START(1, 1),
+    # id, data, commit_position (ENCODE_START(1, 1), a list of ObjectPosition,
+    # each ENCODE_START(1, 1) object_number, tag_tid, entry_tid) and state.
+    at = [0]
+    def take(n):
+        if at[0] + n > len(data):
+            raise ValueError('journal client record is short')
+        value = data[at[0]:at[0] + n]
+        at[0] += n
+        return value
+    u8 = lambda: take(1)[0]
+    u32 = lambda: struct.unpack('<I', take(4))[0]
+    u64 = lambda: struct.unpack('<Q', take(8))[0]
+    def header():
+        u8(), u8(), u32()
+    header()
+    client_id = text(take(u32()))
+    take(u32())
+    header()
+    count = u32()
+    if count > 64:
+        raise ValueError('journal commit position too long')
+    positions = []
+    for _ in range(count):
+        header()
+        positions.append([u64(), u64(), u64()])
+    return {'id': client_id, 'positions': positions, 'state': u8()}
+
+def produce(ioctx, out):
+    # One read-write image instance owns the lock and journals the plan's
+    # writes in two batches while the Go test consumes the journal as a
+    # registered client. Each phase is published with the journal header's
+    # exec outputs and the journal objects (rbd-journal-state.json and one
+    # binary view per phase); the waits are bounded and reported, not judged.
+    state = {'token': token, 'request_id': int(request_id), 'native_global_id': out['native_global_id'], 'phases': []}
+    image = rbd.Image(ioctx, name)
+    try:
+        image_id = text(image.id())
+        header, prefix = 'journal.' + image_id, 'journal_data.%d.%s.' % (ioctx.get_pool_id(), image_id)
+        splay = call(ioctx, header, 'journal', 'get_splay_width', b'')
+        width = bytes.fromhex(splay['output_hex'])[0] if splay['code'] == 0 and len(splay['output_hex']) == 2 else 0
+        if width == 0:
+            raise ValueError('native journal splay width unavailable')
+        def client(client_id):
+            entry = call(ioctx, header, 'journal', 'get_client', lstr(client_id))
+            if entry['code'] != 0:
+                raise ValueError('native journal client %s unavailable' % client_id)
+            return parse_client(bytes.fromhex(entry['output_hex']))
+        def object_set(method):
+            entry = call(ioctx, header, 'journal', method, b'')
+            if entry['code'] != 0 or len(entry['output_hex']) != 16:
+                raise ValueError('native journal %s unavailable' % method)
+            return struct.unpack('<Q', bytes.fromhex(entry['output_hex']))[0]
+        minimum = lambda: object_set('get_minimum_set')
+        active = lambda: object_set('get_active_set')
+        def committed(last):
+            # The image client's position names its last entry first and
+            # one entry per splay offset, all past object set 0.
+            positions = client('')['positions']
+            return len(positions) == width and positions[0][2] == last and all(p[0] // width >= 1 for p in positions)
+        def until(test, bound):
+            started, deadline, polls = time.monotonic_ns(), time.monotonic() + bound, 0
+            while True:
+                polls += 1
+                met = test()
+                if met or time.monotonic() > deadline:
+                    return {'polls': polls, 'waited_ns': time.monotonic_ns() - started, 'met': bool(met)}
+                time.sleep(0.2)
+        def phase(label, **extra):
+            objects, view = journal_objects(ioctx, prefix)
+            entry = dict(phase=label, time_ns=time.time_ns(), is_owner=image.is_exclusive_lock_owner(), class_calls=journal_calls(ioctx, header),
+                         journal_objects=objects, blob=publish(PREFIX + label + '-journal-objects.bin', view), **extra)
+            state['phases'].append(entry)
+            publish('rbd-journal-state.json', json.dumps(state, sort_keys=True).encode())
+        events = [apply(image, 'produce', e) for e in plan['produce_events']]
+        # The image client's position leaves object set 0 once its commits
+        # are flushed; the Go client's position still names set 0.
+        waited = until(lambda: committed(len(plan['produce_events']) - 1), 60)
+        phase('produced', events=events, wait=waited)
+        proceed = wait_proceed(1)
+        # The Go client committed a position past object set 0: the
+        # producer's trimmer removes the set and raises the minimum set.
+        waited = until(lambda: minimum() >= 1, 60)
+        phase('trimmed', wait=waited, proceed_ns=proceed)
+        proceed = wait_proceed(2)
+        laggy = [apply(image, 'laggy', e) for e in plan['laggy_events']]
+        # A new list: the published first phase keeps its own.
+        events = events + laggy
+        # The Go client is now more object sets behind than the plan admits:
+        # the producer flags it disconnected and trims up to the active set,
+        # which its own image client's position names once all of its entries
+        # are committed.
+        last = len(plan['produce_events']) + len(plan['laggy_events']) - 1
+        waited = until(lambda: client(plan['go_client'])['state'] == 1 and committed(last) and minimum() == active(), 90)
+        phase('disconnected', events=laggy, wait=waited, proceed_ns=proceed)
+        out['final_wait_ns'] = wait_proceed(3)
+        out['events'] = events
+    except BaseException:
+        image.close()
+        raise
+    started = time.monotonic_ns()
+    image.close()
+    out['close_ns'] = time.monotonic_ns() - started
+    out['phases_produce'] = state['phases']
+
 def concurrent(ioctx, out):
     # One read-write image instance for the whole session. Its first
     # synchronous write takes the exclusive lock (automatic policy), opens
@@ -924,13 +1048,26 @@ LOG_LINE = re.compile(r'^\S+ +[0-9a-f]+ +(-?[0-9]+) (librbd::[A-Za-z_:]+): (.*)$
 # journal/JournalTrimmer.cc logs every step at level 20 under the prefix
 # "JournalTrimmer: <this> " (subsystem journaler).
 TRIM_LINE = re.compile(r'^\S+ +[0-9a-f]+ +(-?[0-9]+) JournalTrimmer: 0x[0-9a-f]+ (.*)$')
-TRIM_LINES = 64
+TRIM_LINES = 256
 trim_lines, trim_matched = [], [0]
+# journal/JournalMetadata.cc logs the laggy-client disconnect at levels 1 and
+# 10 under the prefix "JournalMetadata: <this> " (the second from inside a
+# lambda, whose function name is operator()).
+LAGGY_LINE = re.compile(r'^\S+ +[0-9a-f]+ +(-?[0-9]+) JournalMetadata: 0x[0-9a-f]+ ((?:schedule_laggy_clients_disconnect|operator\(\)): \S+: (?:scheduling disconnect|flagging disconnected))$')
+LAGGY_LINES = 16
+laggy_lines, laggy_matched = [], [0]
 conf = {'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'}
 if action in ('force-break', 'takeover'):
     conf.update(debug_rbd='10/10', log_to_file='true', log_file=LOCK_LOG)
 if TRIM and action == 'takeover':
     conf.update(debug_journaler='20/20')
+if action == 'produce':
+    # The producer's journaler logs its trimmer and its laggy-client
+    # disconnect; it disconnects a client the plan's number of object sets
+    # behind (librbd/Journal.cc create_journaler) and commits its own
+    # position a second after an entry is safe.
+    conf.update(debug_journaler='20/20', log_to_file='true', log_file=LOCK_LOG,
+                rbd_journal_max_concurrent_object_sets=str(plan['max_concurrent_object_sets']), rbd_journal_commit_age='1')
 if TRIM and action == 'setup':
     # librbd/image/CreateRequest.cc reads rbd_journal_order when the
     # journaling feature is enabled at creation.
@@ -952,6 +1089,12 @@ def lock_log():
     lines, matched, pointers = [], 0, {}
     for raw in data.split(b'\n'):
         line = raw.decode('utf-8', 'replace')
+        laggy = LAGGY_LINE.match(line)
+        if laggy is not None:
+            laggy_matched[0] += 1
+            if len(laggy_lines) < LAGGY_LINES:
+                laggy_lines.append({'level': int(laggy.group(1)), 'text': laggy.group(2)[:LOCK_TEXT]})
+            continue
         trimmed = TRIM_LINE.match(line)
         if trimmed is not None:
             trim_matched[0] += 1
@@ -994,6 +1137,8 @@ try:
                 raise ValueError('native oracle journal client registration failed')
         if action == 'concurrent':
             concurrent(ioctx, out)
+        elif action == 'produce':
+            produce(ioctx, out)
         elif action in ('setup', 'write'):
             phase = 'setup' if action == 'setup' else 'write'
             image = rbd.Image(ioctx, name)
@@ -1073,7 +1218,10 @@ finally:
     cluster.shutdown()
 if action in ('force-break', 'takeover'):
     out['lock_log'] = lock_log()
-if TRIM and action == 'takeover':
+if action == 'produce':
+    lock_log()
+    out['laggy_log'] = {'matched': laggy_matched[0], 'truncated': laggy_matched[0] > len(laggy_lines), 'lines': laggy_lines}
+if TRIM and action in ('takeover', 'produce'):
     out['trim_log'] = {'matched': trim_matched[0], 'truncated': trim_matched[0] > len(trim_lines), 'lines': trim_lines}
 out['finished_ns'] = time.time_ns()
 print(json.dumps(out, sort_keys=True))
@@ -1188,9 +1336,13 @@ type rbdJournalNative struct {
 	Disconnect *rbdJournalCLI `json:"disconnect,omitempty"`
 	// TrimWait and TrimLog belong to the takeover of the trim plan: how long
 	// the open image waited for its journal trimmer to raise the minimum
-	// set, and that trimmer's debug lines.
+	// set, and that trimmer's debug lines. The producer of the consumer plan
+	// keeps its trimmer's lines too, and its laggy-client lines in LaggyLog.
 	TrimWait *rbdJournalTrimWait `json:"trim_wait,omitempty"`
 	TrimLog  *rbdJournalTrimLog  `json:"trim_log,omitempty"`
+	LaggyLog *rbdJournalTrimLog  `json:"laggy_log,omitempty"`
+	// ProducePhases are the producer's published phases.
+	ProducePhases []rbdJournalProducePhase `json:"phases_produce,omitempty"`
 }
 
 // rbdJournalTrimWait is the takeover's wait for the journal's minimum set to
@@ -1202,8 +1354,12 @@ type rbdJournalTrimWait struct {
 	Moved      bool   `json:"moved"`
 }
 
-// rbdJournalTrimLines bounds the trimmer lines the driver keeps (TRIM_LINES).
-const rbdJournalTrimLines = 64
+// rbdJournalTrimLines bounds the trimmer lines the driver keeps (TRIM_LINES),
+// rbdJournalLaggyLines the laggy-client lines (LAGGY_LINES).
+const (
+	rbdJournalTrimLines  = 256
+	rbdJournalLaggyLines = 16
+)
 
 // rbdJournalTrimLog is the journal/JournalTrimmer.cc part of the takeover's
 // debug log, pointers removed; Matched counts every such line read.
@@ -1220,8 +1376,10 @@ func (w *rbdJournalTrimWait) valid() bool {
 	return w != nil && w.Polls > 0 && w.WaitedNS >= 0 && w.Moved == (w.MinimumSet != 0)
 }
 
-func (l *rbdJournalTrimLog) valid() bool {
-	if l == nil || l.Lines == nil || len(l.Lines) > rbdJournalTrimLines || l.Matched < len(l.Lines) || l.Truncated != (l.Matched > len(l.Lines)) {
+func (l *rbdJournalTrimLog) valid() bool { return l.validWithin(rbdJournalTrimLines) }
+
+func (l *rbdJournalTrimLog) validWithin(limit int) bool {
+	if l == nil || l.Lines == nil || len(l.Lines) > limit || l.Matched < len(l.Lines) || l.Truncated != (l.Matched > len(l.Lines)) {
 		return false
 	}
 	for _, line := range l.Lines {
@@ -1388,7 +1546,7 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 		result.JournalHeader == "journal."+result.ImageID && result.JournalPrefix == prefix &&
 		s.Order == plan.Order && s.ObjectSize == 1<<plan.Order && s.Prefix == "rbd_data."+result.ImageID && s.Size == plan.Size && s.Objects == plan.Size>>plan.Order &&
 		result.Features == plan.Features && rbdLockLockersValid(result.Lockers) && rbdWriteWatchersValid(result.Watchers) &&
-		len(result.ClassCalls) == len(rbdJournalCalls) && len(result.JournalObjects) == rbdJournalObjectCount && len(result.Blobs) == len(rbdJournalBlobViews)
+		len(result.ClassCalls) == len(rbdJournalCalls) && len(result.JournalObjects) == plan.objects() && len(result.Blobs) == len(rbdJournalBlobViews)
 	for i, method := range rbdJournalCalls {
 		if i < len(result.ClassCalls) {
 			ok = ok && rbdLockCallValid(&result.ClassCalls[i], result.JournalHeader, "journal", method) && len(result.ClassCalls[i].OutputHex) <= 131072
@@ -1412,7 +1570,9 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 	} else {
 		ok = ok && result.Inspect == nil
 	}
-	ok = ok && (action == "concurrent") == (result.Phases != nil) && (action == "concurrent") == (result.AioReturns != nil) && (action == "concurrent") == (result.FinalWaitNS > 0)
+	ok = ok && (action == "concurrent") == (result.Phases != nil) && (action == "concurrent") == (result.AioReturns != nil) && (action == "concurrent" || action == "produce") == (result.FinalWaitNS > 0)
+	ok = ok && (action == "produce") == (result.ProducePhases != nil) && (action == "produce") == (result.LaggyLog != nil) &&
+		(action != "produce" || plan.consumer() && rbdJournalProducePhasesValid(result.ProducePhases, plan, result.JournalHeader) && result.LaggyLog.validWithin(rbdJournalLaggyLines))
 	ok = ok && (action == "setup") == (result.OracleRegister != nil) && (action == "replay" || action == "takeover") == (result.Owner != nil) && (action == "replay") == (result.AcquireNS > 0)
 	ok = ok && (action == "takeover") == (result.WriteNS > 0) && (action == "force-break") == (result.ForceBreak != nil) && (action != "force-break" || result.ForceBreak.valid())
 	ok = ok && rbdJournalBlocklisted(action) == (result.Blocklist != nil) && (!rbdJournalBlocklisted(action) || rbdLockBlocklistValid(result.Blocklist))
@@ -1421,8 +1581,8 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 	ok = ok && rbdJournalLockLogged(action) == (result.LockLog != nil) && (!rbdJournalLockLogged(action) || result.LockLog.valid())
 	ok = ok && (action == "disconnect-oracle") == (result.Disconnect != nil) &&
 		(action != "disconnect-oracle" || rbdJournalCLIValid(result.Disconnect, "client", "disconnect", "--client-id", plan.OracleClient, spec))
-	trimmed := action == "takeover" && plan.JournalOrder != 0
-	ok = ok && trimmed == (result.TrimWait != nil) && trimmed == (result.TrimLog != nil) && (!trimmed || result.TrimWait.valid() && result.TrimLog.valid())
+	trimmed, logged := action == "takeover" && plan.JournalOrder != 0, action == "produce" && plan.JournalOrder != 0
+	ok = ok && trimmed == (result.TrimWait != nil) && (trimmed || logged) == (result.TrimLog != nil) && (!trimmed || result.TrimWait.valid()) && (!trimmed && !logged || result.TrimLog.valid())
 	if result.OracleRegister != nil {
 		ok = ok && rbdLockCallValid(result.OracleRegister, result.JournalHeader, "journal", "client_register") && result.OracleRegister.Code == 0
 	}
@@ -1435,6 +1595,10 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 		ok = ok && result.Events == nil && result.CloseNS > 0
 	case "takeover":
 		ok = ok && rbdJournalEventsValid(result.Events, "takeover", plan.TakeoverEvents) && result.CloseNS > 0
+	case "produce":
+		produced := min(len(plan.ProduceEvents), len(result.Events))
+		ok = ok && rbdJournalEventsValid(result.Events[:produced], "produce", plan.ProduceEvents) && rbdJournalEventsValid(result.Events[produced:], "laggy", plan.LaggyEvents) &&
+			result.CloseNS > 0
 	case "concurrent":
 		owner := min(len(plan.ConcurrentOwnerEvents), len(result.Events))
 		ok = ok && rbdJournalEventsValid(result.Events[:owner], "concurrent-owner", plan.ConcurrentOwnerEvents) &&
@@ -1481,6 +1645,19 @@ func checkRBDJournalBlobs(out, action string, blobs map[string]rbdBaseBlob) erro
 // to three `rbd journal` commands of at most 60 s each.
 const rbdJournalNativeTimeout = 240 * time.Second
 
+// rbdJournalProduceTimeout bounds the producer, which waits at most 60, 60
+// and 90 s for its three states and 30 s for each of its three proceed
+// signals, then observes the journal.
+const rbdJournalProduceTimeout = 480 * time.Second
+
+// rbdJournalActionTimeout is the bound of one native journal action.
+func rbdJournalActionTimeout(action string) time.Duration {
+	if action == "produce" {
+		return rbdJournalProduceTimeout
+	}
+	return rbdJournalNativeTimeout
+}
+
 func (c *fixtureCluster) rbdJournalRunNative(ctx context.Context, action string, request int64) (*ceph.NativeCommandResult, rbdJournalNative, error) {
 	x := c.rbdBase
 	plan, err := json.Marshal(x.journalPlan)
@@ -1488,7 +1665,7 @@ func (c *fixtureCluster) rbdJournalRunNative(ctx context.Context, action string,
 		return nil, rbdJournalNative{}, err
 	}
 	argv := []string{"python3", "-c", rbdJournalNativePython, "client.rbd-base-native-" + x.token, action, x.token, strconv.FormatInt(request, 10), string(plan)}
-	process, err := c.runKeyedNative(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: rbdJournalNativeTimeout, MaxStdout: rbdBaseJSONLimit, MaxStderr: 16 << 10, Label: "owned native RBD journal " + action}, x.native)
+	process, err := c.runKeyedNative(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: rbdJournalActionTimeout(action), MaxStdout: rbdBaseJSONLimit, MaxStderr: 16 << 10, Label: "owned native RBD journal " + action}, x.native)
 	if err != nil || !process.Complete() || process.ExitCode != 0 {
 		return &process, rbdJournalNative{}, errors.Join(err, fmt.Errorf("native RBD journal %s did not complete (exit %d, timed out %v)", action, process.ExitCode, process.TimedOut))
 	}
@@ -1541,6 +1718,8 @@ func rbdJournalTarget(plan rbdJournalPlan, action string) string {
 		return plan.Pool + ":pool-flag-" + rbdLockAdvanceFlag + ",osdmap-epoch"
 	case "disconnect-oracle":
 		return plan.Image + ",journal-client:" + plan.OracleClient + ":disconnected"
+	case "produce":
+		return plan.Image + ":exclusive-lock,native-write,journal-trim,journal-client:" + plan.GoClient + ":disconnected"
 	}
 	return plan.Image
 }
@@ -1554,7 +1733,7 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	if c.profile.rbdBase != "1" || x == nil || x.out != out || x.setup == nil || x.native == nil || !x.plan.owned(x.token) || !x.journalPlan.owned(x.token) {
 		return errors.New("invalid owned RBD journal control scope")
 	}
-	ctx, stop := context.WithTimeout(ctx, rbdJournalNativeTimeout+20*time.Second)
+	ctx, stop := context.WithTimeout(ctx, rbdJournalProduceTimeout+20*time.Second)
 	defer stop()
 	if err := lockMDSFresh(ctx, &x.mu); err != nil {
 		return err
@@ -1596,10 +1775,26 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 			return c.rbdBaseFinish(m, err)
 		}
 	}
+	if rbdJournalHeldAdmin(action) {
+		// The fixture's own reads of a held-request sequence; no driver.
+		read, err := c.rbdJournalHeldControl(ctx, action)
+		result["held"] = read
+		return c.rbdBaseFinish(m, err)
+	}
 	if action == "advance-map" {
 		// The fixture's own administrative commands only; the Go test's
 		// observations follow as their own actions.
-		advance, err := rbdLockAdvanceMap(ctx, x.plan.Pool, c.rbdLockAdvanceOps(x.plan.Pool))
+		ops := c.rbdLockAdvanceOps(x.plan.Pool)
+		if c.profile.admits(capRBDJournalHeldPrimaryChange) {
+			// On three OSDs the samples are the old primary's, which holds
+			// the append (rbd_journal_held.go).
+			if x.journalHeldPrimary < 0 || len(x.osdsMarkedOut) != 1 || x.osdsMarkedOut[0] != x.journalHeldPrimary {
+				return c.rbdBaseFinish(m, errors.New("the held append's primary was not the one OSD marked out"))
+			}
+			held := x.journalHeldPrimary
+			ops.osds = func(context.Context) ([]int, error) { return []int{held}, nil }
+		}
+		advance, err := rbdLockAdvanceMap(ctx, x.plan.Pool, ops)
 		result["advance"] = advance
 		return c.rbdBaseFinish(m, err)
 	}
@@ -1610,6 +1805,11 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	}
 	if err == nil {
 		err = checkRBDJournalBlobs(out, action, native.Blobs)
+	}
+	for _, p := range native.ProducePhases {
+		if err == nil {
+			err = checkRBDBlob(out, rbdJournalProduceBlobName(p.Phase), p.Blob)
+		}
 	}
 	if err != nil {
 		return c.rbdBaseFinish(m, err)
@@ -1639,29 +1839,42 @@ var _ = collectDiagnosticFiles(
 	"rbd-journal-advance-map.json",
 	"rbd-journal-change-primary.json",
 	"rbd-journal-checkpoint.json",
+	"rbd-journal-consumer-results.json",
+	"rbd-journal-dead-primary-outcome.json",
+	"rbd-journal-dead-primary-results.json",
 	"rbd-journal-disconnect-oracle.json",
 	"rbd-journal-force-break.json",
 	"rbd-journal-forced-break-inflight-outcome.json",
 	"rbd-journal-forced-break-inflight-results.json",
 	"rbd-journal-forced-break-pending-results.json",
 	"rbd-journal-forced-break-results.json",
+	"rbd-journal-held-primary-change-outcome.json",
+	"rbd-journal-held-primary-change-results.json",
 	"rbd-journal-inspect.json",
 	"rbd-journal-lost-append-outcome.json",
 	"rbd-journal-lost-append-results.json",
+	"rbd-journal-observe-answered.json",
 	"rbd-journal-observe-appended.json",
 	"rbd-journal-observe-committed.json",
 	"rbd-journal-observe-fenced.json",
+	"rbd-journal-observe-held.json",
 	"rbd-journal-observe-locked.json",
 	"rbd-journal-observe-new-connection.json",
 	"rbd-journal-observe-pending.json",
+	"rbd-journal-observe-placed.json",
+	"rbd-journal-observe-primary-lost.json",
 	"rbd-journal-observe-recorded.json",
 	"rbd-journal-observe-registered.json",
 	"rbd-journal-observe-resubmitted.json",
+	"rbd-journal-observe-settled.json",
 	"rbd-journal-owner-loss-outcome.json",
 	"rbd-journal-owner-loss-results.json",
 	"rbd-journal-primary-change-outcome.json",
 	"rbd-journal-primary-change-results.json",
+	"rbd-journal-produce.json",
 	"rbd-journal-replay.json",
+	"rbd-journal-replica-hold-outcome.json",
+	"rbd-journal-replica-hold-results.json",
 	"rbd-journal-results.json",
 	"rbd-journal-setup.json",
 	"rbd-journal-takeover.json",

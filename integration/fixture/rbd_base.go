@@ -180,6 +180,9 @@ type rbdBaseScope struct {
 	// recorded before the command; the cleanup marks them in again.
 	journalImageID string
 	osdsMarkedOut  []int
+	// journalHeldPrimary is the PG primary the held-request sequences'
+	// observe-placed found (rbd_journal_held.go), -1 before it.
+	journalHeldPrimary int
 	// The RBD group-snapshot acceptance's group and two images in the same
 	// owned pool (rbd_group.go).
 	group rbdGroupState
@@ -670,7 +673,7 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 		return err
 	}
 	token := hex.EncodeToString(raw[:])
-	x := &rbdBaseScope{out: out, token: token, plan: rbdBasePlanFor(token), writePlan: rbdWritePlanFor(token), lockPlan: rbdLockPlanFor(token), clonePlan: rbdClonePlanFor(token), journalPlan: rbdJournalPlanFor(token, p.admits(capRBDJournalTrim)), poolID: -1}
+	x := &rbdBaseScope{out: out, token: token, plan: rbdBasePlanFor(token), writePlan: rbdWritePlanFor(token), lockPlan: rbdLockPlanFor(token), clonePlan: rbdClonePlanFor(token), journalPlan: rbdJournalPlanOf(token, p), poolID: -1, journalHeldPrimary: -1}
 	if !x.plan.owned(token) || !x.writePlan.owned(token) || !x.lockPlan.owned(token) || !x.clonePlan.owned(token) || !x.journalPlan.owned(token) {
 		return errors.New("RBD base plan is not bound to its token")
 	}

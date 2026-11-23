@@ -614,7 +614,7 @@ func rbdJournalOutput(token string, plan rbdJournalPlan, action string) map[stri
 		calls = append(calls, map[string]any{"object": header, "class": "journal", "method": method, "input_hex": "", "code": 0, "output_hex": "00"})
 	}
 	objects, offset := []map[string]any{}, uint64(0)
-	for i := 0; i < rbdJournalObjectCount; i++ {
+	for i := 0; i < plan.objects(); i++ {
 		size := uint64(0)
 		if i < 4 {
 			size = 8300
@@ -687,6 +687,27 @@ func rbdJournalOutput(token string, plan rbdJournalPlan, action string) map[stri
 		value["boundary"] = map[string]any{
 			"lockers":  map[string]any{"empty": false, "tag": "internal", "exclusive": true, "lockers": []map[string]any{{"client": "client.4321", "cookie": "auto 77", "addr": "10.0.0.9:0/11"}}},
 			"watchers": []map[string]any{{"addr": "10.0.0.9:0/11", "id": 4321, "cookie": 77}, {"addr": "10.0.0.3:0/3", "id": 4400, "cookie": 88}}}
+	case "produce":
+		produced, laggy := events("produce", plan.ProduceEvents), events("laggy", plan.LaggyEvents)
+		value["events"], value["close_ns"], value["final_wait_ns"] = slices.Concat(produced, laggy), 5, 6
+		phases := []map[string]any{}
+		for i, name := range rbdJournalConsumerPhases {
+			phase := map[string]any{"phase": name, "time_ns": 1 + i, "is_owner": true, "class_calls": calls, "journal_objects": objects,
+				"blob": map[string]any{"name": rbdJournalProduceBlobName(name), "length": offset, "sha256": strings.Repeat("5", 64)},
+				"wait": map[string]any{"polls": 2, "waited_ns": 300, "met": true}}
+			switch name {
+			case "produced":
+				phase["events"] = produced
+			case "trimmed":
+				phase["proceed_ns"] = 4
+			case "disconnected":
+				phase["events"], phase["proceed_ns"] = laggy, 4
+			}
+			phases = append(phases, phase)
+		}
+		value["phases_produce"] = phases
+		value["trim_log"] = map[string]any{"matched": 1, "truncated": false, "lines": []map[string]any{{"level": 20, "text": "trim_objects: min_set=1"}}}
+		value["laggy_log"] = map[string]any{"matched": 1, "truncated": false, "lines": []map[string]any{{"level": 1, "text": "schedule_laggy_clients_disconnect: c: scheduling disconnect"}}}
 	case "force-break":
 		owner := "10.0.0.9:0/11"
 		value["force_break"] = map[string]any{"owners": []map[string]any{{"mode": 0, "owner": owner}}, "watchers_before": []map[string]any{{"addr": owner, "id": 4321, "cookie": 77}},

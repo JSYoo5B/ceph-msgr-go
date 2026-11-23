@@ -426,13 +426,15 @@ func admitSingleProfile(p profile, getenv func(string) string) (profile, error) 
 		// advanced. The lock-owner-loss acceptances blocklist two client
 		// addresses and kill a native lock owner. The primary-change
 		// acceptance is the lost-append-reply sequence on three replicated
-		// BlueStore OSDs; no other RBD selection is admitted on that topology,
-		// and that one on no other. Each runs alone on a fresh fixture and is
-		// admitted only by its capability.
+		// BlueStore OSDs, and the held-request acceptances (replica hold,
+		// held primary change, dead primary) run there too; no other RBD
+		// selection is admitted on that topology, and those on no other. Each
+		// runs alone on a fresh fixture and is admitted only by its
+		// capability.
 		admitted := p.admitsExclusive(fixtureRBD)
 		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != p.rbdReplicas() || p.osdReplicas == "3" && p.osdStore != "bluestore" || p.mdsFresh != "0" ||
 			(p.sparseReadOracle != "" || p.mapExtOracle != "") || !ownSelection(p.testRun, selected, admitted) {
-			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s or one capability-admitted test, the single-OSD legacy-v6 fixture (three BlueStore OSDs for capability %s alone) and no MDS profile", selected, capRBDJournalPrimaryChange.name)
+			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s or one capability-admitted test, the single-OSD legacy-v6 fixture (three BlueStore OSDs for capabilities %s, %s, %s and %s alone) and no MDS profile", selected, capRBDJournalPrimaryChange.name, capRBDJournalReplicaHold.name, capRBDJournalHeldPrimaryChange.name, capRBDJournalDeadPrimary.name)
 		}
 	}
 	if p.monPing == "1" {
@@ -499,9 +501,9 @@ func admitSingleProfile(p profile, getenv func(string) string) (profile, error) 
 }
 
 // rbdReplicas is the OSD topology the selected RBD acceptance runs on: one
-// OSD, or three for the primary-change sequence.
+// OSD, or three for the primary-change and held-request journal sequences.
 func (p profile) rbdReplicas() string {
-	if p.declares(capRBDJournalPrimaryChange) {
+	if p.rbdJournalThreeOSD() {
 		return "3"
 	}
 	return "1"
