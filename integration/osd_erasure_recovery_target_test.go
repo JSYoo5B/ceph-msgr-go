@@ -35,11 +35,12 @@ import (
 //   - A write to an object an async recovery target is missing is not
 //     degraded for it, and neither is one past a backfill target's
 //     last_backfill that no backfill is copying
-//     (src/osd/PrimaryLogPG.cc:655-690), so the write does not wait. Its
-//     sub-write to the target carries the log entries and an empty
-//     transaction (should_send_op false, src/osd/PrimaryLogPG.cc:568-595;
-//     src/osd/ECCommon.cc:829-846), and the reply still waits for the
-//     target's commit.
+//     (src/osd/PrimaryLogPG.cc:655-690), so the write does not wait. The
+//     pinned source builds the target's sub-write with the log entries and
+//     an empty transaction (should_send_op false,
+//     src/osd/PrimaryLogPG.cc:568-595; src/osd/ECCommon.cc:829-846). The
+//     test observes the reply and the target's stored bytes only, not the
+//     sub-write on the wire.
 //   - norecover and nobackfill keep the PG from recovering or backfilling
 //     the object to the target until they are unset. Once the PG has
 //     recovered, the primary puts its targets back into the acting set
@@ -222,14 +223,17 @@ const backfillWrites = 8
 // still holds the first content's chunk.
 //
 // One Go WRITEFULL of a third content with a SETXATTR, through the unchanged
-// primary, must be answered ONDISK once, each operation with result 0,
-// without waiting for recovery, in that interval; the PG is observed with
-// the same target after it. The native object then has the third content,
-// the xattr, the reply's user version and the request's mtime, while the
-// target's own store still holds the first content's chunk: the write's
-// sub-write to it carried no bytes (an async recovery target that misses
-// the object, or a backfill target past last_backfill, gets an empty
-// transaction; src/osd/PrimaryLogPG.cc:568-595). Every other shard holds
+// primary, must get an accepted ONDISK reply at attempt 0 under its own
+// submission, each operation with result 0, in that interval; the PG is
+// observed with the same target after it. The native object then has the
+// third content, the xattr, the reply's user version and the request's
+// mtime, while the target's own store still holds the first content's
+// chunk: unchanged target bytes, which the pinned source's empty
+// transaction for such a target predicts (an async recovery target that
+// misses the object, or a backfill target past last_backfill;
+// src/osd/PrimaryLogPG.cc:568-595). How often the request or the sub-write
+// crossed the wire, and what the sub-write carried, are not observed. Every
+// other shard holds
 // the third content's chunk. The flags are released; the PG recovers or
 // backfills, the target returns to the acting set in a newer clean
 // interval, and every shard, the target included, holds its chunk of the
@@ -336,7 +340,7 @@ func erasureRecoveryTargetWriteScenario(t *testing.T, width erasureWidth, kind r
 	}
 	r.shardBytes(label+", after the write", object, target,
 		map[string][]byte{"native": contents[2], "first": contents[0], "second": contents[1]}, positions(size, "native", map[int]string{victim: "first"}))
-	t.Logf("shard %d (osd.%d) still holds the first content's chunk after the acknowledged write: its sub-write carried no bytes", victim, route.Acting[victim])
+	t.Logf("shard %d (osd.%d) still holds the first content's chunk after the accepted ONDISK reply: the target's stored chunk is unchanged", victim, route.Acting[victim])
 
 	flags.release(r.ctx)
 	r.clean()
