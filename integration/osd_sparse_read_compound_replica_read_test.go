@@ -59,9 +59,12 @@ import (
 // legacy three-replica BlueStore suites run it too. The request-v9 fixture
 // admits one OSD only, so v9 replica reads have native codec vectors
 // (TestSparseReadCompoundReplicaMatches12FreshNativeRequests) and no daemon
-// evidence. Not verified: EC, MemStore allocation maps, a degraded or
-// recovering replica, the pool option pct_update_delay, mid-vector daemon
-// errors, faults and resubmission.
+// evidence. A replica that rejoined missing the object is
+// TestCephOSDSparseReadCompoundDegradedReplicaIntegration's. Not verified:
+// EC, MemStore allocation maps, a replica during a push of the object, the
+// pool option pct_update_delay, faults and resubmission; no stock daemon
+// answers this compound with a later operation's error
+// (TestCephOSDReadCompoundLaterErrorIntegration).
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdsparsereadcompoundreplicaread key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdsparsereadcompoundreplicaread key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
