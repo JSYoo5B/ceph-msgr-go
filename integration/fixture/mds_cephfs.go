@@ -238,6 +238,13 @@ func parseMDSCephFSRequest(fields []string, token string, previousID int64) (int
 			return 0, mdsCephFSAction{}, errors.New("MDS CephFS in-flight check requires one canonical GlobalID:TID")
 		}
 		action.gid, action.tid = gid, tid
+	case "lock-inflight":
+		// <GlobalID>:<TID> of one request of an observed owned session.
+		gid, tid, ok := parseMDSCephFSGIDTID(arg)
+		if !ok {
+			return 0, mdsCephFSAction{}, errors.New("MDS CephFS in-flight lock read requires one canonical GlobalID:TID")
+		}
+		action.gid, action.tid = gid, tid
 	case "recovery-list", "recovery-write", "restart-arm", "restart-pause", "restart-fire", "restart-status", "restart-adopt", "restart-resume":
 		if arg != "" {
 			return 0, mdsCephFSAction{}, errors.New("MDS CephFS recovery and restart actions take no caller argument")
@@ -262,7 +269,7 @@ func parseMDSCephFSRequest(fields []string, token string, previousID int64) (int
 		if arg != "" {
 			return 0, mdsCephFSAction{}, errors.New("MDS CephFS push actions take no caller argument")
 		}
-	case "getxattr", "write", "read", "flock-ex-nb", "flock-sh-nb", "fcntl-probe":
+	case "getxattr", "write", "read", "flock-ex-nb", "flock-sh-nb", "fcntl-probe", "fcntl-probe-ranges":
 		if arg != "go-file" {
 			return 0, mdsCephFSAction{}, errors.New("MDS CephFS file action admits only the Go-created file")
 		}
@@ -317,7 +324,7 @@ def flock_state():
         raise ValueError('flock probe file changed while reading')
     return {'ino': s['ino'], 'size': s['size'], 'version': s['version'],
             'mtime': int(s['mtime'].timestamp()), 'data_hex': data.hex()}
-out = {'action': action, 'path': path}
+` + mdsCephFSFcntlProbePython + `out = {'action': action, 'path': path}
 try:
     fs.mount(filesystem_name=fsname)
     out['native_global_id'] = fs.get_instance_id()
@@ -355,79 +362,8 @@ try:
         probe['elapsed_ns'] = time.monotonic_ns() - started
         probe['after'] = flock_state()
         out['flock'] = probe
-    elif action == 'fcntl-probe' and path == prefix + '/go-file' and 0 < len(extra) <= 8:
-        # The binding has no record-lock call: a second mount through ctypes
-        # uses libcephfs ceph_getlk/ceph_setlk (include/cephfs/libcephfs.h).
-        import ctypes
-        lib = ctypes.CDLL('libcephfs.so.2')
-        class FL(ctypes.Structure):
-            _fields_ = [('l_type', ctypes.c_short), ('l_whence', ctypes.c_short), ('l_start', ctypes.c_int64),
-                        ('l_len', ctypes.c_int64), ('l_pid', ctypes.c_int32)]
-        vp = ctypes.c_void_p
-        lib.ceph_create.argtypes = [ctypes.POINTER(vp), ctypes.c_char_p]
-        lib.ceph_conf_read_file.argtypes = [vp, ctypes.c_char_p]
-        lib.ceph_conf_set.argtypes = [vp, ctypes.c_char_p, ctypes.c_char_p]
-        lib.ceph_select_filesystem.argtypes = [vp, ctypes.c_char_p]
-        lib.ceph_mount.argtypes = [vp, ctypes.c_char_p]
-        lib.ceph_get_instance_id.argtypes = [vp]
-        lib.ceph_get_instance_id.restype = ctypes.c_uint64
-        lib.ceph_open.argtypes = [vp, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint]
-        lib.ceph_getlk.argtypes = [vp, ctypes.c_int, ctypes.POINTER(FL), ctypes.c_uint64]
-        lib.ceph_setlk.argtypes = [vp, ctypes.c_int, ctypes.POINTER(FL), ctypes.c_uint64, ctypes.c_int]
-        lib.ceph_close.argtypes = [vp, ctypes.c_int]
-        lib.ceph_shutdown.argtypes = [vp]
-        lib.ceph_shutdown.restype = None
-        kinds = {'w': fcntl.F_WRLCK, 'r': fcntl.F_RDLCK}
-        names = {fcntl.F_WRLCK: 'w', fcntl.F_RDLCK: 'r', fcntl.F_UNLCK: 'u'}
-        requests = []
-        for item in extra:
-            kind, start, length = item.split(':')
-            if kind not in kinds or not (0 <= int(start) < 4096 and 0 <= int(length) < 4096):
-                raise ValueError('fcntl probe request outside its bound')
-            requests.append((kind, int(start), int(length)))
-        # libcephfs sets the owner's high bit itself (Client::_do_filelock).
-        owner = 0x63657068
-        def check(r, call):
-            if r < 0:
-                raise OSError(-r, call + ' failed')
-        probe = {'owner': owner | (1 << 63), 'probes': [], 'before': flock_state()}
-        cm = vp()
-        check(lib.ceph_create(ctypes.byref(cm), identity.removeprefix('client.').encode()), 'ceph_create')
-        started = time.monotonic_ns()
-        try:
-            check(lib.ceph_conf_read_file(cm, b'/tmp/ceph-msgr-test/ceph.conf'), 'ceph_conf_read_file')
-            check(lib.ceph_conf_set(cm, b'key', NATIVE_KEY.encode()), 'ceph_conf_set')
-            check(lib.ceph_select_filesystem(cm, fsname.encode()), 'ceph_select_filesystem')
-            check(lib.ceph_mount(cm, b'/'), 'ceph_mount')
-            probe['global_id'] = lib.ceph_get_instance_id(cm)
-            fd = lib.ceph_open(cm, path.encode(), os.O_RDWR, 0)
-            check(fd, 'ceph_open')
-            try:
-                for kind, start, length in requests:
-                    item = {'type': kind, 'start': start, 'len': length, 'errno': 0, 'acquired': False, 'unlocked': False}
-                    fl = FL(kinds[kind], os.SEEK_SET, start, length, 0)
-                    check(lib.ceph_getlk(cm, fd, ctypes.byref(fl), owner), 'ceph_getlk')
-                    if fl.l_type not in names:
-                        raise ValueError('ceph_getlk returned an unknown lock type')
-                    item['getlk'] = {'type': names[fl.l_type], 'start': fl.l_start, 'len': fl.l_len, 'pid': fl.l_pid}
-                    fl = FL(kinds[kind], os.SEEK_SET, start, length, 0)
-                    r = lib.ceph_setlk(cm, fd, ctypes.byref(fl), owner, 0)
-                    if r == -11:
-                        item['errno'] = 11
-                    else:
-                        check(r, 'ceph_setlk')
-                        item['acquired'] = True
-                        fl = FL(fcntl.F_UNLCK, os.SEEK_SET, start, length, 0)
-                        check(lib.ceph_setlk(cm, fd, ctypes.byref(fl), owner, 0), 'ceph_setlk unlock')
-                        item['unlocked'] = True
-                    probe['probes'].append(item)
-            finally:
-                lib.ceph_close(cm, fd)
-        finally:
-            lib.ceph_shutdown(cm)
-        probe['elapsed_ns'] = time.monotonic_ns() - started
-        probe['after'] = flock_state()
-        out['fcntl'] = probe
+    elif action in ('fcntl-probe', 'fcntl-probe-ranges') and path == prefix + '/go-file' and 0 < len(extra) <= 8:
+        out['fcntl'] = fcntl_probe(extra)
     elif action == 'create' and path == prefix and len(extra) == 3:
         out['created'] = []
         for name in extra:
@@ -580,12 +516,12 @@ type mdsCephFSFcntlState struct {
 	After     mdsCephFSFlockState    `json:"after"`
 }
 
-// validFcntlProbes requires the fixed probe set in order, each with either a
+// validFcntlProbes requires the action's fixed probe set in order, each with either a
 // conflict (EAGAIN, nothing acquired, a held lock that overlaps the request
 // and is incompatible with it) or an acquire and release with no conflict
 // reported.
-func validFcntlProbes(results []mdsCephFSFcntlResult) bool {
-	if len(results) != len(mdsCephFSFcntlProbes) {
+func validFcntlProbes(results []mdsCephFSFcntlResult, set []mdsCephFSFcntlProbe) bool {
+	if len(set) == 0 || len(results) != len(set) {
 		return false
 	}
 	overlaps := func(aStart, aLen, bStart, bLen int64) bool {
@@ -593,7 +529,7 @@ func validFcntlProbes(results []mdsCephFSFcntlResult) bool {
 		return (aLen == 0 || bStart < aEnd) && (bLen == 0 || aStart < bEnd)
 	}
 	for i, r := range results {
-		want, g := mdsCephFSFcntlProbes[i], r.Getlk
+		want, g := set[i], r.Getlk
 		if r.Type != want.Type || r.Start != want.Start || r.Length != want.Length {
 			return false
 		}
@@ -646,7 +582,7 @@ func decodeMDSCephFSNativeOutput(action, path string, data []byte) (mdsCephFSNat
 	if result.Flock != nil && action != "flock-ex-nb" && action != "flock-sh-nb" {
 		return mdsCephFSNative{}, errors.New("native flock output belongs to a different action")
 	}
-	if result.Fcntl != nil && action != "fcntl-probe" {
+	if result.Fcntl != nil && mdsCephFSFcntlProbeSet(action) == nil {
 		return mdsCephFSNative{}, errors.New("native fcntl output belongs to a different action")
 	}
 	if result.Charmap != nil && action != "setcharmap" {
@@ -704,19 +640,19 @@ func decodeMDSCephFSNative(action, path string, plan mdsCephFSPlan, data []byte)
 				result.Stat == nil && result.SourceStat == nil && result.Statfs == nil && result.TimingsNS == nil &&
 				!result.QuotaAbsent && result.ValueHex == "" && result.DataHex == "" && result.Written == 0 && len(result.Created) == 0 && len(result.Entries) == 0
 		}
-	case "fcntl-probe":
+	case "fcntl-probe", "fcntl-probe-ranges":
 		probe := result.Fcntl
 		if probe != nil {
 			data, err := hex.DecodeString(probe.Before.DataHex)
 			ok = path == "/"+plan.Directory+"/"+plan.GoFile && probe.Owner == mdsCephFSFlockOwner && probe.ElapsedNS > 0 &&
-				probe.GlobalID != 0 && probe.GlobalID != result.NativeGlobalID && validFcntlProbes(probe.Probes) &&
+				probe.GlobalID != 0 && probe.GlobalID != result.NativeGlobalID && validFcntlProbes(probe.Probes, mdsCephFSFcntlProbeSet(action)) &&
 				probe.Before == probe.After && probe.Before.Ino != 0 && probe.Before.Version != 0 &&
 				probe.Before.Size <= 64 && err == nil && uint64(len(data)) == probe.Before.Size && result.Flock == nil &&
 				result.Stat == nil && result.SourceStat == nil && result.Statfs == nil && result.TimingsNS == nil &&
 				!result.QuotaAbsent && result.ValueHex == "" && result.DataHex == "" && result.Written == 0 && len(result.Created) == 0 && len(result.Entries) == 0
 		}
 	}
-	if action != "flock-ex-nb" && action != "flock-sh-nb" && result.Flock != nil || action != "fcntl-probe" && result.Fcntl != nil {
+	if action != "flock-ex-nb" && action != "flock-sh-nb" && result.Flock != nil || action != "fcntl-probe" && action != "fcntl-probe-ranges" && result.Fcntl != nil {
 		ok = false
 	}
 	if !ok {
@@ -751,6 +687,7 @@ type mdsCephFSResult struct {
 	Restart         *mdsCephFSRestart         `json:"restart,omitempty"`
 	RankStatus      *mdsCephFSRankStatus      `json:"rank_status,omitempty"`
 	HistoricOps     []mdsCephFSHistoricOp     `json:"historic_ops,omitempty"`
+	LockInFlight    *mdsCephFSLockInFlight    `json:"lock_in_flight,omitempty"`
 	PushConfig      *mdsCephFSPushConfig      `json:"push_config,omitempty"`
 	CacheDrop       *mdsCephFSCacheDrop       `json:"cache_drop,omitempty"`
 	Complete        bool                      `json:"complete"`
@@ -935,7 +872,7 @@ func (c *fixtureCluster) mdsCephFSControl(ctx context.Context, out string, field
 	if err != nil {
 		return err
 	}
-	if err := admitMDSCephFSHeldFcntl(action.name, c.profile); err != nil {
+	if err := errors.Join(admitMDSCephFSHeldFcntl(action.name, c.profile), admitMDSCephFSHeldLocks(action.name, c.profile)); err != nil {
 		return err
 	}
 	x.lastRequestID = id
@@ -1047,6 +984,8 @@ func (c *fixtureCluster) mdsCephFSAct(ctx context.Context, id int64, action mdsC
 		return c.mdsCephFSRestartAct(ctx, id, action, result)
 	case "recovery-ops":
 		return c.mdsCephFSHistoricOps(ctx, action.gid, result)
+	case "lock-inflight":
+		return c.mdsCephFSLockInFlightRead(ctx, action, result)
 	case "recovery-stat", "recovery-list", "recovery-write":
 		return c.mdsCephFSRecoveryNative(ctx, id, action, result)
 	}
@@ -1064,11 +1003,9 @@ func (c *fixtureCluster) mdsCephFSAct(ctx context.Context, id int64, action mdsC
 		extra = []string{x.plan.XattrName}
 	case "read":
 		extra = []string{strconv.Itoa(len(x.plan.PayloadHex) / 2)}
-	case "flock-ex-nb", "flock-sh-nb", "fcntl-probe":
-		if action.name == "fcntl-probe" {
-			for _, p := range mdsCephFSFcntlProbes {
-				extra = append(extra, p.arg())
-			}
+	case "flock-ex-nb", "flock-sh-nb", "fcntl-probe", "fcntl-probe-ranges":
+		for _, p := range mdsCephFSFcntlProbeSet(action.name) {
+			extra = append(extra, p.arg())
 		}
 		// A probe may acquire a transient lock. Record each closed request
 		// before execution, never replay an uncertain native process.
