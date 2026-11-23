@@ -187,7 +187,7 @@ func nativeOmapRead(t *testing.T, ctx context.Context, base osdFixtureOracle, mo
 
 // Interpret the native encoded collection only in this consumer test. Product
 // operations preserve Data/RawData and perform no map projection or pagination.
-func decodeOmapRead(t *testing.T, code cephmsgr.OSDOpcode, data []byte) ([]omapNativeEntry, *bool) {
+func decodeOmapRead(t testing.TB, code cephmsgr.OSDOpcode, data []byte) ([]omapNativeEntry, *bool) {
 	t.Helper()
 	d := wire.NewDecoderLimit(data, 64<<10)
 	minimum := uint32(8)
