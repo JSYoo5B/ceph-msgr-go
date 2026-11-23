@@ -87,7 +87,7 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 	if held != nil && held.Cut != nil {
 		// The connection-loss cell dials MDS endpoints through its own cut,
 		// not through the relay, so that it sees whole frames.
-		cut = &splitCut{record: held.Cut}
+		cut = newSplitCut(held.Cut, os.Getenv("CEPH_MSGR_TEST_CONNECTION_MODE") == "crc")
 		client = splitCutClient(t, ctx, identity, key, dials, cut)
 	} else {
 		client = recoveryClient(t, ctx, identity, key, dials, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS = true, true })
@@ -432,6 +432,9 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 			}
 			if cut != nil {
 				if err := cut.check(connection.Resumes()); err != nil {
+					t.Fatal(err)
+				}
+				if err := cut.checkFragments(held.Fragments); err != nil {
 					t.Fatal(err)
 				}
 			}
