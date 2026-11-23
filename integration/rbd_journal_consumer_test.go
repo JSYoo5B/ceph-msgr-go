@@ -33,8 +33,10 @@ import (
 // commit position of the connected clients, the oracle's empty one), and
 // native `rbd journal client disconnect` flags the oracle client
 // disconnected. A native librbd instance (the producer) then opens the image
-// read-write with rbd_journal_max_concurrent_object_sets 1 and keeps it open
-// for the rest of the sequence; it owns the exclusive lock throughout.
+// read-write with rbd_journal_max_concurrent_object_sets 1 and
+// rbd_journal_commit_age 1 s (so that its own commits follow its writes
+// within a second) and keeps it open for the rest of the sequence; it owns
+// the exclusive lock throughout.
 //
 //   - Its first eight 3 KiB writes are entries 0 to 7 of its tag. Entries 0 to
 //     3 follow the setup entries in objects 0 to 3; entry 4 finds object 0
@@ -78,7 +80,8 @@ import (
 // Consumer choices kept explicit here: the Go client commits without
 // applying the entries anywhere, commits once per stage, and commits again
 // after it was disconnected instead of re-registering; the oracle's
-// disconnect makes trimming reachable. The Go client sends no remove, no
+// disconnect makes trimming reachable, and the lag bound and the commit age
+// are the producer's settings for this test. The Go client sends no remove, no
 // set_minimum_set and no client_update_state: the trimming and the
 // disconnect are native. Not covered: a Go consumer that replays the entries
 // into another image, a Go client that reconnects, and trimming on several
