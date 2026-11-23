@@ -186,9 +186,14 @@ func checkCopyClientOp(ops opsInFlightSnapshot, objecter objecterRequestsSnapsho
 	}
 	op := ops.Ops[0]
 	// A legacy-v6 request names the raw PG of its object hash, a replicated
-	// PG request the actual PG (tools/osd_ops_in_flight_oracle.py).
-	if op.TID == 0 || op.Reqid != fmt.Sprintf("client.%d.%d:%d", gid, incarnation, op.TID) || (op.PGID != route.PGID && op.PGID != route.RawPGID) || op.Epoch != route.Epoch {
-		return op, fmt.Errorf("in-flight op %s for %s at epoch %d; want the route's %s or %s at epoch %d", op.Reqid, op.PGID, op.Epoch, route.PGID, route.RawPGID, route.Epoch)
+	// PG request the actual PG (tools/osd_ops_in_flight_oracle.py), and a
+	// request to an erasure-coded PG the primary's shard of it.
+	pg := op.PGID == route.PGID || op.PGID == route.RawPGID
+	if route.Shard >= 0 {
+		pg = op.PGID == fmt.Sprintf("%ss%d", route.PGID, route.Shard)
+	}
+	if op.TID == 0 || op.Reqid != fmt.Sprintf("client.%d.%d:%d", gid, incarnation, op.TID) || !pg || op.Epoch != route.Epoch {
+		return op, fmt.Errorf("in-flight op %s for %s at epoch %d; want the route's %s (raw %s, shard %d) at epoch %d", op.Reqid, op.PGID, op.Epoch, route.PGID, route.RawPGID, route.Shard, route.Epoch)
 	}
 	return op, nil
 }
@@ -419,10 +424,12 @@ func (r *copyPrimaryRecovery) clearPauseReads(t *testing.T, ctx context.Context)
 	if err := copyMonCommand(ctx, r.c, `{"prefix":"osd unset","key":"pause"}`); err != nil {
 		t.Fatal("osd unset pause", err)
 	}
-	r.pauserd = false
+	// pauserd stays armed for restore until the native readback shows the
+	// flags gone.
 	if flags := nativePool(t, ctx, "osdflags", map[string]any{"action": "show"}); slices.Contains(flags.OSDMapFlags, "pauserd") || slices.Contains(flags.OSDMapFlags, "pausewr") {
 		t.Fatalf("native OSDMap still carries a pause flag at epoch %d: %v", flags.Epoch, flags.OSDMapFlags)
 	}
+	r.pauserd = false
 }
 
 func sortedOSDs(set map[int32]bool) []int32 {
@@ -534,6 +541,13 @@ const (
 
 func newCopyPrimaryChangeRun(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, label string) *copyPrimaryChangeRun {
 	t.Helper()
+	// pause is a cluster-wide flag and restore clears it whenever pauserd is
+	// armed, so a run starts only from a native OSDMap without it (an
+	// earlier test's failed cleanup is reported, not cleared). It runs before
+	// any read of the pools, which a left pause would hold until timeout.
+	if flags := nativePool(t, ctx, "osdflags", map[string]any{"action": "show"}); recovery.pauserd || slices.Contains(flags.OSDMapFlags, "pauserd") || slices.Contains(flags.OSDMapFlags, "pausewr") {
+		t.Fatalf("a pause flag is already set at epoch %d before this run sets it (armed %t): %v", flags.Epoch, recovery.pauserd, flags.OSDMapFlags)
+	}
 	r := &copyPrimaryChangeRun{t: t, ctx: ctx, pools: pools, recovery: recovery, blocked: make(chan struct{}, 1)}
 	r.armed = map[string]*atomic.Bool{}
 	options := integrationOptions(t)
@@ -569,8 +583,10 @@ func newCopyPrimaryChangeRun(t *testing.T, ctx context.Context, pools ownedPools
 		t.Fatal("source or destination head already exists")
 	}
 	r.srcRoute, r.dstRoute = poolPlace(t, ctx, 1, r.source, ""), poolPlace(t, ctx, 2, r.dest, "")
-	if r.dstRoute.PGTemp || len(r.dstRoute.Acting) != 3 || !slices.Equal(r.dstRoute.Up, r.dstRoute.Acting) || r.dstRoute.PrimaryID != r.dstRoute.ID {
-		t.Fatalf("the destination PG is not settled on three OSDs: %+v", r.dstRoute)
+	// Every OSD of the pool's size holds the PG: three replicas, or each
+	// shard of an erasure-coded destination.
+	if r.dstRoute.PGTemp || r.dstRoute.Replicas < 3 || len(r.dstRoute.Acting) != r.dstRoute.Replicas || !slices.Equal(r.dstRoute.Up, r.dstRoute.Acting) || r.dstRoute.PrimaryID != r.dstRoute.ID {
+		t.Fatalf("the destination PG is not settled on every OSD of its size: %+v", r.dstRoute)
 	}
 	if r.srcRoute.PGID == r.dstRoute.PGID || r.srcRoute.Pool != pools.ids[1] || r.dstRoute.Pool != pools.ids[2] {
 		t.Fatal("source and destination are not in distinct owned PGs", r.srcRoute.PGID, r.dstRoute.PGID)

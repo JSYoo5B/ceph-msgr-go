@@ -232,6 +232,27 @@ func (o *OSDConnection) validateChecksumCompound(request OSDRequest) error {
 	return osd.ValidateSparseReadCompoundRequest(input)
 }
 
+// validateErasureReexecution refuses, for an erasure-coded placement, a
+// vector whose extent read the primary completes asynchronously beside an
+// operation with output: the pinned EC primary runs the vector again after
+// the read and can return that output once per run (osd.ErasureReexecutedVector).
+func (o *OSDConnection) validateErasureReexecution(request OSDRequest) error {
+	if request.Placement == nil || !request.Placement.Erasure || len(request.Operations) < 2 {
+		return nil
+	}
+	if len(request.Operations) > osd.MaxOperations {
+		return osd.ErrRequest
+	}
+	ops := make([]osd.Operation, len(request.Operations))
+	for i, op := range request.Operations {
+		ops[i] = osd.Operation{Code: uint16(op.Code)}
+	}
+	if osd.ErasureReexecutedVector(ops) {
+		return fmt.Errorf("%w: an erasure-coded primary can repeat the output of an operation beside an extent read", ErrUnsupportedOSDOperation)
+	}
+	return nil
+}
+
 // Each encoded OMAP entry needs at least two length prefixes, each assertion
 // two prefixes and an operator, and the whole request data must fit one frame.
 // Refuse impossible maps, summed across the vector, before copying headers.

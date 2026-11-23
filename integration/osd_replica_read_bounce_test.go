@@ -17,9 +17,10 @@ import (
 // A replica answers a balanced read with -EAGAIN instead of serving bytes it
 // cannot vouch for: an object whose last write is not yet known committed on
 // every replica, and an object the replica is still missing after it rejoined
-// with recovery held. Both are known refusals with no effect; the client
-// resends nothing, and the caller's later read (after the next write in the
-// PG, or after recovery) is served with the native bytes.
+// with recovery held. Both are known refusals with no effect, answered at
+// attempt 0 (the test does not observe transmissions), and the caller's
+// later read (after the next write in the PG, or after recovery) is served
+// with the native bytes.
 //
 //scenario:covers CLIENT to OSD
 //fixture:isolated kills and restarts a replica OSD; restart waits osd-ready clean, no pg_temp proof; norecover/nobackfill unset
@@ -100,7 +101,7 @@ func TestCephOSDReplicaReadBounceIntegration(t *testing.T) {
 		var server *cephmsgr.OSDError
 		var unknown *cephmsgr.OutcomeUnknownError
 		if !errors.As(err, &server) || errors.As(err, &unknown) || server.Code != -11 || reply.Code != -11 || reply.RetryAttempt != 0 {
-			t.Fatalf("osd.%d: %s: expected a known -EAGAIN without a local resend, got code %d: %v", id, why, reply.Code, err)
+			t.Fatalf("osd.%d: %s: expected a known -EAGAIN reply at attempt 0, got code %d: %v", id, why, reply.Code, err)
 		}
 	}
 	expectServed := func(t *testing.T, id int32, want []byte) {
@@ -135,20 +136,19 @@ func TestCephOSDReplicaReadBounceIntegration(t *testing.T) {
 		victim := replicas[1]
 		name := strconv.Itoa(int(victim))
 		// Recorded and registered first: a set or kill whose wait failed may
-		// still run, and the restore runs after it.
-		flagsSet, started := true, true
+		// still run, and the restore runs after it. The hold refuses a cluster
+		// that already has either recovery flag and clears only what it set.
+		recovery, started := newRecoveryFlagHold(t), true
 		defer func() {
-			recover, stop := context.WithTimeout(context.Background(), 200*time.Second)
+			restore, stop := context.WithTimeout(context.Background(), 200*time.Second)
 			defer stop()
 			if !started {
-				testcluster.ControlDaemon(recover, dir, "start", "osd", name)
+				testcluster.ControlDaemon(restore, dir, "start", "osd", name)
 			}
-			if flagsSet {
-				nativePool(t, recover, "osdflags", map[string]any{"action": "unset"})
-			}
-			waitOSDFixtureClean(t, recover, base)
+			recovery.release(restore)
+			waitOSDFixtureClean(t, restore, base)
 		}()
-		nativePool(t, ctx, "osdflags", map[string]any{"action": "set"})
+		recovery.hold(ctx)
 		started = false
 		if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
 			t.Fatal(err)
@@ -191,8 +191,7 @@ func TestCephOSDReplicaReadBounceIntegration(t *testing.T) {
 		time.Sleep(time.Second)
 		expectBounce(t, victim, "object missing while recovery is held")
 		expectServed(t, route.ID, data)
-		nativePool(t, ctx, "osdflags", map[string]any{"action": "unset"})
-		flagsSet = false
+		recovery.release(ctx)
 		waitOSDFixtureClean(t, ctx, base)
 		// Recovery re-establishes the PG; the recovered replica may still bounce
 		// until a write in the new interval. Reads are idempotent, so the
