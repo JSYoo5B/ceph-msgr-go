@@ -419,18 +419,23 @@ func requireLocations(t *testing.T, s pgHistorySnapshot, target int, tier, versi
 //
 // Phase 1: K, P and S start as ordinary entries and must move into the
 // duplicate records; P and S must then be two records with P's version.
-// With shards, every acting shard's store is then copied and read offline:
-// K must be a persisted duplicate record on every shard whose copy holds it
-// there, and where P is one, S must not be, because both have one key. The
-// primary's copy must be its live log with that one record fewer. K is then
+// With shards, every acting shard's store is then copied and read offline.
+// Each copy must sit exactly where the primary's live log does, with K, P
+// and S trimmed into the duplicate records (shardPersistedVerdict): the
+// primary sends every acting shard, its own included, the same trim bound
+// with each write. K and P must be persisted duplicate records on every
+// shard and S must not be, because S and P share one key. The primary's
+// copy must be its live log with that one record fewer. K is then
 // resubmitted explicitly under its original identity on a fresh connection:
 // the OSD must answer it from the duplicate record with K's original
 // versions, the native object must be unchanged and the live log must be
 // byte for byte the same.
 //
-// Phase 2: more writes push K out of every tier of the live primary log,
-// while the dump still holds every later request (the oldest remaining one
-// is the positive control). K is then resubmitted explicitly once more: the
+// Phase 2: more writes push K out of every tier of the live primary log.
+// The first dump without K must begin exactly at K's successor P, with S
+// beside it as a duplicate record, and hold every later request
+// (evictionBoundary): K left alone, and P and S are the surviving positive
+// control. K is then resubmitted explicitly once more: the
 // OSD has no record of it and executes the APPEND again at a new version,
 // the native object holds the tail twice, and the live log holds K as a new
 // ordinary entry. That is the loss of request history after eviction.
@@ -695,11 +700,13 @@ func dupHistoryScenario(t *testing.T, width *erasureWidth) {
 	}
 	requireLocations(t, s, kTarget, "evicted", "")
 	requireLocations(t, s, lastTarget, "log", r.want[len(r.want)-1].Version)
-	oldest := r.want[at.First]
-	if at.Log <= at.First {
-		t.Fatalf("no duplicate record remains beside the evicted K: %+v", at)
+	if err := evictionBoundary(at, ki, pi, si); err != nil {
+		t.Fatalf("after F%d: %v", fills, err)
 	}
-	t.Logf("after F%d K is in no tier of the live primary log; %d duplicate records remain, the oldest %s (%s at %s), and every later request is there",
+	requireLocations(t, s, pTarget, "dups", r.want[pi].Version)
+	requireLocations(t, s, sTarget, "dups", r.want[pi].Version)
+	oldest := r.want[at.First]
+	t.Logf("after F%d K is in no tier of the live primary log; %d duplicate records remain, the oldest K's successor %s (%s at %s) with S beside it, and every later request is there",
 		fills, at.Log-at.First, oldest.Label, oldest.Reqid, oldest.Version)
 	if native := poolObserve(t, ctx, slot, known, "", ""); native.Code != 0 || !bytes.Equal(native.Data, once) || native.Version != k.UserVersion {
 		t.Fatal("the native object changed before the second resubmission", native.Code, len(native.Data), native.Version)
@@ -724,12 +731,48 @@ func dupHistoryScenario(t *testing.T, width *erasureWidth) {
 		replayVersion(replayed), replayed.UserVersion, replayVersion(k), k.UserVersion)
 }
 
+// evictionBoundary judges the first live dump without K (position p): its
+// oldest retained record must be K's successor P, with S, P's extra request
+// ID, also a duplicate record. A suffix that begins later, so that more than
+// K left together, is refused. Each filler adds one duplicate record and the
+// trim drops the oldest while more than osd_pg_log_dups_tracked remain
+// (src/osd/PGLog.cc:83-108, 141-151).
+func evictionBoundary(p dupHistoryPosition, ki, pi, si int) error {
+	if pi != ki+1 || si != pi+1 {
+		return fmt.Errorf("requests K %d, P %d and S %d are not consecutive", ki, pi, si)
+	}
+	if p.tier(ki) != "evicted" {
+		return fmt.Errorf("K is still %s: %+v", p.tier(ki), p)
+	}
+	if p.First != pi || p.tier(pi) != "dups" || p.tier(si) != "dups" {
+		return fmt.Errorf("the oldest retained record is request %d, not K's successor P (%d) with S (%d) beside it as duplicate records: %+v", p.First, pi, si, p)
+	}
+	return nil
+}
+
+// shardPersistedVerdict judges one shard copy (position p, with the records
+// of one version reduced to one) taken right after the live primary dump at
+// position live. The primary builds one sub-write per acting shard, its own
+// included, each with the same trim bound (src/osd/ECCommon.cc:812-889), and
+// every shard passes it to its own log (src/osd/ECBackend.cc:383-442). Every
+// shard has applied all the test's writes before their replies, so each copy
+// must be at the live position, with K, P and S in the duplicate range.
+func shardPersistedVerdict(p, live dupHistoryPosition, ki, pi, si int) error {
+	if p != live {
+		return fmt.Errorf("persisted history %+v differs from the live primary's %+v", p, live)
+	}
+	for _, i := range []int{ki, pi, si} {
+		if p.tier(i) != "dups" {
+			return fmt.Errorf("request %d is %s, not a persisted duplicate record: %+v", i, p.tier(i), p)
+		}
+	}
+	return nil
+}
+
 // dupHistoryShards copies every acting shard's store right after the phase-1
 // snapshot s (position at) and matches each offline log to the requests,
-// with the duplicate records of one version reduced to one. A shard may have
-// trimmed less than the primary; it may not hold anything else. K must be a
-// persisted duplicate record on every shard whose copy has it there, and
-// the primary's copy must sit exactly where its live log does.
+// with the duplicate records of one version reduced to one. Every copy is
+// read and classified on its own, and each must pass shardPersistedVerdict.
 func dupHistoryShards(t *testing.T, r *dupHistoryRun, width *erasureWidth, s pgHistorySnapshot, at dupHistoryPosition, targets []pgHistoryTarget, ki, pi, si int) {
 	t.Helper()
 	captured := shardPGHistory(t, r.ctx, r.slot, "dup-history-filler", r.route, targets, nil)
@@ -739,7 +782,6 @@ func dupHistoryShards(t *testing.T, r *dupHistoryRun, width *erasureWidth, s pgH
 	if len(captured.Shards) != width.size() {
 		t.Fatalf("%d shards captured; the width has %d", len(captured.Shards), width.size())
 	}
-	persisted := 0
 	for i, shard := range captured.Shards {
 		raw, _ := base64.StdEncoding.DecodeString(shard.Raw)
 		head, tail, records, err := parsePGLogRecords(raw)
@@ -755,28 +797,15 @@ func dupHistoryShards(t *testing.T, r *dupHistoryRun, width *erasureWidth, s pgH
 				t.Fatalf("near-miss identity %s matched on %s: %+v", got.Reqid, shard.SPG, got.Locations)
 			}
 		}
-		if p.First > at.First || p.Log > at.Log {
-			t.Fatalf("shard %s trimmed past the primary: %+v vs %+v", shard.SPG, p, at)
+		if err := shardPersistedVerdict(p, at, ki, pi, si); err != nil {
+			t.Fatalf("shard %s (osd.%d): %v", shard.SPG, shard.OSD, err)
 		}
-		switch p.tier(ki) {
-		case "dups":
-			requireShardLocation(t, shard, 0, "dups", r.want[ki].Version)
-			persisted++
-		case "log":
-			requireShardLocation(t, shard, 0, "log", r.want[ki].Version)
-		default:
-			t.Fatalf("shard %s holds no record of K: %+v", shard.SPG, p)
+		requireShardLocation(t, shard, 0, "dups", r.want[ki].Version)
+		requireShardLocation(t, shard, 1, "dups", r.want[pi].Version)
+		if len(shard.Targets[2].Locations) != 0 {
+			t.Fatalf("shard %s persisted S beside P at one key: %+v", shard.SPG, shard.Targets[2].Locations)
 		}
-		collision := "not reached: P is an ordinary entry"
-		if p.tier(pi) == "dups" {
-			requireShardLocation(t, shard, 1, "dups", r.want[pi].Version)
-			if len(shard.Targets[2].Locations) != 0 {
-				t.Fatalf("shard %s persisted S beside P at one key: %+v", shard.SPG, shard.Targets[2].Locations)
-			}
-			collision = "dup_" + r.want[pi].Version + " holds P only"
-		} else if p.tier(si) == "log" {
-			requireShardLocation(t, shard, 2, "extra_reqids", r.want[pi].Version)
-		}
+		collision := "dup_" + r.want[pi].Version + " holds P only"
 		if i == int(r.route.Shard) {
 			if shard.OSD != s.OSD || p != at || shard.Head != s.Head || shard.Tail != s.Tail || shard.DupEntries != s.DupEntries-1 || shard.LogEntries != s.LogEntries {
 				t.Fatalf("the primary's store copy %s (%+v, %d duplicate records) differs from its live log (%+v, %d duplicate records) by more than the shared key",
@@ -785,9 +814,6 @@ func dupHistoryShards(t *testing.T, r *dupHistoryRun, width *erasureWidth, s pgH
 		}
 		t.Logf("shard %s (osd.%d): persisted history %+v of %d requests, K %s, %d duplicate records; same-version key: %s",
 			shard.SPG, shard.OSD, p, len(r.want), p.tier(ki), shard.DupEntries, collision)
-	}
-	if persisted == 0 {
-		t.Fatal("no shard copy holds K as a persisted duplicate record")
 	}
 }
 
@@ -964,5 +990,70 @@ func TestMatchDupHistory(t *testing.T) {
 		if p0.tier(i) != tier {
 			t.Errorf("request %d: %s, want %s", i, p0.tier(i), tier)
 		}
+	}
+}
+
+func TestDupHistoryBoundaries(t *testing.T) {
+	// Requests: seed 0, K 1, P 2, S 3 (P's extra), F1 4, F2 5, F3 6.
+	const ki, pi, si = 1, 2, 3
+	for name, c := range map[string]struct {
+		p  dupHistoryPosition
+		ok bool
+	}{
+		"P oldest, S beside it":        {dupHistoryPosition{First: 2, Log: 5}, true},
+		"F1 oldest, K, P and S gone":   {dupHistoryPosition{First: 4, Log: 6}, false},
+		"S oldest, P gone with K":      {dupHistoryPosition{First: 3, Log: 6}, false},
+		"F2 oldest, no duplicate left": {dupHistoryPosition{First: 5, Log: 5}, false},
+		"K still a duplicate":          {dupHistoryPosition{First: 1, Log: 5}, false},
+		"P still an ordinary entry":    {dupHistoryPosition{First: 2, Log: 2}, false},
+	} {
+		if err := evictionBoundary(c.p, ki, pi, si); (err == nil) != c.ok {
+			t.Errorf("eviction boundary %s %+v: %v", name, c.p, err)
+		}
+	}
+	if evictionBoundary(dupHistoryPosition{First: 3, Log: 5}, ki, 3, 4) == nil {
+		t.Error("eviction boundary accepted a P that is not K's successor")
+	}
+	live := dupHistoryPosition{First: 0, Log: 6}
+	for name, c := range map[string]struct {
+		p  dupHistoryPosition
+		ok bool
+	}{
+		"at the live position":           {live, true},
+		"P and S still ordinary entries": {dupHistoryPosition{First: 0, Log: 2}, false},
+		"K still an ordinary entry":      {dupHistoryPosition{First: 0, Log: 1}, false},
+		"trimmed less, K a duplicate":    {dupHistoryPosition{First: 0, Log: 5}, false},
+		"trimmed past the primary":       {dupHistoryPosition{First: 1, Log: 7}, false},
+		"K evicted on the shard":         {dupHistoryPosition{First: 2, Log: 6}, false},
+	} {
+		if err := shardPersistedVerdict(c.p, live, ki, pi, si); (err == nil) != c.ok {
+			t.Errorf("shard verdict %s %+v: %v", name, c.p, err)
+		}
+	}
+	if shardPersistedVerdict(dupHistoryPosition{First: 0, Log: 2}, dupHistoryPosition{First: 0, Log: 2}, ki, pi, si) == nil {
+		t.Error("shard verdict accepted P and S as ordinary entries at an equal live position")
+	}
+	// The F1-oldest suffix is a valid suffix to the matcher; only the
+	// boundary check refuses it.
+	want := []dupHistoryRequest{
+		{Label: "seed", Reqid: "client.4700.6:1", Version: "30'1", UserVersion: 1},
+		{Label: "K", Reqid: "client.4700.7:2", Version: "30'2", UserVersion: 2},
+		{Label: "P", Reqid: "client.4700.9:3", Version: "30'3", UserVersion: 3},
+		{Label: "S", Reqid: "client.4700.5:1", Version: "30'3", UserVersion: 1, Extra: true},
+		{Label: "F1", Reqid: "client.4700.11:4", Version: "30'4", UserVersion: 4},
+		{Label: "F2", Reqid: "client.4700.11:5", Version: "30'5", UserVersion: 5},
+	}
+	raw := []byte(`{"pg_log_t":{"head":"30'5","tail":"30'4","log":[{"op":"modify","object":"x","version":"30'5","prior_version":"30'4","reqid":"client.4700.11:5","extra_reqids":[],"mtime":"0.0","return_code":0}],` +
+		`"dups":[{"reqid":"client.4700.11:4","version":"30'4","user_version":"4","return_code":"0"}]}}`)
+	head, tail, records, err := parsePGLogRecords(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := matchDupHistory(head, tail, records, want, false)
+	if err != nil || p != (dupHistoryPosition{First: 4, Log: 5}) {
+		t.Fatal("the F1-oldest suffix", p, err)
+	}
+	if evictionBoundary(p, ki, pi, si) == nil {
+		t.Error("eviction boundary accepted the F1-oldest suffix")
 	}
 }
