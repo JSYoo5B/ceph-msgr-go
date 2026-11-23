@@ -104,6 +104,9 @@ type nativeRBDJournalEvent struct {
 }
 
 type nativeRBDJournalPlan struct {
+	// JournalOrder is the journal object order the setup created the journal
+	// with, 0 for librbd's default (the trim plan, rbd_journal_trim_test.go).
+	JournalOrder int                     `json:"journal_order"`
 	Pool         string                  `json:"pool"`
 	BaseImage    string                  `json:"base_image"`
 	Image        string                  `json:"image"`
@@ -224,6 +227,24 @@ type nativeRBDJournal struct {
 	// LockLog is the lock state machines' part of librbd's debug log of the
 	// force-break and takeover actions (rbd_journal.go lock_log).
 	LockLog *nativeRBDJournalLockLog `json:"lock_log"`
+	// The trimming sequence only (rbd_journal_trim_test.go): the
+	// disconnect-oracle action's `rbd journal client disconnect`, and the
+	// takeover's wait for its journal trimmer and that trimmer's debug lines.
+	Disconnect *nativeRBDJournalCLI `json:"disconnect"`
+	TrimWait   *struct {
+		Polls      int    `json:"polls"`
+		WaitedNS   int64  `json:"waited_ns"`
+		MinimumSet uint64 `json:"minimum_set"`
+		Moved      bool   `json:"moved"`
+	} `json:"trim_wait"`
+	TrimLog *struct {
+		Matched   int  `json:"matched"`
+		Truncated bool `json:"truncated"`
+		Lines     []struct {
+			Level int    `json:"level"`
+			Text  string `json:"text"`
+		} `json:"lines"`
+	} `json:"trim_log"`
 }
 
 // nativeRBDJournalLockLog is the driver's filtered librbd debug log at level

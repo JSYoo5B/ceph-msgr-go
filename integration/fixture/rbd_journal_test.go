@@ -14,12 +14,12 @@ import (
 
 func TestRBDJournalPlanIsTokenBound(t *testing.T) {
 	token := strings.Repeat("a1", 16)
-	plan := rbdJournalPlanFor(token)
+	plan := rbdJournalPlanFor(token, false)
 	if !plan.owned(token) || plan.owned(strings.Repeat("b2", 16)) || plan.Pool != rbdBasePlanFor(token).Pool || plan.BaseImage != rbdBasePlanFor(token).Image ||
 		plan.Image != "ceph-msgr-journal-"+token || plan.OracleClient != "ceph-msgr-oracle-a1a1a1a1" || plan.GoClient != "ceph-msgr-mirror-a1a1a1a1" || plan.Features != 69 {
 		t.Fatal("owned RBD journal plan names changed", plan)
 	}
-	if !reflect.DeepEqual(plan, rbdJournalPlanFor(token)) || reflect.DeepEqual(plan, rbdJournalPlanFor(strings.Repeat("b2", 16))) {
+	if !reflect.DeepEqual(plan, rbdJournalPlanFor(token, false)) || reflect.DeepEqual(plan, rbdJournalPlanFor(strings.Repeat("b2", 16), false)) {
 		t.Fatal("journal plan is not deterministic and token-bound")
 	}
 	// Writes stay inside one object and below librbd's 16 KiB journal
@@ -49,7 +49,7 @@ func TestRBDJournalPlanIsTokenBound(t *testing.T) {
 		"no takeover write":   func(p *rbdJournalPlan) { p.TakeoverEvents = nil },
 		"discard in takeover": func(p *rbdJournalPlan) { p.TakeoverEvents = []rbdJournalEvent{{"discard", 0, 64 << 10}} },
 	} {
-		changed := rbdJournalPlanFor(token)
+		changed := rbdJournalPlanFor(token, false)
 		change(&changed)
 		if changed.owned(token) {
 			t.Fatal("changed journal plan admitted", name)
@@ -90,10 +90,66 @@ func TestRBDJournalPlanIsTokenBound(t *testing.T) {
 	}
 }
 
+// The trim plan creates the journal with 4 KiB objects and fills object set
+// 0 exactly as its test expects: one small setup entry per splay offset, Go
+// writes that overflow object 0 at entry 4 and reach every splay offset of
+// object set 1, and a takeover write over the start of the last Go extent,
+// the one only the takeover's replay applies.
+func TestRBDJournalTrimPlan(t *testing.T) {
+	token := strings.Repeat("a1", 16)
+	plan, ordinary := rbdJournalPlanFor(token, true), rbdJournalPlanFor(token, false)
+	if !plan.owned(token) || plan.JournalOrder != rbdJournalTrimOrder || rbdJournalTrimOrder != 12 || ordinary.JournalOrder != 0 || plan.Image != ordinary.Image ||
+		plan.OracleClient != ordinary.OracleClient || plan.Order != ordinary.Order || plan.Size != ordinary.Size || !reflect.DeepEqual(plan, rbdJournalTrimPlanFor(token)) {
+		t.Fatal("trim plan differs", plan)
+	}
+	changed := plan
+	changed.JournalOrder = 13
+	if changed.owned(token) {
+		t.Fatal("plan with another journal order admitted")
+	}
+	objectSize := uint64(1) << plan.Order
+	// One entry per splay offset: three writes below 4 KiB less the entry
+	// overhead, and one whole-object discard.
+	if len(plan.SetupEvents) != 4 || plan.SetupEvents[3].Kind != "discard" || plan.SetupEvents[3].Length != objectSize || plan.SetupEvents[3].Offset%objectSize != 0 {
+		t.Fatal("trim setup is not one entry per splay offset", plan.SetupEvents)
+	}
+	for _, e := range plan.SetupEvents[:3] {
+		if e.Kind != "write" || e.Length == 0 || e.Length > 2<<10 || e.Offset%4096 != 0 {
+			t.Fatal("trim setup write does not fit one small entry", e)
+		}
+	}
+	// Eight 3 KiB writes: two fit in no 4 KiB object, so entry 4 finds
+	// object 0 (a setup entry and entry 0) full.
+	if len(plan.GoWrites) != 8 {
+		t.Fatal("trim plan does not reach every splay offset of object set 1", plan.GoWrites)
+	}
+	for i, e := range plan.GoWrites {
+		if e.Length != 3<<10 || e.Offset/objectSize != (e.Offset+e.Length-1)/objectSize || e.Offset+e.Length > plan.Size ||
+			i > 0 && e.Offset < plan.GoWrites[i-1].Offset+plan.GoWrites[i-1].Length {
+			t.Fatal("trim Go write is not a 3 KiB extent after the previous one inside one image object", e)
+		}
+		for _, w := range plan.SetupEvents[:3] {
+			if e.Offset < w.Offset+w.Length && w.Offset < e.Offset+e.Length {
+				t.Fatal("trim Go write overlaps a setup write", e, w)
+			}
+		}
+	}
+	last, w := plan.GoWrites[7], plan.TakeoverEvents[0]
+	if len(plan.TakeoverEvents) != 1 || w.Kind != "write" || w.Offset != last.Offset || w.Length == 0 || w.Length >= last.Length {
+		t.Fatal("takeover write does not cover the start of the last Go extent only", plan.TakeoverEvents)
+	}
+	for _, field := range []string{"or plan.get('journal_order') not in (0, 12)", "conf.update(rbd_journal_order=str(plan['journal_order']))", "conf.update(debug_journaler='20/20')",
+		"out['trim_wait'] = trim_wait(ioctx, 'journal.' + text(image.id()))", "'get_minimum_set'", "'journal', 'client', 'disconnect', '--client-id', plan['oracle_client']"} {
+		if !strings.Contains(rbdJournalNativePython, field) {
+			t.Fatal("native journal driver lacks", field)
+		}
+	}
+}
+
 func TestRBDJournalRequestIsClosedAndOrdered(t *testing.T) {
 	token := strings.Repeat("a1", 16)
 	for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions, rbdJournalPrimaryChangeActions, rbdJournalOwnerLossActions, rbdJournalForcedBreakActions,
-		rbdJournalForcedBreakPendingActions} {
+		rbdJournalForcedBreakPendingActions, rbdJournalForcedBreakInflightActions, rbdJournalTrimActions} {
 		for next := range actions {
 			for i, action := range actions {
 				id, got, err := parseRBDJournalRequest(actions, []string{"7", token, action}, token, 6, next)
@@ -144,6 +200,8 @@ const (
 	rbdJournalOwnerLossSelector     = "^TestCephRBDJournalOwnerLossIntegration$"
 	rbdJournalForcedBreakSelector   = "^TestCephRBDJournalForcedBreakIntegration$"
 	rbdJournalForcedPendingSelector = "^TestCephRBDJournalForcedBreakPendingIntegration$"
+	rbdJournalInflightSelector      = "^TestCephRBDJournalForcedBreakInflightIntegration$"
+	rbdJournalTrimSelector          = "^TestCephRBDJournalTrimIntegration$"
 )
 
 // rbdSelectionProfile is the profile of the RBD catalog row that selects
@@ -307,7 +365,7 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 		})
 	}
 	for selector, want := range map[string][]string{rbdJournalOwnerLossSelector: rbdJournalOwnerLossActions, rbdJournalForcedBreakSelector: rbdJournalForcedBreakActions,
-		rbdJournalForcedPendingSelector: rbdJournalForcedBreakPendingActions} {
+		rbdJournalForcedPendingSelector: rbdJournalForcedBreakPendingActions, rbdJournalInflightSelector: rbdJournalForcedBreakInflightActions, rbdJournalTrimSelector: rbdJournalTrimActions} {
 		p, err := load(selector)
 		if err != nil || p.testRun != selector || p.rbdReplicas() != "1" || !slices.Equal(rbdJournalActionsFor(p), want) || !slices.Equal(rbdLockActionsFor(p), rbdLockActions) {
 			t.Fatal("journal owner-loss selector admission differs", selector, p.testRun, err)
@@ -315,7 +373,12 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 		if row := rbdSelectionProfile(t, selector); !slices.Equal(rbdJournalActionsFor(row), want) {
 			t.Fatal("catalog row of", selector, "selects another sequence")
 		}
-		for _, widened := range []string{strings.TrimSuffix(selector, "$"), strings.TrimPrefix(selector, "^"), "^TestCephRBDJournal(OwnerLoss|ForcedBreak|ForcedBreakPending)Integration$"} {
+		// Only the trimming selection gets the trim plan.
+		if rbdJournalPlanFor(strings.Repeat("a1", 16), p.admits(capRBDJournalTrim)).JournalOrder != map[bool]int{true: rbdJournalTrimOrder}[selector == rbdJournalTrimSelector] {
+			t.Fatal("journal plan of", selector, "differs")
+		}
+		for _, widened := range []string{strings.TrimSuffix(selector, "$"), strings.TrimPrefix(selector, "^"), "^TestCephRBDJournal(OwnerLoss|ForcedBreak|ForcedBreakPending)Integration$",
+			"^TestCephRBDJournal(ForcedBreakInflight|Trim)Integration$"} {
 			if _, err := load(widened); err == nil {
 				t.Fatal("unanchored or widened journal owner-loss selector admitted", widened)
 			}
@@ -324,7 +387,8 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 	for _, selector := range []string{"", rbdJournalLostAppendSelector, rbdLockOwnerLossSelector, rbdLockOwnerLossPendingSelector} {
 		p, err := load(selector)
 		if err != nil || slices.Equal(rbdJournalActionsFor(p), rbdJournalOwnerLossActions) || slices.Equal(rbdJournalActionsFor(p), rbdJournalForcedBreakActions) ||
-			slices.Equal(rbdJournalActionsFor(p), rbdJournalForcedBreakPendingActions) {
+			slices.Equal(rbdJournalActionsFor(p), rbdJournalForcedBreakPendingActions) || slices.Equal(rbdJournalActionsFor(p), rbdJournalForcedBreakInflightActions) ||
+			slices.Equal(rbdJournalActionsFor(p), rbdJournalTrimActions) || p.admits(capRBDJournalTrim) {
 			t.Fatal("another RBD selection runs a journal owner-loss sequence", selector, err)
 		}
 	}
@@ -345,7 +409,27 @@ func TestRBDJournalOwnerLossSelectorsAreExclusive(t *testing.T) {
 			t.Fatal("replay admitted in the owner-loss sequence", next)
 		}
 	}
-	for _, action := range slices.Concat(rbdJournalOwnerLossActions, rbdJournalForcedBreakActions, slices.DeleteFunc(slices.Clone(rbdJournalForcedBreakPendingActions), func(a string) bool { return a == "advance-map" })) {
+	// The in-flight sequence is the lost-append sequence to its checkpoint,
+	// then the break, the fenced observation and the takeover; the trimming
+	// sequence adds the oracle client's disconnect before the break.
+	if !slices.Equal(rbdJournalForcedBreakInflightActions, append(slices.Clone(rbdJournalLostAppendActions[:3]), "force-break", "observe-fenced", "takeover")) ||
+		!slices.Equal(rbdJournalTrimActions, []string{"setup", "observe-locked", "observe-committed", "disconnect-oracle", "force-break", "takeover"}) {
+		t.Fatal("in-flight or trimming sequence differs", rbdJournalForcedBreakInflightActions, rbdJournalTrimActions)
+	}
+	for next := 0; next <= len(rbdJournalTrimActions); next++ {
+		for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions, rbdJournalPrimaryChangeActions, rbdJournalOwnerLossActions, rbdJournalForcedBreakActions,
+			rbdJournalForcedBreakPendingActions, rbdJournalForcedBreakInflightActions} {
+			if _, _, err := parseRBDJournalRequest(actions, []string{"7", token, "disconnect-oracle"}, token, 6, next); err == nil {
+				t.Fatal("disconnect-oracle admitted in another sequence", next)
+			}
+		}
+	}
+	if rbdJournalReadOnly("disconnect-oracle") || !rbdJournalInspected("disconnect-oracle") || rbdJournalBlocklisted("disconnect-oracle") || rbdJournalLockLogged("disconnect-oracle") ||
+		rbdJournalTarget(rbdJournalPlan{Image: "i", OracleClient: "o"}, "disconnect-oracle") != "i,journal-client:o:disconnected" {
+		t.Fatal("disconnect-oracle classification or target differs")
+	}
+	for _, action := range slices.Concat(rbdJournalOwnerLossActions, rbdJournalForcedBreakActions, slices.DeleteFunc(slices.Clone(rbdJournalForcedBreakPendingActions), func(a string) bool { return a == "advance-map" }),
+		rbdJournalForcedBreakInflightActions, rbdJournalTrimActions) {
 		if !strings.Contains(rbdJournalNativePython, "'"+action+"'") {
 			t.Fatal("native journal driver does not admit", action)
 		}
@@ -567,6 +651,13 @@ func rbdJournalOutput(token string, plan rbdJournalPlan, action string) map[stri
 	if action == "takeover" {
 		value["blocklist_before"] = []map[string]any{}
 	}
+	if action == "takeover" && plan.JournalOrder != 0 {
+		value["trim_wait"] = map[string]any{"polls": 3, "waited_ns": 400, "minimum_set": 1, "moved": true}
+		value["trim_log"] = map[string]any{"matched": 1, "truncated": false, "lines": []map[string]any{{"level": 20, "text": "trim_objects: min_set=1"}}}
+	}
+	if action == "disconnect-oracle" {
+		value["disconnect"] = cli("client", "disconnect", "--client-id", plan.OracleClient, spec)
+	}
 	if rbdJournalLockLogged(action) {
 		value["lock_log"] = map[string]any{"present": true, "matched": 2, "truncated": false, "over_cap": false, "lines": []map[string]any{
 			{"level": 10, "component": "librbd::managed_lock::AcquireRequest", "text": "@0 handle_get_locker: r=-2"},
@@ -621,7 +712,7 @@ func rbdJournalOutput(token string, plan rbdJournalPlan, action string) map[stri
 
 func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 	token := strings.Repeat("a1", 16)
-	plan := rbdJournalPlanFor(token)
+	plan := rbdJournalPlanFor(token, false)
 	encode := func(value map[string]any) []byte {
 		data, err := json.Marshal(value)
 		if err != nil {
@@ -632,9 +723,46 @@ func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 	fb := func(v map[string]any) map[string]any { return v["force_break"].(map[string]any) }
 	pendingDriven := slices.DeleteFunc(slices.Clone(rbdJournalForcedBreakPendingActions), func(a string) bool { return a == "advance-map" })
 	for _, action := range slices.Concat(rbdJournalActions, rbdJournalLostAppendActions, []string{"change-primary", "observe-resubmitted"}, rbdJournalOwnerLossActions, rbdJournalForcedBreakActions,
-		pendingDriven) {
+		pendingDriven, rbdJournalForcedBreakInflightActions) {
 		if _, err := decodeRBDJournalNative(action, token, 9, plan, encode(rbdJournalOutput(token, plan, action))); err != nil {
 			t.Fatal("well-formed journal output refused", action, err)
+		}
+	}
+	// The trimming sequence, with the trim plan: the disconnect carries its
+	// command, the takeover its trimmer wait and log, nothing else does.
+	trimPlan := rbdJournalPlanFor(token, true)
+	for _, action := range rbdJournalTrimActions {
+		if _, err := decodeRBDJournalNative(action, token, 9, trimPlan, encode(rbdJournalOutput(token, trimPlan, action))); err != nil {
+			t.Fatal("well-formed trimming journal output refused", action, err)
+		}
+	}
+	tw := func(v map[string]any) map[string]any { return v["trim_wait"].(map[string]any) }
+	for name, c := range map[string]struct {
+		action string
+		plan   rbdJournalPlan
+		change func(map[string]any)
+	}{
+		"trim takeover without its wait":    {"takeover", trimPlan, func(v map[string]any) { delete(v, "trim_wait") }},
+		"trim takeover without its log":     {"takeover", trimPlan, func(v map[string]any) { delete(v, "trim_log") }},
+		"trim wait moved without a set":     {"takeover", trimPlan, func(v map[string]any) { tw(v)["minimum_set"] = 0 }},
+		"trim wait without a poll":          {"takeover", trimPlan, func(v map[string]any) { tw(v)["polls"] = 0 }},
+		"trim log miscounted":               {"takeover", trimPlan, func(v map[string]any) { v["trim_log"].(map[string]any)["matched"] = 0 }},
+		"trim log truncation unstated":      {"takeover", trimPlan, func(v map[string]any) { v["trim_log"].(map[string]any)["matched"] = 2 }},
+		"ordinary takeover with a trim log": {"takeover", plan, func(v map[string]any) { v["trim_log"] = rbdJournalOutput(token, trimPlan, "takeover")["trim_log"] }},
+		"ordinary takeover with a wait":     {"takeover", plan, func(v map[string]any) { v["trim_wait"] = rbdJournalOutput(token, trimPlan, "takeover")["trim_wait"] }},
+		"disconnect without its command":    {"disconnect-oracle", trimPlan, func(v map[string]any) { delete(v, "disconnect") }},
+		"disconnect of another client": {"disconnect-oracle", trimPlan, func(v map[string]any) {
+			v["disconnect"].(map[string]any)["argv"] = []string{"--rbd_cache=false", "--log_to_stderr=false", "--err_to_stderr=true", "journal", "client", "disconnect", trimPlan.Pool}
+		}},
+		"observation with a disconnect": {"observe-committed", trimPlan, func(v map[string]any) {
+			v["disconnect"] = rbdJournalOutput(token, trimPlan, "disconnect-oracle")["disconnect"]
+		}},
+		"disconnect with native events": {"disconnect-oracle", trimPlan, func(v map[string]any) { v["events"] = rbdJournalOutput(token, trimPlan, "takeover")["events"] }},
+	} {
+		value := rbdJournalOutput(token, c.plan, c.action)
+		c.change(value)
+		if _, err := decodeRBDJournalNative(c.action, token, 9, c.plan, encode(value)); err == nil {
+			t.Fatal("malformed trimming journal output admitted", name)
 		}
 	}
 	// A checkpoint must carry its inspection; the lost-append observations

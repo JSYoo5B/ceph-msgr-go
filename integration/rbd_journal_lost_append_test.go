@@ -197,6 +197,8 @@ type rbdJournalLostAppendView struct {
 	ObservedUTC    string
 	ObjectSizes    []uint64
 	ObjectSHA256   []string
+	// ObjectExists says which journal objects native librados found.
+	ObjectExists []bool
 	// The owned entry's place in its journal object: the bytes before it,
 	// the entry itself when the object reaches that far, and how many bytes
 	// follow it.
@@ -301,12 +303,21 @@ type rbdJournalLostAppendRecord struct {
 	// ForcedPending is set in the forced-break variant with held appends
 	// (rbd_journal_forced_break_pending_test.go) only.
 	ForcedPending *rbdJournalForcedPending
+	// Inflight is set in the forced-break variant with an append whose reply
+	// is in flight (rbd_journal_forced_break_inflight_test.go) only.
+	Inflight *rbdJournalForcedInflight
+	// Trim is set in the trimming variant (rbd_journal_trim_test.go) only.
+	Trim *rbdJournalTrim
 }
 
 // rbdJournalLostAppendPlan returns the stages and the step order of the
 // variant the record belongs to.
 func rbdJournalLostAppendPlan(r *rbdJournalLostAppendRecord) (stages, order []string) {
 	switch {
+	case r.Trim != nil:
+		return rbdJournalTrimStages, rbdJournalTrimOrder
+	case r.Inflight != nil:
+		return rbdJournalForcedInflightStages, rbdJournalForcedInflightOrder
 	case r.ForcedPending != nil:
 		return rbdJournalForcedPendingStages, rbdJournalForcedPendingOrder
 	case r.PrimaryChange != nil:
@@ -335,6 +346,12 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 	fail := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	// Records hold optional fields as pointers; print them as their JSON.
 	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+	if r.Trim != nil {
+		return rbdJournalTrimClaims(r, stage)
+	}
+	if r.Inflight != nil {
+		return rbdJournalForcedInflightClaims(r, stage)
+	}
 	if r.ForcedPending != nil {
 		return rbdJournalForcedPendingClaims(r, stage)
 	}
@@ -680,7 +697,7 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 			return nil, errors.New("native journal object list differs from its binary view")
 		}
 		data := objects[o.Offset : o.Offset+o.Size]
-		v.ObjectSizes, v.ObjectSHA256 = append(v.ObjectSizes, o.Size), append(v.ObjectSHA256, digest(data))
+		v.ObjectSizes, v.ObjectSHA256, v.ObjectExists = append(v.ObjectSizes, o.Size), append(v.ObjectSHA256, digest(data)), append(v.ObjectExists, o.Exists)
 		if entry != nil && uint64(i) == entry.Object && len(data) >= entry.Offset {
 			prefix := digest(data[:entry.Offset])
 			v.PrefixSHA256 = &prefix
@@ -817,6 +834,7 @@ func TestCephRBDJournalPrimaryChangeIntegration(t *testing.T) {
 func runRBDJournalLostAppend(t *testing.T, variant string) {
 	primaryChange, ownerLoss, forced := variant == rbdJournalVariantPrimaryChange, variant == rbdJournalVariantOwnerLoss, variant == rbdJournalVariantForcedBreak
 	forcedPending := variant == rbdJournalVariantForcedBreakPending
+	inflight, trim := variant == rbdJournalVariantForcedBreakInflight, variant == rbdJournalVariantTrim
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
 		t.Skip("requires the opt-in disposable RBD fixture (CEPH_MSGR_TEST_RBD=1) under its exact selector")
@@ -861,6 +879,10 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		results = "rbd-journal-forced-break-results.json"
 	case rbdJournalVariantForcedBreakPending:
 		results = "rbd-journal-forced-break-pending-results.json"
+	case rbdJournalVariantForcedBreakInflight:
+		results, outcomeFile = "rbd-journal-forced-break-inflight-results.json", "rbd-journal-forced-break-inflight-outcome.json"
+	case rbdJournalVariantTrim:
+		results = "rbd-journal-trim-results.json"
 	}
 
 	// The observer is a second Go client with its own connections. It
@@ -908,11 +930,17 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	if primaryChange {
 		record.PrimaryChange = &rbdJournalPrimaryChange{}
 	}
-	if ownerLoss || forced || forcedPending {
-		record.OwnerLoss = &rbdJournalOwnerLoss{Forced: forced || forcedPending}
+	if ownerLoss || forced || forcedPending || inflight || trim {
+		record.OwnerLoss = &rbdJournalOwnerLoss{Forced: forced || forcedPending || inflight || trim}
 	}
 	if forcedPending {
 		record.ForcedPending = &rbdJournalForcedPending{}
+	}
+	if inflight {
+		record.Inflight = &rbdJournalForcedInflight{}
+	}
+	if trim {
+		record.Trim = &rbdJournalTrim{}
 	}
 	publish := func() error {
 		record.Timings["total"] = time.Since(started).String()
@@ -1052,8 +1080,14 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	}
 	md := &rbdDecoder{data: metadata}
 	order, splay, _, minimumSet, activeSet := md.u8(), md.u8(), md.u64(), md.u64(), md.u64()
-	if err := md.done(); err != nil || order != rbdJournalOrder || splay != rbdJournalSplay || minimumSet != 0 || activeSet != 0 {
-		t.Fatal("journal metadata differs", order, splay, minimumSet, activeSet, err)
+	// The trim plan creates the journal with rbdJournalTrimJournalOrder, every other
+	// plan with librbd's default.
+	wantOrder := rbdJournalOrder
+	if trim {
+		wantOrder = rbdJournalTrimJournalOrder
+	}
+	if err := md.done(); err != nil || order != uint8(wantOrder) || plan.JournalOrder != map[bool]int{true: rbdJournalTrimJournalOrder}[trim] || splay != rbdJournalSplay || minimumSet != 0 || activeSet != 0 {
+		t.Fatal("journal metadata differs", order, splay, minimumSet, activeSet, plan.JournalOrder, err)
 	}
 	imageOutput, err := hex.DecodeString(setup.ClassCalls[6].OutputHex)
 	if err != nil || setup.ClassCalls[6].InputHex != hex.EncodeToString(rbdString("")) {
@@ -1278,6 +1312,13 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	if s := gate.State(); s.LargeWrites != 0 || s.Bound || s.Connections != len(conns) {
 		t.Fatal("the subject already wrote a frame of the append's size, so the gate cannot single out the append", s)
 	}
+	if trim {
+		runRBDJournalTrim(t, rbdJournalTrimSteps{rbdJournalForcedBreakSteps: rbdJournalForcedBreakSteps{ctx: ctx, record: &record, entry: entry, header: header, plan: plan, token: token,
+			gid: gid, w: w, conn: first, splay: uint64(splay), locked: lockedNative, route: route, request: request, keep: keep, now: now, send: send, native: native, judge: judge,
+			done: done, released: func() { unlocked = true }}, observer: observer, setup: setup, journalHeader: journalHeader, prefix: prefix,
+			softMax: uint64(1) << order, imagePositions: imageClient.Positions, before: expected, imageOutput: imageOutput, dir: dir})
+		return
+	}
 	if forced || forcedPending {
 		steps := rbdJournalForcedBreakSteps{ctx: ctx, record: &record, entry: entry, header: header, plan: plan, token: token, gid: gid, w: w, conn: first,
 			appendInput: append(rbdLE64(1<<order), rbdJournalBL(entryBytes)...), splay: uint64(splay), locked: lockedNative, route: route, request: request, keep: keep,
@@ -1289,6 +1330,22 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		runRBDJournalForcedBreakPending(t, rbdJournalForcedPendingSteps{rbdJournalForcedBreakSteps: steps, dir: dir, closeAll: closeAll, connect: connect,
 			dials: func() int { return int(osdDials.Load()) }, after: after, timings: record.Timings})
 		return
+	}
+	if inflight {
+		// The owner is live: it renews its watch right before the append,
+		// on its own connection while that still delivers replies.
+		watchRequest := request(headerRoute)
+		watchRequest.Operations = nil
+		ping, err := w.Ping(ctx, headerRoute.Epoch)
+		keep("watch_ping", headerRoute, watchRequest, ping, err)
+		attempt := rbdLockOwnerLossOutcome("watch_ping", ping, err)
+		record.OwnerLoss.PingBefore = &attempt
+		if err != nil {
+			t.Fatal("subject watch ping before the append", err)
+		}
+		record.Inflight.PingedUTC = time.Now().UTC().Format(time.RFC3339Nano)
+		watched = time.Now()
+		done("ping")
 	}
 	if err := gate.Arm(entryBytes); err != nil {
 		t.Fatal(err)
@@ -1417,6 +1474,27 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		record.WithheldBeforeCancel = atCancel
 	}
 
+	if inflight {
+		// Native librbd breaks the live owner's lock while the reply to its
+		// applied append is still withheld from it.
+		if age := time.Since(watched); age > rbdJournalOwnerLossTakeoverStart {
+			t.Fatalf("the subject's watch was pinged %v ago; with its %d s timeout a break started now may no longer find it listed", age, rbdJournalLostAppendWatchTimeout)
+		}
+		unlocked = true
+		b, err := rbdJournalBreakOf(native(t, "force-break"), record.Views["force-break"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		record.OwnerLoss.Break = b
+		select {
+		case got := <-finished:
+			keep("journal_append", targetRoute, appendRequest, got.reply, got.err)
+			t.Fatal("the withheld append completed during the break", got.reply.Code, got.err)
+		default:
+			record.Inflight.PendingAfterBreak = true
+		}
+	}
+
 	// Outcome: cancel only the local wait and record what the caller was
 	// told, before anything else is done.
 	cancelCall()
@@ -1438,6 +1516,11 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		t.Fatal("the canceled append did not end with an unknown outcome and its submission", got.reply.Submission, got.err)
 	}
 	done("outcome_recorded")
+
+	if inflight {
+		runRBDJournalForcedBreakInflightEnd(t, &record, native, judge, done, closeAll, func() int { return int(osdDials.Load()) })
+		return
+	}
 
 	// Order: a second native observation after the record. The lock, the
 	// commit position, the tags and every journal byte are where they were.
