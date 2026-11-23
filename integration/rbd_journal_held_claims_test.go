@@ -39,6 +39,27 @@ func rbdJournalHeldEvents(events, then []string, last ...string) bool {
 	return slices.Equal(tail, slices.Sorted(slices.Values(last)))
 }
 
+// rbdJournalHeldQueryProblem names the first field of a PG query that is not
+// state on acting set acting with a history consistent with the query's own
+// epoch, or returns "".
+func rbdJournalHeldQueryProblem(q *nativeRBDJournalPGQuery, state string, acting []int32) string {
+	switch {
+	case q.State != state:
+		return fmt.Sprintf("state is %q, want %q", q.State, state)
+	case !slices.Equal(q.Acting, acting):
+		return fmt.Sprintf("acting set is %v, want %v", q.Acting, acting)
+	case !slices.Equal(q.Up, acting):
+		return fmt.Sprintf("up set is %v, want %v", q.Up, acting)
+	case q.SameIntervalSince == 0 || q.SameIntervalSince > q.Epoch:
+		return fmt.Sprintf("same_interval_since %d is not within its epoch %d", q.SameIntervalSince, q.Epoch)
+	case q.SamePrimarySince > q.SameIntervalSince:
+		return fmt.Sprintf("same_primary_since %d is after same_interval_since %d", q.SamePrimarySince, q.SameIntervalSince)
+	case q.LastUpdate == "":
+		return "names no last update"
+	}
+	return ""
+}
+
 // rbdJournalHeldClaims checks a held-request record up to one stage. It
 // keeps apart what the OSDs listed while the caller was pending (held, from
 // "observe-held" on), what the caller was told and how often it asked
@@ -132,13 +153,20 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 			}
 		}
 	}
-	// queried checks one read's PG query: the state, the up and acting sets
-	// and, when clean, every peer at the primary's last update.
+	// queried checks one read's PG query: the state, the up and acting sets,
+	// a history consistent with the query's own epoch and, when clean, every
+	// peer at the primary's last update. The query's epoch is the PG's own
+	// map epoch on its primary, which may lag (or lead) the OSDMap epochs of
+	// the reads around it, so it is not compared with them; the interval
+	// claims compare the history instead.
 	queried := func(name string, read *nativeRBDJournalHeldRead, state string, acting []int32) *nativeRBDJournalPGQuery {
 		q := read.Query
-		if q == nil || q.State != state || !slices.Equal(q.Acting, acting) || !slices.Equal(q.Up, acting) || q.Epoch < read.Objects[0].Epoch || q.SameIntervalSince == 0 ||
-			q.SameIntervalSince > q.Epoch || q.SamePrimarySince > q.SameIntervalSince || q.LastUpdate == "" {
-			fail("%s: the PG query is not %s on acting set %v: %s", name, state, acting, text(q))
+		if q == nil {
+			fail("%s: the PG query is missing", name)
+			return nil
+		}
+		if problem := rbdJournalHeldQueryProblem(q, state, acting); problem != "" {
+			fail("%s: the PG query %s: %s", name, problem, text(q))
 			return nil
 		}
 		peers := []int32{}
@@ -344,7 +372,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 			placedOn("observe-primary-lost", lost, after, after[0])
 			q := lost.Query
 			if !strings.HasPrefix(q.State, "active") || !slices.Equal(q.Acting, after) || placedQuery != nil && (q.SameIntervalSince <= placedQuery.SameIntervalSince ||
-				q.SamePrimarySince <= placedQuery.SamePrimarySince) || q.Epoch < lost.Objects[0].Epoch {
+				q.SamePrimarySince <= placedQuery.SamePrimarySince) || q.SameIntervalSince > q.Epoch {
 				fail("observe-primary-lost: the PG is not active in a newer interval with a new primary: %s, before %s", text(q), text(placedQuery))
 			}
 		}

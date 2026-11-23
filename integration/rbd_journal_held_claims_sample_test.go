@@ -167,6 +167,35 @@ func rbdJournalHeldSample(mode string) *rbdJournalLostAppendRecord {
 	return r
 }
 
+// TestRBDJournalHeldQueryProblem judges PG queries field by field. The first
+// case is the held read of a secure dead-primary run: the OSDMap reads around
+// it were at epoch 29 and the PG's own query still at 28, with the PG clean in
+// the interval the lock was taken in; the claims once refused it.
+func TestRBDJournalHeldQueryProblem(t *testing.T) {
+	clean := func() *nativeRBDJournalPGQuery {
+		return &nativeRBDJournalPGQuery{State: "active+clean", Epoch: 28, Up: []int32{0, 1, 2}, Acting: []int32{0, 1, 2}, LastUpdate: "28'52", SameIntervalSince: 20, SameUpSince: 20,
+			SamePrimarySince: 20, LastEpochStarted: 21}
+	}
+	if problem := rbdJournalHeldQueryProblem(clean(), "active+clean", []int32{0, 1, 2}); problem != "" {
+		t.Fatal("a clean query refused:", problem)
+	}
+	for want, change := range map[string]func(q *nativeRBDJournalPGQuery){
+		"state is":                 func(q *nativeRBDJournalPGQuery) { q.State = "active+degraded" },
+		"acting set is":            func(q *nativeRBDJournalPGQuery) { q.Acting = []int32{1, 2, 0} },
+		"up set is":                func(q *nativeRBDJournalPGQuery) { q.Up = []int32{1, 2} },
+		"same_interval_since 29":   func(q *nativeRBDJournalPGQuery) { q.SameIntervalSince = 29 },
+		"same_interval_since 0":    func(q *nativeRBDJournalPGQuery) { q.SameIntervalSince = 0 },
+		"same_primary_since 21 is": func(q *nativeRBDJournalPGQuery) { q.SamePrimarySince = 21 },
+		"names no last update":     func(q *nativeRBDJournalPGQuery) { q.LastUpdate = "" },
+	} {
+		q := clean()
+		change(q)
+		if problem := rbdJournalHeldQueryProblem(q, "active+clean", []int32{0, 1, 2}); !strings.HasPrefix(problem, want) {
+			t.Errorf("query problem %q, want one starting %q", problem, want)
+		}
+	}
+}
+
 // TestRBDJournalHeldClaims feeds the held-request claims contradictory
 // records: each consistent sample passes at every stage, and each change
 // fails at the stage named.
@@ -236,6 +265,15 @@ func TestRBDJournalHeldClaims(t *testing.T) {
 		"replica commit not yet": {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = op(r).Events[:10] }},
 		"local commit missing": {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
 			op(r).Events = slices.DeleteFunc(op(r).Events, func(e string) bool { return e == "op_commit" })
+		}},
+		"PG query behind the map reads": {rbdJournalVariantDeadPrimary, "", func(r *rbdJournalLostAppendRecord) {
+			// The secure dead-primary run's held read: the OSDMap at 29 around
+			// a PG query still at 28.
+			for i := range r.Held.Held.Objects {
+				r.Held.Held.Objects[i].Epoch = 31
+			}
+			r.Held.Held.Epoch, r.Held.Lost.Query.Epoch = 31, 32
+			r.Held.Held.Query.Epoch = 30
 		}},
 		"commits in either order": {rbdJournalVariantDeadPrimary, "", func(r *rbdJournalLostAppendRecord) {
 			n := len(op(r).Events)
