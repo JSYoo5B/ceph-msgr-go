@@ -106,13 +106,17 @@ const (
 //
 // A source larger than the destination primary's osd_copyfrom_max_chunk is
 // read in chunks, and every later chunk asserts the user version the first
-// one returned. A write of the source head between chunks, an OMAP edit
+// one returned; a copy pinned to a source version asserts it from the first
+// chunk on. A write of the source head between chunks, an OMAP edit
 // included, then fails the copy with -ERANGE, and a removed head or a
-// snapshot removed between chunks with -ENOENT, while a copy at a snap id
-// keeps reading its clone when only the head changes or is removed. An
-// erasure-coded destination fails a source with OMAP entries or a header with
-// -EOPNOTSUPP once a chunk carries them, after staging any earlier chunk. Each
-// failure reports per-op -EINPROGRESS and leaves the destination unchanged.
+// snapshot removed between chunks with -ENOENT, pinned or not, while a copy
+// at a snap id keeps reading its clone when only the head changes or is
+// removed. A source in an erasure-coded pool is copied in chunks the same
+// way. An erasure-coded destination fails a source with OMAP entries or a
+// header with -EOPNOTSUPP once a chunk carries them, after staging any
+// earlier chunk; its chunks are the limit rounded up to its stripe width.
+// Each failure reports per-op -EINPROGRESS and leaves the destination
+// unchanged.
 // Sources: ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc (_copy_some,
 // process_copy_chunk, do_copy_get).
 //
