@@ -49,8 +49,10 @@ func sparseReadCompoundExpect(op cephmsgr.OSDOperation, full []cephmsgr.OSDExten
 // outcome on a separate client. The native client does not execute the
 // compound itself. The same compound at a snapshot is
 // TestCephOSDSparseReadCompoundSnapshotIntegration's, and with a replica-read
-// flag TestCephOSDSparseReadCompoundReplicaReadIntegration's. Not verified: EC,
-// mid-vector daemon errors, faults and resubmission.
+// flag TestCephOSDSparseReadCompoundReplicaReadIntegration's. No stock daemon
+// answers this compound with a later operation's error
+// (TestCephOSDReadCompoundLaterErrorIntegration). Not verified: EC, faults and
+// resubmission.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdsparsereadcompound key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-request-v9-reply-v8.t-osdsparsereadcompound key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-request-v9-reply-v8

@@ -35,6 +35,9 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 	if err := o.validateChecksumCompound(request); err != nil {
 		return result, err
 	}
+	if err := o.validateErasureReexecution(request); err != nil {
+		return result, err
+	}
 	if err := o.validateSetChunk(request); err != nil {
 		return result, err
 	}

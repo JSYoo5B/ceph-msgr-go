@@ -594,21 +594,10 @@ func erasureObjectBackoffScenario(t *testing.T, width erasureWidth) {
 	written := r.write("overwrite while the shard is away", *absent.After, degraded, degradedAt, cephmsgr.OSDSnapContext{})
 	r.heldThrough("the overwrite while the shard is away", object, *absent.After)
 
-	flagged := false
-	// Registered after the run's own cleanups, so it runs before their
-	// recovery, which waits for clean PGs.
-	r.t.Cleanup(func() {
-		if flagged {
-			cleanup, stop := context.WithTimeout(context.Background(), 60*time.Second)
-			defer stop()
-			nativePool(t, cleanup, "osdflags", map[string]any{"action": "unset"})
-		}
-	})
-	flagged = true
-	flags := nativePool(t, r.ctx, "osdflags", map[string]any{"action": "set"})
-	if !slices.Contains(flags.OSDMapFlags, "norecover") || !slices.Contains(flags.OSDMapFlags, "nobackfill") {
-		t.Fatal("recovery flags were not set", flags.OSDMapFlags)
-	}
+	// Registered after the run's own cleanups, so its cleanup runs before
+	// their recovery, which waits for clean PGs.
+	recovery := newRecoveryFlagHold(r.t)
+	recovery.hold(r.ctx)
 	r.start(parity)
 	seen := r.waitState("degraded on the returned shard", object, func(o pgIntervalObservation) error { return o.degradedOn(route, absent.Query.SameIntervalSince) })
 	now := *seen.After
@@ -696,8 +685,7 @@ func erasureObjectBackoffScenario(t *testing.T, width erasureWidth) {
 	}
 	t.Logf("resubmission tid %d applied once: version %d -> %d", reply.Transaction, pre.Version, final.Version)
 
-	nativePool(t, r.ctx, "osdflags", map[string]any{"action": "unset"})
-	flagged = false
+	recovery.release(r.ctx)
 	r.clean()
 	// The primary never stopped and recovery ends no interval.
 	clean := r.waitState("clean again", object, func(o pgIntervalObservation) error {

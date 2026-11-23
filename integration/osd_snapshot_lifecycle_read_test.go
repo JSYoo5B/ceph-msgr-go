@@ -104,9 +104,11 @@ func TestSnapLifecycleClones(t *testing.T) {
 // and the native heads and clones are unchanged at the end.
 //
 // Not verified: EC, replica reads, more than one PG, a removal while the PG
-// is inactive, mid-vector daemon errors, faults, and a native client
-// executing the compound or ISDIRTY (no native client composes the compound,
-// and none observes the dirty flag; ISDIRTY's expectation is source-derived).
+// is inactive, faults, and a native client executing the compound or ISDIRTY
+// (no native client composes the compound, and none observes the dirty flag;
+// ISDIRTY's expectation is source-derived). No stock daemon answers the
+// compound with a later operation's error
+// (TestCephOSDReadCompoundLaterErrorIntegration).
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-osdsnapshotlifecycleread key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-reply-v8
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-request-v9-reply-v8.t-osdsnapshotlifecycleread key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=replicated-pg-request-v9-reply-v8
