@@ -14,6 +14,10 @@ RBD_JOURNAL_LOST_APPEND_SELECTOR = "^TestCephRBDJournalLostAppendReplyIntegratio
 RBD_LOCK_OWNER_LOSS_SELECTOR = "^TestCephRBDLockOwnerLossIntegration$"
 RBD_LOCK_OWNER_LOSS_PENDING_SELECTOR = "^TestCephRBDLockOwnerLossPendingIntegration$"
 RBD_JOURNAL_PRIMARY_CHANGE_SELECTOR = "^TestCephRBDJournalPrimaryChangeIntegration$"
+# The capabilities the fixture admits on three replicated BlueStore OSDs, and
+# only there (integration/fixture/profile.go rbdReplicas): the primary-change
+# cell and the held-request cells (tools/test_ci_rows_rbd_journal_held.py).
+RBD_THREE_OSD_CAPABILITIES = {"rbd-journal-primary-change", "rbd-journal-replica-hold", "rbd-journal-held-primary-change", "rbd-journal-dead-primary"}
 
 
 def broad_rbd_rows(rows):
@@ -115,9 +119,9 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
         self.assertEqual({row["capabilities"] for row in rows}, {"rbd-lock-owner-loss,rbd-lock-pending-requests"})
 
     def test_rbd_journal_primary_change_rows_are_exclusive(self):
-        # The primary-change cell is the only RBD selection on three OSDs:
-        # replicated BlueStore in both connection modes, the RBD opt-in, its
-        # test alone, and no other RBD row matches it or shares its topology.
+        # The primary-change cell runs on three OSDs: replicated BlueStore in
+        # both connection modes, the RBD opt-in, its test alone, and no other
+        # RBD row matches it. Only the held-request cells share its topology.
         rows = [row for row in self.rows if row.get("test_run") == RBD_JOURNAL_PRIMARY_CHANGE_SELECTOR]
         others = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") != RBD_JOURNAL_PRIMARY_CHANGE_SELECTOR]
         self.assertEqual(len(rows), 2)
@@ -129,7 +133,7 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
             self.assertIsNone(selector.search(unrelated))
         for row in others:
             self.assertIsNone(re.compile(row["test_run"]).search(expected))
-            self.assertEqual(row["osd_replicas"], "1")
+            self.assertEqual(row["osd_replicas"], "3" if row.get("capabilities") in RBD_THREE_OSD_CAPABILITIES else "1")
         observed = set()
         for row in rows:
             self.assertEqual((row["rbd"], row["osd"], row["osd_replicas"], row["osd_store"], row["osd_profile"], row["stress"]),

@@ -225,6 +225,12 @@ func rbdJournalActionsFor(p profile) []string {
 		return rbdJournalForcedBreakActions
 	case p.admits(capRBDJournalForcedBreakPending):
 		return rbdJournalForcedBreakPendingActions
+	case p.admits(capRBDJournalReplicaHold):
+		return rbdJournalReplicaHoldActions
+	case p.admits(capRBDJournalHeldPrimaryChange):
+		return rbdJournalHeldPrimaryChangeActions
+	case p.admits(capRBDJournalDeadPrimary):
+		return rbdJournalDeadPrimaryActions
 	}
 	return rbdJournalActions
 }
@@ -624,7 +630,8 @@ identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
 ACTIONS = ('setup', 'observe-registered', 'write', 'observe-committed', 'inspect', 'replay', 'concurrent',
            'observe-locked', 'checkpoint', 'observe-recorded', 'change-primary', 'observe-resubmitted',
-           'observe-appended', 'force-break', 'observe-fenced', 'takeover', 'observe-pending', 'observe-new-connection', 'disconnect-oracle')
+           'observe-appended', 'force-break', 'observe-fenced', 'takeover', 'observe-pending', 'observe-new-connection', 'disconnect-oracle',
+           'observe-answered',)
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('image') != 'ceph-msgr-journal-' + token or plan.get('features') != 69
@@ -1596,10 +1603,26 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 			return c.rbdBaseFinish(m, err)
 		}
 	}
+	if rbdJournalHeldAdmin(action) {
+		// The fixture's own reads of a held-request sequence; no driver.
+		read, err := c.rbdJournalHeldControl(ctx, action)
+		result["held"] = read
+		return c.rbdBaseFinish(m, err)
+	}
 	if action == "advance-map" {
 		// The fixture's own administrative commands only; the Go test's
 		// observations follow as their own actions.
-		advance, err := rbdLockAdvanceMap(ctx, x.plan.Pool, c.rbdLockAdvanceOps(x.plan.Pool))
+		ops := c.rbdLockAdvanceOps(x.plan.Pool)
+		if c.profile.admits(capRBDJournalHeldPrimaryChange) {
+			// On three OSDs the samples are the old primary's, which holds
+			// the append (rbd_journal_held.go).
+			if x.journalHeldPrimary < 0 || len(x.osdsMarkedOut) != 1 || x.osdsMarkedOut[0] != x.journalHeldPrimary {
+				return c.rbdBaseFinish(m, errors.New("the held append's primary was not the one OSD marked out"))
+			}
+			held := x.journalHeldPrimary
+			ops.osds = func(context.Context) ([]int, error) { return []int{held}, nil }
+		}
+		advance, err := rbdLockAdvanceMap(ctx, x.plan.Pool, ops)
 		result["advance"] = advance
 		return c.rbdBaseFinish(m, err)
 	}
@@ -1639,29 +1662,40 @@ var _ = collectDiagnosticFiles(
 	"rbd-journal-advance-map.json",
 	"rbd-journal-change-primary.json",
 	"rbd-journal-checkpoint.json",
+	"rbd-journal-dead-primary-outcome.json",
+	"rbd-journal-dead-primary-results.json",
 	"rbd-journal-disconnect-oracle.json",
 	"rbd-journal-force-break.json",
 	"rbd-journal-forced-break-inflight-outcome.json",
 	"rbd-journal-forced-break-inflight-results.json",
 	"rbd-journal-forced-break-pending-results.json",
 	"rbd-journal-forced-break-results.json",
+	"rbd-journal-held-primary-change-outcome.json",
+	"rbd-journal-held-primary-change-results.json",
 	"rbd-journal-inspect.json",
 	"rbd-journal-lost-append-outcome.json",
 	"rbd-journal-lost-append-results.json",
+	"rbd-journal-observe-answered.json",
 	"rbd-journal-observe-appended.json",
 	"rbd-journal-observe-committed.json",
 	"rbd-journal-observe-fenced.json",
+	"rbd-journal-observe-held.json",
 	"rbd-journal-observe-locked.json",
 	"rbd-journal-observe-new-connection.json",
 	"rbd-journal-observe-pending.json",
+	"rbd-journal-observe-placed.json",
+	"rbd-journal-observe-primary-lost.json",
 	"rbd-journal-observe-recorded.json",
 	"rbd-journal-observe-registered.json",
 	"rbd-journal-observe-resubmitted.json",
+	"rbd-journal-observe-settled.json",
 	"rbd-journal-owner-loss-outcome.json",
 	"rbd-journal-owner-loss-results.json",
 	"rbd-journal-primary-change-outcome.json",
 	"rbd-journal-primary-change-results.json",
 	"rbd-journal-replay.json",
+	"rbd-journal-replica-hold-outcome.json",
+	"rbd-journal-replica-hold-results.json",
 	"rbd-journal-results.json",
 	"rbd-journal-setup.json",
 	"rbd-journal-takeover.json",
