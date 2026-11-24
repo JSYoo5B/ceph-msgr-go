@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
 // msrRuleReceipt is the owned-pool oracle's mode msrrule
@@ -102,6 +104,12 @@ func refusedForCRUSHMSR(attempt func() error, bound time.Duration, pause func())
 //     OSDMonitor::validate_crush_against_features), and raising that
 //     baseline without yes_i_really_mean_it is refused (-EPERM) because a
 //     connected client lacks CRUSH_MSR; the Go session is such a client.
+//   - A mutation with an uncertain outcome: the oracle raises the baseline,
+//     sends the rule creation and fails before any read, as a lost reply
+//     and read would. The Go session sees the rule in the map; the restore
+//     must remove it and the profile and set the baseline back, from the
+//     intent it recorded before the commands, and the MON must then refuse
+//     the rule again as in the first probe.
 //   - With the baseline raised and the rule present: a new Go session to a
 //     MON, and a new OSD connection of the session that was already
 //     admitted, must fail with ErrUnsupportedFeatures naming exactly
@@ -197,6 +205,28 @@ func TestCephOSDErasureMSRRuleAdmissionIntegration(t *testing.T) {
 	t.Logf("native guards at require_min_compat_client %s: rule creation %d %q; baseline change %d %q",
 		probe.MSR.Prior, probe.MSR.RuleCreate.Code, probe.MSR.RuleCreate.Status, probe.MSR.BaselineChange.Code, probe.MSR.BaselineChange.Status)
 
+	// A mutation whose reply and read are lost: the oracle raises the
+	// baseline, sends the rule creation and fails before any read. The rule
+	// is then in the map with nothing but the recorded intent naming it,
+	// and the restore must still return the map to its start.
+	if err := msrLostReadback(ctx); err == nil {
+		t.Fatal("the apply with a lost readback reported success")
+	}
+	if rules := monRuleNames(t, ctx, c); !slices.Contains(rules, msrOwnedRule) {
+		t.Fatal("the rule creation with the lost readback did not reach the map", rules)
+	}
+	undone := msr(ctx, "restore")
+	if !undone.MSR.Restored || !undone.MSR.Owned || undone.MSR.RulePresent || undone.MSR.ProfilePresent || undone.MSR.Baseline != probe.MSR.Prior {
+		t.Fatalf("restore after a lost readback left the rule, the profile or the raised baseline: %+v", undone.MSR)
+	}
+	if rules := monRuleNames(t, ctx, c); slices.Contains(rules, msrOwnedRule) {
+		t.Fatal("the Go session still lists the rule after the restore", rules)
+	}
+	t.Logf("restore after a lost readback: rule and profile absent, require_min_compat_client %s", undone.MSR.Baseline)
+	if again := msr(ctx, "probe"); again.MSR.Prior != probe.MSR.Prior || again.MSR.RuleCreate == nil || again.MSR.RuleCreate.Code != -22 || again.MSR.RulePresent {
+		t.Fatalf("the restored map does not refuse the rule as the first probe saw: %+v", again.MSR)
+	}
+
 	applied := msr(ctx, "apply")
 	if applied.MSR.Baseline != "squid" || len(applied.MSR.Rule) == 0 {
 		t.Fatal("the MSR rule was not applied", applied.MSR.Baseline)
@@ -250,6 +280,27 @@ func TestCephOSDErasureMSRRuleAdmissionIntegration(t *testing.T) {
 		}
 		pause()
 	}
+}
+
+// msrOwnedRule is the rule of tools/osd_pool_mode_msrrule_oracle.py.
+const msrOwnedRule = "ceph-msgr-owned-msr-rule"
+
+// msrLostReadback runs the oracle's apply with its injected failure after
+// the rule creation was sent and returns the oracle's error.
+func msrLostReadback(ctx context.Context) error {
+	return testcluster.ControlDaemonInput(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "verify", "osd-pool", "msrrule",
+		testcluster.ControlInput{Name: "osd-pool-input.json", Data: []byte(`{"action":"apply","lose":"readback"}`)})
+}
+
+// monRuleNames lists the CRUSH rules through the Go client's MON session.
+func monRuleNames(t *testing.T, ctx context.Context, c *cephmsgr.Client) []string {
+	t.Helper()
+	got, err := c.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"osd crush rule ls","format":"json"}`)})
+	var names []string
+	if err != nil || json.Unmarshal(got.Data, &names) != nil {
+		t.Fatal("authenticated crush rule list", err)
+	}
+	return names
 }
 
 // judgeBaselineGuard checks the MON's refusal to raise
