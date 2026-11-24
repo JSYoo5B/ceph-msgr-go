@@ -83,10 +83,14 @@ const (
 // operation that returns output (STAT, GETXATTR, GETXATTRS, the OMAP reads,
 // CALL), because the pinned EC primary runs such a vector again after the
 // read and, depending on the order, returns that output once per run and
-// runs a CALL's method each time. The
+// runs a CALL's method each time. BalanceReads and LocalizeReads are refused
+// the same way: the pinned native client sends such a read to a replica only
+// on a replicated pool (osdc/Objecter.cc _calc_target), while the OSD would
+// serve it on any shard that is not the primary, a path this client keeps
+// away from. The
 // object-hash profile sends no shard and the OSD maps the raw hash to the
 // primary shard itself; it names no placement, so the client cannot refuse
-// that shape there.
+// either shape there.
 type OSDPlacement struct {
 	PG      OSDPG
 	Primary int32
@@ -167,6 +171,9 @@ func (o *OSDConnection) validatePlacement(request OSDRequest) error {
 	p := request.Placement
 	if p != nil && !validShardPlacement(p.Erasure, p.Shard, p.PrimaryFirst) {
 		return fmt.Errorf("%w: a shard is meaningful only for erasure-coded placement", osd.ErrRequest)
+	}
+	if p != nil && p.Erasure && (request.BalanceReads || request.LocalizeReads) {
+		return fmt.Errorf("%w: BalanceReads and LocalizeReads are refused for an erasure-coded placement", ErrUnsupportedOSDOperation)
 	}
 	if !o.client.options.OSDProfile.replicatedPG() || p == nil || request.Object.Pool < 0 || p.PG.Pool != uint64(request.Object.Pool) || p.Primary != o.target.ID && !request.BalanceReads && !request.LocalizeReads {
 		return fmt.Errorf("%w: replicated request requires its explicit PG and connection primary", osd.ErrRequest)
