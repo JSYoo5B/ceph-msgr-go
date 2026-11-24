@@ -306,6 +306,12 @@ def mode_create(rados, cluster, request, out):
     hashpspool = request["hashpspool"]
     if type(hashpspool) is not bool:
         raise ValueError("hashpspool must be boolean")
+    # False leaves an erasure-coded pool as the MON creates it, without
+    # allow_ec_overwrites: appends at the stripe boundary only
+    # (pg_pool_t::requires_aligned_append). Optimizations need overwrites.
+    allow_overwrites = request.get("overwrites", True)
+    if type(allow_overwrites) is not bool or not allow_overwrites and (not erasure or optimized or width["force"]):
+        raise ValueError("overwrites must be boolean; false needs a non-optimized erasure width with its own profile")
     if find_pool(rados.dump(cluster), name):
         raise RuntimeError("owned pool already exists")
     if erasure and name in crush_rules(rados, cluster):
@@ -332,8 +338,9 @@ def mode_create(rados, cluster, request, out):
         if width["force"]:
             setter["force"] = True
         steps = [setter,
-                 {"prefix": "osd pool create", "pool": name, "pg_num": pg, "pgp_num": pg, "pool_type": "erasure", "erasure_code_profile": width["profile"]},
-                 {"prefix": "osd pool set", "pool": name, "var": "allow_ec_overwrites", "val": "true"}]
+                 {"prefix": "osd pool create", "pool": name, "pg_num": pg, "pgp_num": pg, "pool_type": "erasure", "erasure_code_profile": width["profile"]}]
+        if allow_overwrites:
+            steps.append({"prefix": "osd pool set", "pool": name, "var": "allow_ec_overwrites", "val": "true"})
         if optimized:
             # Tentacle's optimized EC (OSDMonitor::enable_pool_ec_optimizations):
             # irreversible, restricts which shards may be primary and stores
@@ -401,8 +408,8 @@ def mode_create(rados, cluster, request, out):
             raise RuntimeError("native pool EC optimization state differs: %d %s" % (code, text))
         code, text = rados.mon(cluster, {"prefix": "osd pool get", "pool": name, "var": "allow_ec_overwrites", "format": "json"})
         overwrites = json.loads(text).get("allow_ec_overwrites") if code == 0 else None
-        if not width["force"] and (overwrites is not True or pool.get("erasure_code_profile") != width["profile"]
-                                   or "ec_overwrites" not in pool.get("flags_names", "").split(",")):
+        if not width["force"] and (overwrites is not allow_overwrites or pool.get("erasure_code_profile") != width["profile"]
+                                   or ("ec_overwrites" in pool.get("flags_names", "").split(",")) is not allow_overwrites):
             raise RuntimeError("native pool overwrite flag or profile differs: %r %r" % (overwrites, pool.get("erasure_code_profile")))
         if not width["force"] and parse_nonprimary(pool.get("nonprimary_shards")) != ec_nonprimary_shards(width["k"], optimized):
             raise RuntimeError("native pool nonprimary_shards %r differ from the pinned derivation for optimized=%r"

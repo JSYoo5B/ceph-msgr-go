@@ -231,6 +231,10 @@ func rbdJournalActionsFor(p profile) []string {
 		return rbdJournalHeldPrimaryChangeActions
 	case p.admits(capRBDJournalDeadPrimary):
 		return rbdJournalDeadPrimaryActions
+	case p.admits(capRBDJournalPendingHold):
+		return rbdJournalPendingHoldActions
+	case p.admits(capRBDJournalPrimaryRestart):
+		return rbdJournalPrimaryRestartActions
 	case p.admits(capRBDJournalConsumer):
 		return rbdJournalConsumerActions
 	}
@@ -639,7 +643,7 @@ plan = json.loads(plan_json)
 ACTIONS = ('setup', 'observe-registered', 'write', 'observe-committed', 'inspect', 'replay', 'concurrent',
            'observe-locked', 'checkpoint', 'observe-recorded', 'change-primary', 'observe-resubmitted',
            'observe-appended', 'force-break', 'observe-fenced', 'takeover', 'observe-pending', 'observe-new-connection', 'disconnect-oracle',
-           'observe-answered', 'produce')
+           'observe-answered', 'produce', 'observe-restarted')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('image') != 'ceph-msgr-journal-' + token or plan.get('features') != 69
@@ -1862,15 +1866,21 @@ var _ = collectDiagnosticFiles(
 	"rbd-journal-observe-new-connection.json",
 	"rbd-journal-observe-pending.json",
 	"rbd-journal-observe-placed.json",
+	"rbd-journal-observe-primary-back.json",
 	"rbd-journal-observe-primary-lost.json",
 	"rbd-journal-observe-recorded.json",
 	"rbd-journal-observe-registered.json",
+	"rbd-journal-observe-restarted.json",
 	"rbd-journal-observe-resubmitted.json",
 	"rbd-journal-observe-settled.json",
 	"rbd-journal-owner-loss-outcome.json",
 	"rbd-journal-owner-loss-results.json",
+	"rbd-journal-pending-hold-outcome.json",
+	"rbd-journal-pending-hold-results.json",
 	"rbd-journal-primary-change-outcome.json",
 	"rbd-journal-primary-change-results.json",
+	"rbd-journal-primary-restart-outcome.json",
+	"rbd-journal-primary-restart-results.json",
 	"rbd-journal-produce.json",
 	"rbd-journal-replay.json",
 	"rbd-journal-replica-hold-outcome.json",

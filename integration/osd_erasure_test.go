@@ -21,10 +21,13 @@ import (
 // The independent native client observes every result. OMAP SETVALS is
 // refused with -EOPNOTSUPP, and a request with NO_SHARD or another shard is
 // never answered, so it ends as an unknown outcome. A watch receives a NOTIFY
-// from a second client and its ACK completes the notify. Not verified: MSR
-// rules, partial or direct shard reads, and replica (shard) reads, because a
+// from a second client and its ACK completes the notify. Not verified: pools
+// on MSR rules, partial or direct shard reads, and replica (shard) reads. A
 // balanced read routed to a non-primary shard asserts the OSD's EC read
-// pipeline in the pinned release.
+// pipeline in the pinned release, so the client refuses BalanceReads and
+// LocalizeReads for an erasure-coded placement before submission
+// (TestCephOSDErasureOptimizedK2M2UnsupportedOperationsIntegration); the
+// object-hash profile names no placement, so nothing is refused there.
 //
 //scenario:covers CLIENT to OSD
 //fixture:shareable own EC pool I/O only; checked owned-pool cleanup removes pool, profile and CRUSH rule and restores config
@@ -250,10 +253,9 @@ func erasureScenario(t *testing.T, width erasureWidth, optimized bool, plugin st
 		_, err := send(30*time.Second, nil, cephmsgr.OSDOperation{Code: cephmsgr.OSDSetOmapValues, Omap: cephmsgr.OSDOmapInput{Entries: []cephmsgr.OSDOmapEntry{{Key: "k", Value: []byte("v")}}}})
 		var server *cephmsgr.OSDError
 		var unknown *cephmsgr.OutcomeUnknownError
-		if !errors.As(err, &server) || errors.As(err, &unknown) {
-			t.Fatal("OMAP write on an EC pool was not a known refusal", err)
+		if !errors.As(err, &server) || errors.As(err, &unknown) || server.Code != -95 {
+			t.Fatal("OMAP write on an EC pool was not the known refusal -EOPNOTSUPP", err)
 		}
-		t.Logf("OMAP on EC pool: %d", server.Code)
 	})
 
 	if hash {

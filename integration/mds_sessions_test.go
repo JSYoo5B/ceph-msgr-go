@@ -277,7 +277,8 @@ func waitMDSSession(ctx context.Context, s *cephmsgr.MDSSession, limit time.Dura
 // Tentacle MDS with native `session ls`: open, renewal, STALE and resume,
 // confirmed close, REJECT reasons, native and autoclose eviction observed as
 // Lost with the address guard, required-feature admission per profile
-// (including the CHARMAP opt-in) and reclaim. STALE needs
+// (including the CHARMAP opt-in), the REJECT of every profile for each bit
+// all of them withhold, and reclaim. STALE needs
 // mds_defer_session_stale=false, because Server::find_idle_sessions never
 // marks a capless session stale by default.
 // Reclaim encoding is checked only against the daemon. Not verified live:
@@ -679,6 +680,60 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 		off, err := control.request(ctx, "require-off")
 		if err != nil || !maps.Equal(off.Map.Required, base.Map.Required) || off.Mutation == nil || off.Mutation.State != "restored" {
 			t.Fatal("required client features were not restored", err)
+		}
+	}) {
+		return
+	}
+
+	// Every bit that all three Go bitsets withhold keeps its explicit
+	// refusal. The owned filesystem requires one such bit at a time, and the
+	// session-only profile, the CephFS profile and the CHARMAP opt-in each
+	// get the native REJECT. Its reason names exactly the required bit: the
+	// pinned handle_client_session prints the missing features as the
+	// feature_bitset_t hex of one 64-bit block. A refused open leaves no local
+	// session, so each profile reuses one connection for all six bits.
+	if !leaf("reject_required_withheld_features", func(t *testing.T) {
+		withheld := []struct {
+			action, feature string
+			bit             uint
+		}{
+			{"require-lazy", "lazy_caps_wanted", 11}, {"require-metric", "metric_collect", 14}, {"require-notify", "notify_session_state", 16},
+			{"require-getvxattr", "op_getvxattr", 17}, {"require-authcaps", "client_mds_auth_caps", 21}, {"require-blockdiff", "blockdiff", 23},
+		}
+		profiles := []struct {
+			name      string
+			configure func(*cephmsgr.Options)
+			client    *cephmsgr.Client
+			conn      *cephmsgr.MDSConnection
+		}{
+			{name: "Q-session-profile", configure: func(*cephmsgr.Options) {}},
+			{name: "R-cephfs-profile", configure: func(o *cephmsgr.Options) { o.EnableCephFS = true }},
+			{name: "S-charmap-opt-in", configure: func(o *cephmsgr.Options) { o.EnableCephFS, o.EnableCephFSCharmap = true, true }},
+		}
+		for i := range profiles {
+			p := &profiles[i]
+			p.client, p.conn, _ = newClient(t, p.name[:1], identity, freshKey, p.configure)
+		}
+		for _, w := range withheld {
+			key := fmt.Sprintf("feature_%d", w.bit)
+			on, err := control.request(ctx, w.action+"-on")
+			if err != nil || on.Map.Required[key] != w.feature || len(on.Map.Required) != 1 || on.Mutation == nil || on.Mutation.State != "applied" {
+				t.Fatal("withheld-feature requirement was not applied", w.feature, err)
+			}
+			want := fmt.Sprintf("missing required features '0x%016x'", uint64(1)<<w.bit)
+			for i, p := range profiles {
+				if cephmsgr.MDSFeatureBitsetHas(p.client.MDSClientFeatures(), w.bit) {
+					t.Fatal("a Go profile declares a withheld bit", p.name, w.feature)
+				}
+				rejected := reject(t, p.name+"-"+w.feature, identity, p.conn, p.client.Snapshot().GlobalID, metadata(fmt.Sprintf("-%c-%d", 'q'+i, w.bit)))
+				if rejected.Reason != want {
+					t.Fatalf("%s refusal for required %s differs: %q, want %q", p.name, w.feature, rejected.Reason, want)
+				}
+			}
+			off, err := control.request(ctx, w.action+"-off")
+			if err != nil || !maps.Equal(off.Map.Required, base.Map.Required) || off.Mutation == nil || off.Mutation.State != "restored" {
+				t.Fatal("withheld-feature requirement was not restored", w.feature, err)
+			}
 		}
 	}) {
 		return
@@ -1182,8 +1237,9 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 				t.Fatal("session client dialed an OSD or redialed the MDS", r.name, r.dials.MDS.Load(), r.dials.OSD.Load())
 			}
 		}
-		// Two of them (O and P) belong to the CHARMAP admission leaf.
-		if len(dialRecords) != 17 {
+		// Two of them (O and P) belong to the CHARMAP admission leaf and three
+		// (Q, R and S) to the withheld-feature refusals.
+		if len(dialRecords) != 20 {
 			t.Fatal("unexpected number of session clients", len(dialRecords))
 		}
 	})

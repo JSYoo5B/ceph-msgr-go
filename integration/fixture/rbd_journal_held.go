@@ -35,16 +35,26 @@ import (
 //     primary through the daemon control (control_daemon.go) while the
 //     append waits there, resumes the replica and lets the cluster mark the
 //     primary down.
+//   - pending hold: the replica hold with three appends of the Go lock
+//     owner, to journal objects 0, 1 and 2, all waiting for the paused
+//     replica at once.
+//   - primary restart: the dead primary with two appends, one waiting for
+//     the paused replica (journal object 0) and one naming an OSDMap epoch
+//     the cluster has not reached (journal object 1); after the primary was
+//     marked down the Go test starts it again through the daemon control and
+//     `observe-primary-back` waits for the PG to be clean on its original
+//     members.
 //
 // Apart from `change-primary` and `advance-map` the fixture's part is
-// observation only: `observe-placed`, `observe-held`, `observe-settled` and
-// `observe-primary-lost` run no native driver. Each reads the placement of
-// the image header, journal object 0 and the journal header with `ceph osd
-// map`, the PG's peering history, sets and last updates with `ceph pg
-// <pgid> query`, and the OSDMap's down OSDs; `observe-held` also reads the
-// primary's operations in flight (`dump_ops_in_flight`, with their events),
-// and `observe-held` and `observe-primary-lost` wait for a state to appear,
-// bounded. What the reads mean is the test's to judge.
+// observation only: `observe-placed`, `observe-held`, `observe-settled`,
+// `observe-primary-lost` and `observe-primary-back` run no native driver.
+// Each reads the placement of the image header, journal object 0 and the
+// journal header with `ceph osd map`, the PG's peering history, sets and last
+// updates with `ceph pg <pgid> query`, and the OSDMap's down OSDs;
+// `observe-held` also reads the primary's operations in flight
+// (`dump_ops_in_flight`, with their events). `observe-held`,
+// `observe-primary-lost` and `observe-primary-back` wait for a state to
+// appear, bounded. What the reads mean is the test's to judge.
 
 // capRBDJournalReplicaHold admits the replica-hold sequence: its test runs
 // alone on a fresh three-OSD RBD fixture and pauses one replica OSD under a
@@ -67,25 +77,44 @@ var capRBDJournalDeadPrimary = defineExclusiveCapability(fixtureRBD, "rbd-journa
 	"run one test alone on a fresh three-OSD RBD fixture with the journal sequence whose append waits at a primary that is then killed",
 	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
 
-// The three sequences. `observe-answered` and `observe-recorded` are the
-// driver's ordinary observation, `change-primary` the primary-change
-// sequence's action and `replay` the native replay.
+// capRBDJournalPendingHold admits the pending-hold sequence: its test runs
+// alone on a fresh three-OSD RBD fixture and pauses one replica OSD under a
+// lease while three appends are held for it.
+var capRBDJournalPendingHold = defineExclusiveCapability(fixtureRBD, "rbd-journal-pending-hold",
+	"run one test alone on a fresh three-OSD RBD fixture with the journal sequence whose three appends are held for a paused replica's commit",
+	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
+
+// capRBDJournalPrimaryRestart admits the primary-restart sequence: its test
+// runs alone on a fresh three-OSD RBD fixture, pauses one replica, kills the
+// PG's primary while two appends are held there and starts it again.
+var capRBDJournalPrimaryRestart = defineExclusiveCapability(fixtureRBD, "rbd-journal-primary-restart",
+	"run one test alone on a fresh three-OSD RBD fixture with the journal sequence whose appends are held at a primary that is killed and started again",
+	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
+
+// The five sequences. `observe-answered`, `observe-recorded` and
+// `observe-restarted` are the driver's ordinary observation,
+// `change-primary` the primary-change sequence's action and `replay` the
+// native replay.
 var (
 	rbdJournalReplicaHoldActions       = []string{"setup", "observe-locked", "observe-placed", "observe-held", "observe-settled", "observe-answered", "replay"}
 	rbdJournalHeldPrimaryChangeActions = []string{"setup", "observe-locked", "observe-placed", "observe-held", "change-primary", "advance-map", "observe-settled", "observe-recorded", "replay"}
 	rbdJournalDeadPrimaryActions       = []string{"setup", "observe-locked", "observe-placed", "observe-held", "observe-primary-lost", "observe-recorded", "replay"}
+	rbdJournalPendingHoldActions       = slices.Clone(rbdJournalReplicaHoldActions)
+	rbdJournalPrimaryRestartActions    = []string{"setup", "observe-locked", "observe-placed", "observe-held", "observe-primary-lost", "observe-recorded", "observe-primary-back",
+		"observe-restarted", "replay"}
 )
 
 // rbdJournalThreeOSD says whether the profile selects a journal sequence of
 // the three-OSD topology.
 func (p profile) rbdJournalThreeOSD() bool {
-	return p.declares(capRBDJournalPrimaryChange) || p.declares(capRBDJournalReplicaHold) || p.declares(capRBDJournalHeldPrimaryChange) || p.declares(capRBDJournalDeadPrimary)
+	return p.declares(capRBDJournalPrimaryChange) || p.declares(capRBDJournalReplicaHold) || p.declares(capRBDJournalHeldPrimaryChange) || p.declares(capRBDJournalDeadPrimary) ||
+		p.declares(capRBDJournalPendingHold) || p.declares(capRBDJournalPrimaryRestart)
 }
 
 // rbdJournalHeldAdmin names the fixture's own read-only actions of the
 // held-request sequences.
 func rbdJournalHeldAdmin(action string) bool {
-	return slices.Contains([]string{"observe-placed", "observe-held", "observe-settled", "observe-primary-lost"}, action)
+	return slices.Contains([]string{"observe-placed", "observe-held", "observe-settled", "observe-primary-lost", "observe-primary-back"}, action)
 }
 
 // rbdJournalPGPeer is one peer of `ceph pg query` with its last update.
@@ -233,17 +262,26 @@ type rbdJournalHeldOps struct {
 	inFlight func(ctx context.Context, osd int) ([]rbdJournalHeldOp, error)
 	down     func(ctx context.Context) (uint32, []int, error)
 	// held bounds the wait of observe-held, lost that of
-	// observe-primary-lost, and pause is the time between two looks.
-	held, lost, pause time.Duration
+	// observe-primary-lost, back that of observe-primary-back, and pause is
+	// the time between two looks.
+	held, lost, back, pause time.Duration
 }
 
 // rbdJournalHeldWait says what one held-request observation waits for.
 type rbdJournalHeldWait struct {
 	// osd is the OSD whose operations observe-held reads; for
-	// observe-primary-lost it is the primary that must go down.
+	// observe-primary-lost it is the primary that must go down, and for
+	// observe-primary-back the one that must be up and in the PG again.
 	osd int
-	// object is the name the awaited operation's description carries, and
-	// committed requires that a replica's commit was recorded on it.
+	// ops are the operations observe-held waits for, all at once.
+	ops []rbdJournalHeldAwait
+	// acting is the acting set observe-primary-back waits for.
+	acting []int
+}
+
+// rbdJournalHeldAwait is one awaited operation: the object its description
+// names and whether a replica's commit must be recorded on it.
+type rbdJournalHeldAwait struct {
 	object    string
 	committed bool
 }
@@ -285,11 +323,16 @@ func rbdJournalHeldObserve(ctx context.Context, action string, objects []string,
 			return nil
 		}
 	}
-	// held says whether the OSD lists the awaited operation.
+	// held says whether the OSD lists every awaited operation.
 	held := func() bool {
-		return slices.ContainsFunc(r.Ops, func(o rbdJournalHeldOp) bool {
-			return strings.Contains(o.Description, wait.object) && (!wait.committed || slices.Contains(o.Events, "sub_op_commit_rec"))
-		})
+		for _, w := range wait.ops {
+			if !slices.ContainsFunc(r.Ops, func(o rbdJournalHeldOp) bool {
+				return strings.Contains(o.Description, ":::"+w.object+":head ") && (!w.committed || slices.Contains(o.Events, "sub_op_commit_rec"))
+			}) {
+				return false
+			}
+		}
+		return true
 	}
 	readOps := func() error {
 		got, err := ops.inFlight(ctx, wait.osd)
@@ -306,7 +349,7 @@ func rbdJournalHeldObserve(ctx context.Context, action string, objects []string,
 		}
 		r.Settled = true
 	case "observe-held":
-		if wait.osd < 0 || wait.object == "" {
+		if wait.osd < 0 || len(wait.ops) == 0 || slices.ContainsFunc(wait.ops, func(w rbdJournalHeldAwait) bool { return w.object == "" }) {
 			return r, errors.New("the held-request observation names no OSD or object")
 		}
 		// It waits until the OSD lists the operation.
@@ -337,6 +380,30 @@ func rbdJournalHeldObserve(ctx context.Context, action string, objects []string,
 			if p := r.Objects[0]; slices.Contains(r.Down, wait.osd) && p.ActingPrimary >= 0 && p.ActingPrimary != wait.osd {
 				q, err := ops.query(ctx, r.PGID)
 				if err == nil && strings.HasPrefix(q.State, "active") && slices.Equal(q.Acting, p.Acting) && !slices.Contains(q.Acting, wait.osd) {
+					r.Query, r.Settled = &q, true
+					return r, nil
+				}
+			}
+			if !time.Now().Before(deadline) {
+				return r, nil
+			}
+			if err := sleep(); err != nil {
+				return r, err
+			}
+		}
+	case "observe-primary-back":
+		if wait.osd < 0 || len(wait.acting) == 0 || !slices.Contains(wait.acting, wait.osd) {
+			return r, errors.New("the held-request observation names no restarted primary or acting set")
+		}
+		// The OSDMap has the restarted OSD up again, and the PG is clean on
+		// the awaited acting set as the query agrees.
+		for deadline := time.Now().Add(ops.back); ; {
+			if err := look(); err != nil {
+				return r, err
+			}
+			if p := r.Objects[0]; !slices.Contains(r.Down, wait.osd) && slices.Equal(p.Acting, wait.acting) && slices.Equal(p.Up, wait.acting) {
+				q, err := ops.query(ctx, r.PGID)
+				if err == nil && q.State == "active+clean" && slices.Equal(q.Acting, wait.acting) && slices.Equal(q.Up, wait.acting) {
 					r.Query, r.Settled = &q, true
 					return r, nil
 				}
@@ -400,7 +467,7 @@ func (c *fixtureCluster) rbdJournalHeldOps() rbdJournalHeldOps {
 			}
 			return dump.Epoch, down, nil
 		},
-		held: 10 * time.Second, lost: 90 * time.Second, pause: 200 * time.Millisecond,
+		held: 10 * time.Second, lost: 90 * time.Second, back: 150 * time.Second, pause: 200 * time.Millisecond,
 	}
 }
 
@@ -413,16 +480,36 @@ func (c *fixtureCluster) rbdJournalHeldControl(ctx context.Context, action strin
 		return rbdJournalHeldRead{}, errors.New("the journaling image is unknown")
 	}
 	objects := rbdJournalPrimaryObjects(x.poolID, x.journalImageID)
-	wait := rbdJournalHeldWait{osd: -1, object: objects[1]}
+	wait := rbdJournalHeldWait{osd: -1}
 	switch action {
 	case "observe-held":
-		wait.osd, wait.committed = x.journalHeldPrimary, !c.profile.admits(capRBDJournalHeldPrimaryChange)
+		wait.osd, wait.ops = x.journalHeldPrimary, rbdJournalHeldAwaited(c.profile, x.poolID, x.journalImageID)
 	case "observe-primary-lost":
 		wait.osd = x.journalHeldPrimary
+	case "observe-primary-back":
+		wait.osd, wait.acting = x.journalHeldPrimary, x.journalHeldActing
 	}
 	read, err := rbdJournalHeldObserve(ctx, action, objects, wait, c.rbdJournalHeldOps())
 	if err == nil && action == "observe-placed" {
-		x.journalHeldPrimary = read.Objects[0].ActingPrimary
+		x.journalHeldPrimary, x.journalHeldActing = read.Objects[0].ActingPrimary, slices.Clone(read.Objects[0].Acting)
 	}
 	return read, err
+}
+
+// rbdJournalHeldAwaited are the operations observe-held waits for in the
+// selected sequence: the append to journal object 0, with a replica's commit
+// recorded unless it is held for its map; in the pending-hold sequence the
+// appends to journal objects 0, 1 and 2, each with a replica's commit; in
+// the primary-restart sequence the append to journal object 0 with a
+// replica's commit and the one to journal object 1, which is held for its
+// map.
+func rbdJournalHeldAwaited(p profile, poolID int64, imageID string) []rbdJournalHeldAwait {
+	object := func(n int) string { return fmt.Sprintf("journal_data.%d.%s.%d", poolID, imageID, n) }
+	switch {
+	case p.admits(capRBDJournalPendingHold):
+		return []rbdJournalHeldAwait{{object(0), true}, {object(1), true}, {object(2), true}}
+	case p.admits(capRBDJournalPrimaryRestart):
+		return []rbdJournalHeldAwait{{object(0), true}, {object(1), false}}
+	}
+	return []rbdJournalHeldAwait{{object(0), !p.admits(capRBDJournalHeldPrimaryChange)}}
 }

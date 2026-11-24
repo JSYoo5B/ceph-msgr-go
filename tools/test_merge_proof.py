@@ -80,8 +80,14 @@ import unittest
 # Set in the merged tree of Case D, whose whole tools suite runs this module
 # too: the nested run skips it instead of repeating the proof.
 NESTED = "CEPH_MSGR_MERGE_PROOF_NESTED"
+# Set by a Basic CI step whose tools suite leaves this proof to another job
+# of that workflow; the value names that job's ID. MergeProofScheduleTest
+# requires the named job to run this proof itself, without the variable,
+# and to fail when the proof is skipped there.
+ELSEWHERE = "CEPH_MSGR_MERGE_PROOF_JOB"
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / ".github" / "scenarios" / "README.md"
+BASIC_CI = ROOT / ".github" / "workflows" / "ci.yml"
 SECTION = "## Adding a native test"
 OTHER_SECTION = "## Adding other registrations"
 TIMEOUT = 1800
@@ -443,6 +449,7 @@ def readme_patterns(text=None, section=SECTION):
 
 
 @unittest.skipIf(os.environ.get(NESTED) == "1", "running inside the merge proof's own merged tree")
+@unittest.skipIf(bool(os.environ.get(ELSEWHERE)), "the Basic CI job %s runs the merge proof" % os.environ.get(ELSEWHERE))
 class MergeProofTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -684,6 +691,88 @@ class AuthorInstructionsTest(unittest.TestCase):
             self.assertTrue([pattern for pattern, compiled in patterns if compiled.match(path)], path)
         for pattern, compiled in patterns:
             self.assertTrue([path for path in paths if compiled.match(path)], pattern)
+
+
+def workflow_jobs(text):
+    """{job ID: job text} of a workflow."""
+    body = text.split("\njobs:\n", 1)[1]
+    parts = re.split(r"(?m)^  ([A-Za-z0-9_-]+):[ \t]*\n", body)
+    return dict(zip(parts[1::2], parts[2::2]))
+
+
+def job_steps(job):
+    return re.split(r"(?m)^      - ", job)[1:]
+
+
+def step_script(step):
+    """The shell script of a step's `run: |` block."""
+    return "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
+
+
+class MergeProofScheduleTest(unittest.TestCase):
+    """A Basic CI step that leaves the merge proof to another job names that
+    job, and that job runs the proof and fails when the proof does not run."""
+
+    def setUp(self):
+        self.text = BASIC_CI.read_text(encoding="utf-8")
+        self.jobs = workflow_jobs(self.text)
+
+    def deferring(self):
+        """[(job ID, step, named job)] of the steps that set ELSEWHERE."""
+        found = []
+        for name, job in self.jobs.items():
+            for step in job_steps(job):
+                match = re.search(r"(?m)^          %s: (\S+)\s*$" % ELSEWHERE, step)
+                if match:
+                    found.append((name, step, match.group(1)))
+        return found
+
+    def proof_steps(self, job):
+        return [step for step in job_steps(self.jobs[job]) if "-p 'test_merge_proof.py'" in step]
+
+    def test_the_deferring_step_names_a_job_that_runs_the_proof(self):
+        deferring = self.deferring()
+        self.assertTrue(deferring, "no Basic CI step leaves the merge proof to another job")
+        for job, step, named in deferring:
+            self.assertIn("-m unittest discover -s tools -p 'test_*.py'", step, job)
+            self.assertIn(named, self.jobs, "%s leaves the merge proof to %s, which is not a Basic CI job" % (job, named))
+            self.assertNotEqual(named, job)
+            steps = self.proof_steps(named)
+            self.assertEqual(len(steps), 1, "%s does not run the merge proof once" % named)
+            self.assertNotRegex(self.jobs[named], r"(?m)^\s+%s:" % ELSEWHERE, "%s would skip the proof it runs" % named)
+            # Both jobs run under the same condition, so the proof runs
+            # whenever the suite that leaves it does.
+            condition = re.compile(r"(?m)^    if: (.+)$")
+            self.assertEqual(condition.findall(self.jobs[named]), condition.findall(self.jobs[job]))
+            self.assertNotIn("continue-on-error", self.jobs[named])
+        # No other workflow leaves the proof to anyone.
+        for path in BASIC_CI.parent.glob("*.yml"):
+            if path != BASIC_CI:
+                self.assertNotRegex(path.read_text(encoding="utf-8"), r"(?m)^\s+%s:" % ELSEWHERE, path.name)
+
+    @unittest.skipUnless(os.name == "posix", "Basic CI runs the step with bash on Linux")
+    def test_the_proof_step_fails_unless_every_test_ran(self):
+        named = self.deferring()[0][2]
+        script = step_script(self.proof_steps(named)[0])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "bin"
+            binary.mkdir()
+            python = binary / "python3"
+            # A stand-in for the unittest run: prints the given summary and
+            # exits with the given status.
+            python.write_text("#!%s\nimport os, sys\nprint('Ran 5 tests in 1.0s', file=sys.stderr)\n"
+                              "print(os.environ['SUMMARY'], file=sys.stderr)\nsys.exit(int(os.environ['STATUS']))\n" % sys.executable)
+            python.chmod(0o755)
+            for summary, status, passes in (("OK", 0, True), ("OK (skipped=5)", 0, False), ("OK (skipped=1)", 0, False),
+                                            ("FAILED (failures=1)", 1, False), ("OK", 3, False)):
+                with self.subTest(summary=summary, status=status):
+                    env = dict(os.environ, PATH=str(binary) + os.pathsep + os.environ["PATH"], RUNNER_TEMP=str(root),
+                               SUMMARY=summary, STATUS=str(status))
+                    env.pop(ELSEWHERE, None)
+                    result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                                            cwd=ROOT, env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

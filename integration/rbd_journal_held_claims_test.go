@@ -28,9 +28,38 @@ const (
 	rbdJournalHeldSubOpsFlag = "waiting for sub ops"
 )
 
+// rbdJournalHeldMapDelays are the marks PrimaryLogPG::do_request records
+// when it parks an op that reached its PG before the PG had the op's map
+// epoch ("op must wait for map"), or behind another such op of the same
+// client ("waiting_for_map not empty"); once the PG has the map the op
+// reaches it again (osd/PrimaryLogPG.cc at ceph/ceph/blob/v20.2.4/src/).
+// The OSD's map may lead its PG's within one interval, so a held op can
+// carry such a pair right after its first reached_pg.
+var rbdJournalHeldMapDelays = []string{"op must wait for map", "waiting_for_map not empty"}
+
+// rbdJournalHeldMapDelayLimit bounds the pairs one op may carry.
+const rbdJournalHeldMapDelayLimit = 4
+
 // rbdJournalHeldEvents says whether events are exactly the pre-PG steps, then
-// the steps of then in order, then each of last once in any order.
+// the steps of then in order, then each of last once in any order. Each pair
+// of a map delay and the following reached_pg directly after a reached_pg
+// is the PG catching up with the op's map and is set aside, at most
+// rbdJournalHeldMapDelayLimit of them.
 func rbdJournalHeldEvents(events, then []string, last ...string) bool {
+	var kept []string
+	delays := 0
+	for i := 0; i < len(events); i++ {
+		if i > 0 && i+1 < len(events) && events[i-1] == "reached_pg" && events[i+1] == "reached_pg" && slices.Contains(rbdJournalHeldMapDelays, events[i]) {
+			delays++
+			i++
+			continue
+		}
+		kept = append(kept, events[i])
+	}
+	if delays > rbdJournalHeldMapDelayLimit {
+		return false
+	}
+	events = kept
 	head := append(slices.Clone(rbdJournalHeldPrePG), then...)
 	if len(events) != len(head)+len(last) || !slices.Equal(events[:len(head)], head) {
 		return false
@@ -71,6 +100,12 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	fail := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	text := rbdJournalHeldText
 	h, e := r.Held, r.Entry
+	if rbdJournalHeldPendingMode(h.Mode) {
+		return rbdJournalHeldPendingClaims(r, stage)
+	}
+	if h.Pending != nil {
+		return []string{"record: a single-append held record carries pending appends"}
+	}
 	stages, order := rbdJournalHeldPlan(h.Mode)
 	reached := slices.Index(stages, stage)
 	if reached < 0 {
@@ -80,14 +115,26 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		return []string{"record: a held-request record carries another variant's part"}
 	}
 	replica, change, dead := h.Mode == rbdJournalVariantReplicaHold, h.Mode == rbdJournalVariantHeldPrimaryChange, h.Mode == rbdJournalVariantDeadPrimary
+	// inventory is the setup observation's journal object count: every
+	// later observation must list exactly as many objects, each with its
+	// size, digest and existence, before any two of them are compared.
+	inventory := -1
 	view := func(name string, at int) *rbdJournalLostAppendView {
 		if reached < at {
 			return nil
 		}
 		v := r.Views[name]
-		if v == nil || v.Action != name || int(e.Object) >= len(v.ObjectSizes) || len(v.ObjectSizes) != len(v.ObjectSHA256) {
-			fail("%s: native observation missing or incomplete", name)
+		if v == nil || v.Action != name {
+			fail("%s: native observation missing", name)
 			return nil
+		}
+		if int(e.Object) >= len(v.ObjectSizes) || len(v.ObjectSHA256) != len(v.ObjectSizes) || len(v.ObjectExists) != len(v.ObjectSizes) ||
+			inventory >= 0 && len(v.ObjectSizes) != inventory {
+			fail("%s: native observation incomplete (%d journal objects, the setup listed %d)", name, len(v.ObjectSizes), inventory)
+			return nil
+		}
+		if inventory < 0 {
+			inventory = len(v.ObjectSizes)
 		}
 		return v
 	}
@@ -223,7 +270,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	}
 	// The OSDMap may gain an epoch between the fixture's read and the
 	// subject's own placement; the PG's interval may not (below).
-	if hd := h.Held; h.SentAtEpoch == 0 || h.SentAtEpoch < pl.Objects[1].Epoch || hd != nil && h.SentAtEpoch > hd.Objects[1].Epoch {
+	if hd := h.Held; h.SentAtEpoch == 0 || h.SentAtEpoch < pl.Objects[1].Epoch || hd != nil && len(hd.Objects) == 3 && h.SentAtEpoch > hd.Objects[1].Epoch {
 		fail("append: the subject placed the append at epoch %d, outside the fixture's reads around it", h.SentAtEpoch)
 	}
 	wantNamed := h.SentAtEpoch
@@ -438,6 +485,10 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		// Interval: the PG is led by the new primary in a newer interval.
 		st := h.Settled
 		newActing := n.Objects[0].After.Acting
+		if len(newActing) == 0 {
+			fail("change-primary: the PG has no acting set after the change: %s", text(n.Objects[0]))
+			return problems
+		}
 		if st == nil || len(st.Objects) != 3 || st.Query == nil {
 			fail("observe-settled: the fixture's read is missing: %s", text(st))
 			return problems

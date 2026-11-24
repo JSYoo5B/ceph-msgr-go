@@ -34,9 +34,31 @@ class FakeServiceRados:
         return 0, json.dumps({"svc": {"d1": entry}}).encode()
 
 
-def watch(states, **request):
+class FakeClock:
+    """A monotonic clock that advances only when the watch sleeps, so a watch
+    that never matches reaches its deadline after the same polls as in real
+    time without spending that time."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def observe(states, **request):
     base = {"service": "svc", "daemon": "d1", "expect": "present", "wait_seconds": 1}
     return oracle.mode_servicewatch(FakeServiceRados(states), None, dict(base, **request), None)
+
+
+def watch(states, **request):
+    """observe on the fake clock."""
+    clock = FakeClock()
+    with patch("time.monotonic", clock.monotonic), patch("time.sleep", clock.sleep):
+        return observe(states, **request)
 
 
 class ServiceWatchTest(unittest.TestCase):
@@ -91,7 +113,7 @@ class ServiceWatchTest(unittest.TestCase):
 
     def test_stable_absence_resets_after_reappearance(self):
         with patch("time.monotonic", side_effect=range(20)), patch("time.sleep"):
-            result = watch([None, None, self.present, None, None, None, None],
+            result = observe([None, None, self.present, None, None, None, None],
                            expect="absent", wait_seconds=12, stable_seconds=3)
         self.assertTrue(result["matched"])
         self.assertEqual(result["matched_for_seconds"], 3)
@@ -99,7 +121,7 @@ class ServiceWatchTest(unittest.TestCase):
 
     def test_deadline_does_not_accept_a_brief_absence(self):
         with patch("time.monotonic", side_effect=range(20)), patch("time.sleep"):
-            result = watch([self.present, self.present, None, None],
+            result = observe([self.present, self.present, None, None],
                            expect="absent", wait_seconds=4, stable_seconds=3)
         self.assertFalse(result["matched"])
         self.assertEqual(result["matched_for_seconds"], 1)
@@ -475,6 +497,22 @@ class ErasureWidthTest(unittest.TestCase):
                 create(rados, width="k2m2", plugin="isa")
             # No step is retried after a failed check.
             self.assertLessEqual(sum(c["prefix"] == "osd erasure-code-profile set" for c in rados.commands), 1)
+
+    def test_a_pool_without_overwrites_skips_the_flag_and_reads_its_absence_back(self):
+        rados = FakeErasureRados(overwrites=False)
+        result = create(rados, width="k2m2", plugin="isa", overwrites=False)
+        self.assertIs(result["ec_overwrites"], False)
+        self.assertNotIn("ec_overwrites", result["flag_names"].split(","))
+        self.assertEqual([c.get("var") for c in rados.commands if c["prefix"] == "osd pool set"], [])
+        # A pool that has the flag although none was asked for is refused.
+        with self.assertRaises(RuntimeError):
+            create(FakeErasureRados(overwrites=True), width="k2m2", plugin="isa", overwrites=False)
+
+    def test_without_overwrites_inputs_are_closed(self):
+        for request in (dict(width="k2m2", plugin="isa", overwrites="no"), dict(width="k2m2", plugin="isa", overwrites=False, optimized=True),
+                        dict(width="k2m1", overwrites=False), dict(width="", erasure=False, size=3, min_size=2, overwrites=False)):
+            with self.subTest(request=request), self.assertRaises(ValueError):
+                create(FakeErasureRados(overwrites=False), **request)
 
     def test_optimized_k2m2_reads_back_the_pinned_nonprimary_shards(self):
         rados = FakeErasureRados()
