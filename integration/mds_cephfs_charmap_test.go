@@ -141,16 +141,22 @@ type charmapReply struct {
 // symlink target unchanged; Go finds the entry the stock client created by
 // its wrapped name with the native original as the alternate name, and not
 // by that original. The MDS transforms nothing: a lookup by an original name
-// is ENOENT. Across a restart of the owned MDS, the reconnected session keeps
-// CHARMAP in the native session record (the new incarnation reads it from
-// its session map; reconnect sends no feature bits) and creates one more
-// entry, which the stock client resolves.
+// is ENOENT. The owned filesystem then requires CHARMAP (a journaled fixture
+// toggle) across a restart of the owned MDS. The new incarnation admits the
+// reconnect while the bit is required: it checks the requirement against the
+// features its session map kept, because reconnect sends no feature bits. The
+// reconnected session keeps CHARMAP in the native session record, the new
+// incarnation refuses a default CephFS session with the native
+// missing-feature reason, and after the requirement is removed the session
+// creates one more entry, which the stock client resolves.
 //
 // Not exercised: a case-sensitive charmap, the nfd, nfc and nfkd
 // normalizations, an encoding other than utf8, invalid UTF-8 names, a charmap
 // on a nonempty directory, a rename inside or out of the charmap directory,
 // a rename onto an existing entry, alternate names longer than the MDS
-// limit, multiple ranks and a required CHARMAP after a restart.
+// limit, multiple ranks, and a reconnect refused because a session lacking
+// the bit was held across a restart that added the requirement (the order of
+// the new MDSMap and the reconnect phase is not owned by this fixture).
 //
 //scenario:row mds-cephfs-charmap.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscharmap key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=mds-charmap
 //scenario:row mds-cephfs-charmap.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscharmap key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=mds-charmap
@@ -607,6 +613,17 @@ func TestCephMDSCephFSCharmapIntegration(t *testing.T) {
 	}
 
 	if !leaf("restart_reconnect_keeps_the_declaration", func(t *testing.T) {
+		// The owned filesystem requires CHARMAP across the restart. Applying
+		// the requirement evicts nothing, because the open opt-in session
+		// declares the bit.
+		required := req(t, "charmap-require-on")
+		if required.Map == nil || len(required.Map.Required) != 1 || required.Map.Required["feature_22"] != "charmap" || required.Mutation == nil || required.Mutation.State != "applied" {
+			t.Fatal("the charmap requirement was not applied", required.Map, required.Mutation)
+		}
+		if err := checkNativeCephFSCharmapSession(observe(t, snap.GlobalID), identity, options.Metadata); err != nil || session.Status().State != cephmsgr.MDSSessionOpen {
+			t.Fatal("the charmap requirement disturbed the opt-in session", err, session.Status())
+		}
+		facts["required_before_restart"] = required.Map
 		armed := req(t, "restart-arm").Restart
 		facts["armed"] = armed
 		req(t, "restart-fire")
@@ -698,6 +715,37 @@ func TestCephMDSCephFSCharmapIntegration(t *testing.T) {
 		}
 		if !strings.HasSuffix(native.Address, ":0/"+strconv.FormatUint(uint64(snap.CephFSNonce), 10)) || native.Caps < int64(len(caps)) {
 			t.Fatal("charmap reconnect changed native identity or lost held caps", native)
+		}
+		// The new incarnation read the requirement from its first MDSMap and
+		// admitted the reconnect against the features its session map kept.
+		// It refuses a default CephFS session with the native reason, which
+		// prints the missing bit 22 as one feature_bitset_t block, and keeps
+		// no session for it.
+		plain, _ := mdsCommandClient(t, ctx, identity, key, next.Endpoint, true, func(o *cephmsgr.Options) { o.EnableCephFS = true })
+		plainGID := plain.Snapshot().GlobalID
+		control.goGIDs[plainGID] = true
+		plainConn, err := plain.OpenMDS(ctx, target(*next))
+		if err != nil {
+			t.Fatal(err)
+		}
+		refused, err := plainConn.OpenSession(ctx, cephmsgr.MDSSessionOptions{Metadata: metadata("required"), RenewInterval: 2 * time.Second})
+		var rejected *cephmsgr.MDSSessionRejectedError
+		if refused != nil {
+			closing, cancel := context.WithTimeout(ctx, 15*time.Second)
+			refused.Close(closing)
+			cancel()
+		}
+		if refused != nil || !errors.As(err, &rejected) || rejected.Reason != "missing required features '0x0000000000400000'" || rejected.Blocklisted || rejected.Flags != 0 ||
+			rejected.Metadata["error_string"] != rejected.Reason {
+			t.Fatal("the new incarnation did not refuse a default CephFS session while CHARMAP is required", err)
+		}
+		if observe(t, plainGID) != nil {
+			t.Fatal("the refused default CephFS session is in the native session map")
+		}
+		facts["required_reject_reason"] = rejected.Reason
+		restored := req(t, "charmap-require-off")
+		if restored.Map == nil || len(restored.Map.Required) != 0 || restored.Mutation == nil || restored.Mutation.State != "restored" {
+			t.Fatal("the charmap requirement was not restored", restored.Map, restored.Mutation)
 		}
 		// The new incarnation honors the kept declaration: one more entry.
 		original := plan.Entries[6].Name
