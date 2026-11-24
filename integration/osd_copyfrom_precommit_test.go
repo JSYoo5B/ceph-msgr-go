@@ -196,60 +196,77 @@ func copyStalledInterval(o copyIntervalObservation, route osdFixtureOracle) erro
 	return nil
 }
 
-// settleCommitStall undoes an armed or partly armed commit stall from what
-// it observes, never from elapsed time: unless the test itself SIGKILLed the
-// OSD with its 137 receipt (killed), stop asks the fixture to stop the
-// owned daemon, which returns only once Docker reports the container
-// stopped, whether it was still running (armed, stalled or not) or had
-// exited on its own; then restore starts it again and must leave it running
-// and clean; and finally show reads both runtime options from the running
-// OSD, which must be the baseline read before arming. The options are not
-// persisted (`config set` is runtime only), so only a daemon that kept
-// running since the arm can still show them.
+// settleCommitStall decides, from what it observes and never from elapsed
+// time, whether an armed or partly armed commit stall was undone. Unless the
+// test itself SIGKILLed the OSD with its 137 receipt (killed), stop reports
+// the fixture's stop of the owned daemon, which returns only once Docker
+// reports the container stopped, whether it was still running (armed,
+// stalled or not) or had exited on its own. restore is the cell's final
+// recovery attempt and must leave the OSD started and clean. show reads both
+// runtime options from the running OSD, which must be the baseline read
+// before arming: `config set` is runtime only, so only a daemon that kept
+// running since the arm can still show them. No step is skipped because an
+// earlier one failed; any failure fails the settle.
 func settleCommitStall(killed bool, baseline copyCommitStall, stop, restore func() error, show func() copyCommitStall) (copyCommitStall, error) {
+	var failed []error
 	if !killed {
 		if err := stop(); err != nil {
-			return copyCommitStall{}, fmt.Errorf("stop the armed osd.%d: %w", baseline.OSD, err)
+			failed = append(failed, fmt.Errorf("stop the armed osd.%d: %w", baseline.OSD, err))
 		}
 	}
 	if err := restore(); err != nil {
-		return copyCommitStall{}, fmt.Errorf("restart osd.%d after the stall: %w", baseline.OSD, err)
+		failed = append(failed, fmt.Errorf("restart osd.%d after the stall: %w", baseline.OSD, err))
 	}
 	now := show()
 	switch {
 	case len(now.Failures) != 0:
-		return now, fmt.Errorf("osd.%d's runtime options were not read after the stall: %q", baseline.OSD, now.Failures)
+		failed = append(failed, fmt.Errorf("osd.%d's runtime options were not read after the stall: %q", baseline.OSD, now.Failures))
 	case now.OSD != baseline.OSD || now.Crash != baseline.Crash || now.Delay != baseline.Delay:
-		return now, fmt.Errorf("osd.%d's runtime options are %s=%d %s=%d after the stall; the baseline was %d and %d",
-			baseline.OSD, "bdev_inject_crash", now.Crash, "bdev_inject_crash_flush_delay", now.Delay, baseline.Crash, baseline.Delay)
+		failed = append(failed, fmt.Errorf("osd.%d's runtime options are %s=%d %s=%d after the stall; the baseline was %d and %d",
+			baseline.OSD, "bdev_inject_crash", now.Crash, "bdev_inject_crash_flush_delay", now.Delay, baseline.Crash, baseline.Delay))
 	}
-	return now, nil
+	return now, errors.Join(failed...)
 }
 
-// armCommitStall reads the destination primary's two runtime options as the
-// baseline, arms its commit stall and registers the undo (settleCommitStall),
-// which runs before the restore lowerCopyChunk registered and runs restore
-// itself (restore is idempotent). The undo runs whatever failed: the arm
-// request, its readback or anything after it. It returns the time before the
-// arm request, before which the stall cannot have started, and the flag the
-// test sets once it SIGKILLed the OSD itself.
-func (r *copyPrimaryChangeRun) armCommitStall(osd int32, stalled *copyStalledCommit) (time.Time, *bool) {
+// copyStallGate keeps the cells of one run behind verified stall cleanup:
+// once a cell's settle failed, every later cell is refused before it touches
+// the cluster.
+type copyStallGate struct{ unverified error }
+
+func (g *copyStallGate) admit() error {
+	if g.unverified != nil {
+		return fmt.Errorf("not run: an earlier cell's commit stall cleanup is unverified: %w", g.unverified)
+	}
+	return nil
+}
+
+// copyStallGuard is one cell's commit stall: its baseline, whether the arm
+// was requested, whether the test SIGKILLed the OSD itself, and the result of
+// the stop that undoes it otherwise.
+type copyStallGuard struct {
+	r            *copyPrimaryChangeRun
+	osd          int32
+	stalled      *copyStalledCommit
+	armRequested bool
+	killed       bool
+	stopErr      error
+}
+
+// guardCommitStall registers the verification of osd's commit stall. It must
+// be registered before lowerCopyChunk: cleanups run in reverse, so it runs
+// after every other recovery of the cell, makes the final restore attempt
+// itself (restore is idempotent) and reads the options last
+// (settleCommitStall). A failed settle fails the cell and closes gate.
+func (r *copyPrimaryChangeRun) guardCommitStall(gate *copyStallGate, osd int32, stalled *copyStalledCommit) *copyStallGuard {
 	t := r.t
 	t.Helper()
-	baseline := commitStall(t, r.ctx, osd, "show")
-	if baseline.OSD != osd || baseline.Crash != 0 || len(baseline.Failures) != 0 {
-		t.Fatalf("the commit stall of osd.%d is not unarmed before the test arms it: %+v", osd, baseline)
-	}
-	stalled.Baseline = baseline
-	killed := new(bool)
+	g := &copyStallGuard{r: r, osd: osd, stalled: stalled}
 	t.Cleanup(func() {
+		if !g.armRequested {
+			return
+		}
 		cleanup, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 		defer cancel()
-		stop := func() error {
-			// Recorded first, so an uncertain stop is still started again.
-			r.recovery.killed[osd] = true
-			return testcluster.ControlDaemon(cleanup, r.recovery.dir, "stop", "osd", fmt.Sprint(osd))
-		}
 		restore := func() error {
 			r.recovery.restore(t)
 			if r.recovery.killed[osd] || r.recovery.restarted {
@@ -258,18 +275,58 @@ func (r *copyPrimaryChangeRun) armCommitStall(osd int32, stalled *copyStalledCom
 			return nil
 		}
 		show := func() copyCommitStall { return commitStall(t, cleanup, osd, "show") }
-		settled, err := settleCommitStall(*killed, baseline, stop, restore, show)
+		settled, err := settleCommitStall(g.killed, stalled.Baseline, func() error { return g.stopErr }, restore, show)
 		stalled.Settled = &settled
 		if err != nil {
+			gate.unverified = err
 			t.Error(err)
 		}
 	})
+	return g
+}
+
+// arm reads the OSD's two runtime options as the baseline, registers the
+// stop that undoes the stall unless the test SIGKILLs the OSD itself, and
+// arms it. The stop is registered after lowerCopyChunk's cleanups, so it runs
+// before them: no other recovery step runs against an armed daemon. It
+// returns the time before the arm request, before which the stall cannot
+// have started.
+func (g *copyStallGuard) arm() time.Time {
+	r, t, osd, stalled := g.r, g.r.t, g.osd, g.stalled
+	t.Helper()
+	stalled.Baseline = commitStall(t, r.ctx, osd, "show")
+	if b := stalled.Baseline; b.OSD != osd || b.Crash != 0 || len(b.Failures) != 0 {
+		t.Fatalf("the commit stall of osd.%d is not unarmed before the test arms it: %+v", osd, b)
+	}
+	t.Cleanup(func() {
+		if g.killed {
+			return
+		}
+		cleanup, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		// Recorded first, so an uncertain stop is still started again.
+		r.recovery.killed[osd] = true
+		g.stopErr = testcluster.ControlDaemon(cleanup, r.recovery.dir, "stop", "osd", fmt.Sprint(osd))
+	})
+	g.armRequested = true
 	armed := time.Now()
 	stalled.Stall = commitStall(t, r.ctx, osd, "arm")
 	if s := stalled.Stall; !s.Armed || !s.Set || s.Crash != 1<<30 || s.Delay != int64(copyCommitStallDelay/time.Second) || len(s.Failures) != 0 {
 		t.Fatalf("the commit stall of osd.%d was not armed: %+v", osd, s)
 	}
-	return armed, killed
+	return armed
+}
+
+// publishAfterCleanups registers publish as a cleanup of the subtest t; it
+// must be its first registration, so that it runs after every cleanup
+// registered later (they run in reverse) and publishes the receipt fields
+// those cleanups write. A skipped subtest publishes nothing.
+func publishAfterCleanups(t *testing.T, publish func()) {
+	t.Cleanup(func() {
+		if !t.Skipped() {
+			publish()
+		}
+	})
 }
 
 // For COPY_FROM and COPY_FROM2, an unversioned copy of a 64 KiB source from
@@ -331,27 +388,30 @@ func TestCephOSDCopyFromPrecommitLossIntegration(t *testing.T) {
 			t.Error("pre-commit loss receipt", err)
 		}
 	})
+	gate := &copyStallGate{}
 	for _, tc := range copyPrimaryChangeCases {
 		t.Run(tc.name+"/destination-before-commit", func(t *testing.T) {
+			if err := gate.admit(); err != nil {
+				t.Fatal(err)
+			}
 			receipt := copyPrecommitReceipt{copyChunkLossReceipt: copyChunkLossReceipt{Cell: tc.name + "/destination-before-commit", Chunk: multiChunkLimit, Paused: -1}}
-			defer func() {
-				if t.Skipped() {
-					return
-				}
+			publishAfterCleanups(t, func() {
 				mu.Lock()
 				receipts = append(receipts, receipt)
 				mu.Unlock()
-			}()
-			copyPrecommitLoss(t, ctx, pools, recovery, tc, &receipt)
+			})
+			copyPrecommitLoss(t, ctx, pools, recovery, gate, tc, &receipt)
 		})
 	}
 }
 
-func copyPrecommitLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, tc copyPrimaryChangeCase, receipt *copyPrecommitReceipt) {
+func copyPrecommitLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, gate *copyStallGate, tc copyPrimaryChangeCase, receipt *copyPrecommitReceipt) {
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("precommit-%d", tc.code))
 	primary := r.dstRoute.ID
 	stalled := &receipt.Stalled
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), primary
+	// Before lowerCopyChunk, so it verifies the stall after its recovery.
+	guard := r.guardCommitStall(gate, primary, stalled)
 	r.lowerCopyChunk(&receipt.ChunkRestore)
 	r.seedDestination()
 	trigger, triggerRoute := r.blockerObject()
@@ -375,7 +435,7 @@ func copyPrecommitLoss(t *testing.T, ctx context.Context, pools ownedPools, reco
 	copyKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryCopyIncarnation, TID: h.op.TID}
 	writeKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryWriteIncarnation, TID: write.Transaction}
 
-	armed, killed := r.armCommitStall(primary, stalled)
+	armed := guard.arm()
 	// Every observation of the stalled primary ends well before its own exit.
 	work, stopWork := context.WithDeadline(ctx, armed.Add(copyCommitStallDelay-20*time.Second))
 	defer stopWork()
@@ -479,7 +539,7 @@ func copyPrecommitLoss(t *testing.T, ctx context.Context, pools ownedPools, reco
 		t.Fatal("the observations of the stalled primary outlasted their budget")
 	}
 	receipt.KillExit = r.recovery.kill(t, ctx, primary)
-	*killed = true
+	guard.killed = true
 	stalled.KilledAfter = time.Since(armed).Round(10 * time.Millisecond).String()
 	stopWork()
 
@@ -606,6 +666,24 @@ func judgeLoggedResubmission(reply cephmsgr.OSDReply, tid, user uint64) error {
 			reply.Transaction, reply.RetryAttempt, reply.Code, len(reply.Operations), reply.UserVersion, tid, user)
 	}
 	return nil
+}
+
+// TestPublishAfterCleanups checks that a receipt is published after the
+// subtest's later cleanups wrote into it.
+func TestPublishAfterCleanups(t *testing.T) {
+	var published []copyPrecommitReceipt
+	t.Run("cleanup writes", func(t *testing.T) {
+		var receipt copyPrecommitReceipt
+		publishAfterCleanups(t, func() { published = append(published, receipt) })
+		t.Cleanup(func() {
+			receipt.ChunkRestore = true
+			receipt.Stalled.Settled = &copyCommitStall{OSD: 2, Delay: 2}
+		})
+		receipt.Cell = "COPY_FROM/destination-before-commit"
+	})
+	if len(published) != 1 || !published[0].ChunkRestore || published[0].Stalled.Settled == nil || published[0].Cell == "" {
+		t.Fatalf("published %+v", published)
+	}
 }
 
 func TestCopyFromPrecommitJudgements(t *testing.T) {
@@ -736,9 +814,24 @@ func TestCopyFromPrecommitJudgements(t *testing.T) {
 	} {
 		u := c.u
 		_, err := run(c.killed, &u)
-		if (err == nil) != c.ok || u.stops != c.stops || (c.u.stopErr == nil) != (u.restores == 1) {
+		// A failed stop never skips the final restart or the readback.
+		if (err == nil) != c.ok || u.stops != c.stops || u.restores != 1 {
 			t.Errorf("%s: err %v, %d stops, %d restores", name, err, u.stops, u.restores)
 		}
+	}
+	// A stop error stays an error even when the readback is the baseline.
+	if _, err := run(false, &undo{stopErr: errors.New("timed out"), shown: baseline}); err == nil || !strings.Contains(err.Error(), "stop the armed osd.2") {
+		t.Errorf("a failed stop was settled: %v", err)
+	}
+
+	// An unverified settle closes the gate for every later cell.
+	gate := &copyStallGate{}
+	if err := gate.admit(); err != nil {
+		t.Fatal("an open gate refused a cell:", err)
+	}
+	gate.unverified = errors.New("osd.2's runtime options were not read after the stall")
+	if err := gate.admit(); err == nil || !strings.Contains(err.Error(), "not run") {
+		t.Fatal("a closed gate admitted a cell:", err)
 	}
 
 	answered := cephmsgr.OSDReply{Transaction: 5, RetryAttempt: 1, UserVersion: 12, Operations: []cephmsgr.OSDOperationResult{{Result: 0}}}
