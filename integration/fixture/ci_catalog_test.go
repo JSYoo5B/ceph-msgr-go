@@ -72,33 +72,130 @@ var ciForwarding = sync.OnceValues(func() (*ciForwarder, error) {
 // ciEnvironment is the environment the native workflow's runner receives for
 // a matrix (a row's parameters, or a planned job), or the helper's refusal.
 func ciEnvironment(matrix map[string]string) (map[string]string, error) {
-	f, err := ciForwarding()
-	if err != nil {
-		return nil, fmt.Errorf("forwarding helper: %w", err)
-	}
-	request, err := json.Marshal(matrix)
+	envs, refusals, err := ciEnvironments([]map[string]string{matrix})
 	if err != nil {
 		return nil, err
 	}
+	return envs[0], refusals[0]
+}
+
+// ciEnvironments is ciEnvironment of each matrix, in order, in one exchange
+// with the helper: every request is written before the answers are read, so
+// a large product of matrices costs no round trip per matrix. The requests
+// are written from another goroutine, so neither side blocks on a full pipe.
+// The error is the helper's failure; refusals[i] is the helper's refusal of
+// matrices[i].
+func ciEnvironments(matrices []map[string]string) (envs []map[string]string, refusals []error, err error) {
+	f, err := ciForwarding()
+	if err != nil {
+		return nil, nil, fmt.Errorf("forwarding helper: %w", err)
+	}
+	var requests bytes.Buffer
+	for _, matrix := range matrices {
+		request, err := json.Marshal(matrix)
+		if err != nil {
+			return nil, nil, err
+		}
+		requests.Write(append(request, '\n'))
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, err := f.in.Write(append(request, '\n')); err != nil {
-		return nil, fmt.Errorf("forwarding helper: %w", err)
+	written := make(chan error, 1)
+	go func() {
+		_, err := f.in.Write(requests.Bytes())
+		written <- err
+	}()
+	envs, refusals = make([]map[string]string, len(matrices)), make([]error, len(matrices))
+	for i := range matrices {
+		if !f.answers.Scan() {
+			return nil, nil, fmt.Errorf("forwarding helper ended: %v", f.answers.Err())
+		}
+		var answer struct {
+			Environment map[string]string `json:"environment"`
+			Error       string            `json:"error"`
+		}
+		if err := json.Unmarshal(f.answers.Bytes(), &answer); err != nil {
+			return nil, nil, fmt.Errorf("forwarding helper: %w", err)
+		}
+		if answer.Error != "" {
+			refusals[i] = errors.New(answer.Error)
+		} else {
+			envs[i] = answer.Environment
+		}
 	}
-	if !f.answers.Scan() {
-		return nil, fmt.Errorf("forwarding helper ended: %v", f.answers.Err())
+	if err := <-written; err != nil {
+		return nil, nil, fmt.Errorf("forwarding helper: %w", err)
 	}
-	var answer struct {
-		Environment map[string]string `json:"environment"`
-		Error       string            `json:"error"`
+	return envs, refusals, nil
+}
+
+// ciTopologySelection is one row's topology (its parameters) with one
+// selection of the catalog in place of its own (test_run and capabilities),
+// as the native workflow forwards it and the fixture admits it.
+type ciTopologySelection struct {
+	row                    ciScenario
+	selector, capabilities string
+	profile                profile
+	err                    error
+}
+
+// ciTopologySelections is every row's topology combined with every
+// selection of the catalog: no selection, and each row's selector with its
+// declared capabilities and without any. The admission proofs of
+// capabilities that came after the capability migration read it; it is
+// forwarded and admitted once per test binary, in one exchange with the
+// helper. A matrix the helper refuses to forward fails the reader.
+var ciTopologySelections = sync.OnceValues(func() ([]ciTopologySelection, error) {
+	rows, err := ciCatalogRows()
+	if err != nil {
+		return nil, fmt.Errorf("scenario rows from the planner: %w", err)
 	}
-	if err := json.Unmarshal(f.answers.Bytes(), &answer); err != nil {
-		return nil, fmt.Errorf("forwarding helper: %w", err)
+	type selection struct{ selector, capabilities string }
+	selections := []selection{{"", ""}}
+	seen := map[selection]bool{{"", ""}: true}
+	for _, row := range rows {
+		for _, s := range []selection{{row.Params["test_run"], row.Params["capabilities"]}, {row.Params["test_run"], ""}} {
+			if !seen[s] {
+				seen[s] = true
+				selections = append(selections, s)
+			}
+		}
 	}
-	if answer.Error != "" {
-		return nil, errors.New(answer.Error)
+	var product []ciTopologySelection
+	var matrices []map[string]string
+	for _, row := range rows {
+		for _, s := range selections {
+			params := maps.Clone(row.Params)
+			params["test_run"], params["capabilities"] = s.selector, s.capabilities
+			product = append(product, ciTopologySelection{row: row, selector: s.selector, capabilities: s.capabilities})
+			matrices = append(matrices, params)
+		}
 	}
-	return answer.Environment, nil
+	envs, refusals, err := ciEnvironments(matrices)
+	if err != nil {
+		return nil, err
+	}
+	for i := range product {
+		if refusals[i] != nil {
+			return nil, fmt.Errorf("%s with %s [%s]: %w", product[i].row.ID, product[i].selector, product[i].capabilities, refusals[i])
+		}
+		env := envs[i]
+		product[i].profile, product[i].err = loadProfile(func(k string) string { return env[k] })
+	}
+	return product, nil
+})
+
+// ciRowSelections is ciTopologySelections for a test.
+func ciRowSelections(t *testing.T) []ciTopologySelection {
+	t.Helper()
+	product, err := ciTopologySelections()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(product) == 0 {
+		t.Fatal("no scenario is declared")
+	}
+	return product
 }
 
 // ciRowEnvironment is ciEnvironment of a matrix the helper must forward.

@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -40,12 +39,7 @@ func heldLockCellCapabilities() []heldLockCellCapability {
 // declaration on any other topology is refused.
 func TestMDSCephFSHeldLockCellCapabilitiesOverTheCatalog(t *testing.T) {
 	rows := ciRepositoryCatalog(t)
-	type selection struct{ selector, capabilities string }
-	selections := map[selection]bool{{"", ""}: true}
-	for _, row := range rows {
-		s := selection{row.Params["test_run"], row.Params["capabilities"]}
-		selections[s], selections[selection{s.selector, ""}] = true, true
-	}
+	product := ciRowSelections(t)
 	for _, c := range heldLockCellCapabilities() {
 		declares := func(capabilities string) bool {
 			return slices.Contains(strings.Split(capabilities, ","), c.capability.name)
@@ -65,29 +59,24 @@ func TestMDSCephFSHeldLockCellCapabilitiesOverTheCatalog(t *testing.T) {
 			}
 		}
 		admitted, refused := 0, 0
-		for _, row := range rows {
-			for s := range selections {
-				params := maps.Clone(row.Params)
-				params["test_run"], params["capabilities"] = s.selector, s.capabilities
-				env := ciRowEnvironment(t, params)
-				p, err := loadProfile(func(k string) string { return env[k] })
-				probe := err == nil
-				for _, action := range c.actions {
-					probe = probe && c.admit(action, p) == nil
-				}
-				switch {
-				case declares(s.capabilities) && c.fixture(row.Params) && (!probe || !slices.Contains(c.selectors, p.testRun)):
-					t.Errorf("%s with %s [%s]: the %s cell was not admitted alone with its actions: %v", row.ID, s.selector, s.capabilities, c.capability.name, err)
-				case declares(s.capabilities) && !c.fixture(row.Params) && err == nil:
-					t.Errorf("%s with %s [%s]: %s was admitted off its fixture", row.ID, s.selector, s.capabilities, c.capability.name)
-				case !declares(s.capabilities) && probe:
-					t.Errorf("%s with %s [%s]: the actions of %s were admitted without it", row.ID, s.selector, s.capabilities, c.capability.name)
-				}
-				if probe {
-					admitted++
-				} else if declares(s.capabilities) {
-					refused++
-				}
+		for _, s := range product {
+			row, p, err := s.row, s.profile, s.err
+			probe := err == nil
+			for _, action := range c.actions {
+				probe = probe && c.admit(action, p) == nil
+			}
+			switch {
+			case declares(s.capabilities) && c.fixture(row.Params) && (!probe || !slices.Contains(c.selectors, p.testRun)):
+				t.Errorf("%s with %s [%s]: the %s cell was not admitted alone with its actions: %v", row.ID, s.selector, s.capabilities, c.capability.name, err)
+			case declares(s.capabilities) && !c.fixture(row.Params) && err == nil:
+				t.Errorf("%s with %s [%s]: %s was admitted off its fixture", row.ID, s.selector, s.capabilities, c.capability.name)
+			case !declares(s.capabilities) && probe:
+				t.Errorf("%s with %s [%s]: the actions of %s were admitted without it", row.ID, s.selector, s.capabilities, c.capability.name)
+			}
+			if probe {
+				admitted++
+			} else if declares(s.capabilities) {
+				refused++
 			}
 		}
 		if admitted == 0 || refused == 0 {
