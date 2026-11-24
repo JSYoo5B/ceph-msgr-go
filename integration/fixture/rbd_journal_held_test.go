@@ -15,6 +15,7 @@ const (
 	rbdJournalDeadPrimarySelector       = "^TestCephRBDJournalDeadPrimaryIntegration$"
 	rbdJournalPendingHoldSelector       = "^TestCephRBDJournalPendingHoldIntegration$"
 	rbdJournalPrimaryRestartSelector    = "^TestCephRBDJournalPrimaryRestartIntegration$"
+	rbdJournalErasureHoldSelector       = "^TestCephRBDJournalErasureHoldIntegration$"
 )
 
 // rbdJournalProfile loads the profile of one selector with its catalog
@@ -40,7 +41,7 @@ func TestRBDJournalHeldSelectorsAreExclusive(t *testing.T) {
 	one := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1"}
 	for selector, want := range map[string][]string{rbdJournalReplicaHoldSelector: rbdJournalReplicaHoldActions, rbdJournalHeldPrimaryChangeSelector: rbdJournalHeldPrimaryChangeActions,
 		rbdJournalDeadPrimarySelector: rbdJournalDeadPrimaryActions, rbdJournalPendingHoldSelector: rbdJournalPendingHoldActions,
-		rbdJournalPrimaryRestartSelector: rbdJournalPrimaryRestartActions} {
+		rbdJournalPrimaryRestartSelector: rbdJournalPrimaryRestartActions, rbdJournalErasureHoldSelector: rbdJournalErasureHoldActions} {
 		p, err := rbdJournalProfile(t, three, selector)
 		if err != nil || p.testRun != selector || p.rbdReplicas() != "3" || p.osdTopology().poolSize != 3 || p.osdTopology().poolMinSize != 2 ||
 			!slices.Equal(rbdJournalActionsFor(p), want) || !slices.Equal(rbdLockActionsFor(p), rbdLockActions) {
@@ -88,6 +89,7 @@ func TestRBDJournalHeldSelectorsAreExclusive(t *testing.T) {
 		rbdJournalHeldPrimaryChangeSelector: {{"journal_data.3.ab.0", false}},
 		rbdJournalPendingHoldSelector:       {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", true}, {"journal_data.3.ab.2", true}},
 		rbdJournalPrimaryRestartSelector:    {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", false}},
+		rbdJournalErasureHoldSelector:       {{"journal_data.3.ab.0", true}},
 	} {
 		p, err := rbdJournalProfile(t, three, selector)
 		if got := rbdJournalHeldAwaited(p, 3, "ab"); err != nil || !slices.Equal(got, want) {
@@ -103,7 +105,16 @@ func TestRBDJournalHeldDecoders(t *testing.T) {
 	if err != nil || q.State != "active+clean" || q.SameIntervalSince != 21 || q.LastEpochStarted != 22 || len(q.Peers) != 2 || q.Peers[1] != (rbdJournalPGPeer{2, "29'51"}) {
 		t.Fatal("PG query projection differs", q, err)
 	}
+	// An erasure-coded PG's primary names itself with its shard and each
+	// peer with its shard.
+	ec := strings.NewReplacer(`"pgid":"3.0"`, `"pgid":"3.0s0"`, `"peer":"1"`, `"peer":"1(1)"`, `"peer":"2"`, `"peer":"2(2)"`).Replace(query)
+	if q, err := decodeRBDJournalPGQuery("3.0", []byte(ec)); err != nil || len(q.Peers) != 2 || q.Peers[0] != (rbdJournalPGPeer{1, "29'51"}) || q.Peers[1] != (rbdJournalPGPeer{2, "29'51"}) {
+		t.Fatal("erasure-coded PG query projection differs", q, err)
+	}
 	for _, bad := range []string{strings.Replace(query, `"pgid":"3.0"`, `"pgid":"3.1"`, 1), strings.Replace(query, `"peer":"1"`, `"peer":"osd"`, 1),
+		strings.Replace(query, `"pgid":"3.0"`, `"pgid":"3.0s"`, 1), strings.Replace(query, `"pgid":"3.0"`, `"pgid":"3.0sx"`, 1),
+		strings.Replace(query, `"pgid":"3.0"`, `"pgid":"3.1s0"`, 1), strings.Replace(query, `"peer":"1"`, `"peer":"1(x)"`, 1),
+		strings.Replace(query, `"peer":"1"`, `"peer":"1(1"`, 1), strings.Replace(query, `"peer":"1"`, `"peer":"(1)"`, 1),
 		strings.Replace(query, `,"history":{"last_epoch_started":22,"same_up_since":21,"same_interval_since":21,"same_primary_since":21}`, "", 1), `{}`} {
 		if _, err := decodeRBDJournalPGQuery("3.0", []byte(bad)); err == nil {
 			t.Fatal("malformed PG query accepted", bad)

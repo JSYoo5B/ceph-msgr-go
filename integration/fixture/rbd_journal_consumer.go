@@ -80,7 +80,11 @@ func rbdJournalPlanOf(token string, p profile) rbdJournalPlan {
 	if p.admits(capRBDJournalConsumer) {
 		return rbdJournalConsumerPlanFor(token)
 	}
-	return rbdJournalPlanFor(token, p.admits(capRBDJournalTrim))
+	plan := rbdJournalPlanFor(token, p.admits(capRBDJournalTrim))
+	if p.admits(capRBDJournalErasureHold) {
+		plan.JournalPool = rbdGroupSecondPoolName(token)
+	}
+	return plan
 }
 
 // consumer says whether the plan is the consumer plan.
