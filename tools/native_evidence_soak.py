@@ -60,31 +60,49 @@ def project(receipts, tests, ctx):
 
 
 def validate(payloads, ctx):
-    validate_tests(payloads["tests.json"])
+    validate_tests(payloads["tests.json"], ctx["schema_version"])
     validate_soak(payloads["soak.json"], ctx)
     validate_cleanup(payloads["cleanup.json"])
     validate_receipts(payloads["receipts.json"], payloads["soak.json"])
 
 
 def gate(value):
-    """The broad gate lists no expected tests for this row, so require both parents here."""
-    keys(value, {"selector", "expected", "observed", "problems", "passed"})
+    """The broad gate lists no expected tests for this row, so require both parents here.
+
+    The fixture's announcement must name exactly both parents (in the order
+    it announced them) as the whole selection, so the retained record shows
+    that no other test was selected and left unreported.
+    """
+    keys(value, evidence.GATE_FIELDS)
     need(value["passed"] is True and value["selector"] == "" and value["expected"] == [] and value["problems"] == [], "required-test-not-passed")
+    selected_tests(value["selected"])
     observed = value["observed"]
     need(isinstance(observed, list) and len(observed) == 2, "required-test-not-passed")
     for item in observed:
         keys(item, {"suite", "test", "result"})
     need(sorted((i["suite"], i["test"], i["result"]) for i in observed) ==
          sorted(("api", test, "PASS") for test in TESTS.values()), "required-test-not-passed")
-    return {"selector": "", "fixture_selector": SELECTOR,
+    return {"selector": "", "fixture_selector": SELECTOR, "selected": value["selected"],
             "required": [{"suite": "api", "test": TESTS[label], "result": "PASS"} for label in LABELS], "passed": True}
 
 
-def validate_tests(value):
-    keys(value, {"selector", "fixture_selector", "required", "passed"})
-    need(value == {"selector": "", "fixture_selector": SELECTOR, "passed": True,
-                   "required": [{"suite": "api", "test": TESTS[label], "result": "PASS"} for label in LABELS]},
-         "required-test-not-passed")
+def selected_tests(value):
+    """An announced selection of exactly both parents, each once."""
+    pairs = [["api", TESTS[label]] for label in LABELS]
+    need(isinstance(value, list) and len(value) == len(pairs) and all(pair in value for pair in pairs), "required-test-not-passed")
+
+
+def validate_tests(value, version):
+    """The retained record: version 1 predates the retained announced selection."""
+    need(version in evidence.RETAINED_SCHEMA_VERSIONS, "schema-version")
+    wanted = {"selector": "", "fixture_selector": SELECTOR, "passed": True,
+              "required": [{"suite": "api", "test": TESTS[label], "result": "PASS"} for label in LABELS]}
+    if version == 2:
+        keys(value, set(wanted) | {"selected"})
+        selected_tests(value["selected"])
+        wanted["selected"] = value["selected"]
+    keys(value, set(wanted))
+    need(value == wanted, "required-test-not-passed")
 
 
 def receipt_names(faults):
