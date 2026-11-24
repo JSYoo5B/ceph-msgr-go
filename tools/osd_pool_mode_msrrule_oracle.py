@@ -17,12 +17,26 @@ disposable cluster.
   Neither is repeated, and the rule must still be absent afterwards.
 - action apply: raises require_min_compat_client to squid with
   yes_i_really_mean_it, creates the rule and reads it back.
-- action restore: removes the rule and the profile this run created, sets
-  require_min_compat_client back to the recorded value and confirms all three
-  by independent reads. It removes nothing this run did not create.
+- action restore: removes the rule and the profile this run recorded an
+  intent for, sets require_min_compat_client back to the recorded value and
+  confirms all three by independent reads. Without a record it removes
+  nothing.
 
-What this run created and the prior baseline are kept in the fixture output
-directory, so restore works from a later oracle run.
+The prior baseline and what this run may have changed are kept in the
+fixture output directory, so restore works from a later oracle run. The
+record is an intent, written BEFORE each mutating command: the probe first
+proves the owned rule and profile absent, so once an intent is recorded
+anything under those names is this run's, whether or not the command's reply
+or the read after it arrived. Restore therefore never trusts a read taken
+around the mutation. It sends the removal for every recorded intent (both
+removals answer 0 for an absent name), sets the baseline back when it
+differs, and reports restored only from reads taken afterwards; a read that
+fails raises and keeps the record for the next restore.
+
+Apply takes an optional "lose": "readback". It then raises right after the
+rule creation was sent, before any read, which is the outcome of a lost
+reply or read as this mode sees it. The test uses it to run the restore
+after an uncertain mutation against the real MON.
 """
 import json
 import os
@@ -87,11 +101,19 @@ def refusal(rados, cluster, command):
     return {"code": code, "status": rados.last_status}
 
 
+def intend(out, state, key):
+    """Record, before the command that may do it, that this run may create
+    the rule or the profile or change the baseline."""
+    state[key] = True
+    write_state(out, state)
+
+
 @oracle_mode
 def mode_msrrule(rados, cluster, request, out):
     """Probe, apply or restore the owned MSR rule and the client baseline."""
-    if not isinstance(request, dict) or set(request) != {"action"} or request["action"] not in ("probe", "apply", "restore"):
-        raise ValueError("msrrule takes exactly action probe, apply or restore")
+    if (not isinstance(request, dict) or request.get("action") not in ("probe", "apply", "restore")
+            or set(request) - {"action", "lose"} or "lose" in request and (request["action"] != "apply" or request["lose"] != "readback")):
+        raise ValueError("msrrule takes exactly action probe, apply or restore; apply also takes lose=readback")
     action = request["action"]
     state = read_state(out)
     if action == "probe":
@@ -104,37 +126,33 @@ def mode_msrrule(rados, cluster, request, out):
             raise RuntimeError("the owned MSR rule or profile already exists; refusing to reuse it")
         state = {"prior": prior, "profile": False, "rule": False, "raised": False}
         write_state(out, state)
-        try:
-            code, _ = rados.mon(cluster, {"prefix": "osd erasure-code-profile set", "name": PROFILE, "profile": PROFILE_SETTINGS})
-        finally:
-            state["profile"] = ec_profile_present(rados, cluster, PROFILE)
-            write_state(out, state)
+        intend(out, state, "profile")
+        code, _ = rados.mon(cluster, {"prefix": "osd erasure-code-profile set", "name": PROFILE, "profile": PROFILE_SETTINGS})
         if code < 0:
             raise RuntimeError("native MSR erasure-code profile failed: %d %s" % (code, rados.last_status))
-        try:
-            create = refusal(rados, cluster, {"prefix": "osd crush rule create-erasure", "name": RULE, "profile": PROFILE})
-        finally:
-            state["rule"] = RULE in crush_rules(rados, cluster)
-            write_state(out, state)
+        # Both guarded commands are expected to be refused, but either may
+        # apply; the intent covers that before the reply is known.
+        intend(out, state, "rule")
+        create = refusal(rados, cluster, {"prefix": "osd crush rule create-erasure", "name": RULE, "profile": PROFILE})
+        intend(out, state, "raised")
         raise_plain = refusal(rados, cluster, {"prefix": "osd set-require-min-compat-client", "version": TARGET})
         after, epoch = baseline(rados, cluster)
-        state["raised"] = after != prior
-        write_state(out, state)
         return {"msr_rule": {"action": action, "prior": prior, "rule_create": create, "baseline_change": raise_plain,
-                             "rule_present": state["rule"], "baseline": after, "epoch": epoch}}
+                             "rule_present": RULE in crush_rules(rados, cluster), "baseline": after, "epoch": epoch}}
     if action == "apply":
-        if state is None or state["rule"] or state["raised"] or not state["profile"]:
+        # The probe's refused steps must have left the map as it was; that
+        # is read here, not taken from the record.
+        if (state is None or not state["profile"] or RULE in crush_rules(rados, cluster) or not ec_profile_present(rados, cluster, PROFILE)
+                or baseline(rados, cluster)[0] != state["prior"]):
             raise RuntimeError("msrrule apply needs a probe that left the profile and nothing else")
-        state["raised"] = True
-        write_state(out, state)
+        intend(out, state, "raised")
         code, _ = rados.mon(cluster, {"prefix": "osd set-require-min-compat-client", "version": TARGET, "yes_i_really_mean_it": True})
         if code < 0:
             raise RuntimeError("native require_min_compat_client %s failed: %d %s" % (TARGET, code, rados.last_status))
-        try:
-            code, _ = rados.mon(cluster, {"prefix": "osd crush rule create-erasure", "name": RULE, "profile": PROFILE})
-        finally:
-            state["rule"] = RULE in crush_rules(rados, cluster)
-            write_state(out, state)
+        intend(out, state, "rule")
+        code, _ = rados.mon(cluster, {"prefix": "osd crush rule create-erasure", "name": RULE, "profile": PROFILE})
+        if request.get("lose") == "readback":
+            raise RuntimeError("injected: the reply and the read after the MSR rule creation are lost")
         if code < 0:
             raise RuntimeError("native MSR rule creation failed: %d %s" % (code, rados.last_status))
         rule = rule_dump(rados, cluster)
@@ -149,16 +167,18 @@ def mode_msrrule(rados, cluster, request, out):
         value, epoch = baseline(rados, cluster)
         return {"msr_rule": {"action": action, "owned": False, "rule_present": RULE in crush_rules(rados, cluster),
                              "profile_present": ec_profile_present(rados, cluster, PROFILE), "baseline": value, "epoch": epoch, "restored": True}}
+    # Every recorded intent is undone whatever a read around the mutation
+    # showed. The rule goes first: the MON refuses a baseline below what the
+    # map still needs, and a profile a rule was made from stays removable.
     if state["rule"]:
         rados.mon(cluster, {"prefix": "osd crush rule rm", "name": RULE})
     if state["profile"]:
         rados.mon(cluster, {"prefix": "osd erasure-code-profile rm", "name": PROFILE})
     rule_present, profile_present = RULE in crush_rules(rados, cluster), ec_profile_present(rados, cluster, PROFILE)
-    if state["raised"] and not rule_present:
-        # The MON refuses a baseline below what the map still needs, so the
-        # rule goes first; the change back is confirmed by the read below.
-        rados.mon(cluster, {"prefix": "osd set-require-min-compat-client", "version": state["prior"], "yes_i_really_mean_it": True})
     value, epoch = baseline(rados, cluster)
+    if state["raised"] and value != state["prior"] and not rule_present:
+        rados.mon(cluster, {"prefix": "osd set-require-min-compat-client", "version": state["prior"], "yes_i_really_mean_it": True})
+        value, epoch = baseline(rados, cluster)
     restored = not rule_present and not profile_present and value == state["prior"]
     if restored:
         try:
