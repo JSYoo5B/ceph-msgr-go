@@ -407,11 +407,9 @@ type copyChunkLossReceipt struct {
 // or snapshot sources changed between chunks are in
 // osd_copyfrom_multichunk_sources_test.go, and erasure-coded destinations,
 // including a loss before the primary's local commit of the final copy
-// transaction, in osd_erasure_copyfrom_sources_test.go. Not verified: that
-// loss on this replicated destination (no stock control holds a BlueStore
-// commit, and the final transaction is queued locally in the call that
-// issues it; see #7) and the legacy one-PG pools when their primaries
-// coincide.
+// transaction, in osd_erasure_copyfrom_sources_test.go, and that loss on a
+// replicated destination in osd_copyfrom_precommit_test.go. Not verified:
+// the legacy one-PG pools when their primaries coincide.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfrommultichunkloss key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfrommultichunkloss key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8

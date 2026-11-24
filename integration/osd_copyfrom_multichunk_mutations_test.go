@@ -532,9 +532,9 @@ func copyRemovalAnswer(removal string, cloneUser uint64) (int32, uint64) {
 // -ENOENT while native listsnaps still lists the clone with that snapshot.
 //
 // The pinned variants follow. Not verified: a removal before the first
-// chunk, a trimmed clone (it is -ENOENT by find_object_context as well),
-// snapshot or removed EC sources and the legacy one-PG pools when their
-// primaries coincide.
+// chunk, a trimmed clone (it is -ENOENT by find_object_context as well) and
+// the legacy one-PG pools when their primaries coincide. The same cells on an
+// erasure-coded source are in osd_erasure_copyfrom_snapshots_test.go.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromchunksourceremoval key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromchunksourceremoval key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
@@ -581,7 +581,8 @@ func runCopyChunkSourceRemoval(t *testing.T, pinned bool, name string) {
 
 // snapTrimState observes where removed snapshots of the source pool are for
 // the source's PG, listing objects natively (no object while pauserd is set:
-// listsnaps is a read).
+// listsnaps is a read). The primary's pg query names an erasure-coded PG by
+// its own shard (copyRouteSPG).
 func (r *copyPrimaryChangeRun) snapTrimState(objects []string) copyPurgedTrimState {
 	r.t.Helper()
 	var result struct {
@@ -589,7 +590,7 @@ func (r *copyPrimaryChangeRun) snapTrimState(objects []string) copyPurgedTrimSta
 	}
 	nativePoolResult(r.t, r.ctx, "snaptrim", map[string]any{"slot": 1, "object": r.source, "objects": objects}, &result)
 	s := result.SnapTrim
-	if s.PoolID != r.pools.ids[1] || s.PGID != r.srcRoute.PGID || len(s.ListSnaps) != len(objects) {
+	if s.PoolID != r.pools.ids[1] || s.PGID != copyRouteSPG(r.srcRoute) || len(s.ListSnaps) != len(objects) {
 		r.t.Fatalf("native snaptrim observation is not the source PG's: %+v", s)
 	}
 	return s
