@@ -104,11 +104,7 @@ func TestCephOSDErasureOptimizedK2M2CopyFromSourceChunksIntegration(t *testing.T
 						mutation = "head-write"
 					}
 					receipt := copyChunkMutationReceipt{Cell: cell.label(), Mutation: mutation, Chunk: multiChunkLimit}
-					defer func() {
-						if !t.Skipped() {
-							keep(receipt)
-						}
-					}()
+					publishAfterCleanups(t, func() { keep(receipt) })
 					copyErasureSource(t, ctx, pools, recovery, facts, cell, &receipt)
 				})
 			}
@@ -321,14 +317,11 @@ func runCopyErasureChunkLoss(t *testing.T, width erasureWidth, name string) {
 			cell := copyChunkLossCell{tc, lost}
 			t.Run(cell.name+"/"+lost, func(t *testing.T) {
 				receipt := copyErasureLossReceipt{copyChunkLossReceipt: copyChunkLossReceipt{Cell: cell.name + "/" + lost, Chunk: uint64(limit), Paused: -1}, Width: width.name, Lost: -1, Shard: -1, CopyGets: limit}
-				defer func() {
-					if t.Skipped() {
-						return
-					}
+				publishAfterCleanups(t, func() {
 					mu.Lock()
 					receipts = append(receipts, receipt)
 					mu.Unlock()
-				}()
+				})
 				if lost == "destination-before-commit" {
 					copyErasureHeldCommitLoss(t, ctx, pools, recovery, facts, width, limit, cell, &receipt)
 					return

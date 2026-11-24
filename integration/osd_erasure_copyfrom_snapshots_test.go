@@ -96,22 +96,14 @@ func TestCephOSDErasureOptimizedK2M2CopyFromSnapshotSourceIntegration(t *testing
 			cell := copyErasureSnapshotCell{tc, pinned}
 			t.Run(cell.label(), func(t *testing.T) {
 				receipt := copyChunkMutationReceipt{Cell: cell.label(), Mutation: "head-write", Chunk: multiChunkLimit}
-				defer func() {
-					if !t.Skipped() {
-						keep(receipt)
-					}
-				}()
+				publishAfterCleanups(t, func() { keep(receipt) })
 				copyErasureSnapshotChange(t, ctx, pools, recovery, facts, cell, &receipt)
 			})
 			for _, removal := range []string{"head-of-head-source", "head-of-snapshot-source", "snapshot-of-snapshot-source"} {
 				cell := copyRemovalCell{tc, removal, pinned}
 				t.Run(cell.label(), func(t *testing.T) {
 					receipt := copyChunkMutationReceipt{Cell: cell.label(), Mutation: removal, Chunk: multiChunkLimit}
-					defer func() {
-						if !t.Skipped() {
-							keep(receipt)
-						}
-					}()
+					publishAfterCleanups(t, func() { keep(receipt) })
 					copyChunkSourceRemoval(t, ctx, pools, recovery, cell, &receipt)
 				})
 			}
@@ -306,11 +298,7 @@ func TestCephOSDErasureOptimizedCopyFromErasureToErasureIntegration(t *testing.T
 						mutation = "head-write"
 					}
 					receipt := copyChunkMutationReceipt{Cell: cell.label(), Mutation: mutation, Chunk: uint64(limit)}
-					defer func() {
-						if !t.Skipped() {
-							keep(receipt)
-						}
-					}()
+					publishAfterCleanups(t, func() { keep(receipt) })
 					copyErasureToErasure(t, ctx, pools, recovery, srcFacts, dstFacts, limit, cell, &receipt)
 				})
 			}
