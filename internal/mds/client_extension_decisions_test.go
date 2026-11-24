@@ -35,15 +35,23 @@ const (
 // on each bit's own line. Server and client paths named below are relative to
 // the pinned src/. A newer pinned source with more features extends this list.
 //
-// Where the MDS reads a withheld bit at the pinned tag: admission
-// (Server::handle_client_session REJECTs a REQUEST_OPEN lacking a
-// required_client_features bit, handle_client_reconnect answers CLOSE, and
-// update_required_client_features evicts open sessions); bit 11 in
-// Locker::resume_stale_caps; bit 16 in handle_client_session; bit 21 when a
-// root_squash grant is held; bit 22 on entry creation in a charmap directory.
-// Bits 14, 17 and 23 are never read from the client's bitset: the native
-// client gates them on the MDS's advertisement. Every withheld bit keeps an
-// explicit refusal when a filesystem requires it; nothing is retried.
+// Where the MDS reads a withheld bit at the pinned tag (re-audited for bits
+// 11, 14, 16, 17, 21 and 23): admission (Server::handle_client_session
+// REJECTs a REQUEST_OPEN lacking a required_client_features bit,
+// handle_client_reconnect answers CLOSE, and update_required_client_features
+// evicts open sessions); bit 11 in Locker::resume_stale_caps; bit 16 in
+// handle_client_session; bit 21 in handle_client_session and
+// handle_client_reconnect when a root_squash grant is held; bit 22 on entry
+// creation in a charmap directory. Bits 14, 17 and 23 are never read from the
+// client's bitset: the native client gates them on the MDS's advertisement
+// (Client::collect_and_send_global_metrics, and Client::_getvxattr and
+// Client::file_blockdiff through make_request's feature_needed). Every
+// withheld bit keeps an explicit refusal when a filesystem requires it;
+// nothing is retried. The
+// reject_required_withheld_features leaf of TestCephMDSSessionsIntegration
+// requires each of the six in turn and observes the native REJECT of every
+// profile, whose reason names exactly that bit. The reconnect CLOSE for a
+// missing bit is source-only.
 var tentacleCephFSFeatures = []struct {
 	name     string
 	decision extensionDecision
@@ -59,32 +67,42 @@ var tentacleCephFSFeatures = []struct {
 	{"mimic", baseline},
 	{"reply_encoding", baseline},
 	{"reclaim_client", baseline},
-	// lazy_caps_wanted: after STALE returns to OPEN the client must
-	// re-announce wanted caps with an MClientCaps UPDATE; the consumer owns
-	// that policy (SendCaps carries Wanted). Omission keeps eager reissue.
+	// lazy_caps_wanted: with the bit, Locker::resume_stale_caps stops at the
+	// first cap that is not notable (as revoke_stale_caps does), so after
+	// STALE returns to OPEN the client must re-announce wanted caps with an
+	// MClientCaps UPDATE. The consumer owns that policy (SendCaps carries
+	// Wanted). Omission keeps the eager reissue of every cap.
 	{"lazy_caps_wanted", consumerOwned},
 	{"multi_reconnect", baseline},
 	{"deleg_ino", baseline},
 	// metric_collect: MClientMetrics (type 29) is not represented and
-	// REQUEST_OPEN sends an empty metric spec; telemetry values belong to the
-	// I/O layer and the MDS sends no acknowledgement.
+	// REQUEST_OPEN sends an empty metric spec. The MDS never reads the bit:
+	// MetricsHandler::handle_client_metrics accepts metrics from any session,
+	// and the native client sends them only when rank 0 advertises the bit.
+	// Telemetry values belong to the I/O layer and the MDS sends no
+	// acknowledgement, so there is no caller contract or oracle yet.
 	{"metric_collect", deferred},
 	{"alternate_name", baseline},
-	// notify_session_state: needs a duplicate-REQUEST_OPEN path that resends
-	// OPEN or FORCE_RO on an existing session; one REQUEST_OPEN is sent per
-	// local session.
+	// notify_session_state: handle_client_session reads it from the
+	// supported features of a duplicate REQUEST_OPEN on an open session and
+	// then resends OPEN (and FORCE_RO on a read-only MDS). Supporting it needs
+	// that duplicate-REQUEST_OPEN path; one REQUEST_OPEN is sent per local
+	// session.
 	{"notify_session_state", deferred},
-	// op_getvxattr: CEPH_MDS_OP_GETVXATTR can travel through raw Submit; the
+	// op_getvxattr: Server::handle_client_getvxattr does not read the bit.
+	// CEPH_MDS_OP_GETVXATTR (OpGetVxattr) can travel through raw Submit; the
 	// consumer picks the vxattr, checks the MDS advertisement and interprets
-	// the text. No exported constant or native evidence.
+	// the text. No exported constant, and no Go-sent request has native
+	// evidence (the charmap push leaf reads vxattrs with the stock client).
 	{"op_getvxattr", consumerOwned},
 	{"32bits_retry_fwd", baseline},
 	{"new_snaprealm_info", baseline},
 	{"has_owner_uidgid", baseline},
 	// client_mds_auth_caps: the client must enforce MDS auth caps before
-	// buffering changes; the library enforces no grant. Without the bit a
-	// root_squash session is reported as a broken client (health error, by
-	// source; not observed live).
+	// buffering changes; the library enforces no grant. Without the bit,
+	// handle_client_session and handle_client_reconnect add a session holding
+	// a root_squash grant to the broken root_squash clients, which the beacon
+	// reports as a health error (by source; not observed live).
 	{"client_mds_auth_caps", consumerOwned},
 	// charmap: the MDS adds a directory's charmap to every REPLY_ENCODING
 	// InodeStat without testing the bit, and InodeStat.DecodeOptionalMetadata
@@ -96,13 +114,17 @@ var tentacleCephFSFeatures = []struct {
 	// the alternate name, which the MDS does not check. Options
 	// EnableCephFSCharmap is that explicit caller statement and declares it
 	// (TestCephMDSCephFSCharmapIntegration compares the transformed names and
-	// alternate names with a stock client across a restart;
-	// TestCephMDSSessionsIntegration admits it to a filesystem that requires
-	// the bit).
+	// alternate names with a stock client, and reconnects across a restart
+	// while the filesystem requires the bit, which the new incarnation then
+	// refuses to a default CephFS session; TestCephMDSSessionsIntegration
+	// admits it to a filesystem that requires the bit). Multiple ranks are
+	// not exercised.
 	{"charmap", optIn},
-	// blockdiff: CEPH_MDS_OP_FILE_BLOCKDIFF can travel through raw Submit
-	// with caller-built arguments; snapshot selection, paging and block
-	// mapping are the consumer's. No exported constant or native evidence.
+	// blockdiff: Server::handle_client_file_blockdiff does not read the bit.
+	// CEPH_MDS_OP_FILE_BLOCKDIFF (OpFileBlockdiff) can travel through raw
+	// Submit with caller-built arguments; snapshot selection, paging and
+	// block mapping are the consumer's. No exported constant or native
+	// evidence.
 	{"blockdiff", consumerOwned},
 }
 

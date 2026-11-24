@@ -824,7 +824,8 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 		"deny-on", "deny-off", "window-on", "window-off", "restart-arm", "restart-fire", "restart-status", "restart-adopt",
 		"debug-caps-on", "debug-caps-off", "split-flock-ex-nb", "split-final-flock-ex-nb",
 		"split-flock-sh-nb", "split-fcntl-probe", "split-second-flock-ex-nb", "split-middle-flock-ex-nb",
-		"deleg-zero-on", "deleg-zero-off", "async-dirops-off", "async-dirops-on", "charmap-set", "charmap-names", "charmap-create":
+		"deleg-zero-on", "deleg-zero-off", "async-dirops-off", "async-dirops-on", "charmap-set", "charmap-names", "charmap-create",
+		"charmap-require-on", "charmap-require-off":
 		if len(args) != 0 {
 			return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion action takes no caller argument")
 		}
@@ -1326,6 +1327,8 @@ func (c *fixtureCluster) mdsCephFSCompletionAct(ctx context.Context, id int64, a
 		return c.mdsCephFSCompletionNative(ctx, id, action, result)
 	case "charmap-set", "charmap-names", "charmap-create":
 		return c.mdsCephFSCharmapAct(ctx, id, action, result)
+	case "charmap-require-on", "charmap-require-off":
+		return c.mdsCephFSCharmapRequire(ctx, id, action.name == "charmap-require-on", result)
 	case "flush-journal":
 		data, err := c.mdsCephFSCompletionAsok(ctx, 60*time.Second, "flush", "journal")
 		if err != nil {
@@ -1897,6 +1900,9 @@ type mdsCephFSCompletionCleanup struct {
 	NamespaceRestored    bool                          `json:"namespace_restored"`
 	NamespaceNote        string                        `json:"namespace_note,omitempty"`
 	Namespace            *mdsCephFSNative              `json:"namespace,omitempty"`
+	// CharmapRequiredRestored is set only when a charmap run attempted the
+	// owned CHARMAP requirement.
+	CharmapRequiredRestored *bool `json:"charmap_required_restored,omitempty"`
 	mdsCephFSBlocklistReceipt
 	ClientIdentityRemoved bool     `json:"client_identity_removed"`
 	NativeIdentityRemoved bool     `json:"native_identity_removed"`
@@ -1982,6 +1988,9 @@ func (c *fixtureCluster) finishMDSCephFSCompletion(ctx context.Context) error {
 			}
 			fail(err)
 		}
+		restored, err := c.mdsCephFSCharmapReconcile(ctx)
+		receipt.CharmapRequiredRestored = restored
+		fail(err)
 		fail(c.mdsCephFSCompletionJournal())
 		config, err := c.mdsCephFSCompletionConfig(ctx)
 		fail(err)
@@ -2055,7 +2064,8 @@ func (c *fixtureCluster) finishMDSCephFSCompletion(ctx context.Context) error {
 	for _, err := range errs {
 		receipt.Errors = append(receipt.Errors, err.Error())
 	}
-	receipt.Completed = len(errs) == 0 && receipt.ConfigRestored && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved
+	receipt.Completed = len(errs) == 0 && receipt.ConfigRestored && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved &&
+		(receipt.CharmapRequiredRestored == nil || *receipt.CharmapRequiredRestored)
 	if !receipt.Completed && len(errs) == 0 {
 		errs = append(errs, errors.New("MDS CephFS completion cleanup did not verify every check"))
 	}

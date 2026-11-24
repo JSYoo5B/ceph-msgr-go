@@ -64,7 +64,10 @@ way, in files of its own:
 
 `tools/test_merge_proof.py` makes branches that each add every file of both
 sections and requires them to merge without conflicts and pass the
-validators.
+validators. A local run of the tools suite includes it. Basic CI runs it in
+the job `Fixture build and unit checks without a cluster` instead of the job
+`Build, lint and unit tests`, which runs the rest of the suite, so the two
+required jobs share its time.
 
 ## Declarations
 
