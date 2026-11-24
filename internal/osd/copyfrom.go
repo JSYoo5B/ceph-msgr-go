@@ -112,8 +112,9 @@ const (
 // snapshot removed between chunks with -ENOENT, pinned or not, while a copy
 // at a snap id keeps reading its clone when only the head changes or is
 // removed. A source in an erasure-coded pool is copied in chunks the same
-// way. An erasure-coded destination fails a source with OMAP entries or a
-// header with -EOPNOTSUPP once a chunk carries them, after staging any
+// way, at its head or at a snap id, onto a replicated or an erasure-coded
+// destination. An erasure-coded destination fails a source with OMAP entries
+// or a header with -EOPNOTSUPP once a chunk carries them, after staging any
 // earlier chunk; its chunks are the limit rounded up to its stripe width.
 // Each failure reports per-op -EINPROGRESS and leaves the destination
 // unchanged.
