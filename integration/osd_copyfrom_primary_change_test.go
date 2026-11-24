@@ -532,6 +532,19 @@ type copyPrimaryChangeRun struct {
 	// restartedPrimary says the original destination primary was killed and
 	// started again, so it returns under a new address.
 	restartedPrimary bool
+	// chunkMax is the copy-get max of a multi-chunk copy when the destination
+	// rounds the lowered limit up to its stripe width; zero is
+	// multiChunkLimit.
+	chunkMax int
+}
+
+// copyGetMax is the max every copy-get of the run's multi-chunk copy
+// prints (get_copy_chunk_size).
+func (r *copyPrimaryChangeRun) copyGetMax() int {
+	if r.chunkMax != 0 {
+		return r.chunkMax
+	}
+	return multiChunkLimit
 }
 
 const (
