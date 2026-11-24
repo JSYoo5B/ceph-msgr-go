@@ -121,7 +121,11 @@ func (e *MDSRequestForwardedError) Error() string {
 // the attempt counters the caller wants to report. Resubmission is always a
 // caller decision: ResubmitForwarded and ReconnectSession keep the original
 // TID, while a new Submit gets a new one.
-// Stamp zero means the local send time.
+// Stamp zero means the local send time. Op is the caller's: GETVXATTR
+// (0x00106) and FILE_BLOCKDIFF (0x01405) need no client feature bit, since
+// the MDS reads neither op_getvxattr nor blockdiff; a caller that gates them
+// as the native client does checks bits 17 and 23 of the OPEN's
+// SupportedFeatures and decodes the reply's Extra itself.
 type MDSRequest struct {
 	Op                   uint32
 	Flags                uint32
