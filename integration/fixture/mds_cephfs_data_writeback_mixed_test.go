@@ -135,7 +135,7 @@ func TestMDSCephFSDataObjectBytesOutputShape(t *testing.T) {
 	object := func(i int, rest string) string {
 		return `{"objno":` + itoa(i) + `,"name":"10000000001.0000000` + itoa(i) + `"` + rest + `}`
 	}
-	present := object(0, `,"exists":true,"size":131072,"digest":`+digest(131072, 8))
+	present := object(0, `,"exists":true,"size":131072,"digest":`+digest(131072, 8)+`,"version":12`)
 	missing := object(1, `,"exists":false,"size":0`)
 	view := func(action string, objects ...string) string {
 		return head(action, path) + `,"stat":` + file + `,"objects":[` + strings.Join(objects, ",") + `]}`
@@ -145,15 +145,18 @@ func TestMDSCephFSDataObjectBytesOutputShape(t *testing.T) {
 		ok                 bool
 	}{
 		{"object 0 with content, object 1 absent", "object-bytes", view("object-bytes", present, missing), true},
-		{"both objects with content", "object-bytes", view("object-bytes", present, object(1, `,"exists":true,"size":65536,"digest":`+digest(65536, 4))), true},
+		{"both objects with content", "object-bytes", view("object-bytes", present, object(1, `,"exists":true,"size":65536,"digest":`+digest(65536, 4)+`,"version":9`)), true},
+		{"existing object without its version", "object-bytes", view("object-bytes", object(0, `,"exists":true,"size":131072,"digest":`+digest(131072, 8)), missing), false},
+		{"version of an absent object", "object-bytes", view("object-bytes", present, object(1, `,"exists":false,"size":0,"version":3`)), false},
+		{"version in the plain object view", "objects", view("objects", object(0, `,"exists":true,"size":131072,"version":12`), missing), false},
 		{"absent file", "object-bytes", head("object-bytes", path) + `,"stat":` + absent + `,"objects":[]}`, true},
-		{"existing object without content", "object-bytes", view("object-bytes", object(0, `,"exists":true,"size":131072`), missing), false},
-		{"content length differs from size", "object-bytes", view("object-bytes", object(0, `,"exists":true,"size":131072,"digest":`+digest(65536, 4)), missing), false},
+		{"existing object without content", "object-bytes", view("object-bytes", object(0, `,"exists":true,"size":131072,"version":12`), missing), false},
+		{"content length differs from size", "object-bytes", view("object-bytes", object(0, `,"exists":true,"size":131072,"digest":`+digest(65536, 4)+`,"version":12`), missing), false},
 		{"content of an absent object", "object-bytes", view("object-bytes", present, object(1, `,"exists":false,"size":0,"digest":`+digest(0, 0))), false},
-		{"chunk count differs", "object-bytes", view("object-bytes", object(0, `,"exists":true,"size":131072,"digest":`+digest(131072, 7)), missing), false},
+		{"chunk count differs", "object-bytes", view("object-bytes", object(0, `,"exists":true,"size":131072,"digest":`+digest(131072, 7)+`,"version":12`), missing), false},
 		{"one object of two", "object-bytes", view("object-bytes", present), false},
 		{"clones in the content view", "object-bytes", view("object-bytes", object(0, `,"exists":true,"size":131072,"digest":`+digest(131072, 8)+
-			`,"snaps":{"seq":1,"clones":[]}`), missing), false},
+			`,"version":12,"snaps":{"seq":1,"clones":[]}`), missing), false},
 		{"content in the plain object view", "objects", view("objects", present, missing), false},
 	} {
 		_, err := decodeMDSCephFSDataNative(tc.action, "capsnap-file", path, pool, plan, []byte(tc.data))
