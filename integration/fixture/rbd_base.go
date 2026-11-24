@@ -181,8 +181,10 @@ type rbdBaseScope struct {
 	journalImageID string
 	osdsMarkedOut  []int
 	// journalHeldPrimary is the PG primary the held-request sequences'
-	// observe-placed found (rbd_journal_held.go), -1 before it.
+	// observe-placed found (rbd_journal_held.go), -1 before it, and
+	// journalHeldActing the PG's acting set it found.
 	journalHeldPrimary int
+	journalHeldActing  []int
 	// The RBD group-snapshot acceptance's group and two images in the same
 	// owned pool (rbd_group.go).
 	group rbdGroupState
