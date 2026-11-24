@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -81,15 +80,12 @@ func TestMDSCephFSHeldFcntlAdmissionOverTheCatalog(t *testing.T) {
 	declares := func(capabilities string) bool {
 		return slices.Contains(strings.Split(capabilities, ","), capMDSHeldFcntl.name)
 	}
-	type selection struct{ selector, capabilities string }
-	selections := map[selection]bool{{"", ""}: true}
 	declaring := 0
 	for _, row := range rows {
-		s := selection{row.Params["test_run"], row.Params["capabilities"]}
-		selections[s], selections[selection{s.selector, ""}] = true, true
-		if declares(s.capabilities) {
-			if s.selector != mdsCephFSHeldFcntlSelector || s.capabilities != capMDSHeldFcntl.name {
-				t.Errorf("%s declares %s for %s", row.ID, s.capabilities, s.selector)
+		selector, capabilities := row.Params["test_run"], row.Params["capabilities"]
+		if declares(capabilities) {
+			if selector != mdsCephFSHeldFcntlSelector || capabilities != capMDSHeldFcntl.name {
+				t.Errorf("%s declares %s for %s", row.ID, capabilities, selector)
 			}
 			declaring++
 		}
@@ -98,27 +94,22 @@ func TestMDSCephFSHeldFcntlAdmissionOverTheCatalog(t *testing.T) {
 		t.Fatal("no catalog row declares", capMDSHeldFcntl.name)
 	}
 	admitted, refused := 0, 0
-	for _, row := range rows {
+	for _, s := range ciRowSelections(t) {
+		row, p, err := s.row, s.profile, s.err
 		metadata := row.Params["mds_fresh"] == "1" && row.Params["mds_cephfs"] == "1"
-		for s := range selections {
-			params := maps.Clone(row.Params)
-			params["test_run"], params["capabilities"] = s.selector, s.capabilities
-			env := ciRowEnvironment(t, params)
-			p, err := loadProfile(func(k string) string { return env[k] })
-			probe := err == nil && admitMDSCephFSHeldFcntl("fcntl-probe", p) == nil
-			switch {
-			case declares(s.capabilities) && metadata && (!probe || p.testRun != s.selector):
-				t.Errorf("%s with %s [%s]: the FCNTL acceptance was not admitted alone with its probe: %v", row.ID, s.selector, s.capabilities, err)
-			case declares(s.capabilities) && !metadata && err == nil:
-				t.Errorf("%s with %s [%s]: the FCNTL capability was admitted off the metadata fixture", row.ID, s.selector, s.capabilities)
-			case !declares(s.capabilities) && probe:
-				t.Errorf("%s with %s [%s]: the FCNTL probe was admitted without its capability", row.ID, s.selector, s.capabilities)
-			}
-			if probe {
-				admitted++
-			} else if declares(s.capabilities) {
-				refused++
-			}
+		probe := err == nil && admitMDSCephFSHeldFcntl("fcntl-probe", p) == nil
+		switch {
+		case declares(s.capabilities) && metadata && (!probe || p.testRun != s.selector):
+			t.Errorf("%s with %s [%s]: the FCNTL acceptance was not admitted alone with its probe: %v", row.ID, s.selector, s.capabilities, err)
+		case declares(s.capabilities) && !metadata && err == nil:
+			t.Errorf("%s with %s [%s]: the FCNTL capability was admitted off the metadata fixture", row.ID, s.selector, s.capabilities)
+		case !declares(s.capabilities) && probe:
+			t.Errorf("%s with %s [%s]: the FCNTL probe was admitted without its capability", row.ID, s.selector, s.capabilities)
+		}
+		if probe {
+			admitted++
+		} else if declares(s.capabilities) {
+			refused++
 		}
 	}
 	if admitted == 0 || refused == 0 {

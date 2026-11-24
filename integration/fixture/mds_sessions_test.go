@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +79,13 @@ func TestMDSSessionsPoolAndCapabilityContracts(t *testing.T) {
 	}
 }
 
+// mdsSessionsFeatureNames is the pinned feature_names list
+// (mds/cephfs_features.cc at mdsFreshSource), indexed by bit; the MDSMap dump
+// keys a required feature as feature_<bit>.
+var mdsSessionsFeatureNames = []string{"reserved", "reserved", "reserved", "reserved", "reserved", "jewel", "kraken", "luminous", "mimic", "reply_encoding",
+	"reclaim_client", "lazy_caps_wanted", "multi_reconnect", "deleg_ino", "metric_collect", "alternate_name", "notify_session_state", "op_getvxattr",
+	"32bits_retry_fwd", "new_snaprealm_info", "has_owner_uidgid", "client_mds_auth_caps", "charmap", "blockdiff"}
+
 func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 	token := strings.Repeat("a1", 16)
 	for _, tc := range []struct {
@@ -99,6 +108,8 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"10", token, "require-deleg-off"}, "require-deleg-off", nil},
 		{[]string{"10", token, "require-charmap-on"}, "require-charmap-on", nil},
 		{[]string{"10", token, "require-charmap-off"}, "require-charmap-off", nil},
+		{[]string{"10", token, "require-blockdiff-on"}, "require-blockdiff-on", nil},
+		{[]string{"10", token, "require-lazy-off"}, "require-lazy-off", nil},
 		{[]string{"10", token, "stale-on"}, "stale-on", nil},
 		{[]string{"10", token, "stale-off"}, "stale-off", nil},
 	} {
@@ -115,6 +126,7 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		{"10", token, "evict"}, {"10", token, "evict", "42", "43"}, {"10", token, "refuse-on", "42"},
 		{"10", token, "fs", "set"}, {"10", token, "osd", "blocklist", "rm"}, {"10", token, "stale-on", "60"},
 		{"10", token, "require-reclaim-on", "reply_encoding"}, {"10", token, "require-multi-on", "charmap"}, {"10", token, "require-deleg-on", "deleg_ino"}, {"10", token, "require-deleg"}, {"10", token, "require-charmap-on", "charmap"}, {"10", token, "require-charmap"}, {"10", token, "require-reclaim"},
+		{"10", token, "require-blockdiff-on", "blockdiff"}, {"10", token, "require-lazy"}, {"10", token, "require-feature_11-on"}, {"10", token, "require-lazy_caps_wanted-on"},
 		{"0", token, "observe", "42"}, {"010", token, "observe", "42"}, {"-1", token, "observe", "42"},
 	} {
 		if _, _, err := parseMDSSessionsRequest(fields, token, 0); err == nil {
@@ -136,12 +148,33 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		"require-deleg-off":   {"deleg_ino", "feature_13", "required_client_features_deleg_ino"},
 		"require-charmap-on":  {"charmap", "feature_22", "required_client_features_charmap"},
 		"require-charmap-off": {"charmap", "feature_22", "required_client_features_charmap"},
+		// The six bits every Go profile withholds.
+		"require-lazy-on":      {"lazy_caps_wanted", "feature_11", "required_client_features_lazy_caps_wanted"},
+		"require-metric-on":    {"metric_collect", "feature_14", "required_client_features_metric_collect"},
+		"require-notify-on":    {"notify_session_state", "feature_16", "required_client_features_notify_session_state"},
+		"require-getvxattr-on": {"op_getvxattr", "feature_17", "required_client_features_op_getvxattr"},
+		"require-authcaps-on":  {"client_mds_auth_caps", "feature_21", "required_client_features_client_mds_auth_caps"},
+		"require-blockdiff-on": {"blockdiff", "feature_23", "required_client_features_blockdiff"},
 	} {
 		if got, ok := mdsSessionsRequirementFor(action); !ok || got != want {
 			t.Fatal("required-feature toggle changed", action, got, ok)
 		}
 	}
-	for _, action := range []string{"require", "require-reclaim", "refuse-on", "stale-on", "require-charmap", "require-blockdiff-on", "-on"} {
+	// Every toggle has both actions, admitted by the request parser, and a
+	// distinct feature, dump key and journal kind.
+	seen := map[string]bool{}
+	for name, r := range mdsSessionsRequirements {
+		for _, suffix := range []string{"-on", "-off"} {
+			if _, action, err := parseMDSSessionsRequest([]string{"10", token, name + suffix}, token, 9); err != nil || action.name != name+suffix {
+				t.Fatal("requirement toggle not admitted", name+suffix, err)
+			}
+		}
+		if seen[r.feature] || seen[r.key] || seen[r.kind] || r.key != "feature_"+strconv.Itoa(slices.Index(mdsSessionsFeatureNames, r.feature)) {
+			t.Fatal("requirement toggle is not one distinct pinned feature", name, r)
+		}
+		seen[r.feature], seen[r.key], seen[r.kind] = true, true, true
+	}
+	for _, action := range []string{"require", "require-reclaim", "refuse-on", "stale-on", "require-charmap", "require-alternate-on", "require-blockdiff", "-on"} {
 		if _, ok := mdsSessionsRequirementFor(action); ok {
 			t.Fatal("non-requirement action mapped to a required feature", action)
 		}

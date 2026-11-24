@@ -118,6 +118,8 @@ func TestMDSCephFSCompletionRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"11", token, "async-dirops-off"}, mdsCephFSCompletionAction{name: "async-dirops-off"}},
 		{[]string{"12", token, "async-dirops-on"}, mdsCephFSCompletionAction{name: "async-dirops-on"}},
 		{[]string{"13", token, "stat", "deleg-grant"}, mdsCephFSCompletionAction{name: "stat", target: "deleg-grant"}},
+		{[]string{"14", token, "charmap-require-on"}, mdsCephFSCompletionAction{name: "charmap-require-on"}},
+		{[]string{"15", token, "charmap-require-off"}, mdsCephFSCompletionAction{name: "charmap-require-off"}},
 	} {
 		id, action, err := parse(0, tc.fields...)
 		if err != nil || action != tc.want || id <= 0 {
@@ -128,6 +130,7 @@ func TestMDSCephFSCompletionRequestIsClosedAndScoped(t *testing.T) {
 		{"1", token, "observe"}, {"1", token, "observe", "0"}, {"1", token, "observe", "042"}, {"1", token, "mds-log", "42"}, {"1", token, "mds-log", "42", "0"},
 		{"1", token, "stat", "/etc/passwd"}, {"1", token, "stat", "dir", "x"}, {"1", token, "list", "dir"}, {"1", token, "blackhole-on", "true"}, {"1", token, "config-set", "x"},
 		{"1", token, "deleg-zero-on", "10"}, {"1", token, "async-dirops-off", "false"}, {"1", token, "deleg-zero"}, {"1", token, "deleg-pct-zero"}, {"1", token, "stat", "deleg-other"},
+		{"1", token, "charmap-require-on", "charmap"}, {"1", token, "charmap-require"}, {"1", token, "charmap-require-on", "blockdiff"},
 		{"1", token, "tell", "mds.a", "config"}, {"1", strings.Repeat("b2", 16), "list"}, {"0", token, "list"}, {"01", token, "list"}, {"1", token},
 	} {
 		if _, _, err := parse(0, fields...); err == nil {

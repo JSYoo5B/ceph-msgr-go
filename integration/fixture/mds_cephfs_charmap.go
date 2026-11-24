@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -37,7 +38,7 @@ var capMDSCharmap = defineExclusiveCapability(fixtureMDSCephFSCompletion, "mds-c
 	"run one test alone on a fresh MDS CephFS completion fixture with the charmap controls",
 	"MDS_FRESH=1 MDS_CEPHFS_COMPLETION=1", nil)
 
-var mdsCephFSCharmapActions = []string{"charmap-set", "charmap-names", "charmap-create"}
+var mdsCephFSCharmapActions = []string{"charmap-set", "charmap-names", "charmap-create", "charmap-require-on", "charmap-require-off"}
 
 // admitMDSCephFSCharmap refuses a charmap action without its capability.
 func admitMDSCephFSCharmap(action string, p profile) error {
@@ -314,6 +315,169 @@ func (c *fixtureCluster) mdsCephFSCharmapAct(ctx context.Context, id int64, acti
 		return c.mdsCephFSCompletionJournal()
 	}
 	return nil
+}
+
+// The owned CHARMAP requirement. charmap-require-on adds charmap to the
+// filesystem's required_client_features once, journaled before the command
+// and never replayed after an uncertain outcome; charmap-require-off removes
+// it. Both return once the owned daemon has the resulting MDSMap. The pinned
+// update_required_client_features evicts and blocklists every open session
+// lacking a required bit, so the requirement is refused unless every native
+// session declares bit 22 (the stock client and the Go opt-in do). A new
+// incarnation reads the requirement from its first MDSMap and checks it on
+// each reconnect against the features its session map persisted
+// (mds/MDSRank.cc handle_mds_map, mds/Server.cc handle_client_reconnect at
+// mdsFreshSource). The completion control refuses both while a restart is
+// pending; cleanup removes a remaining requirement before the filesystem is
+// deleted.
+const (
+	mdsCephFSCharmapRequiredKind = "charmap-required"
+	mdsCephFSCharmapFeature      = "charmap"
+	mdsCephFSCharmapFeatureKey   = "feature_22"
+	mdsCephFSCharmapBit          = 22
+)
+
+// mdsCephFSCharmapDeclares reports whether a session-dump feature image
+// (feature_bitset_t printed as 0x and 16 hex digits per block, most
+// significant block first) has the CHARMAP bit.
+func mdsCephFSCharmapDeclares(printed string) bool {
+	digits, ok := strings.CutPrefix(printed, "0x")
+	if !ok || len(digits) == 0 || len(digits)%16 != 0 {
+		return false
+	}
+	low, err := strconv.ParseUint(digits[len(digits)-16:], 16, 64)
+	return err == nil && low&(1<<mdsCephFSCharmapBit) != 0
+}
+
+// mdsCephFSCharmapRequiresOnly reports whether a map requires exactly
+// charmap (required) or nothing (!required).
+func mdsCephFSCharmapRequiresOnly(m mdsSessionsMap, required bool) bool {
+	if !required {
+		return len(m.Required) == 0
+	}
+	return len(m.Required) == 1 && m.Required[mdsCephFSCharmapFeatureKey] == mdsCephFSCharmapFeature
+}
+
+func (c *fixtureCluster) mdsCephFSCharmapRequire(ctx context.Context, id int64, on bool, result *mdsCephFSCompletionResult) error {
+	s, x := c.mdsFresh, c.mdsCephFSCompletion
+	if err := admitMDSCephFSCharmap("charmap-require-on", c.profile); err != nil {
+		return err
+	}
+	var m *mdsCephFSMutation
+	for _, candidate := range x.mutations {
+		if candidate.Kind == mdsCephFSCharmapRequiredKind {
+			m = candidate
+		}
+	}
+	current, err := c.mdsSessionsReadMap(ctx)
+	if err != nil {
+		return err
+	}
+	verb := "rm"
+	if on {
+		verb = "add"
+		if m != nil {
+			return errors.New("MDS CephFS charmap requirement was already applied once")
+		}
+		if !mdsCephFSCharmapRequiresOnly(current, false) {
+			return errors.New("MDS CephFS charmap requirement refused while the filesystem requires other features")
+		}
+		sessions, _, err := c.mdsCephFSCompletionSessions(ctx)
+		if err != nil {
+			return err
+		}
+		for _, session := range sessions {
+			if !mdsCephFSCharmapDeclares(session.ClientFeatures) {
+				return fmt.Errorf("MDS CephFS charmap requirement refused: native session %d does not declare charmap and would be evicted", session.ID)
+			}
+		}
+		m = &mdsCephFSMutation{Kind: mdsCephFSCharmapRequiredKind, RequestID: id, Target: s.name, State: "intended"}
+		x.mutations = append(x.mutations, m)
+	} else {
+		if m == nil || m.State != "applied" || !mdsCephFSCharmapRequiresOnly(current, true) {
+			return errors.New("MDS CephFS charmap requirement restore requested without an applied owned requirement")
+		}
+		m.State = "restore-intended"
+	}
+	result.Mutation = m
+	if err := c.mdsCephFSCompletionJournal(); err != nil {
+		return err
+	}
+	output, err := c.cluster.Ceph(ctx, "fs", "required_client_features", s.name, verb, mdsCephFSCharmapFeature)
+	if len(output) != 0 {
+		m.Output = strings.TrimSpace(string(output[:min(len(output), 4096)]))
+	}
+	if err != nil {
+		m.State, m.Error = "uncertain", err.Error()
+		if !on {
+			m.State = "restore-uncertain"
+		}
+		return errors.Join(err, c.mdsCephFSCompletionJournal())
+	}
+	m.State = "applied"
+	if !on {
+		m.State = "restored"
+	}
+	if err := c.mdsCephFSCompletionJournal(); err != nil {
+		return err
+	}
+	return c.mdsCephFSCharmapSettle(ctx, on)
+}
+
+// mdsCephFSCharmapSettle returns, within a bound, once the MDSMap has
+// exactly the wanted requirement and the owned daemon reports that epoch or
+// a later one.
+func (c *fixtureCluster) mdsCephFSCharmapSettle(ctx context.Context, required bool) error {
+	bounded, stop := context.WithTimeout(ctx, 30*time.Second)
+	defer stop()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		current, err := c.mdsSessionsReadMap(bounded)
+		if err != nil {
+			return err
+		}
+		if mdsCephFSCharmapRequiresOnly(current, required) {
+			daemon, err := c.mdsCephFSCompletionStatus(bounded)
+			if err != nil {
+				return err
+			}
+			if daemon.MDSMapEpoch >= current.Epoch {
+				return nil
+			}
+		}
+		select {
+		case <-bounded.Done():
+			return fmt.Errorf("MDS CephFS charmap requirement did not settle: %w", bounded.Err())
+		case <-tick.C:
+		}
+	}
+}
+
+// mdsCephFSCharmapReconcile removes a requirement the run left behind. It
+// reports nil when no requirement was ever attempted.
+func (c *fixtureCluster) mdsCephFSCharmapReconcile(ctx context.Context) (*bool, error) {
+	s, x := c.mdsFresh, c.mdsCephFSCompletion
+	if !x.mutated(mdsCephFSCharmapRequiredKind) {
+		return nil, nil
+	}
+	restored := false
+	current, err := c.mdsSessionsReadMap(ctx)
+	if err != nil {
+		return &restored, err
+	}
+	if current.Required[mdsCephFSCharmapFeatureKey] != "" {
+		if _, err := c.cluster.Ceph(ctx, "fs", "required_client_features", s.name, "rm", mdsCephFSCharmapFeature); err != nil {
+			return &restored, err
+		}
+		if current, err = c.mdsSessionsReadMap(ctx); err != nil {
+			return &restored, err
+		}
+	}
+	if restored = mdsCephFSCharmapRequiresOnly(current, false); !restored {
+		return &restored, errors.New("MDS CephFS charmap requirement was not removed during cleanup")
+	}
+	return &restored, nil
 }
 
 // saveMetadata (diagnostics.go) collects the public receipt the CephFS
