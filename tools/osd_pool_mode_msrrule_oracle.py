@@ -33,10 +33,12 @@ removals answer 0 for an absent name), sets the baseline back when it
 differs, and reports restored only from reads taken afterwards; a read that
 fails raises and keeps the record for the next restore.
 
-Apply takes an optional "lose": "readback". It then raises right after the
-rule creation was sent, before any read, which is the outcome of a lost
-reply or read as this mode sees it. The test uses it to run the restore
-after an uncertain mutation against the real MON.
+Apply takes an optional "lose": "readback". It then stops right after the
+rule creation was sent: it ignores the reply, takes no read and reports only
+that the outcome is unknown, which is all this mode would hold after a lost
+reply and read. The test uses it to run the restore after an uncertain
+mutation against the real MON. It is a receipt and not an error because the
+fixture refuses every later request once an oracle run has failed.
 """
 import json
 import os
@@ -152,7 +154,7 @@ def mode_msrrule(rados, cluster, request, out):
         intend(out, state, "rule")
         code, _ = rados.mon(cluster, {"prefix": "osd crush rule create-erasure", "name": RULE, "profile": PROFILE})
         if request.get("lose") == "readback":
-            raise RuntimeError("injected: the reply and the read after the MSR rule creation are lost")
+            return {"msr_rule": {"action": action, "prior": state["prior"], "outcome": "unknown"}}
         if code < 0:
             raise RuntimeError("native MSR rule creation failed: %d %s" % (code, rados.last_status))
         rule = rule_dump(rados, cluster)

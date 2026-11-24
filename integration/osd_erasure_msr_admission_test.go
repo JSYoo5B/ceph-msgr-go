@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
-	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
 // msrRuleReceipt is the owned-pool oracle's mode msrrule
@@ -32,6 +31,9 @@ type msrRuleReceipt struct {
 		Owned          bool            `json:"owned"`
 		Restored       bool            `json:"restored"`
 		Rule           json.RawMessage `json:"rule"`
+		// Outcome is "unknown" for an apply whose reply and read were
+		// dropped on purpose (lose=readback).
+		Outcome string `json:"outcome"`
 	} `json:"msr_rule"`
 }
 
@@ -105,8 +107,8 @@ func refusedForCRUSHMSR(attempt func() error, bound time.Duration, pause func())
 //     baseline without yes_i_really_mean_it is refused (-EPERM) because a
 //     connected client lacks CRUSH_MSR; the Go session is such a client.
 //   - A mutation with an uncertain outcome: the oracle raises the baseline,
-//     sends the rule creation and fails before any read, as a lost reply
-//     and read would. The Go session sees the rule in the map; the restore
+//     sends the rule creation and stops before any read, holding no more
+//     than a lost reply and read would leave. The Go session sees the rule in the map; the restore
 //     must remove it and the profile and set the baseline back, from the
 //     intent it recorded before the commands, and the MON must then refuse
 //     the rule again as in the first probe.
@@ -206,11 +208,13 @@ func TestCephOSDErasureMSRRuleAdmissionIntegration(t *testing.T) {
 		probe.MSR.Prior, probe.MSR.RuleCreate.Code, probe.MSR.RuleCreate.Status, probe.MSR.BaselineChange.Code, probe.MSR.BaselineChange.Status)
 
 	// A mutation whose reply and read are lost: the oracle raises the
-	// baseline, sends the rule creation and fails before any read. The rule
+	// baseline, sends the rule creation and stops before any read. The rule
 	// is then in the map with nothing but the recorded intent naming it,
 	// and the restore must still return the map to its start.
-	if err := msrLostReadback(ctx); err == nil {
-		t.Fatal("the apply with a lost readback reported success")
+	var lost msrRuleReceipt
+	nativePoolResult(t, ctx, "msrrule", map[string]any{"action": "apply", "lose": "readback"}, &lost)
+	if lost.MSR.Outcome != "unknown" || len(lost.MSR.Rule) != 0 || lost.MSR.Baseline != "" {
+		t.Fatalf("the apply with a lost readback reported more than an unknown outcome: %+v", lost.MSR)
 	}
 	if rules := monRuleNames(t, ctx, c); !slices.Contains(rules, msrOwnedRule) {
 		t.Fatal("the rule creation with the lost readback did not reach the map", rules)
@@ -284,13 +288,6 @@ func TestCephOSDErasureMSRRuleAdmissionIntegration(t *testing.T) {
 
 // msrOwnedRule is the rule of tools/osd_pool_mode_msrrule_oracle.py.
 const msrOwnedRule = "ceph-msgr-owned-msr-rule"
-
-// msrLostReadback runs the oracle's apply with its injected failure after
-// the rule creation was sent and returns the oracle's error.
-func msrLostReadback(ctx context.Context) error {
-	return testcluster.ControlDaemonInput(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "verify", "osd-pool", "msrrule",
-		testcluster.ControlInput{Name: "osd-pool-input.json", Data: []byte(`{"action":"apply","lose":"readback"}`)})
-}
 
 // monRuleNames lists the CRUSH rules through the Go client's MON session.
 func monRuleNames(t *testing.T, ctx context.Context, c *cephmsgr.Client) []string {

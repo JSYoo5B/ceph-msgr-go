@@ -178,8 +178,9 @@ class MSRRule(unittest.TestCase):
         mon = FakeMon()
         self.run_mode(mon, "probe")
         reads = len(mon.commands)
-        with self.assertRaisesRegex(RuntimeError, "injected"):
-            msrrule.mode_msrrule(mon, None, {"action": "apply", "lose": "readback"}, self.out)
+        lost = msrrule.mode_msrrule(mon, None, {"action": "apply", "lose": "readback"}, self.out)["msr_rule"]
+        # The receipt holds no read: only that the outcome is unknown.
+        self.assertEqual(lost, {"action": "apply", "prior": "luminous", "outcome": "unknown"})
         self.assertEqual(mon.commands[-1]["prefix"], "osd crush rule create-erasure")
         self.assertGreater(len(mon.commands), reads)
         self.assertEqual((msrrule.RULE in mon.rules, mon.baseline), (True, "squid"))
