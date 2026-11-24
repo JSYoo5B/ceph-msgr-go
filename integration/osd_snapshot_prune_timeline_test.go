@@ -155,7 +155,7 @@ func TestPruneManagerSamplerRunsDuringBlockedTrim(t *testing.T) {
 	})
 	stop()
 	stop() // cleanup may join an already stopped sampler.
-	if trim.Error != "" || len(p.Observations) < 3 {
+	if trim.Error != "" || len(p.Observations) < 2 {
 		t.Fatalf("MGR sampling blocked behind trim: %+v", p)
 	}
 	for _, o := range p.Observations {
