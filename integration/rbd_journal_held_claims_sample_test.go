@@ -81,10 +81,15 @@ func rbdJournalHeldSample(mode string) *rbdJournalLostAppendRecord {
 		q := &nativeRBDJournalPGQuery{State: state, Epoch: epoch, Up: slices.Clone(acting), Acting: slices.Clone(acting), LastUpdate: last, SameIntervalSince: interval, SameUpSince: interval,
 			SamePrimarySince: interval, LastEpochStarted: interval + 1}
 		for _, p := range peers {
-			q.Peers = append(q.Peers, struct {
-				Peer       int32  `json:"peer"`
-				LastUpdate string `json:"last_update"`
-			}{p, last})
+			q.Peers = append(q.Peers, nativeRBDJournalPGPeer{Peer: p, LastUpdate: last})
+		}
+		if erasure {
+			// Each member's shard is its acting index.
+			index := func(osd int32) *int32 { i := int32(slices.Index(acting, osd)); return &i }
+			q.Shard = index(acting[0])
+			for i := range q.Peers {
+				q.Peers[i].Shard = index(q.Peers[i].Peer)
+			}
 		}
 		return q
 	}
@@ -387,6 +392,22 @@ func TestRBDJournalHeldClaims(t *testing.T) {
 		}},
 		"erasure: own shard committed twice": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
 			op(r).Events = append(op(r).Events, "sub_op_committed")
+		}},
+		// The decoder's shard binding, restated by the claims: valid
+		// numbering of another member's shard is refused at every read.
+		"erasure: primary on a peer's shard": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			*r.Held.Placed.Query.Shard = 1
+		}},
+		"erasure: peers' shards swapped": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			p := r.Held.Held.Query.Peers
+			p[0].Shard, p[1].Shard = p[1].Shard, p[0].Shard
+		}},
+		"erasure: settled peer without its shard": {rbdJournalVariantErasureHold, "observe-answered", func(r *rbdJournalLostAppendRecord) {
+			r.Held.Settled.Query.Peers[0].Shard = nil
+		}},
+		"replica: a shard in a replicated PG": {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			s := int32(1)
+			r.Held.Placed.Query.Peers[0].Shard = &s
 		}},
 		"erasure: answer unknown": {rbdJournalVariantErasureHold, "observe-answered", func(r *rbdJournalLostAppendRecord) {
 			r.Outcome.Class, r.Outcome.UnknownOutcome = "uncertain", true

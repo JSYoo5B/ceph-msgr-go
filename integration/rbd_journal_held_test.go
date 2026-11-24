@@ -276,10 +276,16 @@ type nativeRBDJournalPGQuery struct {
 	SameUpSince       uint32  `json:"same_up_since"`
 	SamePrimarySince  uint32  `json:"same_primary_since"`
 	LastEpochStarted  uint32  `json:"last_epoch_started"`
-	Peers             []struct {
-		Peer       int32  `json:"peer"`
-		LastUpdate string `json:"last_update"`
-	} `json:"peers"`
+	// Shard is the answering primary's shard in an erasure-coded PG, and
+	// each peer's Shard the one it holds; both are absent in a replicated PG.
+	Shard *int32                   `json:"shard"`
+	Peers []nativeRBDJournalPGPeer `json:"peers"`
+}
+
+type nativeRBDJournalPGPeer struct {
+	Peer       int32  `json:"peer"`
+	Shard      *int32 `json:"shard"`
+	LastUpdate string `json:"last_update"`
 }
 
 type nativeRBDJournalHeldOp struct {

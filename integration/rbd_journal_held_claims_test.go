@@ -240,6 +240,20 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		if want := slices.DeleteFunc(members(acting), func(o int32) bool { return o == acting[0] }); !slices.Equal(members(peers), want) {
 			fail("%s: the PG query lists peers %v, want %v", name, peers, want)
 		}
+		// An erasure-coded PG names each member with its shard, its index
+		// in the acting set: the answering primary's is P's, every peer's
+		// its own. A replicated PG names none.
+		atIndex := func(s *int32, osd int32) bool {
+			return s != nil && *s >= 0 && int(*s) < len(acting) && acting[*s] == osd
+		}
+		if erasure && !atIndex(q.Shard, acting[0]) || !erasure && q.Shard != nil {
+			fail("%s: the PG query's primary shard is not the primary's acting index: %s", name, text(q.Shard))
+		}
+		for _, p := range q.Peers {
+			if erasure && !atIndex(p.Shard, p.Peer) || !erasure && p.Shard != nil {
+				fail("%s: peer osd.%d is named with shard %s, not its acting index", name, p.Peer, text(p.Shard))
+			}
+		}
 		return q
 	}
 	// subjectOps are the subject's records among one read's operations.
