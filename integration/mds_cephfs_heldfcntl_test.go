@@ -96,6 +96,14 @@ type heldFcntlRequest struct {
 
 var heldFcntlProbeSet = []heldFcntlRequest{{"w", 0, 1}, {"w", 15, 1}, {"w", 16, 16}, {"r", 32, 16}, {"w", 47, 1}, {"w", 48, 0}, {"r", 8, 1}}
 
+// heldFcntlRangeProbeSet is the fixed set of fcntl-probe-ranges
+// (mdsCephFSFcntlRangeProbes in integration/fixture/mds_cephfs_heldlocks.go),
+// over one owner's merged range and another owner's split range.
+var heldFcntlRangeProbeSet = []heldFcntlRequest{{"w", 20, 1}, {"w", 31, 1}, {"r", 0, 32}, {"w", 32, 32}, {"w", 70, 1}, {"w", 85, 1}, {"w", 100, 1}, {"w", 128, 0}}
+
+// heldFcntlProbeSets maps each closed FCNTL probe action to its fixed set.
+var heldFcntlProbeSets = map[string][]heldFcntlRequest{"fcntl-probe": heldFcntlProbeSet, "fcntl-probe-ranges": heldFcntlRangeProbeSet, "split-fcntl-probe": heldFcntlProbeSet}
+
 // heldFcntlExpect is the result one probe request must have: EAGAIN and the
 // conflicting lock from ceph_getlk, or an acquire and release with ceph_getlk
 // echoing the request as unlocked.
@@ -121,10 +129,15 @@ func heldFcntlOverlap(r heldFcntlRequest, l cephfsFilelock) bool {
 // F_WRLCK or F_RDLCK, start, length and pid), or F_UNLCK with the request's
 // own range and pid 0 when nothing conflicts.
 func heldFcntlExpected(held []cephfsFilelock) []heldFcntlExpect {
+	return heldFcntlExpectedFor(held, heldFcntlProbeSet)
+}
+
+// heldFcntlExpectedFor is heldFcntlExpected over another fixed probe set.
+func heldFcntlExpectedFor(held []cephfsFilelock, set []heldFcntlRequest) []heldFcntlExpect {
 	ordered := slices.Clone(held)
 	slices.SortStableFunc(ordered, func(a, b cephfsFilelock) int { return cmp.Compare(a.Start, b.Start) })
-	out := make([]heldFcntlExpect, 0, len(heldFcntlProbeSet))
-	for _, r := range heldFcntlProbeSet {
+	out := make([]heldFcntlExpect, 0, len(set))
+	for _, r := range set {
 		e := heldFcntlExpect{Request: r, Getlk: nativeMDSCephFSFcntlGetlk{Type: "u", Start: r.Start, Length: r.Length}}
 		for _, l := range ordered {
 			if heldFcntlOverlap(r, l) && (r.Type == "w" || l.Type == cephFlockExclusive) {
@@ -150,12 +163,12 @@ func checkHeldFcntlProbe(r nativeMDSCephFSReceipt, want heldFlockProbeWant, ino 
 		return errors.New("native fcntl receipt lacks its probe or carries a flock probe")
 	}
 	p := *n.Fcntl
-	if r.Action != want.Action || n.Action != want.Action || want.Action != "fcntl-probe" || n.NativeGlobalID == 0 || goGIDs[n.NativeGlobalID] ||
+	if r.Action != want.Action || n.Action != want.Action || heldFcntlProbeSets[want.Action] == nil || n.NativeGlobalID == 0 || goGIDs[n.NativeGlobalID] ||
 		p.GlobalID == 0 || goGIDs[p.GlobalID] || p.GlobalID == n.NativeGlobalID {
 		return fmt.Errorf("native fcntl receipt is for %q/%q or from a Go client: mounts %d and %d", r.Action, n.Action, n.NativeGlobalID, p.GlobalID)
 	}
-	if r.Mutation == nil || r.Mutation.Kind != "native-fcntl-probe" || r.Mutation.State != "applied" || r.Mutation.RequestID != r.RequestID ||
-		p.Owner != cephFlockNativeOwner || p.ElapsedNS <= 0 || p.Before != p.After || p.Before.Ino != ino || p.Before.Size != 0 || p.Before.DataHex != "" {
+	if r.Mutation == nil || r.Mutation.Kind != "native-"+want.Action || r.Mutation.State != "applied" || r.Mutation.RequestID != r.RequestID ||
+		p.Owner != cephFlockNativeOwner || p.ElapsedNS <= 0 || p.Before != p.After || p.Before.Ino != ino || !heldLockFileIs(p.Before, want.Size) {
 		return fmt.Errorf("native fcntl probe record or owned file state differs: probe owner %#x mutation %+v before %+v after %+v", p.Owner, r.Mutation, p.Before, p.After)
 	}
 	if len(p.Probes) != len(want.Fcntl) {

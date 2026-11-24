@@ -73,23 +73,31 @@ func splitHeldFlockRecipe(fragments bool) *splitHeldFlock {
 		return &splitHeldFlock{Results: "mds-cephfs-heldflock-split-reconnect-results.json", Locks: []*splitHeldLock{first}}
 	}
 	return &splitHeldFlock{Results: "mds-cephfs-heldflock-split-fragments-results.json",
-		Locks: []*splitHeldLock{first, {Name: "final", Probe: "split-final-flock-ex-nb", Owner: cephFlockGoSecondOwner, Final: true}}}
+		Locks: []*splitHeldLock{first, {Name: "final", Probe: "split-final-flock-ex-nb", Owner: cephFlockGoSecondOwner, Member: 31, Final: true}}}
 }
 
 // splitHeldLock is one held lock of the split recipe and its retained record.
 type splitHeldLock struct {
 	Name string
-	// Probe is the closed native probe of the completion control that is
-	// bound to this lock's file.
-	Probe string
-	Owner uint64
-	// Final is whether the lock file is the last split file, whose
-	// capability the final fragment must carry. Otherwise it is the first
-	// split file and a fragment marked "more" must carry it.
-	Final bool
-	File  string
-	Ino   uint64
-	Lock  cephfsFilelock
+	// Probe is the closed native exclusive FLOCK probe of the completion
+	// control that is bound to this lock's file. SharedProbe and FcntlProbe
+	// are further closed probes of that file, when it has them.
+	Probe, SharedProbe, FcntlProbe string `json:",omitempty"`
+	Owner                          uint64
+	// Member is the index of the lock file among the plan's split files.
+	// Several locks may name one file; their records travel in one blob.
+	Member int
+	// Final is whether the lock file's capability must be carried by the
+	// final fragment, Middle whether by one that is neither the first nor
+	// the final one. Otherwise a fragment marked "more" must carry it.
+	Final, Middle bool
+	// Rule, Type, PID, Start and Length are the lock. A zero Rule is an
+	// exclusive whole-file FLOCK lock.
+	Rule, Type         byte   `json:",omitempty"`
+	PID, Start, Length uint64 `json:",omitempty"`
+	File               string
+	Ino                uint64
+	Lock               cephfsFilelock
 	// AcquireTID and UnlockTID are recorded as soon as Submit accepted the
 	// call, before its reply is awaited, so a call whose reply is lost or
 	// refused is still counted with its TID.
@@ -120,6 +128,63 @@ type splitHeldLock struct {
 	AcquireTIDInHistoricOps *bool
 	// baseline is the native state of the lock file at its first probe.
 	baseline *nativeMDSCephFSFlockState
+	// released is set by the lock's explicit unlock.
+	released bool
+}
+
+// rule and kind are the lock's rule and type; a zero Rule is an exclusive
+// whole-file FLOCK lock.
+func (l *splitHeldLock) rule() byte {
+	if l.Rule == 0 {
+		return cephLockRuleFlock
+	}
+	return l.Rule
+}
+
+func (l *splitHeldLock) kind() byte {
+	if l.Type == 0 {
+		return cephFlockExclusive
+	}
+	return l.Type
+}
+
+// filelock is the ceph_filelock the MDS holds for the lock of client.
+func (l *splitHeldLock) filelock(client uint64) cephfsFilelock {
+	return cephfsFilelock{Start: l.Start, Length: l.Length, Client: client, Owner: l.Owner, PID: l.PID, Type: l.kind()}
+}
+
+// args is the filelock_change of a SETFILELOCK of the lock with type kind.
+func (l *splitHeldLock) args(kind byte) [56]byte {
+	return cephfsFilelockArgs(l.rule(), kind, l.Owner, l.PID, l.Start, l.Length)
+}
+
+// held is the lock as a heldLock.
+func (l *splitHeldLock) held() heldLock {
+	return heldLock{Rule: l.rule(), cephfsFilelock: l.Lock}
+}
+
+// fileLocks returns every lock of the split file member in recipe order and
+// the ones still held.
+func (h *splitHeldFlock) fileLocks(member int) (all, still []*splitHeldLock) {
+	for _, l := range h.Locks {
+		if l.Member == member {
+			all = append(all, l)
+			if !l.released {
+				still = append(still, l)
+			}
+		}
+	}
+	return all, still
+}
+
+// splitFileBlob is the reconnect blob of one lock file: its FCNTL records,
+// then its FLOCK records, each in recipe order.
+func splitFileBlob(locks []*splitHeldLock) []byte {
+	var held []heldLock
+	for _, l := range locks {
+		held = append(held, l.held())
+	}
+	return heldLockBlob(held)
 }
 
 // splitHeldFlock is the retained record of the held locks in one split
@@ -128,6 +193,16 @@ type splitHeldFlock struct {
 	// Results is the evidence file the recipe writes.
 	Results   string
 	Directory string
+	// FrameLimit bounds each MClientReconnect (default 8 KiB) and
+	// MinFragments is the least number of fragments the replacement must
+	// handle (default 2). SharedFragment requires a fragment that carries
+	// the capabilities of two lock files.
+	FrameLimit     uint32 `json:",omitempty"`
+	MinFragments   int    `json:",omitempty"`
+	SharedFragment bool   `json:",omitempty"`
+	// Cut, when set, cuts the connection to the replacement between the
+	// first and the second fragment (mds_cephfs_split_cut_test.go).
+	Cut *splitCutEvidence `json:",omitempty"`
 	// Locks are in acquisition order, which is also the order of the
 	// explicit unlocks.
 	Locks []*splitHeldLock
@@ -236,13 +311,26 @@ func splitHeldFlockAttach(caps []cephmsgr.MDSCapReconnect, h *splitHeldFlock) ([
 	if slices.ContainsFunc(caps, func(c cephmsgr.MDSCapReconnect) bool { return len(c.Flock) != 0 }) {
 		return nil, errors.New("collected reconnect state already carries a lock blob")
 	}
+	var files []int
 	for _, l := range h.Locks {
-		at := slices.IndexFunc(caps, func(c cephmsgr.MDSCapReconnect) bool { return c.Ino == l.Ino })
-		if at < 0 || l.Ino == 0 || len(caps[at].Flock) != 0 {
-			return nil, fmt.Errorf("collected reconnect state lacks the capability of the %s lock inode %#x or two locks share it", l.Name, l.Ino)
+		if l.Ino == 0 || slices.ContainsFunc(h.Locks, func(o *splitHeldLock) bool { return o.Ino == l.Ino && o.Member != l.Member }) {
+			return nil, fmt.Errorf("the %s lock names no inode, or two lock files share the inode %#x", l.Name, l.Ino)
 		}
-		blob := cephfsFilelockBlob(nil, []cephfsFilelock{l.Lock})
-		caps[at].Flock, l.ReconnectBlobHex = blob, hex.EncodeToString(blob)
+		if !slices.Contains(files, l.Member) {
+			files = append(files, l.Member)
+		}
+	}
+	for _, member := range files {
+		locks, _ := h.fileLocks(member)
+		at := slices.IndexFunc(caps, func(c cephmsgr.MDSCapReconnect) bool { return c.Ino == locks[0].Ino })
+		if at < 0 || len(caps[at].Flock) != 0 {
+			return nil, fmt.Errorf("collected reconnect state lacks the capability of the %s lock inode %#x", locks[0].Name, locks[0].Ino)
+		}
+		blob := splitFileBlob(locks)
+		caps[at].Flock = blob
+		for _, l := range locks {
+			l.ReconnectBlobHex = hex.EncodeToString(blob)
+		}
 	}
 	var sent []uint64
 	carried := 0
@@ -253,13 +341,25 @@ func splitHeldFlockAttach(caps []cephmsgr.MDSCapReconnect, h *splitHeldFlock) ([
 		}
 		carried++
 		at := slices.IndexFunc(h.Locks, func(l *splitHeldLock) bool { return l.Ino == c.Ino })
-		fcntl, flock, err := cephfsDecodeFilelockBlob(c.Flock)
-		if at < 0 || err != nil || len(fcntl) != 0 || len(flock) != 1 || flock[0] != h.Locks[at].Lock {
-			return nil, fmt.Errorf("capability of inode %#x carries a blob that is not its own single lock record: %x %v", c.Ino, c.Flock, err)
+		var fcntl, flock []cephfsFilelock
+		var err error
+		if at >= 0 {
+			locks, _ := h.fileLocks(h.Locks[at].Member)
+			var held []heldLock
+			for _, l := range locks {
+				held = append(held, l.held())
+			}
+			fcntl, flock, err = cephfsDecodeFilelockBlob(c.Flock)
+			if err == nil && (!slices.Equal(fcntl, heldLocksOfRule(held, cephLockRuleFcntl)) || !slices.Equal(flock, heldLocksOfRule(held, cephLockRuleFlock))) {
+				err = errors.New("records differ from the file's locks")
+			}
+		}
+		if at < 0 || err != nil {
+			return nil, fmt.Errorf("capability of inode %#x carries a blob that is not its own file's lock records: %x %v", c.Ino, c.Flock, err)
 		}
 	}
-	if carried != len(h.Locks) {
-		return nil, fmt.Errorf("%d capabilities carry a lock blob for %d held locks", carried, len(h.Locks))
+	if carried != len(files) {
+		return nil, fmt.Errorf("%d capabilities carry a lock blob for %d lock files", carried, len(files))
 	}
 	return sent, nil
 }
@@ -282,6 +382,9 @@ func (a splitFlockAttempt) errno() string {
 	if a.Receipt == nil {
 		return "absent"
 	}
+	if a.Receipt.Fcntl != nil {
+		return "fcntl"
+	}
 	return strconv.Itoa(a.Receipt.Probe.Errno)
 }
 
@@ -291,16 +394,28 @@ func (a splitFlockAttempt) errno() string {
 // file. The file is empty and must not change: the baseline is fixed by the
 // lock's first accepted probe.
 func splitFlockAttemptOf(r nativeMDSCephFSCompletionReceipt, requestErr error, held *splitHeldFlock, lock *splitHeldLock, wantErrno int) (splitFlockAttempt, error) {
+	return splitLockAttemptOf(r, requestErr, held, lock, heldFlockProbeWant{Action: lock.Probe, Errno: wantErrno})
+}
+
+// splitLockAttemptOf is splitFlockAttemptOf for any closed probe of the
+// lock's file.
+func splitLockAttemptOf(r nativeMDSCephFSCompletionReceipt, requestErr error, held *splitHeldFlock, lock *splitHeldLock, want heldFlockProbeWant) (splitFlockAttempt, error) {
 	if requestErr != nil {
-		err := fmt.Errorf("native split flock probe %s: %w", lock.Probe, requestErr)
+		err := fmt.Errorf("native split lock probe %s: %w", want.Action, requestErr)
 		return splitFlockAttempt{Error: err.Error()}, err
 	}
-	if r.Native == nil || r.Native.Flock == nil {
-		err := errors.New("native split flock receipt lacks its probe")
+	fcntl := heldFcntlProbeSets[want.Action] != nil
+	if r.Native == nil || !fcntl && r.Native.Flock == nil || fcntl && r.Native.Fcntl == nil {
+		err := errors.New("native split lock receipt lacks its probe")
 		return splitFlockAttempt{Error: err.Error()}, err
 	}
-	out := splitFlockAttempt{Receipt: &heldFlockProbe{Action: r.Action, NativeGlobalID: r.Native.NativeGlobalID, RequestID: r.RequestID, MDSGID: r.MDSGID, MDSNonce: r.MDSNonce, MDSIncarnation: r.MDSIncarnation, Probe: *r.Native.Flock}}
-	err := checkSplitFlockProbe(r, held, lock, wantErrno)
+	out := splitFlockAttempt{Receipt: &heldFlockProbe{Action: r.Action, NativeGlobalID: r.Native.NativeGlobalID, RequestID: r.RequestID, MDSGID: r.MDSGID, MDSNonce: r.MDSNonce, MDSIncarnation: r.MDSIncarnation}}
+	if fcntl {
+		out.Receipt.Fcntl = r.Native.Fcntl
+	} else {
+		out.Receipt.Probe = *r.Native.Flock
+	}
+	err := checkSplitLockProbe(r, held, lock, want)
 	if err != nil {
 		out.Error = err.Error()
 	}
@@ -308,41 +423,128 @@ func splitFlockAttemptOf(r nativeMDSCephFSCompletionReceipt, requestErr error, h
 }
 
 func checkSplitFlockProbe(r nativeMDSCephFSCompletionReceipt, held *splitHeldFlock, lock *splitHeldLock, wantErrno int) error {
-	p := *r.Native.Flock
-	if r.Action != lock.Probe || r.Target != lock.File || r.Native.Path != "/"+held.Directory+"/"+lock.File || r.Native.NativeGlobalID == lock.Lock.Client {
-		return fmt.Errorf("native split flock probe is another action, names another file or the Go client: action %q target %q path %q", r.Action, r.Target, r.Native.Path)
+	return checkSplitLockProbe(r, held, lock, heldFlockProbeWant{Action: lock.Probe, Errno: wantErrno})
+}
+
+// checkSplitLockProbe checks one closed probe receipt of lock's file: its
+// exclusive or shared FLOCK probe with the wanted errno, or its FCNTL probe
+// with the wanted results. The file is empty and must not change: the
+// baseline is fixed by the file's first accepted probe.
+func checkSplitLockProbe(r nativeMDSCephFSCompletionReceipt, held *splitHeldFlock, lock *splitHeldLock, want heldFlockProbeWant) error {
+	if r.Action != want.Action || r.Target != lock.File || r.Native.Path != "/"+held.Directory+"/"+lock.File || r.Native.NativeGlobalID == lock.Lock.Client {
+		return fmt.Errorf("native split lock probe is another action, names another file or the Go client: action %q target %q path %q", r.Action, r.Target, r.Native.Path)
 	}
-	if r.Mutation == nil || r.Mutation.Kind != "native-"+lock.Probe || r.Mutation.State != "applied" || r.Mutation.RequestID != r.RequestID ||
-		p.Owner != cephFlockNativeOwner || p.Errno != wantErrno || p.Acquired != (wantErrno == 0) || p.Unlocked != p.Acquired || p.ElapsedNS <= 0 ||
-		p.Before != p.After || p.Before.Ino != lock.Ino || p.Before.Size != 0 || p.Before.DataHex != "" {
-		return fmt.Errorf("native split flock probe result or owned file state differs: want errno %d on inode %d, probe %+v mutation %+v", wantErrno, lock.Ino, p, r.Mutation)
+	if r.Mutation == nil || r.Mutation.Kind != "native-"+want.Action || r.Mutation.State != "applied" || r.Mutation.RequestID != r.RequestID {
+		return fmt.Errorf("native split lock probe mutation record differs: %+v", r.Mutation)
+	}
+	var state nativeMDSCephFSFlockState
+	if heldFcntlProbeSets[want.Action] != nil {
+		p := r.Native.Fcntl
+		if p == nil || r.Native.Flock != nil || p.Owner != cephFlockNativeOwner || p.ElapsedNS <= 0 || p.GlobalID == 0 || p.GlobalID == lock.Lock.Client ||
+			p.GlobalID == r.Native.NativeGlobalID || p.Before != p.After || len(p.Probes) != len(want.Fcntl) {
+			return fmt.Errorf("native split FCNTL probe record differs: %+v", p)
+		}
+		for i, got := range p.Probes {
+			e := want.Fcntl[i]
+			if got.Type != e.Request.Type || got.Start != e.Request.Start || got.Length != e.Request.Length || got.Errno != e.Errno ||
+				got.Acquired != (e.Errno == 0) || got.Unlocked != got.Acquired || got.Getlk != e.Getlk {
+				return fmt.Errorf("native split FCNTL probe %d differs: got %+v, want %+v", i, got, e)
+			}
+		}
+		state = p.Before
+	} else {
+		p := r.Native.Flock
+		if p == nil || r.Native.Fcntl != nil || p.Owner != cephFlockNativeOwner || p.Errno != want.Errno || p.Acquired != (want.Errno == 0) || p.Unlocked != p.Acquired ||
+			p.ElapsedNS <= 0 || p.Before != p.After {
+			return fmt.Errorf("native split flock probe result differs: want errno %d on inode %d, probe %+v", want.Errno, lock.Ino, p)
+		}
+		state = p.Before
+	}
+	if state.Ino != lock.Ino || state.Size != 0 || state.DataHex != "" {
+		return fmt.Errorf("native split lock probe names inode %d or a nonempty file, want the empty inode %d: %+v", state.Ino, lock.Ino, state)
 	}
 	if lock.baseline == nil {
-		first := p.Before
+		first := state
 		lock.baseline = &first
-	} else if *lock.baseline != p.Before {
-		return fmt.Errorf("split flock probes changed native bytes, size, version or second-resolution mtime: %+v then %+v", *lock.baseline, p.Before)
+	} else if *lock.baseline != state {
+		return fmt.Errorf("split lock probes changed native bytes, size, version or second-resolution mtime: %+v then %+v", *lock.baseline, state)
 	}
 	return nil
 }
 
-// splitFlockProbeAll probes every lock file once, in order, appends each
-// attempt to that lock's before or after record and returns the observed
-// errnos and the joined failures. A file whose attempt has no receipt is
-// reported as "absent", not as an errno. Every file is probed even when an
-// earlier one differs, so a failure shows the state of all of them.
-func splitFlockProbeAll(ctx context.Context, control *mdsCephFSCompletionControl, held *splitHeldFlock, after bool, want func(*splitHeldLock) int) ([]string, error) {
+// splitFlockProbeAll runs every probe of every lock file once (probes), in
+// order, appends each attempt to the file's first lock's before or after
+// record and returns the observed errnos and the joined failures. The
+// expected result follows from the locks not yet released. A file whose
+// attempt has no receipt is reported as "absent", not as an errno. Every
+// file is probed even when an earlier one differs, so a failure shows the
+// state of all of them.
+func splitFlockProbeAll(ctx context.Context, control *mdsCephFSCompletionControl, held *splitHeldFlock, after bool) ([]string, error) {
 	var errnos []string
 	var failed error
-	for _, lock := range held.Locks {
-		r, requestErr := control.request(ctx, lock.Probe)
-		attempt, err := splitFlockAttemptOf(r, requestErr, held, lock, want(lock))
+	probe := func(lock *splitHeldLock, want heldFlockProbeWant) {
+		r, requestErr := control.request(ctx, want.Action)
+		attempt, err := splitLockAttemptOf(r, requestErr, held, lock, want)
 		errnos = append(errnos, lock.recordProbe(after, attempt))
 		if err != nil {
-			failed = errors.Join(failed, fmt.Errorf("%s lock file: %w", lock.Name, err))
+			failed = errors.Join(failed, fmt.Errorf("%s lock file, probe %s: %w", lock.Name, want.Action, err))
 		}
 	}
+	for _, want := range held.probes() {
+		probe(want.lock, want.want)
+	}
 	return errnos, failed
+}
+
+// splitLockProbeWant is one closed probe of a lock file and its expected
+// result while the locks not yet released are held.
+type splitLockProbeWant struct {
+	lock *splitHeldLock
+	want heldFlockProbeWant
+}
+
+// probes returns the probes of every lock file, in order of the files' first
+// locks: the exclusive FLOCK probe, refused while a FLOCK lock of the file is
+// held; the shared FLOCK probe while all of the file's FLOCK locks are held
+// and shared; and the FCNTL probe with the results the file's held FCNTL
+// locks give. The records go on the file's first lock.
+func (h *splitHeldFlock) probes() []splitLockProbeWant {
+	var out []splitLockProbeWant
+	seen := map[int]bool{}
+	for _, lock := range h.Locks {
+		if seen[lock.Member] {
+			continue
+		}
+		seen[lock.Member] = true
+		all, still := h.fileLocks(lock.Member)
+		var stillHeld []heldLock
+		flockAll, flockStill, shared := 0, 0, true
+		for _, l := range all {
+			if l.rule() == cephLockRuleFlock {
+				flockAll++
+				shared = shared && l.kind() == cephFlockShared
+			}
+		}
+		for _, l := range still {
+			stillHeld = append(stillHeld, l.held())
+			if l.rule() == cephLockRuleFlock {
+				flockStill++
+			}
+		}
+		errno := 0
+		if flockStill != 0 {
+			errno = 11
+		}
+		out = append(out, splitLockProbeWant{lock, heldFlockProbeWant{Action: lock.Probe, Errno: errno}})
+		if lock.SharedProbe != "" && shared && flockAll != 0 && flockStill == flockAll {
+			out = append(out, splitLockProbeWant{lock, heldFlockProbeWant{Action: lock.SharedProbe}})
+		}
+		if lock.FcntlProbe != "" {
+			out = append(out, splitLockProbeWant{lock, heldFlockProbeWant{Action: lock.FcntlProbe,
+				Fcntl: heldFcntlExpectedFor(heldLocksOfRule(stillHeld, cephLockRuleFcntl), heldFcntlProbeSets[lock.FcntlProbe])}})
+		}
+	}
+	return out
 }
 
 // recordProbe appends the attempt to the lock's before or after record and
@@ -415,6 +617,12 @@ func splitReconnectCapFragments(lines []string, gid uint64) ([]splitReconnectFra
 // must be in the last, unmarked fragment: the last split file's capability
 // sorts behind every other one.
 func splitHeldFlockFragment(fragments []splitReconnectFragment, handlers int, sent []uint64, ino uint64, final bool) (int, error) {
+	return splitHeldLockFragment(fragments, handlers, sent, ino, final, false)
+}
+
+// splitHeldLockFragment is splitHeldFlockFragment that, with middle set,
+// requires a fragment that is neither the first nor the final one.
+func splitHeldLockFragment(fragments []splitReconnectFragment, handlers int, sent []uint64, ino uint64, final, middle bool) (int, error) {
 	if len(fragments) < 2 || len(fragments) != handlers {
 		return 0, fmt.Errorf("per-capability log has %d fragments, handler log %d", len(fragments), handlers)
 	}
@@ -442,6 +650,9 @@ func splitHeldFlockFragment(fragments []splitReconnectFragment, handlers int, se
 	if !final && !fragments[found].More {
 		return 0, fmt.Errorf("the locked inode %#x was reconnected by the final fragment %d", ino, found)
 	}
+	if middle && (found == 0 || found == len(fragments)-1) {
+		return 0, fmt.Errorf("the locked inode %#x was reconnected by fragment %d of %d, not by a middle one", ino, found, len(fragments))
+	}
 	return found, nil
 }
 
@@ -454,13 +665,13 @@ func splitHeldFlockFragments(h *splitHeldFlock, handlers int) error {
 	for _, l := range h.Locks {
 		l.Fragment = nil
 	}
-	seen := map[uint64]bool{}
+	seen := map[uint64]int{}
 	for _, l := range h.Locks {
-		if seen[l.Ino] {
-			return fmt.Errorf("two held locks name the inode %#x", l.Ino)
+		if member, ok := seen[l.Ino]; ok && member != l.Member {
+			return fmt.Errorf("two held lock files name the inode %#x", l.Ino)
 		}
-		seen[l.Ino] = true
-		at, err := splitHeldFlockFragment(h.Fragments, handlers, h.SentInodes, l.Ino, l.Final)
+		seen[l.Ino] = l.Member
+		at, err := splitHeldLockFragment(h.Fragments, handlers, h.SentInodes, l.Ino, l.Final, l.Middle)
 		if err != nil {
 			return fmt.Errorf("%s lock: %w", l.Name, err)
 		}
