@@ -81,7 +81,9 @@ func commitStall(t *testing.T, ctx context.Context, osd int32, action string) co
 // copyStalledCommit is the part of a receipt that records the stalled local
 // commit.
 type copyStalledCommit struct {
+	Baseline         copyCommitStall    `json:"stall_baseline"`
 	Stall            copyCommitStall    `json:"stall"`
+	Settled          *copyCommitStall   `json:"stall_after_restore"`
 	Trigger          string             `json:"trigger_object"`
 	TriggerReqid     string             `json:"trigger_reqid"`
 	TriggerPoint     string             `json:"trigger_flag_point"`
@@ -194,33 +196,75 @@ func copyStalledInterval(o copyIntervalObservation, route osdFixtureOracle) erro
 	return nil
 }
 
-// armCommitStall arms the destination primary's commit stall and registers
-// its undo: the OSD is SIGKILLed while it is surely still running, or, once
-// it may have exited on its own, recorded as killed after the stall's
-// deadline, so restore starts it again with the options unset.
+// settleCommitStall undoes an armed or partly armed commit stall from what
+// it observes, never from elapsed time: unless the test itself SIGKILLed the
+// OSD with its 137 receipt (killed), stop asks the fixture to stop the
+// owned daemon, which returns only once Docker reports the container
+// stopped, whether it was still running (armed, stalled or not) or had
+// exited on its own; then restore starts it again and must leave it running
+// and clean; and finally show reads both runtime options from the running
+// OSD, which must be the baseline read before arming. The options are not
+// persisted (`config set` is runtime only), so only a daemon that kept
+// running since the arm can still show them.
+func settleCommitStall(killed bool, baseline copyCommitStall, stop, restore func() error, show func() copyCommitStall) (copyCommitStall, error) {
+	if !killed {
+		if err := stop(); err != nil {
+			return copyCommitStall{}, fmt.Errorf("stop the armed osd.%d: %w", baseline.OSD, err)
+		}
+	}
+	if err := restore(); err != nil {
+		return copyCommitStall{}, fmt.Errorf("restart osd.%d after the stall: %w", baseline.OSD, err)
+	}
+	now := show()
+	switch {
+	case len(now.Failures) != 0:
+		return now, fmt.Errorf("osd.%d's runtime options were not read after the stall: %q", baseline.OSD, now.Failures)
+	case now.OSD != baseline.OSD || now.Crash != baseline.Crash || now.Delay != baseline.Delay:
+		return now, fmt.Errorf("osd.%d's runtime options are %s=%d %s=%d after the stall; the baseline was %d and %d",
+			baseline.OSD, "bdev_inject_crash", now.Crash, "bdev_inject_crash_flush_delay", now.Delay, baseline.Crash, baseline.Delay)
+	}
+	return now, nil
+}
+
+// armCommitStall reads the destination primary's two runtime options as the
+// baseline, arms its commit stall and registers the undo (settleCommitStall),
+// which runs before the restore lowerCopyChunk registered and runs restore
+// itself (restore is idempotent). The undo runs whatever failed: the arm
+// request, its readback or anything after it. It returns the time before the
+// arm request, before which the stall cannot have started, and the flag the
+// test sets once it SIGKILLed the OSD itself.
 func (r *copyPrimaryChangeRun) armCommitStall(osd int32, stalled *copyStalledCommit) (time.Time, *bool) {
 	t := r.t
 	t.Helper()
+	baseline := commitStall(t, r.ctx, osd, "show")
+	if baseline.OSD != osd || baseline.Crash != 0 || len(baseline.Failures) != 0 {
+		t.Fatalf("the commit stall of osd.%d is not unarmed before the test arms it: %+v", osd, baseline)
+	}
+	stalled.Baseline = baseline
 	killed := new(bool)
-	armed := time.Now()
 	t.Cleanup(func() {
-		if *killed {
-			return
-		}
-		if time.Since(armed) < copyCommitStallDelay-10*time.Second {
-			cleanup, stop := context.WithTimeout(context.Background(), 60*time.Second)
-			defer stop()
+		cleanup, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+		defer cancel()
+		stop := func() error {
+			// Recorded first, so an uncertain stop is still started again.
 			r.recovery.killed[osd] = true
-			if err := testcluster.ControlDaemon(cleanup, r.recovery.dir, "kill", "osd", fmt.Sprint(osd)); err != nil {
-				t.Errorf("kill the armed osd.%d: %v", osd, err)
-			}
-			return
+			return testcluster.ControlDaemon(cleanup, r.recovery.dir, "stop", "osd", fmt.Sprint(osd))
 		}
-		time.Sleep(time.Until(armed.Add(copyCommitStallDelay + 15*time.Second)))
-		r.recovery.killed[osd] = true
+		restore := func() error {
+			r.recovery.restore(t)
+			if r.recovery.killed[osd] || r.recovery.restarted {
+				return errors.New("restore did not start it again and republish routing")
+			}
+			return nil
+		}
+		show := func() copyCommitStall { return commitStall(t, cleanup, osd, "show") }
+		settled, err := settleCommitStall(*killed, baseline, stop, restore, show)
+		stalled.Settled = &settled
+		if err != nil {
+			t.Error(err)
+		}
 	})
-	// Cleanups run in reverse, so the undo above runs before the restore
-	// that lowerCopyChunk registered, which starts the killed OSD again.
+	armed := time.Now()
 	stalled.Stall = commitStall(t, r.ctx, osd, "arm")
 	if s := stalled.Stall; !s.Armed || !s.Set || s.Crash != 1<<30 || s.Delay != int64(copyCommitStallDelay/time.Second) || len(s.Failures) != 0 {
 		t.Fatalf("the commit stall of osd.%d was not armed: %+v", osd, s)
@@ -455,6 +499,12 @@ func copyPrecommitLoss(t *testing.T, ctx context.Context, pools ownedPools, reco
 	if r.t.Failed() {
 		return
 	}
+	// The restarted primary runs with the baseline options again.
+	now := commitStall(t, ctx, primary, "show")
+	stalled.Settled = &now
+	if len(now.Failures) != 0 || now.Crash != stalled.Baseline.Crash || now.Delay != stalled.Baseline.Delay {
+		t.Fatalf("the restarted osd.%d still has a commit stall option: %+v; baseline %+v", primary, now, stalled.Baseline)
+	}
 	for _, osd := range r.dstRoute.Acting {
 		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute), osd, r.dstRoute, 0); err != nil {
 			t.Fatal("after recovery:", err)
@@ -644,6 +694,50 @@ func TestCopyFromPrecommitJudgements(t *testing.T) {
 		edit(&q)
 		if err := copyStalledInterval(observation(q), route); err == nil {
 			t.Error("stalled interval accepted:", name)
+		}
+	}
+
+	// The stall's undo: every path that the test did not end with its own
+	// SIGKILL stops the daemon, and every path restarts it and reads the
+	// baseline back.
+	baseline := copyCommitStall{OSD: 2, Action: "show", Crash: 0, Delay: 2}
+	armedNow := copyCommitStall{OSD: 2, Action: "show", Crash: 1 << 30, Delay: 60}
+	type undo struct {
+		stops, restores int
+		stopErr         error
+		restoreErr      error
+		shown           copyCommitStall
+	}
+	run := func(killed bool, u *undo) (copyCommitStall, error) {
+		return settleCommitStall(killed, baseline,
+			func() error { u.stops++; return u.stopErr },
+			func() error { u.restores++; return u.restoreErr },
+			func() copyCommitStall { return u.shown })
+	}
+	for name, c := range map[string]struct {
+		killed bool
+		u      undo
+		stops  int
+		ok     bool
+	}{
+		// The arm and its readback succeeded and the trigger failed; the arm
+		// or its readback failed; the arm took long; the daemon is still
+		// running or exited on its own: all are stopped and restarted.
+		"trigger failed after the arm":  {false, undo{shown: baseline}, 1, true},
+		"arm readback failed":           {false, undo{shown: baseline}, 1, true},
+		"killed by the test":            {true, undo{shown: baseline}, 0, true},
+		"stop refused":                  {false, undo{stopErr: errors.New("no such container"), shown: baseline}, 1, false},
+		"restart failed":                {false, undo{restoreErr: errors.New("start failed"), shown: baseline}, 1, false},
+		"still armed after the restart": {false, undo{shown: armedNow}, 1, false},
+		"delay left behind":             {false, undo{shown: copyCommitStall{OSD: 2, Delay: 60}}, 1, false},
+		"options not read":              {false, undo{shown: copyCommitStall{OSD: 2, Failures: []string{"refused"}}}, 1, false},
+		"another OSD answered":          {false, undo{shown: copyCommitStall{OSD: 1, Delay: 2}}, 1, false},
+		"killed, restarted still armed": {true, undo{shown: armedNow}, 0, false},
+	} {
+		u := c.u
+		_, err := run(c.killed, &u)
+		if (err == nil) != c.ok || u.stops != c.stops || (c.u.stopErr == nil) != (u.restores == 1) {
+			t.Errorf("%s: err %v, %d stops, %d restores", name, err, u.stops, u.restores)
 		}
 	}
 
