@@ -549,7 +549,8 @@ type partialOverwrite struct {
 // readback checks the bytes after each write and the live primary must hold
 // both requests by their full identity. Then every acting shard's store is
 // copied while its container is paused and read offline, between two
-// identical native placement records. The full write's entry must be held by
+// identical native placement records, and the interval the requests were
+// sent in must still hold after the capture (shardPGHistory). The full write's entry must be held by
 // every shard and name every shard. The overwrite's entry must be held by
 // shard 0 and by the parity shards and name exactly those; the nonprimary
 // data shard, which the overwrite does not touch, must not hold it in this
