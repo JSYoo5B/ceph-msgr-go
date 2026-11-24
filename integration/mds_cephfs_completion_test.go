@@ -31,6 +31,9 @@ type nativeMDSCephFSCompletionPlan struct {
 	SplitFiles       []string `json:"split_files"`
 	// Charmap is the charmap acceptance's plan (mds_cephfs_charmap_test.go).
 	Charmap nativeMDSCephFSCharmapPlan `json:"charmap"`
+	// Consumer is the consumer-request acceptance's plan
+	// (mds_cephfs_consumer_requests_test.go).
+	Consumer nativeMDSCephFSConsumerPlan `json:"consumer"`
 }
 
 type nativeMDSCephFSCompletionOracle struct {
@@ -169,12 +172,14 @@ type nativeMDSCephFSCompletionReceipt struct {
 	Blocklist       []nativeMDSSessionsBlock          `json:"blocklist"`
 	Native          *nativeMDSCephFSOutput            `json:"native"`
 	Charmap         *nativeMDSCephFSCharmapOutput     `json:"charmap_native"`
+	Consumer        *nativeMDSCephFSConsumerOutput    `json:"consumer_native"`
 	Process         json.RawMessage                   `json:"native_process,omitempty"`
 	Mutation        *nativeMDSCephFSMutation          `json:"mutation"`
 	Runtime         *nativeMDSCephFSCompletionRuntime `json:"runtime"`
 	Central         *nativeMDSCephFSCompletionCentral `json:"central"`
 	Config          map[string]string                 `json:"config"`
 	Restart         *nativeMDSCephFSRestart           `json:"restart"`
+	Ordered         *nativeMDSCephFSCharmapOrdered    `json:"ordered_requirement"`
 	RankStatus      *nativeMDSCephFSRankStatus        `json:"rank_status"`
 	Ops             []nativeMDSCephFSHistoricOp       `json:"ops"`
 	FlushJournal    *struct {
@@ -254,11 +259,12 @@ func (x *mdsCephFSCompletionControl) request(ctx context.Context, action string,
 	x.last = result.RequestID
 	expected := x.mds
 	switch {
-	case action == "restart-fire" || action == "restart-status":
-		if result.Restart == nil || result.Restart.Armed.GID != x.mds.GID || action == "restart-status" && result.RankStatus == nil {
+	case action == "restart-fire" || action == "restart-fire-require" || action == "restart-status":
+		if result.Restart == nil || result.Restart.Armed.GID != x.mds.GID || action == "restart-status" && result.RankStatus == nil ||
+			action == "restart-fire-require" && result.Ordered == nil {
 			return result, errors.New("native MDS completion restart receipt is incomplete")
 		}
-		if action == "restart-fire" {
+		if action != "restart-status" {
 			x.pending = true
 		}
 		return result, nil
@@ -299,6 +305,11 @@ func (x *mdsCephFSCompletionControl) request(ctx context.Context, action string,
 	case "charmap-set", "charmap-names", "charmap-create":
 		if result.Charmap == nil || result.Charmap.NativeGlobalID == 0 || x.goGIDs[result.Charmap.NativeGlobalID] || result.Native != nil {
 			return result, errors.New("native CephFS charmap oracle output missing or bound to a Go client")
+		}
+	case "consumer-prepare", "consumer-read", "consumer-remove":
+		if c := result.Consumer; c == nil || c.NativeGlobalID == 0 || x.goGIDs[c.NativeGlobalID] || x.goGIDs[c.DiffGlobalID] || c.Stat == nil || c.FileStat == nil ||
+			result.Native != nil || result.Charmap != nil {
+			return result, errors.New("native CephFS consumer-request oracle output missing or bound to a Go client")
 		}
 	}
 	x.mds, x.pending = expected, false

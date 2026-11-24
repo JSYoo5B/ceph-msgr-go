@@ -70,10 +70,17 @@ type mdsCephFSRanksPlan struct {
 	InflightFiles []string `json:"inflight_files,omitempty"`
 	Replayed      string   `json:"replayed,omitempty"`
 	ReplayedFiles []string `json:"replayed_files,omitempty"`
+	// Charmap is the two-rank plan's charmap directory
+	// (mds_cephfs_ranks_charmap.go); the standby-replay extension has none.
+	Charmap *mdsCephFSRanksCharmapPlan `json:"charmap,omitempty"`
 }
 
 func mdsCephFSRanksPlanFor(token string, replay bool) mdsCephFSRanksPlan {
 	p := mdsCephFSRanksPlan{Directory: "ceph-msgr-ranks-" + token, Forward: "fwd", ForwardFile: "target", Migrate: "mig", MigrateFiles: []string{"file-0", "file-1", "file-2"}}
+	if !replay {
+		charmap := mdsCephFSRanksCharmapPlanFor()
+		p.Charmap = &charmap
+	}
 	if replay {
 		p.Chain, p.ChainFiles = "chain/hop", []string{"anchor", "forwarded-file", "forwarded-dir"}
 		p.Inflight, p.InflightFiles = "inflight", []string{"anchor", "held-file", "held-dir"}
@@ -95,6 +102,9 @@ func (p mdsCephFSRanksPlan) targets() []string {
 	for _, name := range p.MigrateFiles {
 		result = append(result, p.Migrate+"/"+name)
 	}
+	if p.Charmap != nil {
+		result = append(result, p.Charmap.Dir)
+	}
 	if p.Chain == "" {
 		return result
 	}
@@ -115,6 +125,9 @@ func (p mdsCephFSRanksPlan) targets() []string {
 // (a nested directory before its parent).
 func (p mdsCephFSRanksPlan) pinTargets() []string {
 	result := []string{p.Forward, p.Migrate}
+	if p.Charmap != nil {
+		result = append(result, p.Charmap.Dir)
+	}
 	if p.Chain != "" {
 		result = append(result, p.Chain, p.chainParent(), p.Inflight)
 	}
@@ -808,6 +821,9 @@ type mdsCephFSRanksScope struct {
 	// lockProbes are the held-lock takeover's native lock probes, each
 	// journaled before it runs.
 	lockProbes []*mdsCephFSMutation
+	// charmapMutations are the native charmap-set and charmap-seed of the
+	// charmap directory, each journaled before it runs.
+	charmapMutations []*mdsCephFSMutation
 	// owned maps session addresses of the owned Go identity, observed through
 	// observe, to their GlobalID.
 	owned map[string]uint64
@@ -904,6 +920,11 @@ func parseMDSCephFSRanksRequest(fields []string, token string, plan mdsCephFSRan
 			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks lock probe admits only its plan file")
 		}
 		action.target = args[0]
+	case "charmap-set", "charmap-seed", "charmap-names":
+		if len(args) != 0 || plan.Charmap == nil {
+			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks charmap actions take no caller argument and need the two-rank plan")
+		}
+		action.target = plan.Charmap.Dir
 	case "takeover-arm", "takeover-fire", "takeover-status", "takeover-adopt", "replay-enable", "log-pause", "log-resume":
 		if len(args) != 0 {
 			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks takeover, replay and runtime actions take no caller argument")
@@ -930,6 +951,7 @@ type mdsCephFSRanksResult struct {
 	Views           []mdsCephFSRanksView           `json:"views,omitempty"`
 	Blocklist       []mdsSessionsBlock             `json:"blocklist,omitempty"`
 	Native          *mdsCephFSRanksNative          `json:"native,omitempty"`
+	Charmap         *mdsCephFSCharmapNative        `json:"charmap_native,omitempty"`
 	Processes       []*ceph.NativeCommandResult    `json:"native_processes,omitempty"`
 	Pin             *mdsCephFSRanksPin             `json:"pin,omitempty"`
 	Placement       *mdsCephFSRanksPlacement       `json:"placement,omitempty"`
@@ -962,6 +984,7 @@ func (c *fixtureCluster) mdsCephFSRanksJournal() error {
 		"client_identity": identity, "native_identity": native, "plan": x.plan, "baseline_blocklist": x.baselineBlocklist,
 		"startup_topology": x.startup, "current_topology": x.current, "pins": x.pins, "pin_baseline": x.pinBaseline, "takeover": x.takeover,
 		"owned_session_addresses": x.owned, "shape": x.shape, "replay_enable": x.replayEnable, "runtime": x.runtime, "lock_probes": x.lockProbes,
+		"charmap_mutations": x.charmapMutations,
 	})
 }
 
@@ -1359,6 +1382,8 @@ func (c *fixtureCluster) mdsCephFSRanksAct(ctx context.Context, id int64, action
 		return c.mdsCephFSRanksTakeoverAct(ctx, id, action, result)
 	case "flock-ex-nb":
 		return c.mdsCephFSRanksFlockProbe(ctx, id, action, result)
+	case "charmap-set", "charmap-seed", "charmap-names":
+		return c.mdsCephFSRanksCharmapAct(ctx, id, action, result)
 	}
 	return errors.New("MDS CephFS ranks action is not admitted")
 }

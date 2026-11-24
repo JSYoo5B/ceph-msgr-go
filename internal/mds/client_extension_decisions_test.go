@@ -51,7 +51,12 @@ const (
 // reject_required_withheld_features leaf of TestCephMDSSessionsIntegration
 // requires each of the six in turn and observes the native REJECT of every
 // profile, whose reason names exactly that bit. The reconnect CLOSE for a
-// missing bit is source-only.
+// missing bit is observed for CHARMAP (bit 22): the
+// reconnect_closed_for_a_missing_required_bit leaf of
+// TestCephMDSCephFSCharmapIntegration adds the requirement while no daemon
+// holds rank 0, and the new incarnation answers the reconnect of a default
+// CephFS session held across the restart with CLOSE. The withheld bits share
+// that handler and are not repeated there.
 var tentacleCephFSFeatures = []struct {
 	name     string
 	decision extensionDecision
@@ -90,10 +95,15 @@ var tentacleCephFSFeatures = []struct {
 	// session.
 	{"notify_session_state", deferred},
 	// op_getvxattr: Server::handle_client_getvxattr does not read the bit.
-	// CEPH_MDS_OP_GETVXATTR (OpGetVxattr) can travel through raw Submit; the
-	// consumer picks the vxattr, checks the MDS advertisement and interprets
-	// the text. No exported constant, and no Go-sent request has native
-	// evidence (the charmap push leaf reads vxattrs with the stock client).
+	// CEPH_MDS_OP_GETVXATTR (OpGetVxattr) travels through raw Submit with the
+	// inode as the path and the vxattr name as the second path; the reply
+	// extra is a v1/compat1 envelope around the text, or the result is
+	// -ENODATA. The consumer picks the vxattr, checks the MDS advertisement
+	// and interprets the text; the library adds no codec and no exported
+	// constant. TestCephMDSCephFSConsumerRequestsIntegration sends it from a
+	// session without the bit and compares seven texts and two -ENODATA
+	// answers with the stock client; the charmap leaf of
+	// TestCephMDSCephFSRanksIntegration does so on both ranks.
 	{"op_getvxattr", consumerOwned},
 	{"32bits_retry_fwd", baseline},
 	{"new_snaprealm_info", baseline},
@@ -117,14 +127,19 @@ var tentacleCephFSFeatures = []struct {
 	// alternate names with a stock client, and reconnects across a restart
 	// while the filesystem requires the bit, which the new incarnation then
 	// refuses to a default CephFS session; TestCephMDSSessionsIntegration
-	// admits it to a filesystem that requires the bit). Multiple ranks are
-	// not exercised.
+	// admits it to a filesystem that requires the bit). The charmap leaf of
+	// TestCephMDSCephFSRanksIntegration repeats the metadata, the -EPERM gate
+	// and the opt-in creation on a directory whose fragment rank 1 holds.
 	{"charmap", optIn},
 	// blockdiff: Server::handle_client_file_blockdiff does not read the bit.
-	// CEPH_MDS_OP_FILE_BLOCKDIFF (OpFileBlockdiff) can travel through raw
-	// Submit with caller-built arguments; snapshot selection, paging and
-	// block mapping are the consumer's. No exported constant or native
-	// evidence.
+	// CEPH_MDS_OP_FILE_BLOCKDIFF (OpFileBlockdiff) travels through raw Submit
+	// with the scan index and page size in the arguments and the two
+	// snapshot files as paths; the reply extra is BlockDiff (rval, next scan
+	// index, extents). Snapshot selection, paging and block mapping are the
+	// consumer's; the library adds no codec and no exported constant.
+	// TestCephMDSCephFSConsumerRequestsIntegration pages a diff from a
+	// session without the bit and compares every page with the stock
+	// client's ceph_file_blockdiff.
 	{"blockdiff", consumerOwned},
 }
 

@@ -201,6 +201,9 @@ type mdsCephFSCompletionPlan struct {
 	SplitFiles       []string `json:"split_files"`
 	// Charmap is used only by the charmap acceptance (mds_cephfs_charmap.go).
 	Charmap mdsCephFSCharmapPlan `json:"charmap"`
+	// Consumer is used only by the consumer-request acceptance
+	// (mds_cephfs_consumer.go).
+	Consumer mdsCephFSConsumerPlan `json:"consumer"`
 }
 
 func mdsCephFSCompletionPlanFor(token string) mdsCephFSCompletionPlan {
@@ -212,7 +215,7 @@ func mdsCephFSCompletionPlanFor(token string) mdsCephFSCompletionPlan {
 	}
 	return mdsCephFSCompletionPlan{Directory: "ceph-msgr-completion-" + token, Children: slices.Clone(mdsCephFSCompletionChildren), Grandchildren: slices.Clone(mdsCephFSCompletionGrandchildren),
 		Snapshot: "completion-" + token[:8], FencedPayloadHex: hex.EncodeToString(payload[:mdsCephFSCompletionFencedBytes]), ReconnectTimeout: mdsCephFSCompletionWindow, SplitFiles: mdsCephFSMultiReconnectNames(),
-		Charmap: mdsCephFSCharmapPlanFor()}
+		Charmap: mdsCephFSCharmapPlanFor(), Consumer: mdsCephFSConsumerPlanFor(token)}
 }
 
 // mdsCephFSMultiReconnectNames are actual owned files whose retained cap state
@@ -619,7 +622,7 @@ var mdsCephFSCompletionLogMarkers = []string{
 	"force file system read-only", "force_clients_readonly", "flushsnap",
 	"mds_deny_all_reconnect was set", "no longer in reconnect state", "reconnect timed out", "reconnect gives up on",
 	"reconnect will complete once clients are evicted", "denied reconnect attempt", "evicting unresponsive client",
-	"ignoring msg from not-open session", "ignoring sessionless msg",
+	"ignoring msg from not-open session", "ignoring sessionless msg", "missing required features",
 }
 
 // filterMDSCephFSCompletionLog keeps the lines of one client: its GlobalID,
@@ -821,11 +824,11 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 		action.target = args[0]
 	case "list", "write-fenced", "snapshot-create", "snapshot-remove", "mds-log-mark", "config-read", "flush-journal", "force-readonly",
 		"log-pause", "log-resume", "early-reply-off", "early-reply-on", "blackhole-on", "blackhole-off", "debug-on", "debug-off",
-		"deny-on", "deny-off", "window-on", "window-off", "restart-arm", "restart-fire", "restart-status", "restart-adopt",
+		"deny-on", "deny-off", "window-on", "window-off", "restart-arm", "restart-fire", "restart-fire-require", "restart-status", "restart-adopt",
 		"debug-caps-on", "debug-caps-off", "split-flock-ex-nb", "split-final-flock-ex-nb",
 		"split-flock-sh-nb", "split-fcntl-probe", "split-second-flock-ex-nb", "split-middle-flock-ex-nb",
 		"deleg-zero-on", "deleg-zero-off", "async-dirops-off", "async-dirops-on", "charmap-set", "charmap-names", "charmap-create",
-		"charmap-require-on", "charmap-require-off":
+		"charmap-require-on", "charmap-require-off", "consumer-prepare", "consumer-read", "consumer-remove":
 		if len(args) != 0 {
 			return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion action takes no caller argument")
 		}
@@ -838,6 +841,8 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 			action.target = "snapshot"
 		case "charmap-set", "charmap-names", "charmap-create":
 			action.target = plan.Charmap.Dir
+		case "consumer-prepare", "consumer-read", "consumer-remove":
+			action.target = plan.Consumer.Dir
 		case "split-flock-ex-nb", "split-final-flock-ex-nb", "split-flock-sh-nb", "split-fcntl-probe", "split-second-flock-ex-nb", "split-middle-flock-ex-nb":
 			// The lock target is fixed by the plan, never chosen by the caller.
 			if action.target = plan.splitLockTargets()[action.name]; action.target == "" {
@@ -878,12 +883,14 @@ type mdsCephFSCompletionResult struct {
 	Blocklist       []mdsSessionsBlock               `json:"blocklist,omitempty"`
 	Native          *mdsCephFSNative                 `json:"native,omitempty"`
 	Charmap         *mdsCephFSCharmapNative          `json:"charmap_native,omitempty"`
+	Consumer        *mdsCephFSConsumerNative         `json:"consumer_native,omitempty"`
 	Process         *ceph.NativeCommandResult        `json:"native_process,omitempty"`
 	Mutation        *mdsCephFSMutation               `json:"mutation,omitempty"`
 	Runtime         *mdsCephFSCompletionRuntime      `json:"runtime,omitempty"`
 	Central         *mdsCephFSCompletionCentral      `json:"central,omitempty"`
 	Config          map[string]string                `json:"config,omitempty"`
 	Restart         *mdsCephFSRestart                `json:"restart,omitempty"`
+	Ordered         *mdsCephFSCharmapOrdered         `json:"ordered_requirement,omitempty"`
 	RankStatus      *mdsCephFSRankStatus             `json:"rank_status,omitempty"`
 	Ops             []mdsCephFSHistoricOp            `json:"ops,omitempty"`
 	FlushJournal    *mdsCephFSCompletionFlush        `json:"flush_journal,omitempty"`
@@ -1180,7 +1187,8 @@ func (c *fixtureCluster) mdsCephFSCompletionControl(ctx context.Context, out str
 	if err != nil {
 		return err
 	}
-	if err := errors.Join(admitMDSCephFSHeldFlockSplit(action.name, c.profile), admitMDSCephFSCharmap(action.name, c.profile)); err != nil {
+	if err := errors.Join(admitMDSCephFSHeldFlockSplit(action.name, c.profile), admitMDSCephFSCharmap(action.name, c.profile),
+		admitMDSCephFSConsumer(action.name, c.profile)); err != nil {
 		return err
 	}
 	x.lastRequestID = id
@@ -1211,7 +1219,7 @@ func (c *fixtureCluster) mdsCephFSCompletionControl(ctx context.Context, out str
 		// Between fire and adopt only transitional reads and daemon-local
 		// diagnostics of the respawned owned daemon are admitted.
 		switch action.name {
-		case "restart-fire", "restart-status", "restart-adopt":
+		case "restart-fire", "restart-fire-require", "restart-status", "restart-adopt":
 		case "config-read", "debug-on", "debug-off", "debug-caps-on", "debug-caps-off", "mds-log-mark", "mds-log":
 			status, err := c.mdsCephFSCompletionRankStatus(ctx, r.Armed.GID)
 			if err != nil {
@@ -1235,7 +1243,7 @@ func (c *fixtureCluster) mdsCephFSCompletionControl(ctx context.Context, out str
 		}
 	}
 	switch action.name {
-	case "restart-fire", "restart-status":
+	case "restart-fire", "restart-fire-require", "restart-status":
 		if err := c.mdsCephFSCompletionRestartAct(ctx, id, action, &result); err != nil {
 			return err
 		}
@@ -1329,6 +1337,8 @@ func (c *fixtureCluster) mdsCephFSCompletionAct(ctx context.Context, id int64, a
 		return c.mdsCephFSCharmapAct(ctx, id, action, result)
 	case "charmap-require-on", "charmap-require-off":
 		return c.mdsCephFSCharmapRequire(ctx, id, action.name == "charmap-require-on", result)
+	case "consumer-prepare", "consumer-read", "consumer-remove":
+		return c.mdsCephFSConsumerAct(ctx, id, action, result)
 	case "flush-journal":
 		data, err := c.mdsCephFSCompletionAsok(ctx, 60*time.Second, "flush", "journal")
 		if err != nil {
@@ -1787,9 +1797,21 @@ func (c *fixtureCluster) mdsCephFSCompletionRestartAct(ctx context.Context, id i
 		x.restarts = append(x.restarts, r)
 		result.Restart = r
 		return c.mdsCephFSCompletionJournal()
-	case "restart-fire":
+	case "restart-fire", "restart-fire-require":
 		if r == nil || r.State != "armed" {
 			return errors.New("MDS CephFS completion restart fire requires one armed, unfired restart")
+		}
+		var ordered *mdsCephFSCharmapOrdered
+		if action.name == "restart-fire-require" {
+			if err := c.mdsCephFSCharmapOrderedPrecheck(ctx); err != nil {
+				return err
+			}
+			ordered = &mdsCephFSCharmapOrdered{}
+			result.Ordered = ordered
+			var err error
+			if ordered.Unjoinable, err = c.mdsCephFSCharmapSetJoinable(ctx, id, false, nil); err != nil {
+				return err
+			}
 		}
 		r.State, r.FireRequestID, r.FireStartedUTC = "intended", id, time.Now().UTC().Format(time.RFC3339Nano)
 		result.Restart = r
@@ -1812,7 +1834,13 @@ func (c *fixtureCluster) mdsCephFSCompletionRestartAct(ctx context.Context, id i
 			return errors.Join(err, c.mdsCephFSCompletionJournal())
 		}
 		r.State = "applied"
-		return c.mdsCephFSCompletionJournal()
+		if err := c.mdsCephFSCompletionJournal(); err != nil {
+			return err
+		}
+		if ordered != nil {
+			return c.mdsCephFSCharmapOrderedFire(ctx, id, r.Armed.GID, ordered)
+		}
+		return nil
 	case "restart-status":
 		if r == nil || !r.pending() || r.State == "intended" {
 			return errors.New("MDS CephFS completion restart status requires a fired, unadopted restart")
@@ -1903,6 +1931,9 @@ type mdsCephFSCompletionCleanup struct {
 	// CharmapRequiredRestored is set only when a charmap run attempted the
 	// owned CHARMAP requirement.
 	CharmapRequiredRestored *bool `json:"charmap_required_restored,omitempty"`
+	// JoinableRestored is set only when a charmap run made the filesystem
+	// unjoinable for an ordered requirement.
+	JoinableRestored *bool `json:"joinable_restored,omitempty"`
 	mdsCephFSBlocklistReceipt
 	ClientIdentityRemoved bool     `json:"client_identity_removed"`
 	NativeIdentityRemoved bool     `json:"native_identity_removed"`
@@ -1938,6 +1969,11 @@ func (c *fixtureCluster) finishMDSCephFSCompletion(ctx context.Context) error {
 		receipt.ConfigRestored, receipt.NamespaceChecked, receipt.NamespaceRestored, receipt.BlocklistRestored = true, true, true, true
 		receipt.NamespaceNote = "preparation ended before any owned mutation was possible"
 	} else {
+		// An unjoinable filesystem never gets its rank back: restore that
+		// before anything expects an active incarnation.
+		joinable, err := c.mdsCephFSCharmapJoinableReconcile(ctx)
+		receipt.JoinableRestored = joinable
+		fail(err)
 		// A pending restart: wait for the respawned daemon to become active
 		// (it does so by itself once its reconnect window closes).
 		if r := x.pending(); r != nil {
@@ -2065,7 +2101,7 @@ func (c *fixtureCluster) finishMDSCephFSCompletion(ctx context.Context) error {
 		receipt.Errors = append(receipt.Errors, err.Error())
 	}
 	receipt.Completed = len(errs) == 0 && receipt.ConfigRestored && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved &&
-		(receipt.CharmapRequiredRestored == nil || *receipt.CharmapRequiredRestored)
+		(receipt.CharmapRequiredRestored == nil || *receipt.CharmapRequiredRestored) && (receipt.JoinableRestored == nil || *receipt.JoinableRestored)
 	if !receipt.Completed && len(errs) == 0 {
 		errs = append(errs, errors.New("MDS CephFS completion cleanup did not verify every check"))
 	}
