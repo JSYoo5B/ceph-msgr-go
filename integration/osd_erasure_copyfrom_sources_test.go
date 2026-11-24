@@ -259,14 +259,46 @@ func copyErasureLostShard(dst, src osdFixtureOracle) (int32, int, error) {
 // primary is lost with the copy's final transaction not applied
 // (copyErasureHeldCommitLoss below).
 //
-// Not verified: other widths under a loss, and a source primary lost between
-// chunks onto an erasure-coded destination.
+// The k=3,m=1 and k=4,m=2 destinations follow. Not verified: a source
+// primary lost between chunks onto an erasure-coded destination.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2copyfromchunkloss key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
 //fixture:isolated pauses and SIGKILLs OSDs, sets pause, lowers a copy chunk at runtime, waits osd-ready clean without pg_temp proof
 func TestCephOSDErasureOptimizedK2M2CopyFromChunkLossIntegration(t *testing.T) {
-	width := erasureK2M2
+	runCopyErasureChunkLoss(t, erasureK2M2, "osd-erasure-copyfrom-chunk-loss-results.json")
+}
+
+// The cells above on an optimized isa k=3,m=1 destination on the four-OSD
+// topology. Its min_size is three, so each loss leaves the PG active on
+// exactly min_size shards. Every copy-get prints the 32 KiB limit rounded
+// up to the stripe width of three data chunks, and the sources are sized
+// from that max. The data shards 1 and 2 may not be primary, so a lost
+// destination primary leaves the parity shard 3 as the only eligible one,
+// under a pg_temp. The held final transaction is behind a partial-page
+// write in shard 1 of a blocker one three-chunk stripe long; the frozen
+// shard and the killed primary leave three shards after the thaw.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1copyfromchunkloss key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses and SIGKILLs OSDs, sets pause, lowers a copy chunk at runtime, waits osd-ready clean without pg_temp proof
+func TestCephOSDErasureOptimizedK3M1CopyFromChunkLossIntegration(t *testing.T) {
+	runCopyErasureChunkLoss(t, erasureK3M1, "osd-erasure-copyfrom-chunk-loss-k3m1-results.json")
+}
+
+// The cells above on an optimized isa k=4,m=2 destination on the six-OSD
+// topology: min_size five of six shards, the data shards 1 to 3 never
+// primary, six shard collections listing the temporary object, and a blocker
+// one four-chunk stripe long.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2copyfromchunkloss key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses and SIGKILLs OSDs, sets pause, lowers a copy chunk at runtime, waits osd-ready clean without pg_temp proof
+func TestCephOSDErasureOptimizedK4M2CopyFromChunkLossIntegration(t *testing.T) {
+	runCopyErasureChunkLoss(t, erasureK4M2, "osd-erasure-copyfrom-chunk-loss-k4m2-results.json")
+}
+
+func runCopyErasureChunkLoss(t *testing.T, width erasureWidth, name string) {
 	ctx, pools, recovery, facts := copyErasureChunkFixture(t, 1800*time.Second, width, false)
 	limit := erasureCopyGetMax(facts, width)
 	t.Logf("destination pool %d: %s, stripe width %d, copy-get max %d, nonprimary shards %v", facts.pool, width, facts.chunk*width.k, limit, facts.nonprimary)
@@ -277,7 +309,7 @@ func TestCephOSDErasureOptimizedK2M2CopyFromChunkLossIntegration(t *testing.T) {
 		defer mu.Unlock()
 		raw, err := json.MarshalIndent(receipts, "", "  ")
 		if err == nil {
-			err = testcluster.WritePublicEvidence(filepath.Join(recovery.dir, "osd-erasure-copyfrom-chunk-loss-results.json"), append(raw, '\n'))
+			err = testcluster.WritePublicEvidence(filepath.Join(recovery.dir, name), append(raw, '\n'))
 		}
 		if err != nil {
 			t.Error("EC chunk loss receipt", err)
@@ -297,7 +329,7 @@ func TestCephOSDErasureOptimizedK2M2CopyFromChunkLossIntegration(t *testing.T) {
 					mu.Unlock()
 				}()
 				if lost == "destination-before-commit" {
-					copyErasureHeldCommitLoss(t, ctx, pools, recovery, facts, limit, cell, &receipt)
+					copyErasureHeldCommitLoss(t, ctx, pools, recovery, facts, width, limit, cell, &receipt)
 					return
 				}
 				copyErasureChunkLoss(t, ctx, pools, recovery, facts, limit, cell, &receipt)
@@ -548,11 +580,12 @@ func checkCommitHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot,
 // natively. After recovery the original primary leads with that single copy
 // and no shard lists a temporary object.
 //
-// Not verified: the same interval on a replicated destination (its final
-// transaction is queued locally in the same call, ReplicatedBackend.cc:
-// 551-640, and no stock control holds a BlueStore commit; see #7), other
-// widths, and a loss of a replica in this interval.
-func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, facts erasureFacts, limit int, cell copyChunkLossCell, receipt *copyErasureLossReceipt) {
+// The same cell runs on the k=3,m=1 and k=4,m=2 destinations, and the
+// interval on a replicated destination, which queues its final transaction
+// locally in the call that issues it (ReplicatedBackend.cc:551-640), is held
+// in BlueStore instead (osd_copyfrom_precommit_test.go). Not verified: a loss
+// of a replica in this interval.
+func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, facts erasureFacts, width erasureWidth, limit int, cell copyChunkLossCell, receipt *copyErasureLossReceipt) {
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("echeld-%d", cell.code))
 	facts.checkPlacement(t, r.dstRoute)
 	r.chunkMax = limit
@@ -567,7 +600,7 @@ func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPoo
 	// page of it is in the primary's extent cache afterwards.
 	blocker, blockerRoute := r.blockerObject()
 	held.Blocker = blocker
-	stripe := make([]byte, facts.chunk*2)
+	stripe := make([]byte, facts.chunk*width.k)
 	for i := range stripe {
 		stripe[i] = byte(i*47 + i>>9 + 19)
 	}
