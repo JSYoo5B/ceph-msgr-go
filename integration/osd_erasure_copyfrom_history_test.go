@@ -91,6 +91,77 @@ type shardHistorySnapshot struct {
 	// NonprimaryShards are the pool's native nonprimary shard IDs as the
 	// oracle read them: the only shards it lets show HeadPastEntries.
 	NonprimaryShards []int `json:"nonprimary_shards"`
+	// IntervalSince is the start of the interval that the witness after the
+	// capture showed holding (shardHistoryAttributed); the oracle does not
+	// set it.
+	IntervalSince uint32 `json:"-"`
+}
+
+// shardHistoryAttributed judges one observation of the PG taken after a
+// shard-history capture: nil when the interval of route, the placement the
+// requests were judged on, still holds (copyIntervalHeld). The brackets
+// compare the placement alone and may sit at a newer epoch than route's,
+// and a repeer into a new interval keeps every field they compare. An
+// interval start only grows, so a held interval after the capture covers
+// the capture and every request since route was judged.
+//
+// A verdict on the interval is reached only from an observation that can
+// carry one, so the checks run in this order and the first that fails
+// decides:
+//  1. two identical placement records around the query;
+//  2. records at an epoch not before the capture's second bracket nor
+//     route's epoch: an older record predates what it is to attribute;
+//  3. records of route's own object (a placement record names its object,
+//     so another object of the same PG would compare as another placement);
+//  4. a complete query reply from a primary whose map is not behind the
+//     records.
+//
+// Each of these failures is a plain error that says nothing about the
+// interval, and the caller observes again. Only an observation that passes
+// them all can wrap errCopyIntervalChanged (another placement, spg, set or
+// interval start), which is final.
+func shardHistoryAttributed(s shardHistorySnapshot, o copyIntervalObservation, route osdFixtureOracle) error {
+	if o.Before == nil || o.After == nil || !reflect.DeepEqual(o.Before, o.After) {
+		return fmt.Errorf("the placement records around the query differ or are missing: %s", o.PlacementFailure)
+	}
+	if floor := max(s.After.Epoch, route.Epoch); o.Before.Epoch < floor {
+		return fmt.Errorf("the observation at epoch %d precedes the capture's second bracket at epoch %d or the route's epoch %d", o.Before.Epoch, s.After.Epoch, route.Epoch)
+	}
+	if o.Before.Name != route.Name || o.Before.Namespace != route.Namespace {
+		return fmt.Errorf("the observation is of object %q in namespace %q, not of the route's %q in %q", o.Before.Name, o.Before.Namespace, route.Name, route.Namespace)
+	}
+	if q := o.Query; q == nil || o.Code == nil || *o.Code != 0 || o.QueryFailure != "" {
+		return fmt.Errorf("no complete pg query reply: %s", o.QueryFailure)
+	} else if q.Epoch < o.Before.Epoch {
+		return fmt.Errorf("the primary is at map epoch %d, behind the placement's epoch %d", q.Epoch, o.Before.Epoch)
+	}
+	return copyIntervalHeld(o, route)
+}
+
+// shardHistoryObservations and shardHistoryPause bound the observations
+// that attribute one capture.
+const (
+	shardHistoryObservations = 30
+	shardHistoryPause        = time.Second
+)
+
+// shardHistoryAwaitAttributed takes observations after a capture, at most
+// attempts, pausing between them, until one is complete, and judges it
+// (shardHistoryAttributed). It returns that observation and its number. A
+// changed interval is final and ends the observations at once; an error
+// without errCopyIntervalChanged means no complete observation was taken.
+func shardHistoryAwaitAttributed(observe func() copyIntervalObservation, s shardHistorySnapshot, route osdFixtureOracle, attempts int, pause func()) (copyIntervalObservation, int, error) {
+	err := errors.New("no observation")
+	for attempt := 1; attempt <= attempts; attempt++ {
+		o := observe()
+		if err = shardHistoryAttributed(s, o, route); err == nil || errors.Is(err, errCopyIntervalChanged) {
+			return o, attempt, err
+		}
+		if attempt < attempts {
+			pause()
+		}
+	}
+	return copyIntervalObservation{}, attempts, fmt.Errorf("no complete observation within %d: %w", attempts, err)
 }
 
 // checkShardHistory requires a complete receipt whose brackets are identical
@@ -210,9 +281,14 @@ func copyFromShardObservation(copyKey, sourceKey []pgHistoryLocation, want copyF
 // shardPGHistory brackets and judges one shard-local capture of the PG that
 // holds an object of the owned pool in slot. The oracle stores the first
 // placement, the fixture copies and reads every acting shard's store under
-// it, and the oracle reads the placement again. It establishes where the
-// identities occur in each shard's own log, never absence. past lists the
-// shards whose log head may be newer than their last entry; nil admits none.
+// it, and the oracle reads the placement again. A read-only copyinterval
+// observation of route's own object after the capture must then show the
+// interval in which route was judged still holding (shardHistoryAttributed);
+// route may name another object of the same PG than object. A changed
+// interval fails the capture as unattributed before any verdict on its
+// content. It establishes where the identities occur in each shard's own
+// log, never absence. past lists the shards whose log head may be newer
+// than their last entry; nil admits none.
 func shardPGHistory(t *testing.T, ctx context.Context, slot int, object string, route osdFixtureOracle, targets []pgHistoryTarget, past []int) shardHistorySnapshot {
 	t.Helper()
 	first := nativePool(t, ctx, "shardhistory", map[string]any{"phase": "before", "slot": slot, "object": object}).Placement
@@ -232,10 +308,27 @@ func shardPGHistory(t *testing.T, ctx context.Context, slot int, object string, 
 			t.Logf("complete offline log dump of %s: %s", shard.SPG, raw)
 		}
 	}
-	if err := checkShardHistory(s, route, targets, past); err != nil {
-		t.Fatal(err)
+	content := checkShardHistory(s, route, targets, past)
+	o, n, err := shardHistoryAwaitAttributed(func() copyIntervalObservation { return copyInterval(t, ctx, slot, route.Name) }, s, route, shardHistoryObservations,
+		func() { time.Sleep(shardHistoryPause) })
+	verdict := "accepted"
+	if content != nil {
+		verdict = content.Error()
 	}
-	t.Logf("shard-history brackets: epoch %d pg %s up %v acting %v primary osd.%d shard %d", s.Before.Epoch, s.PGID, s.Before.Up, s.Acting, s.Before.PrimaryID, s.Before.Shard)
+	if errors.Is(err, errCopyIntervalChanged) {
+		t.Fatalf("shard-history capture: unattributed, the interval of osd.%d shard %d at epoch %d changed by the observation after the capture (observation %d): %v; the receipt alone was %s",
+			route.ID, route.Shard, route.Epoch, n, err, verdict)
+	}
+	if err != nil {
+		t.Fatalf("shard-history capture: no complete observation of the interval of osd.%d shard %d at epoch %d after the capture: %v; the receipt alone was %s",
+			route.ID, route.Shard, route.Epoch, err, verdict)
+	}
+	if content != nil {
+		t.Fatal(content)
+	}
+	s.IntervalSince = o.Query.SameIntervalSince
+	t.Logf("shard-history brackets: epoch %d pg %s up %v acting %v primary osd.%d shard %d; the interval since epoch %d held through the capture (observation %d at epoch %d, route epoch %d)",
+		s.Before.Epoch, s.PGID, s.Before.Up, s.Acting, s.Before.PrimaryID, s.Before.Shard, s.IntervalSince, n, o.Before.Epoch, route.Epoch)
 	return s
 }
 
@@ -245,8 +338,9 @@ func shardPGHistory(t *testing.T, ctx context.Context, slot int, object string, 
 // destination's live primary must bind the copy to the source write exactly
 // as in the replicated control.
 // Then every acting shard's store is copied while its container is paused
-// and read offline, between two identical native placement records. Each
-// copy must be attributed to its acting index and complete, and must hold
+// and read offline, between two identical native placement records, and a
+// read-only observation of the PG afterwards must show the interval the copy
+// was sent in still holding (shardPGHistory). Each copy must be attributed to its acting index and complete, and must hold
 // the copy's entry with the source write's identity, because this copy
 // creates the head on every shard. This is a positive control: it stops
 // before any trimming or resubmission and claims nothing about absence,
@@ -686,6 +780,186 @@ func TestCheckShardHistory(t *testing.T) {
 		edit(&s)
 		if err := checkShardHistory(s, route, targets, nil); err == nil {
 			t.Error("shard-history receipt accepted:", name)
+		}
+	}
+}
+
+func TestShardHistoryAttributed(t *testing.T) {
+	route := osdFixtureOracle{Up: []int32{1, 3, 2, 0}, Acting: []int32{1, 3, 2, 0}, Replicas: 4, Pool: 4, Name: "dst", PoolType: 3, ID: 1, PrimaryID: 1, Shard: 0, Epoch: 28, PGID: "4.2", Address: "v2:192.0.2.11:6800/1"}
+	targets := []pgHistoryTarget{{Type: "client", Num: 4722, Inc: 9, TID: 2}}
+	raw := []byte(`{"pg_log_t":{"log":[{"reqid":"client.4722.9:2"}],"dups":[]}}`)
+	digest := sha256.Sum256(raw)
+	zero := 0
+	// Identical capture brackets at epoch 30 for requests judged at 28.
+	at := func(epoch uint32) osdFixtureOracle {
+		r := route
+		r.Up, r.Acting, r.Epoch = slices.Clone(route.Up), slices.Clone(route.Acting), epoch
+		return r
+	}
+	s := shardHistorySnapshot{Complete: true, Before: at(30), After: at(30), PGID: route.PGID, Acting: slices.Clone(route.Acting), AllActingShards: true}
+	for i, osd := range route.Acting {
+		s.Shards = append(s.Shards, shardHistoryShard{Index: i, OSD: osd, SPG: "4.2s" + strconv.Itoa(i), Whoami: strconv.Itoa(int(osd)), Complete: true,
+			Bytes: len(raw), LimitBytes: 64 << 10, SHA256: hex.EncodeToString(digest[:]), Raw: base64.StdEncoding.EncodeToString(raw),
+			Head: "28'3", Tail: "0'0", LastUpdate: "28'3", LastComplete: "28'3", LastEntry: "28'3", LogEntries: 1,
+			Targets: []struct {
+				Reqid     string              `json:"reqid"`
+				Locations []pgHistoryLocation `json:"locations"`
+			}{{targets[0].String(), []pgHistoryLocation{{Tier: "log", Version: "28'3", Op: "modify", ReturnCode: &zero}}}}})
+	}
+	// The receipt alone accepts the newer brackets: the gap the witness
+	// closes.
+	if err := checkShardHistory(s, route, targets, nil); err != nil {
+		t.Fatal("receipt with identical brackets at a newer epoch refused:", err)
+	}
+	observe := func(epoch, since uint32) copyIntervalObservation {
+		before, after, code := at(epoch), at(epoch), 0
+		return copyIntervalObservation{Before: &before, After: &after, Code: &code,
+			Query: &copyIntervalQuery{State: "active+clean", Epoch: epoch, Up: route.Up, Acting: route.Acting, PGID: "4.2s0", SameIntervalSince: since}}
+	}
+	if err := shardHistoryAttributed(s, observe(30, 29), route); !errors.Is(err, errCopyIntervalChanged) {
+		t.Error("a capture in an interval that started after the requests' epoch was attributed:", err)
+	}
+	if err := shardHistoryAttributed(s, observe(30, 28), route); err != nil {
+		t.Error("a capture in the requests' interval refused:", err)
+	}
+	if err := shardHistoryAttributed(s, observe(31, 25), route); err != nil {
+		t.Error("an observation at a later map in the requests' interval refused:", err)
+	}
+	// An observation that predates the second bracket says nothing.
+	if err := shardHistoryAttributed(s, observe(29, 28), route); err == nil || errors.Is(err, errCopyIntervalChanged) {
+		t.Error("an observation before the capture's second bracket judged:", err)
+	}
+	// The same PG and interval observed through another of its objects is
+	// no observation of the route, and says nothing about the interval.
+	other := observe(30, 28)
+	b := *other.Before
+	b.Name, b.Hash, b.RawPGID = "another-object", 0x30af615c, "4.30af615c"
+	other.Before, other.After = &b, &b
+	if err := shardHistoryAttributed(s, other, route); err == nil || errors.Is(err, errCopyIntervalChanged) {
+		t.Error("an observation of another object of the PG judged:", err)
+	}
+	for name, edit := range map[string]func(*copyIntervalObservation){
+		"another primary": func(o *copyIntervalObservation) {
+			b := *o.Before
+			b.ID, b.PrimaryID, b.Shard = 3, 3, 1
+			o.Before, o.After = &b, &b
+		},
+		"another acting set": func(o *copyIntervalObservation) { o.Query.Acting = []int32{1, 2, 3, 0} },
+		"another spg":        func(o *copyIntervalObservation) { o.Query.PGID = "4.2s1" },
+	} {
+		o := observe(30, 28)
+		edit(&o)
+		if err := shardHistoryAttributed(s, o, route); !errors.Is(err, errCopyIntervalChanged) {
+			t.Errorf("%s attributed to the requests' interval: %v", name, err)
+		}
+	}
+
+	// Re-observation: an incomplete observation is taken again, a changed
+	// interval ends the observations, and none complete is no verdict.
+	seq := func(o ...copyIntervalObservation) (func() copyIntervalObservation, *int) {
+		n := 0
+		return func() copyIntervalObservation { n++; return o[min(n, len(o))-1] }, &n
+	}
+	incomplete := observe(30, 28)
+	incomplete.Query, incomplete.QueryFailure = nil, "pg query returned -11"
+	pause := func() {}
+	next, n := seq(incomplete, observe(30, 28))
+	if o, k, err := shardHistoryAwaitAttributed(next, s, route, 5, pause); err != nil || k != 2 || *n != 2 || o.Query.SameIntervalSince != 28 {
+		t.Error("held interval after one incomplete observation:", k, err)
+	}
+	next, n = seq(observe(30, 29), observe(30, 28))
+	if _, k, err := shardHistoryAwaitAttributed(next, s, route, 5, pause); !errors.Is(err, errCopyIntervalChanged) || k != 1 || *n != 1 {
+		t.Error("a changed interval was observed again:", k, err)
+	}
+	next, n = seq(incomplete)
+	if _, k, err := shardHistoryAwaitAttributed(next, s, route, 3, pause); err == nil || errors.Is(err, errCopyIntervalChanged) || k != 3 || *n != 3 {
+		t.Error("no complete observation judged:", k, err)
+	}
+
+	// Precedence: every kind of observation, alone and combined with a
+	// fault that a later check would read as an interval change, has one
+	// class. An observation that cannot carry a verdict must not end the
+	// observations, so each incomplete kind followed by a current held
+	// observation is attributed at the second, and each changed kind ends
+	// them at the first.
+	type class int
+	const (
+		held class = iota
+		incompleteClass
+		changed
+	)
+	shard := func(o *copyIntervalObservation) {
+		b := *o.Before
+		b.ID, b.PrimaryID, b.Shard = 3, 3, 1
+		o.Before, o.After = &b, &b
+		o.Query.PGID = "4.2s1"
+	}
+	later := func(o *copyIntervalObservation) { o.Query.SameIntervalSince = 29 }
+	object := func(o *copyIntervalObservation) {
+		b := *o.Before
+		b.Name, b.Hash = "dup-history-filler", 0x30af615c
+		o.Before, o.After = &b, &b
+	}
+	kinds := map[string]struct {
+		epoch, since uint32
+		edits        []func(*copyIntervalObservation)
+		want         class
+	}{
+		"current, held":                         {30, 28, nil, held},
+		"current, later map":                    {31, 28, nil, held},
+		"current, later interval":               {30, 29, []func(*copyIntervalObservation){later}, changed},
+		"current, another primary shard":        {30, 28, []func(*copyIntervalObservation){shard}, changed},
+		"current, another spg":                  {30, 28, []func(*copyIntervalObservation){func(o *copyIntervalObservation) { o.Query.PGID = "4.2s1" }}, changed},
+		"current, another acting set":           {30, 28, []func(*copyIntervalObservation){func(o *copyIntervalObservation) { o.Query.Acting = []int32{1, 2, 3, 0} }}, changed},
+		"stale before the bracket":              {29, 28, nil, incompleteClass},
+		"stale, another primary shard":          {29, 28, []func(*copyIntervalObservation){shard}, incompleteClass},
+		"stale, later interval":                 {29, 29, []func(*copyIntervalObservation){later}, incompleteClass},
+		"older than the route, another shard":   {27, 26, []func(*copyIntervalObservation){shard}, incompleteClass},
+		"another object":                        {30, 28, []func(*copyIntervalObservation){object}, incompleteClass},
+		"another object, later interval":        {30, 29, []func(*copyIntervalObservation){object, later}, incompleteClass},
+		"another object, another primary shard": {30, 28, []func(*copyIntervalObservation){object, shard}, incompleteClass},
+		"stale, another object":                 {29, 28, []func(*copyIntervalObservation){object}, incompleteClass},
+		"no query, another primary shard":       {30, 28, []func(*copyIntervalObservation){shard, func(o *copyIntervalObservation) { o.Query, o.QueryFailure = nil, "pg query returned -11" }}, incompleteClass},
+		"refused query, later interval":         {30, 29, []func(*copyIntervalObservation){later, func(o *copyIntervalObservation) { c := -2; o.Code = &c }}, incompleteClass},
+		"primary behind, later interval":        {30, 29, []func(*copyIntervalObservation){later, func(o *copyIntervalObservation) { o.Query.Epoch = 29 }}, incompleteClass},
+		"records differ, another primary shard": {30, 28, []func(*copyIntervalObservation){shard, func(o *copyIntervalObservation) { a := *o.After; a.Epoch++; o.After = &a }}, incompleteClass},
+		"record missing, later interval":        {30, 29, []func(*copyIntervalObservation){later, func(o *copyIntervalObservation) { o.After = nil }}, incompleteClass},
+		"no record at all":                      {30, 28, []func(*copyIntervalObservation){func(o *copyIntervalObservation) { o.Before, o.After, o.PlacementFailure = nil, nil, "no map" }}, incompleteClass},
+	}
+	build := func(epoch, since uint32, edits []func(*copyIntervalObservation)) copyIntervalObservation {
+		o := observe(epoch, since)
+		for _, edit := range edits {
+			edit(&o)
+		}
+		return o
+	}
+	for name, c := range kinds {
+		err := shardHistoryAttributed(s, build(c.epoch, c.since, c.edits), route)
+		got := held
+		switch {
+		case errors.Is(err, errCopyIntervalChanged):
+			got = changed
+		case err != nil:
+			got = incompleteClass
+		}
+		if got != c.want {
+			t.Errorf("%s judged as class %d, want %d: %v", name, got, c.want, err)
+		}
+		next, n := seq(build(c.epoch, c.since, c.edits), observe(30, 28))
+		_, k, err := shardHistoryAwaitAttributed(next, s, route, 5, pause)
+		switch c.want {
+		case held:
+			if err != nil || k != 1 || *n != 1 {
+				t.Errorf("%s, then current: attributed at observation %d of %d: %v", name, k, *n, err)
+			}
+		case incompleteClass:
+			if err != nil || k != 2 || *n != 2 {
+				t.Errorf("%s, then current: %v at observation %d of %d; want attributed at the second", name, err, k, *n)
+			}
+		case changed:
+			if !errors.Is(err, errCopyIntervalChanged) || k != 1 || *n != 1 {
+				t.Errorf("%s, then current: %v at observation %d of %d; want a change at the first", name, err, k, *n)
+			}
 		}
 	}
 }

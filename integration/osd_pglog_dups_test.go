@@ -435,13 +435,15 @@ func requireLocations(t *testing.T, s pgHistorySnapshot, target int, tier, versi
 // The first dump without K must begin exactly at K's successor P, with S
 // beside it as a duplicate record, and hold every later request
 // (evictionBoundary): K left alone, and P and S are the surviving positive
-// control. K is then resubmitted explicitly once more: the
+// control. With shards, every acting shard's store is copied again and must
+// sit at that live position (shardEvictedVerdict): no record of K in the
+// copy, P persisted at its key. K is then resubmitted explicitly once more: the
 // OSD has no record of it and executes the APPEND again at a new version,
 // the native object holds the tail twice, and the live log holds K as a new
 // ordinary entry. That is the loss of request history after eviction.
 //
 // Not claimed: anything about a shard's live duplicate index, the shards'
-// stores after phase 2, an OSD restart (which reloads the persisted
+// stores after the second resubmission, an OSD restart (which reloads the persisted
 // records), a PG interval change, the default bounds, or any other
 // operation than APPEND and COPY_FROM2.
 func dupHistoryScenario(t *testing.T, width *erasureWidth) {
@@ -667,7 +669,7 @@ func dupHistoryScenario(t *testing.T, width *erasureWidth) {
 		fills, kKey, pKey, sKey, r.want[ki].Version, r.want[pi].Version, at, len(r.want), s.DupEntries)
 
 	if shards {
-		dupHistoryShards(t, r, width, s, at, targets(last), ki, pi, si)
+		dupHistoryShards(t, r, width, s, at, targets(last), ki, pi, si, false)
 	}
 
 	// The explicit resubmission while K is a duplicate record.
@@ -708,6 +710,9 @@ func dupHistoryScenario(t *testing.T, width *erasureWidth) {
 	oldest := r.want[at.First]
 	t.Logf("after F%d K is in no tier of the live primary log; %d duplicate records remain, the oldest K's successor %s (%s at %s) with S beside it, and every later request is there",
 		fills, at.Log-at.First, oldest.Label, oldest.Reqid, oldest.Version)
+	if shards {
+		dupHistoryShards(t, r, width, s, at, targets(last), ki, pi, si, true)
+	}
 	if native := poolObserve(t, ctx, slot, known, "", ""); native.Code != 0 || !bytes.Equal(native.Data, once) || native.Version != k.UserVersion {
 		t.Fatal("the native object changed before the second resubmission", native.Code, len(native.Data), native.Version)
 	}
@@ -769,12 +774,43 @@ func shardPersistedVerdict(p, live dupHistoryPosition, ki, pi, si int) error {
 	return nil
 }
 
-// dupHistoryShards copies every acting shard's store right after the phase-1
-// snapshot s (position at) and matches each offline log to the requests,
-// with the duplicate records of one version reduced to one. Every copy is
-// read and classified on its own, and each must pass shardPersistedVerdict.
-func dupHistoryShards(t *testing.T, r *dupHistoryRun, width *erasureWidth, s pgHistorySnapshot, at dupHistoryPosition, targets []pgHistoryTarget, ki, pi, si int) {
+// shardEvictedVerdict judges one shard copy (position p, with the records
+// of one version reduced to one) taken right after the first live primary
+// dump without K (position live). A trim that drops the oldest duplicate
+// record also removes its `dup_<version>` key from the store
+// (src/osd/PGLog.cc:141-151 adds the key to trimmed_dups, and :898-899 and
+// :1034-1035 remove those keys with the write), and every shard
+// applies the same trim bound with each sub-write, so each copy must be at
+// the live position: K in no tier, P and S duplicate records.
+func shardEvictedVerdict(p, live dupHistoryPosition, ki, pi, si int) error {
+	if p != live {
+		return fmt.Errorf("persisted history %+v differs from the live primary's %+v", p, live)
+	}
+	if p.tier(ki) != "evicted" {
+		return fmt.Errorf("K is still %s in the store: %+v", p.tier(ki), p)
+	}
+	for _, i := range []int{pi, si} {
+		if p.tier(i) != "dups" {
+			return fmt.Errorf("request %d is %s, not a persisted duplicate record: %+v", i, p.tier(i), p)
+		}
+	}
+	return nil
+}
+
+// dupHistoryShards copies every acting shard's store right after the
+// primary snapshot s (position at) and matches each offline log to the
+// requests, with the duplicate records of one version reduced to one. Every
+// copy is read and classified on its own. After phase 1 (evicted false) each
+// must pass shardPersistedVerdict and hold K and P as duplicate records;
+// after the eviction (evicted true) each must pass shardEvictedVerdict and
+// hold P but no record of K. S is never persisted beside P at their shared
+// key.
+func dupHistoryShards(t *testing.T, r *dupHistoryRun, width *erasureWidth, s pgHistorySnapshot, at dupHistoryPosition, targets []pgHistoryTarget, ki, pi, si int, evicted bool) {
 	t.Helper()
+	verdict := shardPersistedVerdict
+	if evicted {
+		verdict = shardEvictedVerdict
+	}
 	captured := shardPGHistory(t, r.ctx, r.slot, "dup-history-filler", r.route, targets, nil)
 	if captured.Before.Epoch != s.After.Epoch || captured.Before.Epoch != r.epoch {
 		t.Fatalf("map epoch moved from %d to %d between the primary snapshot and the shard capture", s.After.Epoch, captured.Before.Epoch)
@@ -797,10 +833,16 @@ func dupHistoryShards(t *testing.T, r *dupHistoryRun, width *erasureWidth, s pgH
 				t.Fatalf("near-miss identity %s matched on %s: %+v", got.Reqid, shard.SPG, got.Locations)
 			}
 		}
-		if err := shardPersistedVerdict(p, at, ki, pi, si); err != nil {
+		if err := verdict(p, at, ki, pi, si); err != nil {
 			t.Fatalf("shard %s (osd.%d): %v", shard.SPG, shard.OSD, err)
 		}
-		requireShardLocation(t, shard, 0, "dups", r.want[ki].Version)
+		if evicted {
+			if len(shard.Targets[0].Locations) != 0 {
+				t.Fatalf("shard %s still holds K after its eviction from the live log: %+v", shard.SPG, shard.Targets[0].Locations)
+			}
+		} else {
+			requireShardLocation(t, shard, 0, "dups", r.want[ki].Version)
+		}
 		requireShardLocation(t, shard, 1, "dups", r.want[pi].Version)
 		if len(shard.Targets[2].Locations) != 0 {
 			t.Fatalf("shard %s persisted S beside P at one key: %+v", shard.SPG, shard.Targets[2].Locations)
@@ -836,7 +878,7 @@ func lastVersion(t *testing.T, eversion string) uint64 {
 
 // TestCephOSDErasureOptimizedK2M2DupHistoryIntegration is dupHistoryScenario
 // on optimized isa k=2,m=2 (four OSDs), with every acting shard's store read
-// offline after phase 1.
+// offline after phase 1 and again after K's eviction.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2duphistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-shard-history
 //scenario:covers CLIENT to OSD
@@ -1032,6 +1074,31 @@ func TestDupHistoryBoundaries(t *testing.T) {
 	}
 	if shardPersistedVerdict(dupHistoryPosition{First: 0, Log: 2}, dupHistoryPosition{First: 0, Log: 2}, ki, pi, si) == nil {
 		t.Error("shard verdict accepted P and S as ordinary entries at an equal live position")
+	}
+	// After the eviction the live log begins at P.
+	gone := dupHistoryPosition{First: 2, Log: 5}
+	for name, c := range map[string]struct {
+		p  dupHistoryPosition
+		ok bool
+	}{
+		"at the live position":           {gone, true},
+		"K still persisted":              {dupHistoryPosition{First: 1, Log: 5}, false},
+		"P gone from the store as well":  {dupHistoryPosition{First: 3, Log: 5}, false},
+		"trimmed less, F1 an entry":      {dupHistoryPosition{First: 2, Log: 4}, false},
+		"trimmed past the primary":       {dupHistoryPosition{First: 2, Log: 6}, false},
+		"the phase-1 position persisted": {dupHistoryPosition{First: 0, Log: 6}, false},
+	} {
+		if err := shardEvictedVerdict(c.p, gone, ki, pi, si); (err == nil) != c.ok {
+			t.Errorf("evicted shard verdict %s %+v: %v", name, c.p, err)
+		}
+	}
+	for name, live := range map[string]dupHistoryPosition{
+		"K still a live duplicate": {First: 1, Log: 5},
+		"P evicted with K":         {First: 3, Log: 5},
+	} {
+		if shardEvictedVerdict(live, live, ki, pi, si) == nil {
+			t.Errorf("evicted shard verdict accepted an equal live position where %s: %+v", name, live)
+		}
 	}
 	// The F1-oldest suffix is a valid suffix to the matcher; only the
 	// boundary check refuses it.
