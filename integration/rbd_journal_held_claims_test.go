@@ -28,9 +28,38 @@ const (
 	rbdJournalHeldSubOpsFlag = "waiting for sub ops"
 )
 
+// rbdJournalHeldMapDelays are the marks PrimaryLogPG::do_request records
+// when it parks an op that reached its PG before the PG had the op's map
+// epoch ("op must wait for map"), or behind another such op of the same
+// client ("waiting_for_map not empty"); once the PG has the map the op
+// reaches it again (osd/PrimaryLogPG.cc at ceph/ceph/blob/v20.2.4/src/).
+// The OSD's map may lead its PG's within one interval, so a held op can
+// carry such a pair right after its first reached_pg.
+var rbdJournalHeldMapDelays = []string{"op must wait for map", "waiting_for_map not empty"}
+
+// rbdJournalHeldMapDelayLimit bounds the pairs one op may carry.
+const rbdJournalHeldMapDelayLimit = 4
+
 // rbdJournalHeldEvents says whether events are exactly the pre-PG steps, then
-// the steps of then in order, then each of last once in any order.
+// the steps of then in order, then each of last once in any order. Each pair
+// of a map delay and the following reached_pg directly after a reached_pg
+// is the PG catching up with the op's map and is set aside, at most
+// rbdJournalHeldMapDelayLimit of them.
 func rbdJournalHeldEvents(events, then []string, last ...string) bool {
+	var kept []string
+	delays := 0
+	for i := 0; i < len(events); i++ {
+		if i > 0 && i+1 < len(events) && events[i-1] == "reached_pg" && events[i+1] == "reached_pg" && slices.Contains(rbdJournalHeldMapDelays, events[i]) {
+			delays++
+			i++
+			continue
+		}
+		kept = append(kept, events[i])
+	}
+	if delays > rbdJournalHeldMapDelayLimit {
+		return false
+	}
+	events = kept
 	head := append(slices.Clone(rbdJournalHeldPrePG), then...)
 	if len(events) != len(head)+len(last) || !slices.Equal(events[:len(head)], head) {
 		return false

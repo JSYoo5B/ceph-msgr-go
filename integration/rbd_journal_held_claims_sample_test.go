@@ -295,6 +295,22 @@ func TestRBDJournalHeldClaims(t *testing.T) {
 			r.Held.Held.Epoch, r.Held.Lost.Query.Epoch = 31, 32
 			r.Held.Held.Query.Epoch = 30
 		}},
+		"PG caught up with the op's map": {rbdJournalVariantDeadPrimary, "", func(r *rbdJournalLostAppendRecord) {
+			// The secure primary-restart run's entry 0: the PG reached the
+			// op's epoch after the op reached it.
+			op(r).Events = slices.Insert(op(r).Events, 7, "op must wait for map", "reached_pg")
+		}},
+		"a map delay without its return": {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			op(r).Events = slices.Insert(op(r).Events, 7, "op must wait for map")
+		}},
+		"a map delay before the PG": {rbdJournalVariantReplicaHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			op(r).Events = slices.Insert(op(r).Events, 5, "op must wait for map", "reached_pg")
+		}},
+		"too many map delays": {rbdJournalVariantDeadPrimary, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			for range rbdJournalHeldMapDelayLimit + 1 {
+				op(r).Events = slices.Insert(op(r).Events, 7, "waiting_for_map not empty", "reached_pg")
+			}
+		}},
 		"commits in either order": {rbdJournalVariantDeadPrimary, "", func(r *rbdJournalLostAppendRecord) {
 			n := len(op(r).Events)
 			op(r).Events[n-2], op(r).Events[n-1] = op(r).Events[n-1], op(r).Events[n-2]

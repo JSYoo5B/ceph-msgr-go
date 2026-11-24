@@ -181,6 +181,26 @@ func TestRBDJournalHeldPendingClaims(t *testing.T) {
 			}
 		}
 	}
+	// Admitted variants: a PG that caught up with an op's map while the op
+	// was in it, as on the secure primary-restart row, on every op held for
+	// the replica.
+	for _, mode := range modes {
+		stages, _ := rbdJournalHeldPlan(mode)
+		for _, stage := range stages {
+			r := rbdJournalHeldPendingSample(mode)
+			for i := range r.Held.Held.Ops {
+				if o := &r.Held.Held.Ops[i]; o.FlagPoint == "waiting for sub ops" {
+					o.Events = slices.Insert(o.Events, 7, "op must wait for map", "reached_pg")
+					if i > 0 {
+						o.Events = slices.Insert(o.Events, 7, "waiting_for_map not empty", "reached_pg")
+					}
+				}
+			}
+			if problems := judge(r, r.Order, stage); len(problems) != 0 {
+				t.Fatalf("%s record whose PG caught up with the ops' map refused at %s: %v", mode, stage, problems)
+			}
+		}
+	}
 	type mutation struct {
 		mode, stage string
 		change      func(r *rbdJournalLostAppendRecord)
@@ -205,6 +225,12 @@ func TestRBDJournalHeldPendingClaims(t *testing.T) {
 			opOf(r, 1).Description = strings.Replace(opOf(r, 1).Description, "ab.1", "ab.0", 1)
 		}},
 		"one transaction for two appends": {"*", "observe-held", func(r *rbdJournalLostAppendRecord) { opOf(r, 1).Transaction = 10 }},
+		"a map delay on the map-held entry": {rbdJournalVariantPrimaryRestart, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			opOf(r, 1).Events = append(opOf(r, 1).Events, "op must wait for map", "reached_pg")
+		}},
+		"a map delay without its return on entry 0": {"*", "observe-held", func(r *rbdJournalLostAppendRecord) {
+			opOf(r, 0).Events = slices.Insert(opOf(r, 0).Events, 7, "op must wait for map")
+		}},
 		"entry 0 not held for the replica": {"*", "observe-held", func(r *rbdJournalLostAppendRecord) {
 			opOf(r, 0).Events = slices.DeleteFunc(opOf(r, 0).Events, func(e string) bool { return e == "sub_op_commit_rec" })
 		}},
