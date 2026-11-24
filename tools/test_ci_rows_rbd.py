@@ -17,7 +17,8 @@ RBD_JOURNAL_PRIMARY_CHANGE_SELECTOR = "^TestCephRBDJournalPrimaryChangeIntegrati
 # The capabilities the fixture admits on three replicated BlueStore OSDs, and
 # only there (integration/fixture/profile.go rbdReplicas): the primary-change
 # cell and the held-request cells (tools/test_ci_rows_rbd_journal_held.py).
-RBD_THREE_OSD_CAPABILITIES = {"rbd-journal-primary-change", "rbd-journal-replica-hold", "rbd-journal-held-primary-change", "rbd-journal-dead-primary"}
+RBD_THREE_OSD_CAPABILITIES = {"rbd-journal-primary-change", "rbd-journal-replica-hold", "rbd-journal-held-primary-change", "rbd-journal-dead-primary",
+                              "rbd-journal-pending-hold", "rbd-journal-primary-restart"}
 
 
 def broad_rbd_rows(rows):
