@@ -40,7 +40,21 @@ type nativeMDSCephFSRanksPlan struct {
 	InflightFiles []string `json:"inflight_files"`
 	Replayed      string   `json:"replayed"`
 	ReplayedFiles []string `json:"replayed_files"`
+	// The two-rank plan's charmap directory; nil in the standby-replay
+	// extension.
+	Charmap *struct {
+		Dir           string `json:"dir"`
+		Normalization string `json:"normalization"`
+		Seed          string `json:"seed"`
+		Entry         string `json:"entry"`
+	} `json:"charmap"`
 }
+
+// ranksCharmapWireNames is this test's consumer name policy for the plan's
+// charmap entries in a case-insensitive NFKC/UTF-8 directory: the NFKC, fully
+// case-folded name a stock client sends (Client::_wrap_name). The stock
+// client's listing checks it.
+var ranksCharmapWireNames = map[string]string{"\uff32\uff41\uff4e\uff4b-\uff3a\uff45\uff52\uff4f": "rank-zero", "\uff32\uff41\uff4e\uff4b-\uff2f\uff4e\uff45": "rank-one"}
 
 type nativeMDSCephFSRanksDaemon struct {
 	Name        string `json:"name"`
@@ -292,6 +306,7 @@ type nativeMDSCephFSRanksReceipt struct {
 	Views           []nativeMDSCephFSRanksView           `json:"views"`
 	Blocklist       []nativeMDSSessionsBlock             `json:"blocklist"`
 	Native          *nativeMDSCephFSRanksNative          `json:"native"`
+	Charmap         *nativeMDSCephFSCharmapOutput        `json:"charmap_native"`
 	Processes       json.RawMessage                      `json:"native_processes,omitempty"`
 	Pin             *nativeMDSCephFSRanksPin             `json:"pin"`
 	Placement       *nativeMDSCephFSRanksPlacement       `json:"placement"`
@@ -579,8 +594,29 @@ type ranksStatusSample struct {
 // GlobalID and address instance. A forward resolves the call as
 // MDSRequestForwardedError without ending the session; FLUSHMSG precedes each
 // EXPORT, and EXPORT and IMPORT of one cap arrive on different connections in
-// either order. Not exercised: migration back to rank 0, takeover of rank 1
-// and caps of dirty files across a migration.
+// either order.
+//
+// CHARMAP with two ranks: the stock client marks a Go-created directory
+// case-insensitive (NFKC) and creates a seed subdirectory in it, and the
+// directory is then pinned to rank 1, so its inode stays with rank 0 and
+// rank 1 holds the fragment. Rank 0 reports the charmap in a GETATTR
+// InodeStat. A default session's MKDIR in the directory, sent to rank 0, is
+// forwarded to rank 1, which refuses it with -EPERM. A second Go client with
+// the CHARMAP opt-in opens a session on rank 1 only, which records its bit
+// 22, and creates a subdirectory there under the consumer's wire name with
+// the original as the alternate name; the subdirectory inherits the charmap.
+// The stock client lists exactly the seed and that subdirectory by their
+// original spellings, with their inodes and the inherited charmap. The
+// default session's GETVXATTR (it declares no op_getvxattr) of the three
+// charmap values, on rank 0 for the directory and on rank 1 for the
+// subdirectory, equals the stock client's. The opt-in session removes both
+// subdirectories and closes.
+//
+// Not exercised: migration back to rank 0, takeover of rank 1, caps of dirty
+// files across a migration, a charmap set after the fragment moved (a
+// fragment moves only when nonempty, and a charmap is set only on an empty
+// directory), a filesystem that requires CHARMAP with several ranks, and the
+// charmap across the takeover.
 //
 //scenario:row mds-cephfs-ranks.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsranks key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_ranks=1
 //scenario:row mds-cephfs-ranks.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsranks key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_ranks=1
@@ -615,7 +651,8 @@ func TestCephMDSCephFSRanksIntegration(t *testing.T) {
 		oracle.NativeIdentity != "client.mds-cephfs-ranks-native-"+oracle.Token || oracle.ClientCaps["mon"] != "allow r" || oracle.ClientCaps["mds"] != "allow rw fsname="+fsName ||
 		oracle.ClientCaps["osd"] != "" || oracle.NativeCaps["mds"] != "allow rwp fsname="+fsName || oracle.NativeCaps["osd"] != "" ||
 		plan.Directory != "ceph-msgr-ranks-"+oracle.Token || plan.Forward != "fwd" || plan.ForwardFile != "target" || plan.Migrate != "mig" ||
-		!slices.Equal(plan.MigrateFiles, []string{"file-0", "file-1", "file-2"}) || !topo.stable() ||
+		!slices.Equal(plan.MigrateFiles, []string{"file-0", "file-1", "file-2"}) || plan.Charmap == nil || plan.Charmap.Dir != "cmap" || plan.Charmap.Normalization != "nfkc" ||
+		ranksCharmapWireNames[plan.Charmap.Entry] == "" || ranksCharmapWireNames[plan.Charmap.Seed] == "" || plan.Charmap.Seed == plan.Charmap.Entry || !topo.stable() ||
 		topo.Ranks[0].Name != fresh.MDS.Name || topo.Ranks[0].GID != fresh.MDS.GID || topo.Ranks[0].Endpoint != fresh.MDS.Endpoint || topo.Ranks[0].Nonce != fresh.MDS.Nonce {
 		t.Fatal("owned multi-rank CephFS oracle, plan, identity or topology differ")
 	}
@@ -1128,6 +1165,177 @@ func TestCephMDSCephFSRanksIntegration(t *testing.T) {
 		return
 	}
 
+	var cmapIno uint64
+	if !leaf("charmap_directory_on_rank_one", func(t *testing.T) {
+		cp := plan.Charmap
+		wire := ranksCharmapWireNames[cp.Entry]
+		want := cephmsgr.MDSCharmap{CaseSensitive: false, Normalization: cp.Normalization, Encoding: "utf8"}
+		wantNative := nativeMDSCephFSCharmapText{CaseSensitive: "0", Normalization: cp.Normalization, Encoding: "utf8"}
+		// A charmap is set only on an empty directory, and an export pin
+		// moves only a nonempty fragment: the stock client sets the charmap
+		// and creates a seed subdirectory on rank 0 before the pin. The
+		// directory's inode stays with rank 0, which holds its dentry; the pin
+		// moves its fragment, where entries are created, to rank 1.
+		cmapIno = mkdir(t, 0, dirIno, cp.Dir)
+		set := native(t, "charmap-set").Charmap
+		if set == nil || set.Charmap == nil || *set.Charmap != wantNative || set.Stat == nil || set.Stat.Ino != cmapIno {
+			t.Fatal("native charmap set readback differs", set)
+		}
+		seeded := native(t, "charmap-seed").Charmap
+		if seeded == nil || len(seeded.Entries) != 1 || seeded.Entries[0].Name != cp.Seed || seeded.Entries[0].Charmap == nil || *seeded.Entries[0].Charmap != wantNative {
+			t.Fatal("native seed subdirectory differs", seeded)
+		}
+		seedIno := seeded.Entries[0].Stat.Ino
+		native(t, "pin", cp.Dir, "1")
+		placed := native(t, "placement", cp.Dir, "1")
+		if !placed.Placement.Converged {
+			t.Fatalf("subtree %s did not converge on rank 1: %+v", cp.Dir, placed.Views)
+		}
+		// Rank 0, which holds the directory inode, reports the charmap in its
+		// InodeStat. Rank 1 shows its own view through the refusal and the
+		// inherited charmap below.
+		first, _, trace, e := send(t, 0, "getattr charmap directory on rank 0", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetattr, Args: cephfsGetattrArgs(cephStatAll),
+			Path: cephmsgr.MDSFilePath{Ino: cmapIno}}, 0)
+		if first.Result != 0 || trace.Target == nil || trace.Target.Ino != cmapIno {
+			t.Fatalf("getattr of the charmap directory on rank 0 differs: %+v", e)
+		}
+		if opt, err := trace.Target.DecodeOptionalMetadata(); err != nil || opt.Charmap == nil || *opt.Charmap != want || len(opt.Options) != 1 {
+			t.Fatalf("rank 0 charmap differs: %+v %v", opt, err)
+		}
+		// A default session's MKDIR sent to rank 0 is forwarded to rank 1,
+		// which holds the fragment and refuses it without bit 22.
+		first, _, _, refused := send(t, 0, "mkdir refused in the charmap directory", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpMkdir, Flags: cephmsgr.MDSRequestFlagWantDentry,
+			Args: cephfsMkdirArgs(0o40755), Path: cephmsgr.MDSFilePath{Ino: cmapIno, Path: "refused"}}, 1)
+		original := requests[len(requests)-2]
+		if original.Rank != 0 || original.ForwardedTo != 1 || refused.Rank != 1 || first.Result != -1 {
+			t.Fatalf("the default MKDIR was not forwarded to rank 1 and refused with -EPERM: %+v %+v", original, refused)
+		}
+		// An opt-in client's session on rank 1 creates the entry there with
+		// the consumer's wire name and the original as the alternate name.
+		optClient := recoveryClient(t, ctx, identity, keyFile, dials, func(o *cephmsgr.Options) {
+			o.EnableMDS, o.EnableCephFS, o.EnableCephFSCharmap, o.EnableOSD = true, true, true, false
+		})
+		optGID := optClient.Snapshot().GlobalID
+		optConn, err := optClient.OpenMDS(ctx, topo.Ranks[1].target(fresh.FSCID, 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		optMeta := maps.Clone(metadata)
+		optMeta["hostname"] = "ceph-msgr-go-" + oracle.Token[:8] + "-charmap"
+		optSession, err := optConn.OpenSession(ctx, cephmsgr.MDSSessionOptions{Metadata: optMeta, RenewInterval: 2 * time.Second, MaxEvents: 1024})
+		if err != nil {
+			t.Fatal(err)
+		}
+		optAgent := startCephFSCapAgent(ctx, optSession)
+		optObserve := func(t *testing.T) *nativeMDSSession {
+			t.Helper()
+			r, err := control.request(ctx, "observe", strconv.FormatUint(optGID, 10))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return r.view(1).session(optGID)
+		}
+		if err := checkNativeCephFSCharmapSession(optObserve(t), identity, optMeta); err != nil {
+			t.Fatal("rank 1 does not record the opt-in declaration", err)
+		}
+		optSubmit := func(t *testing.T, name string, r cephmsgr.MDSRequest) (cephmsgr.MDSReply, cephmsgr.MDSTrace) {
+			t.Helper()
+			r.MDSMapEpoch = epoch
+			call, err := optSession.Submit(ctx, r)
+			if err != nil {
+				t.Fatal(name, err)
+			}
+			wait, stop := context.WithTimeout(ctx, 30*time.Second)
+			defer stop()
+			first, err := call.Wait(wait)
+			if err != nil {
+				t.Fatal(name, err)
+			}
+			trace, _, err := optAgent.applyReply(name, first)
+			if err != nil {
+				t.Fatal(name, err)
+			}
+			if first.Result == 0 && !first.Safe {
+				if err := optSession.FlushJournal(wait); err != nil {
+					t.Fatal(err)
+				}
+				if safe, err := call.WaitSafe(wait); err != nil || safe.Result != 0 {
+					t.Fatal(name, "safe", safe.Result, err)
+				}
+			}
+			facts["charmap_opt_in_"+name] = map[string]any{"result": first.Result, "dentry": trace.DentryName}
+			return first, trace
+		}
+		first, trace = optSubmit(t, "mkdir", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpMkdir, Flags: cephmsgr.MDSRequestFlagWantDentry, Args: cephfsMkdirArgs(0o40755),
+			Path: cephmsgr.MDSFilePath{Ino: cmapIno, Path: wire}, AlternateName: []byte(cp.Entry)})
+		if first.Result != 0 || trace.Target == nil || trace.DirInode == nil || trace.DirInode.Ino != cmapIno || trace.DentryName != wire || trace.Lease == nil ||
+			string(trace.Lease.AlternateName) != cp.Entry {
+			t.Fatalf("the opt-in MKDIR on rank 1 differs: result %d dentry %q", first.Result, trace.DentryName)
+		}
+		subIno := trace.Target.Ino
+		if opt, err := trace.Target.DecodeOptionalMetadata(); err != nil || opt.Charmap == nil || *opt.Charmap != want {
+			t.Fatal("the subdirectory created on rank 1 did not inherit the charmap", opt, err)
+		}
+		// The stock client lists the original spellings with their inodes
+		// and the inherited charmap, and no refused entry. It stats each
+		// entry by the listed original, which it wraps again, so a Go entry
+		// stored under any other name would not be found.
+		names := native(t, "charmap-names").Charmap
+		listed := map[string]uint64{}
+		for _, e := range names.Entries {
+			if e.Charmap == nil || *e.Charmap != wantNative || e.DIno != e.Stat.Ino {
+				t.Fatal("a listed charmap subdirectory differs", e)
+			}
+			listed[e.Name] = e.DIno
+		}
+		if names.Charmap == nil || *names.Charmap != wantNative || names.Stat == nil || names.Stat.Ino != cmapIno || len(listed) != 2 || listed[cp.Entry] != subIno || listed[cp.Seed] != seedIno {
+			t.Fatal("the stock client's listing of the charmap directory differs", names)
+		}
+		// GETVXATTR from the default session, which lacks op_getvxattr: the
+		// charmap directory's inode on rank 0, the subdirectory's on rank 1.
+		for _, q := range []struct {
+			rank int32
+			ino  uint64
+		}{{0, cmapIno}, {1, subIno}} {
+			got := map[string]string{}
+			for _, name := range []string{"casesensitive", "normalization", "encoding"} {
+				first, _, _, e := send(t, q.rank, fmt.Sprintf("getvxattr ceph.dir.%s of %d on rank %d", name, q.ino, q.rank), cephmsgr.MDSRequest{Op: mds.OpGetVxattr,
+					Path: cephmsgr.MDSFilePath{Ino: q.ino}, Path2: cephmsgr.MDSFilePath{Path: "ceph.dir." + name}}, 1)
+				value, err := decodeCephFSVxattrExtra(first.Extra)
+				if first.Result != 0 || err != nil {
+					t.Fatalf("GETVXATTR ceph.dir.%s differs: %+v %v", name, e, err)
+				}
+				got[name] = value
+			}
+			if (nativeMDSCephFSCharmapText{got["casesensitive"], got["normalization"], got["encoding"]}) != wantNative {
+				t.Fatalf("GETVXATTR on rank %d differs from the stock client: %v", q.rank, got)
+			}
+		}
+		for _, name := range []string{wire, ranksCharmapWireNames[cp.Seed]} {
+			if first, _ := optSubmit(t, "rmdir "+name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpRmdir, Path: cephmsgr.MDSFilePath{Ino: cmapIno, Path: name}}); first.Result != 0 {
+				t.Fatal("opt-in rmdir on rank 1 differs", name, first.Result)
+			}
+		}
+		items, barrier := optAgent.releaseAll()
+		if len(items) != 0 {
+			if err := optSession.ReleaseCaps(ctx, items, barrier); err != nil {
+				t.Fatal(err)
+			}
+		}
+		closing, stop := context.WithTimeout(ctx, 15*time.Second)
+		err = optSession.Close(closing)
+		stop()
+		if err != nil || optSession.Status().State != cephmsgr.MDSSessionClosed {
+			t.Fatal("opt-in close on rank 1 unconfirmed", err)
+		}
+		if optObserve(t) != nil {
+			t.Fatal("the opt-in session remains on rank 1")
+		}
+		facts["charmap_directory_ino"], facts["charmap_subdirectory_ino"], facts["charmap_seed_ino"], facts["charmap_opt_in_gid"] = cmapIno, subIno, seedIno, optGID
+	}) {
+		return
+	}
+
 	if !leaf("standby_takeover_reconnect", func(t *testing.T) {
 		before := observe(t)
 		takeover.Rank0Before, takeover.Rank1Before = before.view(0).session(gid), before.view(1).session(gid)
@@ -1363,7 +1571,7 @@ func TestCephMDSCephFSRanksIntegration(t *testing.T) {
 	t.Run("cleanup_restore_pins_unlink_release_close", func(t *testing.T) {
 		begin := time.Now()
 		defer func() { caseTimes["cleanup_restore_pins_unlink_release_close"] = time.Since(begin).Milliseconds() }()
-		for _, target := range []string{plan.Forward, plan.Migrate} {
+		for _, target := range []string{plan.Forward, plan.Migrate, plan.Charmap.Dir} {
 			r := native(t, "pin-restore", target)
 			facts["pin_restore_"+target] = r.Pin
 			if r.Pin.Value != "-1" {
@@ -1390,6 +1598,7 @@ func TestCephMDSCephFSRanksIntegration(t *testing.T) {
 		}
 		rmdir(0, dirIno, plan.Forward)
 		rmdir(0, dirIno, plan.Migrate)
+		rmdir(0, dirIno, plan.Charmap.Dir)
 		rmdir(0, 1, plan.Directory)
 		st := native(t, "stat", "dir").Native.Stat
 		if st.Exists || st.Errno != 2 {
