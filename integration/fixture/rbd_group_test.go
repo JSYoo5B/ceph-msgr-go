@@ -27,6 +27,8 @@ func TestRBDGroupPlanAndRequests(t *testing.T) {
 		"single quiesce attempt":        func(p *rbdGroupPlan) { p.QuiesceAttempts = 1 },
 		"retried as the timed-out":      func(p *rbdGroupPlan) { p.RetriedSnapshot = p.TimedOutSnapshot },
 		"foreign over-limit snapshot":   func(p *rbdGroupPlan) { p.OverLimitSnapshot = "ceph-msgr-gsnap-overlimit" },
+		"lock-refused as over-limit":    func(p *rbdGroupPlan) { p.LockRefusedSnapshot = p.OverLimitSnapshot },
+		"foreign complete-refused":      func(p *rbdGroupPlan) { p.CompleteRefusedSnapshot = "ceph-msgr-gsnap-completerefused" },
 	} {
 		foreign := rbdGroupPlanFor(token)
 		foreign.Images = slices.Clone(foreign.Images)
@@ -66,6 +68,12 @@ func TestRBDGroupPlanAndRequests(t *testing.T) {
 	if _, _, err := parseRBDGroupRequest([]string{"8", token, "rollback"}, token, 7, 6); err == nil {
 		t.Fatal("RBD group rollback admitted before the over-limit creation")
 	}
+	if _, _, err := parseRBDGroupRequest([]string{"8", token, "complete-refused"}, token, 7, 7); err == nil {
+		t.Fatal("RBD group complete-refused creation admitted before the lock-refused one")
+	}
+	if _, _, err := parseRBDGroupRequest([]string{"9", token, "rollback"}, token, 8, 8); err == nil {
+		t.Fatal("RBD group rollback admitted before the complete-refused creation")
+	}
 	n := len(rbdGroupActions)
 	if _, _, err := parseRBDGroupRequest([]string{fmt.Sprint(n + 1), token, "cleanup"}, token, int64(n), n); err == nil {
 		t.Fatal("RBD group action admitted after the sequence ended")
@@ -91,7 +99,7 @@ func rbdGroupSample(action, token string, plan rbdGroupPlan) rbdGroupNative {
 		}
 		return n
 	}
-	snapshots := map[string]int{"accepted": 2, "timed-out": 2, "retried": 3, "over-limit": 3, "rollback": 3}[action]
+	snapshots := map[string]int{"accepted": 2, "timed-out": 2, "retried": 3, "over-limit": 3, "lock-refused": 3, "complete-refused": 3, "rollback": 3}[action]
 	if snapshots == 0 {
 		snapshots = 1
 	}
@@ -107,7 +115,7 @@ func rbdGroupSample(action, token string, plan rbdGroupPlan) rbdGroupNative {
 	}
 	if slices.Contains(rbdGroupCreating, action) {
 		c := &rbdGroupCreation{Snapshot: plan.createdSnapshot(action), GroupID: "g1", ImageIDs: map[string]string{"a": "i0", "b": "i1"},
-			QuiesceAttempts: rbdGroupDefaultQuiesceAttempts, Errno: map[string]int{"refused": 16, "timed-out": 110, "over-limit": 2}[action], ElapsedNS: 5}
+			QuiesceAttempts: rbdGroupDefaultQuiesceAttempts, Errno: map[string]int{"refused": 16, "timed-out": 110, "over-limit": 2, "lock-refused": 30, "complete-refused": 17}[action], ElapsedNS: 5}
 		if action == "timed-out" || action == "retried" {
 			c.QuiesceAttempts = plan.QuiesceAttempts
 		}
@@ -289,6 +297,22 @@ func TestRBDGroupNativeOutputShape(t *testing.T) {
 			"member a snapshot":   func(n *rbdGroupNative) { n.Creation.Phases[1].MemberSnapshotCall.Object = "rbd_header.i0" },
 			"early member call": func(n *rbdGroupNative) {
 				n.Creation.Phases[0].MemberSnapshotCall = n.Creation.Phases[1].MemberSnapshotCall
+			},
+		},
+		"lock-refused": {
+			"one observation":     func(n *rbdGroupNative) { n.Creation.Phases = n.Creation.Phases[:1] },
+			"snapshot observed":   func(n *rbdGroupNative) { n.Creation.Phases[1].Phase = "member-snapshot-observed" },
+			"over-limit snapshot": func(n *rbdGroupNative) { n.Creation.Snapshot = plan.OverLimitSnapshot },
+			"a member call": func(n *rbdGroupNative) {
+				n.Creation.Phases[1].MemberSnapshotCall = n.Creation.Phases[1].Images[0].LockCall
+			},
+		},
+		"complete-refused": {
+			"one observation":   func(n *rbdGroupNative) { n.Creation.Phases = n.Creation.Phases[:1] },
+			"complete observed": func(n *rbdGroupNative) { n.Creation.Phases[1].Phase = "complete-observed" },
+			"with a limit": func(n *rbdGroupNative) {
+				set := n.Creation.Phases[0].Images[0].LimitCall
+				n.Creation.SnapLimit = &rbdGroupSnapLimit{Image: "a", Snapshots: 3, Limit: 3, SetCall: set, RemovedLimit: ^uint64(0), RemovedCall: set}
 			},
 		},
 		"rollback": {
