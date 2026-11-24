@@ -186,8 +186,12 @@ type rbdBaseScope struct {
 	journalHeldPrimary int
 	journalHeldActing  []int
 	// The RBD group-snapshot acceptance's group and two images in the same
-	// owned pool (rbd_group.go).
+	// owned pool (rbd_group.go). Its second owned pool also holds the
+	// migration acceptance's destinations, and it is the erasure-hold
+	// sequence's erasure-coded journal pool.
 	group rbdGroupState
+	// The RBD migration acceptance's images and group (rbd_migration.go).
+	migration rbdMigrationState
 }
 
 func (x *rbdBaseScope) mutated(kind string) bool {
@@ -702,10 +706,21 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	if err := c.rbdBaseFinish(m, rbd.InitPool(ctx, c.cluster, x.plan.Pool)); err != nil {
 		return fmt.Errorf("initialize owned RBD pool: %w", err)
 	}
-	if p.admits(capRBDGroupSnapshot) {
+	if p.admits(capRBDGroupSnapshot) || p.admits(capRBDMigration) {
 		// The group acceptance's second owned pool, for its cross-pool
-		// member (rbd_group.go).
+		// member (rbd_group.go), and the migration acceptance's
+		// destination pool (rbd_migration.go).
 		if err := c.prepareRBDGroupPool(ctx, ceph.PoolConfig{PGNum: pgs, Replicas: topology.poolSize, MinSize: topology.poolMinSize, Application: "rbd", NoHashPSPool: true}); err != nil {
+			return err
+		}
+	} else if p.admits(capRBDJournalErasureHold) {
+		// The erasure-coded journal pool of the erasure-hold sequence
+		// (rbd_journal_held.go), created as the second owned pool: k=2,
+		// m=1 over the three OSDs with overwrites, which journal appends
+		// need (osd/osd_types.h requires_aligned_append at rbdBaseSource),
+		// and one PG.
+		if err := c.prepareRBDGroupPool(ctx, ceph.PoolConfig{PGNum: pgs, Application: "rbd", NoHashPSPool: true,
+			ErasureCode: &ceph.ErasureCodeConfig{K: rbdJournalErasureK, M: rbdJournalErasureM, AllowOverwrites: true}}); err != nil {
 			return err
 		}
 	}

@@ -38,6 +38,22 @@ import (
 //   - pending hold: the replica hold with three appends of the Go lock
 //     owner, to journal objects 0, 1 and 2, all waiting for the paused
 //     replica at once.
+//   - erasure hold: the replica hold with the journal's data objects in
+//     an erasure-coded pool (k=2, m=1 over the three OSDs, overwrites
+//     allowed, one PG) while the image header and the journal header stay
+//     in the replicated owned pool. librbd creates the journal with
+//     rbd_journal_pool naming that pool (librbd/journal/CreateRequest.cc)
+//     and names its data objects after the header's pool
+//     (journal/Journaler.cc object_oid_prefix); cls_journal's append only
+//     stats and writes the object (cls/journal/cls_journal.cc), which an
+//     erasure-coded pool with overwrites executes. The test pauses the last
+//     member of the erasure-coded PG's acting set, one shard, before it
+//     sends the append to that PG's primary, which then answers only once
+//     every shard committed (osd/ECCommon.cc try_finish_rmw). The primary
+//     writes its own shard with the client op, which records that
+//     sub-write's start and commit (osd/ECBackend.cc handle_sub_write and
+//     SubWriteCommitted); the other shards' commits are not recorded on
+//     it.
 //   - primary restart: the dead primary with two appends, one waiting for
 //     the paused replica (journal object 0) and one naming an OSDMap epoch
 //     the cluster has not reached (journal object 1); after the primary was
@@ -91,7 +107,21 @@ var capRBDJournalPrimaryRestart = defineExclusiveCapability(fixtureRBD, "rbd-jou
 	"run one test alone on a fresh three-OSD RBD fixture with the journal sequence whose appends are held at a primary that is killed and started again",
 	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
 
-// The five sequences. `observe-answered`, `observe-recorded` and
+// capRBDJournalErasureHold admits the erasure-hold sequence: its test runs
+// alone on a fresh three-OSD RBD fixture with the erasure-coded journal
+// pool and pauses one shard OSD of that pool's PG under a lease.
+var capRBDJournalErasureHold = defineExclusiveCapability(fixtureRBD, "rbd-journal-erasure-hold",
+	"run one test alone on a fresh three-OSD RBD fixture whose journal data objects are in an erasure-coded pool, with the journal sequence whose append is held for a paused shard's commit",
+	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
+
+// rbdJournalErasureK and rbdJournalErasureM are the erasure-coded journal
+// pool's data and coding shards: all three OSDs hold one shard each.
+const (
+	rbdJournalErasureK = 2
+	rbdJournalErasureM = 1
+)
+
+// The six sequences. `observe-answered`, `observe-recorded` and
 // `observe-restarted` are the driver's ordinary observation,
 // `change-primary` the primary-change sequence's action and `replay` the
 // native replay.
@@ -100,6 +130,7 @@ var (
 	rbdJournalHeldPrimaryChangeActions = []string{"setup", "observe-locked", "observe-placed", "observe-held", "change-primary", "advance-map", "observe-settled", "observe-recorded", "replay"}
 	rbdJournalDeadPrimaryActions       = []string{"setup", "observe-locked", "observe-placed", "observe-held", "observe-primary-lost", "observe-recorded", "replay"}
 	rbdJournalPendingHoldActions       = slices.Clone(rbdJournalReplicaHoldActions)
+	rbdJournalErasureHoldActions       = slices.Clone(rbdJournalReplicaHoldActions)
 	rbdJournalPrimaryRestartActions    = []string{"setup", "observe-locked", "observe-placed", "observe-held", "observe-primary-lost", "observe-recorded", "observe-primary-back",
 		"observe-restarted", "replay"}
 )
@@ -108,7 +139,7 @@ var (
 // the three-OSD topology.
 func (p profile) rbdJournalThreeOSD() bool {
 	return p.declares(capRBDJournalPrimaryChange) || p.declares(capRBDJournalReplicaHold) || p.declares(capRBDJournalHeldPrimaryChange) || p.declares(capRBDJournalDeadPrimary) ||
-		p.declares(capRBDJournalPendingHold) || p.declares(capRBDJournalPrimaryRestart)
+		p.declares(capRBDJournalPendingHold) || p.declares(capRBDJournalPrimaryRestart) || p.declares(capRBDJournalErasureHold)
 }
 
 // rbdJournalHeldAdmin names the fixture's own read-only actions of the
@@ -117,9 +148,11 @@ func rbdJournalHeldAdmin(action string) bool {
 	return slices.Contains([]string{"observe-placed", "observe-held", "observe-settled", "observe-primary-lost", "observe-primary-back"}, action)
 }
 
-// rbdJournalPGPeer is one peer of `ceph pg query` with its last update.
+// rbdJournalPGPeer is one peer of `ceph pg query` with its last update and,
+// in an erasure-coded PG, the shard it holds (absent in a replicated PG).
 type rbdJournalPGPeer struct {
 	Peer       int    `json:"peer"`
+	Shard      *int   `json:"shard,omitempty"`
 	LastUpdate string `json:"last_update"`
 }
 
@@ -127,16 +160,19 @@ type rbdJournalPGPeer struct {
 // sequences keep: the state, the query's epoch, the up and acting sets, the
 // primary's last update, the peering history and each peer's last update.
 type rbdJournalPGQuery struct {
-	State             string             `json:"state"`
-	Epoch             uint32             `json:"epoch"`
-	Up                []int              `json:"up"`
-	Acting            []int              `json:"acting"`
-	LastUpdate        string             `json:"last_update"`
-	SameIntervalSince uint32             `json:"same_interval_since"`
-	SameUpSince       uint32             `json:"same_up_since"`
-	SamePrimarySince  uint32             `json:"same_primary_since"`
-	LastEpochStarted  uint32             `json:"last_epoch_started"`
-	Peers             []rbdJournalPGPeer `json:"peers"`
+	State             string `json:"state"`
+	Epoch             uint32 `json:"epoch"`
+	Up                []int  `json:"up"`
+	Acting            []int  `json:"acting"`
+	LastUpdate        string `json:"last_update"`
+	SameIntervalSince uint32 `json:"same_interval_since"`
+	SameUpSince       uint32 `json:"same_up_since"`
+	SamePrimarySince  uint32 `json:"same_primary_since"`
+	LastEpochStarted  uint32 `json:"last_epoch_started"`
+	// Shard is the shard of the answering primary in an erasure-coded PG
+	// (absent in a replicated PG).
+	Shard *int               `json:"shard,omitempty"`
+	Peers []rbdJournalPGPeer `json:"peers"`
 }
 
 // decodeRBDJournalPGQuery projects one `ceph pg <pgid> query` output of pgid.
@@ -161,19 +197,75 @@ func decodeRBDJournalPGQuery(pgid string, data []byte) (rbdJournalPGQuery, error
 			LastUpdate string `json:"last_update"`
 		} `json:"peer_info"`
 	}
-	if len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &raw) != nil || raw.Info == nil || raw.Info.History == nil || raw.Info.PGID != pgid || raw.State == "" ||
+	// An erasure-coded PG's primary names itself with its shard
+	// (<pgid>s<shard>) and each peer as <osd>(<shard>) (osd/osd_types.cc
+	// spg_t and pg_shard_t at rbdBaseSource). A shard is the member's index
+	// in the acting set, which is how the projection binds it.
+	shard := func(name, prefix string) (int, bool) {
+		rest, ok := strings.CutPrefix(name, prefix)
+		if !ok || rest == "" {
+			return 0, false
+		}
+		n, err := strconv.ParseUint(rest, 10, 8)
+		return int(n), err == nil && strconv.FormatUint(n, 10) == rest
+	}
+	if len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &raw) != nil || raw.Info == nil || raw.Info.History == nil || raw.State == "" ||
 		raw.Epoch == 0 || raw.Up == nil || raw.Acting == nil || len(raw.PeerInfo) > 8 {
 		return rbdJournalPGQuery{}, errors.New("native PG query unavailable")
+	}
+	var primaryShard *int
+	if raw.Info.PGID != pgid {
+		s, ok := shard(raw.Info.PGID, pgid+"s")
+		if !ok {
+			return rbdJournalPGQuery{}, errors.New("native PG query names another PG")
+		}
+		primaryShard = &s
 	}
 	h := raw.Info.History
 	q := rbdJournalPGQuery{State: raw.State, Epoch: raw.Epoch, Up: raw.Up, Acting: raw.Acting, LastUpdate: raw.Info.LastUpdate, SameIntervalSince: h.SameIntervalSince,
 		SameUpSince: h.SameUpSince, SamePrimarySince: h.SamePrimarySince, LastEpochStarted: h.LastEpochStarted, Peers: []rbdJournalPGPeer{}}
+	q.Shard = primaryShard
+	// In an erasure-coded PG every member is named with its shard: the
+	// primary's and each peer's are distinct acting indices, and the acting
+	// member at a peer's index is that peer.
+	inActing := func(s int) bool { return s < len(raw.Acting) }
+	used := map[int]bool{}
+	if primaryShard != nil {
+		if !inActing(*primaryShard) {
+			return rbdJournalPGQuery{}, errors.New("native PG query names a primary shard outside the acting set")
+		}
+		used[*primaryShard] = true
+	}
 	for _, p := range raw.PeerInfo {
-		id, err := strconv.Atoi(p.Peer)
-		if err != nil || id < 0 {
+		peer, peerShard := p.Peer, (*int)(nil)
+		if osd, rest, ok := strings.Cut(peer, "("); ok && strings.HasSuffix(rest, ")") {
+			s, valid := shard(strings.TrimSuffix(rest, ")"), "")
+			if !valid {
+				return rbdJournalPGQuery{}, errors.New("native PG query names a peer with a malformed shard")
+			}
+			peer, peerShard = osd, &s
+		}
+		id, err := strconv.Atoi(peer)
+		if err != nil || id < 0 || strconv.Itoa(id) != peer {
 			return rbdJournalPGQuery{}, errors.New("native PG query names a peer that is not an OSD")
 		}
-		q.Peers = append(q.Peers, rbdJournalPGPeer{Peer: id, LastUpdate: p.LastUpdate})
+		if (primaryShard == nil) != (peerShard == nil) {
+			return rbdJournalPGQuery{}, errors.New("native PG query mixes replicated and erasure-coded member names")
+		}
+		if peerShard != nil {
+			if !inActing(*peerShard) || used[*peerShard] || raw.Acting[*peerShard] != id {
+				return rbdJournalPGQuery{}, errors.New("native PG query names a peer shard that is not that peer's acting index")
+			}
+			used[*peerShard] = true
+		}
+		q.Peers = append(q.Peers, rbdJournalPGPeer{Peer: id, Shard: peerShard, LastUpdate: p.LastUpdate})
+	}
+	if primaryShard != nil {
+		for _, p := range q.Peers {
+			if p.Peer == raw.Acting[*primaryShard] {
+				return rbdJournalPGQuery{}, errors.New("native PG query names the primary's acting index for a peer")
+			}
+		}
 	}
 	return q, nil
 }
@@ -327,7 +419,9 @@ func rbdJournalHeldObserve(ctx context.Context, action string, objects []string,
 	held := func() bool {
 		for _, w := range wait.ops {
 			if !slices.ContainsFunc(r.Ops, func(o rbdJournalHeldOp) bool {
-				return strings.Contains(o.Description, ":::"+w.object+":head ") && (!w.committed || slices.Contains(o.Events, "sub_op_commit_rec"))
+				// A replicated primary records each replica's commit, an
+				// erasure-coded one its own shard's.
+				return strings.Contains(o.Description, ":::"+w.object+":head ") && (!w.committed || slices.Contains(o.Events, "sub_op_commit_rec") || slices.Contains(o.Events, "sub_op_committed"))
 			}) {
 				return false
 			}
@@ -480,6 +574,11 @@ func (c *fixtureCluster) rbdJournalHeldControl(ctx context.Context, action strin
 		return rbdJournalHeldRead{}, errors.New("the journaling image is unknown")
 	}
 	objects := rbdJournalPrimaryObjects(x.poolID, x.journalImageID)
+	if x.journalPlan.JournalPool != "" {
+		// The journal object follows the erasure-coded journal pool's PG
+		// alone: the headers are in another pool's PG.
+		objects = objects[1:2]
+	}
 	wait := rbdJournalHeldWait{osd: -1}
 	switch action {
 	case "observe-held":
@@ -498,7 +597,8 @@ func (c *fixtureCluster) rbdJournalHeldControl(ctx context.Context, action strin
 
 // rbdJournalHeldAwaited are the operations observe-held waits for in the
 // selected sequence: the append to journal object 0, with a replica's commit
-// recorded unless it is held for its map; in the pending-hold sequence the
+// (an erasure-coded primary's own shard commit) recorded unless it is held
+// for its map; in the pending-hold sequence the
 // appends to journal objects 0, 1 and 2, each with a replica's commit; in
 // the primary-restart sequence the append to journal object 0 with a
 // replica's commit and the one to journal object 1, which is held for its

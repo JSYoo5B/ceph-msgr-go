@@ -431,14 +431,14 @@ func admitSingleProfile(p profile, getenv func(string) string) (profile, error) 
 		// addresses and kill a native lock owner. The primary-change
 		// acceptance is the lost-append-reply sequence on three replicated
 		// BlueStore OSDs, and the held-request acceptances (replica hold,
-		// held primary change, dead primary, pending hold, primary restart)
-		// run there too; no other RBD selection is admitted on that
+		// held primary change, dead primary, pending hold, primary restart,
+		// erasure hold) run there too; no other RBD selection is admitted on that
 		// topology, and those on no other. Each runs alone on a fresh
 		// fixture and is admitted only by its capability.
 		admitted := p.admitsExclusive(fixtureRBD)
 		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != p.rbdReplicas() || p.osdReplicas == "3" && p.osdStore != "bluestore" || p.mdsFresh != "0" ||
 			(p.sparseReadOracle != "" || p.mapExtOracle != "") || !ownSelection(p.testRun, selected, admitted) {
-			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s or one capability-admitted test, the single-OSD legacy-v6 fixture (three BlueStore OSDs for capabilities %s, %s, %s, %s, %s and %s alone) and no MDS profile", selected, capRBDJournalPrimaryChange.name, capRBDJournalReplicaHold.name, capRBDJournalHeldPrimaryChange.name, capRBDJournalDeadPrimary.name, capRBDJournalPendingHold.name, capRBDJournalPrimaryRestart.name)
+			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s or one capability-admitted test, the single-OSD legacy-v6 fixture (three BlueStore OSDs for capabilities %s, %s, %s, %s, %s, %s and %s alone) and no MDS profile", selected, capRBDJournalPrimaryChange.name, capRBDJournalReplicaHold.name, capRBDJournalHeldPrimaryChange.name, capRBDJournalDeadPrimary.name, capRBDJournalPendingHold.name, capRBDJournalPrimaryRestart.name, capRBDJournalErasureHold.name)
 		}
 	}
 	if p.monPing == "1" {
