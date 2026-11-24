@@ -619,7 +619,10 @@ def create_under_quiesce(out):
         deadline = time.monotonic() + 30
         while True:
             entry = call(*headers[key], 'lock', 'get_info', LOCK_INFO)
-            if entry['code'] == 0 and struct.unpack_from('<I', bytes.fromhex(entry['output_hex']), 6)[0] == 1:
+            output = bytes.fromhex(entry['output_hex'])
+            if entry['code'] == 0 and len(output) < 10:
+                raise ValueError('native lock.get_info output is too short')
+            if entry['code'] == 0 and struct.unpack_from('<I', output, 6)[0] == 1:
                 return
             if not worker.is_alive():
                 raise ValueError('group snapshot creation returned before member %s was locked' % key)

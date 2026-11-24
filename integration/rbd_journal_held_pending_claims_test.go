@@ -44,9 +44,13 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 			return nil
 		}
 		v := r.Views[name]
-		if v == nil || v.Action != name || len(v.ObjectSizes) <= int(e.Object)+len(holds) || len(v.ObjectSHA256) != len(v.ObjectSizes) ||
+		if v == nil || v.Action != name {
+			fail("%s: native observation missing", name)
+			return nil
+		}
+		if len(v.ObjectSizes) <= int(e.Object)+len(holds) || len(v.ObjectSHA256) != len(v.ObjectSizes) ||
 			len(v.ObjectExists) != len(v.ObjectSizes) || inventory >= 0 && len(v.ObjectSizes) != inventory {
-			fail("%s: native observation missing or incomplete (%d journal objects, the setup listed %d)", name, len(v.ObjectSizes), inventory)
+			fail("%s: native observation incomplete (%d journal objects, the setup listed %d)", name, len(v.ObjectSizes), inventory)
 			return nil
 		}
 		if inventory < 0 {

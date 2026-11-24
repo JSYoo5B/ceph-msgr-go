@@ -124,9 +124,13 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 			return nil
 		}
 		v := r.Views[name]
-		if v == nil || v.Action != name || int(e.Object) >= len(v.ObjectSizes) || len(v.ObjectSHA256) != len(v.ObjectSizes) || len(v.ObjectExists) != len(v.ObjectSizes) ||
+		if v == nil || v.Action != name {
+			fail("%s: native observation missing", name)
+			return nil
+		}
+		if int(e.Object) >= len(v.ObjectSizes) || len(v.ObjectSHA256) != len(v.ObjectSizes) || len(v.ObjectExists) != len(v.ObjectSizes) ||
 			inventory >= 0 && len(v.ObjectSizes) != inventory {
-			fail("%s: native observation missing or incomplete (%d journal objects, the setup listed %d)", name, len(v.ObjectSizes), inventory)
+			fail("%s: native observation incomplete (%d journal objects, the setup listed %d)", name, len(v.ObjectSizes), inventory)
 			return nil
 		}
 		if inventory < 0 {
@@ -266,7 +270,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	}
 	// The OSDMap may gain an epoch between the fixture's read and the
 	// subject's own placement; the PG's interval may not (below).
-	if hd := h.Held; h.SentAtEpoch == 0 || h.SentAtEpoch < pl.Objects[1].Epoch || hd != nil && h.SentAtEpoch > hd.Objects[1].Epoch {
+	if hd := h.Held; h.SentAtEpoch == 0 || h.SentAtEpoch < pl.Objects[1].Epoch || hd != nil && len(hd.Objects) == 3 && h.SentAtEpoch > hd.Objects[1].Epoch {
 		fail("append: the subject placed the append at epoch %d, outside the fixture's reads around it", h.SentAtEpoch)
 	}
 	wantNamed := h.SentAtEpoch
@@ -481,6 +485,10 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		// Interval: the PG is led by the new primary in a newer interval.
 		st := h.Settled
 		newActing := n.Objects[0].After.Acting
+		if len(newActing) == 0 {
+			fail("change-primary: the PG has no acting set after the change: %s", text(n.Objects[0]))
+			return problems
+		}
 		if st == nil || len(st.Objects) != 3 || st.Query == nil {
 			fail("observe-settled: the fixture's read is missing: %s", text(st))
 			return problems
