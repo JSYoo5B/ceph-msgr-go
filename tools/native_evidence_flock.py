@@ -55,7 +55,7 @@ def project(receipts, tests, ctx):
 
 
 def validate(payloads, ctx):
-    gate(payloads["tests.json"])
+    evidence.tests_projection(payloads["tests.json"], TEST, ctx["schema_version"])
     validate_flock(payloads["flock.json"])
     evidence.validate_cleanup(payloads["cleanup.json"], CLEAN_FLAGS, FRESH_FLAGS)
 

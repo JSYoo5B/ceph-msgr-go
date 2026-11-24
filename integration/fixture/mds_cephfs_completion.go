@@ -123,11 +123,33 @@ var capMDSHeldFlockSplitFragments = defineCapability("mds-held-flock-split-fragm
 	"add the final-fragment lock probe to mds-held-flock-split",
 	"+mds-held-flock-split", nil)
 
+// capMDSHeldFcntlSplit adds the FCNTL probe of the first split file, for the
+// acceptance that holds FCNTL ranges inside a split reconnect. It extends
+// mds-held-flock-split.
+var capMDSHeldFcntlSplit = defineCapability("mds-held-fcntl-split",
+	"add the first split file's FCNTL probe to mds-held-flock-split",
+	"+mds-held-flock-split", nil)
+
+// capMDSHeldFlockSplitDense adds the shared probe of the first split file and
+// the lock probes of the second and the middle split files, for the
+// acceptance that holds several locks per fragment over three or more
+// fragments. It extends mds-held-flock-split-fragments.
+var capMDSHeldFlockSplitDense = defineCapability("mds-held-flock-split-dense",
+	"add the shared, second-file and middle-file lock probes to mds-held-flock-split-fragments",
+	"+mds-held-flock-split-fragments", nil)
+
 var mdsCephFSHeldFlockSplitActions = []string{"split-flock-ex-nb", "debug-caps-on", "debug-caps-off", "reconnect-cap-log"}
 
 // mdsCephFSHeldFlockSplitFragmentsActions are admitted under the
 // final-fragment capability only.
 var mdsCephFSHeldFlockSplitFragmentsActions = []string{"split-final-flock-ex-nb"}
+
+// mdsCephFSHeldFcntlSplitActions and mdsCephFSHeldFlockSplitDenseActions are
+// admitted under their capabilities only.
+var (
+	mdsCephFSHeldFcntlSplitActions      = []string{"split-fcntl-probe"}
+	mdsCephFSHeldFlockSplitDenseActions = []string{"split-flock-sh-nb", "split-second-flock-ex-nb", "split-middle-flock-ex-nb"}
+)
 
 func admitMDSCephFSHeldFlockSplit(action string, p profile) error {
 	if slices.Contains(mdsCephFSHeldFlockSplitActions, action) && !p.admits(capMDSHeldFlockSplit) {
@@ -135,6 +157,12 @@ func admitMDSCephFSHeldFlockSplit(action string, p profile) error {
 	}
 	if slices.Contains(mdsCephFSHeldFlockSplitFragmentsActions, action) && !p.admits(capMDSHeldFlockSplitFragments) {
 		return errors.New("MDS CephFS completion final-fragment lock probe requires capability " + capMDSHeldFlockSplitFragments.name)
+	}
+	if slices.Contains(mdsCephFSHeldFcntlSplitActions, action) && !p.admits(capMDSHeldFcntlSplit) {
+		return errors.New("MDS CephFS completion split FCNTL probe requires capability " + capMDSHeldFcntlSplit.name)
+	}
+	if slices.Contains(mdsCephFSHeldFlockSplitDenseActions, action) && !p.admits(capMDSHeldFlockSplitDense) {
+		return errors.New("MDS CephFS completion dense split lock probe requires capability " + capMDSHeldFlockSplitDense.name)
 	}
 	return nil
 }
@@ -218,9 +246,34 @@ func (p mdsCephFSCompletionPlan) splitFinalLockFile() string {
 	return p.SplitFiles[len(p.SplitFiles)-1]
 }
 
-// splitLockTargets maps each closed lock probe action to its one file.
+// splitMemberFile is the split file of one predetermined index, or "" for a
+// plan without it.
+func (p mdsCephFSCompletionPlan) splitMemberFile(i int) string {
+	if len(p.SplitFiles) != 32 {
+		return ""
+	}
+	return p.SplitFiles[i]
+}
+
+// splitLockTargets maps each closed lock probe action to its one file: the
+// first, second, middle (index 16) and last split file. With 32 files the
+// first two sort into the first fragment of a split reconnect, the middle one
+// into neither the first nor the last of three or more.
 func (p mdsCephFSCompletionPlan) splitLockTargets() map[string]string {
-	return map[string]string{"split-flock-ex-nb": p.splitLockFile(), "split-final-flock-ex-nb": p.splitFinalLockFile()}
+	return map[string]string{"split-flock-ex-nb": p.splitLockFile(), "split-final-flock-ex-nb": p.splitFinalLockFile(),
+		"split-flock-sh-nb": p.splitLockFile(), "split-fcntl-probe": p.splitLockFile(),
+		"split-second-flock-ex-nb": p.splitMemberFile(1), "split-middle-flock-ex-nb": p.splitMemberFile(16)}
+}
+
+// splitNativeAction is the native driver action of a closed split lock probe.
+func splitNativeAction(action string) string {
+	switch action {
+	case "split-flock-sh-nb":
+		return "flock-sh-nb"
+	case "split-fcntl-probe":
+		return "fcntl-probe"
+	}
+	return "flock-ex-nb"
 }
 
 // targets lists every closed stat target.
@@ -259,7 +312,8 @@ func mdsCephFSCompletionNativeCaps(fsName string) ceph.ClientCaps {
 
 // One fixed native LibCephFS driver. It admits the owned directory, its
 // children and grandchildren, and the one planned snapshot of `snap`. The
-// nonblocking exclusive FLOCK probe names its two split files itself.
+// nonblocking FLOCK probes name their four split files and the FCNTL probe
+// its one split file itself.
 // Source: pybind/cephfs/cephfs.pyx at mdsFreshSource; independent driver.
 const mdsCephFSCompletionNativePython = `
 import cephfs, fcntl, json, os, sys, time
@@ -298,13 +352,13 @@ def flock_state():
         raise ValueError('flock probe file changed while reading')
     return {'ino': s['ino'], 'size': s['size'], 'version': s['version'],
             'mtime': int(s['mtime'].timestamp()), 'data_hex': data.hex()}
-out = {'action': action, 'path': path}
+` + mdsCephFSFcntlProbePython + `out = {'action': action, 'path': path}
 try:
     fs.mount(filesystem_name=fsname)
     out['native_global_id'] = fs.get_instance_id()
     if action == 'stat' and not extra:
         out['stat'] = stat(path)
-    elif action == 'flock-ex-nb' and path in ('/' + directory + '/split-000-' + 's' * 215, '/' + directory + '/split-031-' + 's' * 215) and not extra:
+    elif action in ('flock-ex-nb', 'flock-sh-nb') and path in ['/' + directory + '/split-%03d-' % i + 's' * 215 for i in (0, 1, 16, 31)] and not extra:
         owner = 0x8000000063657068
         probe = {'owner': owner, 'errno': 0, 'acquired': False, 'unlocked': False,
                  'before': flock_state()}
@@ -312,7 +366,8 @@ try:
         started = time.monotonic_ns()
         try:
             try:
-                fs.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB, owner)
+                mode = fcntl.LOCK_EX if action == 'flock-ex-nb' else fcntl.LOCK_SH
+                fs.flock(fd, mode | fcntl.LOCK_NB, owner)
                 probe['acquired'] = True
             except cephfs.Error as e:
                 if abs(e.errno) != 11:
@@ -328,6 +383,8 @@ try:
         probe['elapsed_ns'] = time.monotonic_ns() - started
         probe['after'] = flock_state()
         out['flock'] = probe
+    elif action == 'fcntl-probe' and path == '/' + directory + '/split-000-' + 's' * 215 and 0 < len(extra) <= 8:
+        out['fcntl'] = fcntl_probe(extra)
     elif action == 'list' and path == '/' + directory and not extra:
         out['entries'] = []
         handle = fs.opendir(path)
@@ -385,17 +442,24 @@ func decodeMDSCephFSCompletionNative(action, path string, plan mdsCephFSCompleti
 		ok = result.Stat != nil && result.Stat.Exists && validMDSCephFSStat(*result.Stat)
 	case "rmsnap":
 		ok = result.Stat != nil && !result.Stat.Exists && validMDSCephFSStat(*result.Stat)
-	case "flock-ex-nb":
+	case "flock-ex-nb", "flock-sh-nb", "fcntl-probe":
 		// The probed file is an empty split file that nothing writes. Its
 		// native version is recorded and compared, not required to be nonzero.
 		// The caller passes the path of the action's own file; here it must
-		// be one of the two predetermined lock files.
+		// be one of the predetermined lock files of a probe of this kind.
 		admitted := false
-		for _, file := range plan.splitLockTargets() {
+		for probe, file := range plan.splitLockTargets() {
 			lock, err := plan.path(file)
-			admitted = admitted || err == nil && file != "" && path == lock
+			admitted = admitted || splitNativeAction(probe) == action && err == nil && file != "" && path == lock
 		}
-		if probe := result.Flock; probe != nil && admitted {
+		if probe := result.Fcntl; action == "fcntl-probe" && probe != nil && admitted {
+			ok = probe.Owner == mdsCephFSFlockOwner && probe.ElapsedNS > 0 && probe.GlobalID != 0 && probe.GlobalID != result.NativeGlobalID &&
+				validFcntlProbes(probe.Probes, mdsCephFSFcntlProbeSet("split-fcntl-probe")) &&
+				probe.Before == probe.After && probe.Before.Ino != 0 && probe.Before.Size == 0 && probe.Before.DataHex == "" && result.Flock == nil &&
+				result.Stat == nil && result.SourceStat == nil && result.Statfs == nil && result.TimingsNS == nil &&
+				!result.QuotaAbsent && result.ValueHex == "" && result.DataHex == "" && result.Written == 0 && len(result.Created) == 0 && len(result.Entries) == 0
+		}
+		if probe := result.Flock; action != "fcntl-probe" && probe != nil && admitted && result.Fcntl == nil {
 			ok = probe.Owner == mdsCephFSFlockOwner && probe.ElapsedNS > 0 &&
 				(probe.Errno == 0 && probe.Acquired && probe.Unlocked || probe.Errno == 11 && !probe.Acquired && !probe.Unlocked) &&
 				probe.Before == probe.After && probe.Before.Ino != 0 && probe.Before.Size == 0 && probe.Before.DataHex == "" &&
@@ -759,6 +823,7 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 		"log-pause", "log-resume", "early-reply-off", "early-reply-on", "blackhole-on", "blackhole-off", "debug-on", "debug-off",
 		"deny-on", "deny-off", "window-on", "window-off", "restart-arm", "restart-fire", "restart-status", "restart-adopt",
 		"debug-caps-on", "debug-caps-off", "split-flock-ex-nb", "split-final-flock-ex-nb",
+		"split-flock-sh-nb", "split-fcntl-probe", "split-second-flock-ex-nb", "split-middle-flock-ex-nb",
 		"deleg-zero-on", "deleg-zero-off", "async-dirops-off", "async-dirops-on", "charmap-set", "charmap-names", "charmap-create":
 		if len(args) != 0 {
 			return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion action takes no caller argument")
@@ -772,7 +837,7 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 			action.target = "snapshot"
 		case "charmap-set", "charmap-names", "charmap-create":
 			action.target = plan.Charmap.Dir
-		case "split-flock-ex-nb", "split-final-flock-ex-nb":
+		case "split-flock-ex-nb", "split-final-flock-ex-nb", "split-flock-sh-nb", "split-fcntl-probe", "split-second-flock-ex-nb", "split-middle-flock-ex-nb":
 			// The lock target is fixed by the plan, never chosen by the caller.
 			if action.target = plan.splitLockTargets()[action.name]; action.target == "" {
 				return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion plan has no lock file for this probe")
@@ -1256,7 +1321,8 @@ func (c *fixtureCluster) mdsCephFSCompletionAct(ctx context.Context, id int64, a
 		}
 		result.Ops, err = parseMDSCephFSHistoricOps(data, action.gid)
 		return err
-	case "stat", "list", "write-fenced", "snapshot-create", "snapshot-remove", "split-flock-ex-nb", "split-final-flock-ex-nb":
+	case "stat", "list", "write-fenced", "snapshot-create", "snapshot-remove", "split-flock-ex-nb", "split-final-flock-ex-nb",
+		"split-flock-sh-nb", "split-fcntl-probe", "split-second-flock-ex-nb", "split-middle-flock-ex-nb":
 		return c.mdsCephFSCompletionNative(ctx, id, action, result)
 	case "charmap-set", "charmap-names", "charmap-create":
 		return c.mdsCephFSCharmapAct(ctx, id, action, result)
@@ -1562,10 +1628,13 @@ func (c *fixtureCluster) mdsCephFSCompletionNative(ctx context.Context, id int64
 	}
 	native, extra, kind, once := action.name, []string(nil), "", true
 	switch action.name {
-	case "split-flock-ex-nb", "split-final-flock-ex-nb":
+	case "split-flock-ex-nb", "split-final-flock-ex-nb", "split-flock-sh-nb", "split-fcntl-probe", "split-second-flock-ex-nb", "split-middle-flock-ex-nb":
 		// A probe may take a transient lock. Each request is journaled before
 		// it runs and an uncertain native process is never replayed.
-		native, kind, once = "flock-ex-nb", "native-"+action.name, false
+		native, kind, once = splitNativeAction(action.name), "native-"+action.name, false
+		for _, p := range mdsCephFSFcntlProbeSet(action.name) {
+			extra = append(extra, p.arg())
+		}
 	case "write-fenced":
 		native, extra, kind = "create-write", []string{x.plan.FencedPayloadHex}, "native-create-write"
 	case "snapshot-create":

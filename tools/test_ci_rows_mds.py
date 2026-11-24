@@ -158,7 +158,9 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
         })
 
     def test_mds_cephfs_ranks_rows_select_only_the_declared_multi_rank_test(self):
-        rows = [row for row in self.rows if row.get("mds_cephfs_ranks") == "1" and row.get("mds_cephfs_ranks_replay", "0") == "0"]
+        # A row with a capability selects a dedicated test on its own fresh
+        # fixture (test_ci_rows_mds_heldlocks.py checks those).
+        rows = [row for row in self.rows if row.get("mds_cephfs_ranks") == "1" and row.get("mds_cephfs_ranks_replay", "0") == "0" and "capabilities" not in row]
         self.assertEqual(len(rows), 2)
         expected = {"TestCephMDSCephFSRanksIntegration"}
         self.assertTrue(expected <= self.declared)

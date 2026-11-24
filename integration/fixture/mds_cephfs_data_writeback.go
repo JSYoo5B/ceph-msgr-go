@@ -210,8 +210,8 @@ func (x *mdsCephFSDataScope) newOSDDrop(id int64, daemon string, baseline map[st
 		return nil, errors.New("DATA OSD drop is unrestored or the run's drops are used")
 	}
 	if x.restart.pending() || x.activeRuntime("client-drop-on", x.current.GID) != nil ||
-		x.activeRuntime("log-pause", x.current.GID) != nil || x.activeRuntime("blackhole-on", x.current.GID) != nil {
-		return nil, errors.New("DATA OSD drop refused while a restart or MDS client blackhole is in effect")
+		x.activeRuntime("log-pause", x.current.GID) != nil || x.activeRuntime("blackhole-on", x.current.GID) != nil || x.osdRestart.active() {
+		return nil, errors.New("DATA OSD drop refused while a restart, an MDS client blackhole or an unproven OSD restart is in effect")
 	}
 	if baseline["ms_blackhole_client"] != "false" || baseline["debug_ms"] == "" {
 		return nil, errors.New("DATA OSD client transport must be running from a false baseline")
@@ -393,8 +393,8 @@ func (x *mdsCephFSDataScope) readerReady() error {
 		x.activeRuntime("client-drop-on", x.current.GID) != nil {
 		return errors.New("DATA background reader refused while a restart or MDS fault is in effect")
 	}
-	if x.osdDrop.active() {
-		return errors.New("DATA background reader refused while the OSD drops client messages")
+	if x.osdDrop.active() || x.osdRestart.active() {
+		return errors.New("DATA background reader refused while the OSD drops client messages or an OSD restart is unproven")
 	}
 	return nil
 }
@@ -591,7 +591,8 @@ func (c *fixtureCluster) mdsCephFSDataEvict(ctx context.Context, id int64, gid u
 }
 
 // mdsCephFSDataRestoreOSDDrop restores an override still active at cleanup.
-// An OSD is not restarted by this fixture, so there is no discard path.
+// The one OSD restart of the persistence cell (mds_cephfs_data_osd_restart.go)
+// is admitted only after the drop is restored, so there is no discard path.
 func (c *fixtureCluster) mdsCephFSDataRestoreOSDDrop(ctx context.Context, receipt *mdsCephFSDataCleanup) error {
 	d := c.mdsCephFSData.osdDrop
 	receipt.OSDDrop = d

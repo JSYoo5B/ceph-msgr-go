@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os/exec"
 	"slices"
 	"strings"
@@ -114,8 +115,19 @@ func TestMDSCephFSHeldFlockSplitFinalProbeIsClosed(t *testing.T) {
 		(mdsCephFSCompletionPlan{}).splitFinalLockFile() != "" || (mdsCephFSCompletionPlan{SplitFiles: []string{"only"}}).splitFinalLockFile() != "" {
 		t.Fatal("the predetermined final lock file is not the last of the 32 split files", last)
 	}
-	if targets := plan.splitLockTargets(); len(targets) != 2 || targets["split-flock-ex-nb"] != first || targets["split-final-flock-ex-nb"] != last {
-		t.Fatal("the closed lock probes do not map to their two files", targets)
+	want := map[string]string{"split-flock-ex-nb": first, "split-final-flock-ex-nb": last, "split-flock-sh-nb": first, "split-fcntl-probe": first,
+		"split-second-flock-ex-nb": plan.SplitFiles[1], "split-middle-flock-ex-nb": plan.SplitFiles[16]}
+	if targets := plan.splitLockTargets(); !maps.Equal(targets, want) {
+		t.Fatal("the closed lock probes do not map to their files", targets)
+	}
+	for probe, native := range map[string]string{"split-flock-ex-nb": "flock-ex-nb", "split-final-flock-ex-nb": "flock-ex-nb", "split-second-flock-ex-nb": "flock-ex-nb",
+		"split-middle-flock-ex-nb": "flock-ex-nb", "split-flock-sh-nb": "flock-sh-nb", "split-fcntl-probe": "fcntl-probe"} {
+		if splitNativeAction(probe) != native {
+			t.Fatal("a closed lock probe runs another native action", probe)
+		}
+	}
+	if (mdsCephFSCompletionPlan{SplitFiles: plan.SplitFiles[:31]}).splitMemberFile(16) != "" {
+		t.Fatal("a member file is named on a plan without 32 split files")
 	}
 	id, action, err := parseMDSCephFSCompletionRequest([]string{"4", token, "split-final-flock-ex-nb"}, token, plan, 3)
 	if err != nil || id != 4 || action != (mdsCephFSCompletionAction{name: "split-final-flock-ex-nb", target: last}) {
@@ -167,7 +179,7 @@ func TestMDSCephFSHeldFlockSplitActionsAreClosed(t *testing.T) {
 			t.Fatal("caller-selected lock target or argument accepted", args)
 		}
 	}
-	for _, name := range []string{"split-flock-sh-nb", "split-flock-ex", "flock-ex-nb", "split-flock-unlock"} {
+	for _, name := range []string{"split-flock-ex", "flock-ex-nb", "flock-sh-nb", "fcntl-probe", "split-flock-unlock", "split-fcntl-unlock", "split-third-flock-ex-nb", "split-final-fcntl-probe"} {
 		if _, _, err := parseMDSCephFSCompletionRequest([]string{"4", token, name}, token, plan, 3); err == nil {
 			t.Fatal("unimplemented native lock action admitted", name)
 		}
@@ -211,8 +223,8 @@ func TestMDSCephFSHeldFlockSplitReceiptRejectsUnreleasedOrChangedState(t *testin
 	for _, file := range []string{plan.splitLockFile(), plan.splitFinalLockFile()} {
 		checkMDSCephFSHeldFlockSplitReceipts(t, plan, file)
 	}
-	// Only the two predetermined files are lock files, and a receipt is
-	// bound to the path the driver was started with.
+	// Only the predetermined files are lock files, and a receipt is bound to
+	// the path the driver was started with.
 	first, _ := plan.path(plan.splitLockFile())
 	last, _ := plan.path(plan.splitFinalLockFile())
 	state := mdsCephFSFlockState{Ino: 7, MTime: 10}
@@ -224,10 +236,26 @@ func TestMDSCephFSHeldFlockSplitReceiptRejectsUnreleasedOrChangedState(t *testin
 		}
 		return data
 	}
-	for _, name := range plan.SplitFiles[1:31] {
+	for i, name := range plan.SplitFiles {
 		path, _ := plan.path(name)
-		if _, err := decodeMDSCephFSCompletionNative("flock-ex-nb", path, plan, receipt(path)); err == nil {
-			t.Fatal("a lock receipt of a split file that is no lock file was accepted", name)
+		_, err := decodeMDSCephFSCompletionNative("flock-ex-nb", path, plan, receipt(path))
+		if lockFile := slices.Contains([]int{0, 1, 16, 31}, i); lockFile != (err == nil) {
+			t.Fatal("a lock receipt of a split file was accepted exactly when it is not a lock file", name, err)
+		}
+	}
+	// The shared and FCNTL probes name the first split file only.
+	second, _ := plan.path(plan.SplitFiles[1])
+	shared := func(path string) []byte {
+		data, _ := json.Marshal(mdsCephFSNative{Action: "flock-sh-nb", Path: path, NativeGlobalID: 9,
+			Flock: &mdsCephFSFlockProbe{Owner: mdsCephFSFlockOwner, ElapsedNS: 1, Acquired: true, Unlocked: true, Before: state, After: state}})
+		return data
+	}
+	if _, err := decodeMDSCephFSCompletionNative("flock-sh-nb", first, plan, shared(first)); err != nil {
+		t.Fatal("the shared probe receipt of the first split file was refused", err)
+	}
+	for _, path := range []string{second, last} {
+		if _, err := decodeMDSCephFSCompletionNative("flock-sh-nb", path, plan, shared(path)); err == nil {
+			t.Fatal("a shared probe receipt of another split file was accepted", path)
 		}
 	}
 	if _, err := decodeMDSCephFSCompletionNative("flock-ex-nb", last, plan, receipt(first)); err == nil {
@@ -246,7 +274,7 @@ func TestMDSCephFSHeldFlockSplitReceiptRejectsUnreleasedOrChangedState(t *testin
 func checkMDSCephFSHeldFlockSplitReceipts(t *testing.T, plan mdsCephFSCompletionPlan, file string) {
 	t.Helper()
 	path, _ := plan.path(file)
-	other, _ := plan.path(plan.SplitFiles[1])
+	other, _ := plan.path(plan.SplitFiles[2])
 	// A never-written file may report native version 0; it is compared, not required.
 	for _, state := range []mdsCephFSFlockState{{Ino: 7, MTime: 10}, {Ino: 7, Version: 3, MTime: 10}} {
 		for _, blocked := range []bool{false, true} {
@@ -334,11 +362,12 @@ func TestMDSCephFSReconnectCapLogAttributesLinesToOneClientFragment(t *testing.T
 // lock path are checked with the local interpreter.
 func TestMDSCephFSCompletionNativeDriverCompilesAndNamesTheLockFile(t *testing.T) {
 	plan := mdsCephFSCompletionPlanFor(strings.Repeat("a1", 16))
-	if !strings.Contains(mdsCephFSCompletionNativePython, "path in ('/' + directory + '/split-000-' + 's' * 215, '/' + directory + '/split-031-' + 's' * 215) and not extra") ||
-		strings.Count(mdsCephFSCompletionNativePython, "fs.flock(") != 2 || strings.Contains(mdsCephFSCompletionNativePython, "LOCK_SH") ||
-		strings.Count(mdsCephFSCompletionNativePython, "/split-") != 2 ||
+	if !strings.Contains(mdsCephFSCompletionNativePython, "action in ('flock-ex-nb', 'flock-sh-nb') and path in ['/' + directory + '/split-%03d-' % i + 's' * 215 for i in (0, 1, 16, 31)] and not extra") ||
+		!strings.Contains(mdsCephFSCompletionNativePython, "action == 'fcntl-probe' and path == '/' + directory + '/split-000-' + 's' * 215 and 0 < len(extra) <= 8") ||
+		strings.Count(mdsCephFSCompletionNativePython, "fs.flock(") != 2 || strings.Count(mdsCephFSCompletionNativePython, "LOCK_SH") != 1 ||
+		strings.Count(mdsCephFSCompletionNativePython, "/split-") != 2 || strings.Count(mdsCephFSCompletionNativePython, "ceph_setlk(") != 2 ||
 		plan.splitLockFile() != "split-000-"+strings.Repeat("s", 215) || plan.splitFinalLockFile() != "split-031-"+strings.Repeat("s", 215) {
-		t.Fatal("the native driver no longer fixes one exclusive nonblocking lock on the two planned files", plan.splitLockFile(), plan.splitFinalLockFile())
+		t.Fatal("the native driver no longer fixes its nonblocking lock probes on the four planned files", plan.splitLockFile(), plan.splitFinalLockFile())
 	}
 	python, err := exec.LookPath("python3")
 	if err != nil {

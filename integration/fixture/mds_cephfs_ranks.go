@@ -636,6 +636,9 @@ type mdsCephFSRanksNative struct {
 	Pin            *string          `json:"pin,omitempty"`
 	PinSet         *string          `json:"pin_set,omitempty"`
 	Entries        []mdsCephFSEntry `json:"entries,omitempty"`
+	// Flock is the held-lock takeover's nonblocking FLOCK probe
+	// (mds_cephfs_ranks_flock.go).
+	Flock *mdsCephFSFlockProbe `json:"flock,omitempty"`
 }
 
 // One fixed native LibCephFS driver: stat, list a directory (each entry with
@@ -645,7 +648,7 @@ type mdsCephFSRanksNative struct {
 // Source: pybind/cephfs/cephfs.pyx at mdsFreshSource; independent driver, no
 // code copied.
 const mdsCephFSRanksNativePython = `
-import cephfs, json, sys
+import cephfs, fcntl, json, os, sys, time
 identity, fsname, directory, action, path = sys.argv[1:6]
 extra = sys.argv[6:]
 prefix = '/' + directory
@@ -686,6 +689,36 @@ try:
                 out['entries'].append({'name': name, 'd_ino': entry.d_ino, 'stat': stat(path + '/' + name)})
         finally:
             fs.closedir(handle)
+    elif action == 'flock-ex-nb' and path == prefix + '/mig/file-0' and not extra:
+        # The held-lock takeover's probe: a nonblocking exclusive FLOCK of
+        # one empty plan file, released at once when it acquired.
+        def flock_state():
+            s = fs.statx(path, 0x13cf, 0)
+            if s['size'] != 0:
+                raise ValueError('flock probe file is not empty')
+            return {'ino': s['ino'], 'size': s['size'], 'version': s['version'], 'mtime': int(s['mtime'].timestamp()), 'data_hex': ''}
+        owner = 0x8000000063657068
+        probe = {'owner': owner, 'errno': 0, 'acquired': False, 'unlocked': False, 'before': flock_state()}
+        fd = fs.open(path, os.O_RDWR, 0)
+        started = time.monotonic_ns()
+        try:
+            try:
+                fs.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB, owner)
+                probe['acquired'] = True
+            except cephfs.Error as e:
+                if abs(e.errno) != 11:
+                    raise
+                probe['errno'] = abs(e.errno)
+        finally:
+            try:
+                if probe['acquired']:
+                    fs.flock(fd, fcntl.LOCK_UN, owner)
+                    probe['unlocked'] = True
+            finally:
+                fs.close(fd)
+        probe['elapsed_ns'] = time.monotonic_ns() - started
+        probe['after'] = flock_state()
+        out['flock'] = probe
     elif action == 'pin-set' and len(extra) == 1 and extra[0] in ('-1', '0', '1', '2'):
         fs.setxattr(path, 'ceph.dir.pin', extra[0].encode('ascii'), 0)
         out['pin_set'] = extra[0]
@@ -709,6 +742,8 @@ func decodeMDSCephFSRanksNative(action, path string, extra []string, data []byte
 	}
 	ok := false
 	switch action {
+	case "flock-ex-nb":
+		ok = validMDSCephFSRanksFlock(result, extra)
 	case "stat":
 		ok = len(extra) == 0 && result.Stat != nil && validMDSCephFSStat(*result.Stat) && result.Pin == nil && result.PinSet == nil && result.Entries == nil
 	case "list":
@@ -728,6 +763,9 @@ func decodeMDSCephFSRanksNative(action, path string, extra []string, data []byte
 		}
 	case "pin-set":
 		ok = len(extra) == 1 && result.PinSet != nil && *result.PinSet == extra[0] && result.Stat == nil && result.Pin == nil && result.Entries == nil
+	}
+	if action != "flock-ex-nb" && result.Flock != nil {
+		ok = false
 	}
 	if !ok {
 		return mdsCephFSRanksNative{}, fmt.Errorf("native CephFS ranks %s output shape differs", action)
@@ -767,6 +805,9 @@ type mdsCephFSRanksScope struct {
 	takeover                *mdsCephFSRanksTakeover
 	replayEnable            *mdsCephFSRanksReplayEnable
 	runtime                 []*mdsCephFSRanksRuntime
+	// lockProbes are the held-lock takeover's native lock probes, each
+	// journaled before it runs.
+	lockProbes []*mdsCephFSMutation
 	// owned maps session addresses of the owned Go identity, observed through
 	// observe, to their GlobalID.
 	owned map[string]uint64
@@ -856,6 +897,13 @@ func parseMDSCephFSRanksRequest(fields []string, token string, plan mdsCephFSRan
 			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks historic ops require one rank and one canonical GlobalID")
 		}
 		action.value, action.gid = args[0], gid
+	case "flock-ex-nb":
+		// The one plan file of the held-lock takeover; the caller cannot
+		// choose another.
+		if len(args) != 1 || args[0] != plan.flockTarget() {
+			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks lock probe admits only its plan file")
+		}
+		action.target = args[0]
 	case "takeover-arm", "takeover-fire", "takeover-status", "takeover-adopt", "replay-enable", "log-pause", "log-resume":
 		if len(args) != 0 {
 			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks takeover, replay and runtime actions take no caller argument")
@@ -886,6 +934,7 @@ type mdsCephFSRanksResult struct {
 	Pin             *mdsCephFSRanksPin             `json:"pin,omitempty"`
 	Placement       *mdsCephFSRanksPlacement       `json:"placement,omitempty"`
 	Takeover        *mdsCephFSRanksTakeover        `json:"takeover,omitempty"`
+	Mutation        *mdsCephFSMutation             `json:"mutation,omitempty"`
 	Status          *mdsCephFSRanksStatus          `json:"status,omitempty"`
 	ReplayEnable    *mdsCephFSRanksReplayEnable    `json:"replay_enable,omitempty"`
 	Runtime         *mdsCephFSRanksRuntime         `json:"runtime,omitempty"`
@@ -912,7 +961,7 @@ func (c *fixtureCluster) mdsCephFSRanksJournal() error {
 		"source_commit": mdsFreshSource, "token": s.token, "fsid": c.profile.fsid, "fs_name": s.name, "fscid": s.oracle.FSCID,
 		"client_identity": identity, "native_identity": native, "plan": x.plan, "baseline_blocklist": x.baselineBlocklist,
 		"startup_topology": x.startup, "current_topology": x.current, "pins": x.pins, "pin_baseline": x.pinBaseline, "takeover": x.takeover,
-		"owned_session_addresses": x.owned, "shape": x.shape, "replay_enable": x.replayEnable, "runtime": x.runtime,
+		"owned_session_addresses": x.owned, "shape": x.shape, "replay_enable": x.replayEnable, "runtime": x.runtime, "lock_probes": x.lockProbes,
 	})
 }
 
@@ -1157,6 +1206,9 @@ func (c *fixtureCluster) mdsCephFSRanksControl(ctx context.Context, out string, 
 	if err != nil {
 		return err
 	}
+	if err := admitMDSCephFSRanksHeldFlock(action.name, c.profile); err != nil {
+		return err
+	}
 	x.lastRequestID = id
 	started := time.Now()
 	result := mdsCephFSRanksResult{Source: mdsFreshSource, Token: s.token, RequestID: id, Action: action.name, Target: action.target, Value: action.value, GlobalID: action.gid,
@@ -1305,6 +1357,8 @@ func (c *fixtureCluster) mdsCephFSRanksAct(ctx context.Context, id int64, action
 		return c.mdsCephFSRanksPlacement(ctx, action, result)
 	case "takeover-arm":
 		return c.mdsCephFSRanksTakeoverAct(ctx, id, action, result)
+	case "flock-ex-nb":
+		return c.mdsCephFSRanksFlockProbe(ctx, id, action, result)
 	}
 	return errors.New("MDS CephFS ranks action is not admitted")
 }

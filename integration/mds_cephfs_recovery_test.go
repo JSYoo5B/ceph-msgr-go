@@ -257,6 +257,10 @@ func (x *mdsCephFSRecoveryControl) request(ctx context.Context, action, arg stri
 		if strconv.FormatUint(result.GlobalID, 10) != arg {
 			return result, errors.New("native MDS historic ops scope differs")
 		}
+	case "lock-inflight":
+		if f := result.LockInFlight; f == nil || arg != fmt.Sprintf("%d:%d", f.GlobalID, f.TID) {
+			return result, errors.New("native MDS in-flight lock receipt scope differs")
+		}
 	case "recovery-stat", "recovery-list", "recovery-write", "flock-ex-nb", "flock-sh-nb":
 		if result.Native == nil || result.Native.NativeGlobalID == 0 || x.goGIDs[result.Native.NativeGlobalID] {
 			return result, errors.New("native CephFS recovery oracle output missing or bound to a Go client")
@@ -840,6 +844,19 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		realms    = map[uint64]cephmsgr.MDSSnapRealm{}
 		started   = time.Now()
 	)
+	// A cell's second client session and waiting acquire
+	// (mds_cephfs_heldlock_cells_test.go).
+	var (
+		clientS             *cephmsgr.Client
+		connS               *cephmsgr.MDSConnection
+		sessionS, sessionS2 *cephmsgr.MDSSession
+		agentS, agentS2     *cephfsCapAgent
+		dialsS              *recoveryDials
+		gidS                uint64
+		waiterCall          *cephmsgr.MDSRequestCall
+		waiterLock          heldLock
+	)
+	outer := t
 	t.Cleanup(func() {
 		snapshot := func(a *cephfsCapAgent) *cephfsAgentSnapshot {
 			if a == nil {
@@ -885,7 +902,7 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		begin := time.Now()
 		ok := t.Run(name, run)
 		caseTimes[name] = time.Since(begin).Milliseconds()
-		for _, a := range []*cephfsCapAgent{agentR, agentR2, agentF} {
+		for _, a := range []*cephfsCapAgent{agentR, agentR2, agentF, agentS, agentS2} {
 			if a != nil {
 				if s := a.snapshot(); len(s.Errors) != 0 {
 					t.Errorf("capability agent errors after %s: %v", name, s.Errors)
@@ -1004,6 +1021,10 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 	var heldNativeBaseline *nativeMDSCephFSFlockState
 	var heldDirIno uint64
 	facts["held_flock"] = &hf
+	cell := &heldLockCellEvidence{BlobOmitted: recipe.NoBlob}
+	if recipe.hasSecond() || recipe.Waiter != nil || recipe.DirtySize != 0 || recipe.NoBlob {
+		hf.Cell = cell
+	}
 	// heldLockGets sends one GETFILELOCK per rule of the recipe (FCNTL before
 	// FLOCK) with the whole-file exclusive test lock and checks each answer
 	// against the locks still held (heldLockGetCheck). It returns every
@@ -1036,6 +1057,122 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 	// these options and reports a setup failure in its receipt.
 	baseOptions := integrationOptions(t)
 	clientR = recoveryClient(t, ctx, identity, keyFile, dialsR, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS, o.EnableOSD = true, true, false })
+
+	// openSecond opens the second client session of a two-client cell and the
+	// lock file through it. The client outlives the leaf.
+	openSecond := func(t *testing.T) {
+		t.Helper()
+		dialsS = newRecoveryDials(false, current.MDS.Endpoint)
+		client, release, err := dialRecoveryClient(ctx, baseOptions, identity, keyFile, dialsS, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS, o.EnableOSD = true, true, false })
+		if err != nil {
+			t.Fatal("dial the second client", err)
+		}
+		outer.Cleanup(release)
+		clientS, gidS = client, client.Snapshot().GlobalID
+		control.goGIDs[gidS] = true
+		cell.SecondGlobalID = gidS
+		if gidS == 0 || gidS == gidR || client.Snapshot().CephFSNonce == 0 || client.Snapshot().CephFSNonce == nonceR {
+			t.Fatal("the second client lacks its own GlobalID or shared nonce", client.Snapshot())
+		}
+		if connS, err = clientS.OpenMDS(ctx, mdsTarget); err != nil {
+			t.Fatal("open the second client's MDS", err)
+		}
+		if sessionS, err = connS.OpenSession(ctx, cephmsgr.MDSSessionOptions{Metadata: metadata("second"), RenewInterval: 2 * time.Second, MaxEvents: 1024}); err != nil {
+			t.Fatal("open the second client's CephFS session", err)
+		}
+		outer.Cleanup(func() {
+			closing, stop := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stop()
+			if sessionS2 != nil {
+				sessionS2.Close(closing)
+			} else {
+				sessionS.Close(closing)
+			}
+		})
+		agentS = startCephFSCapAgent(ctx, sessionS)
+		_, n := observe(t, gidS)
+		if err := checkNativeCephFSSession(n, identity, metadata("second")); err != nil {
+			t.Fatal(err)
+		}
+		agentS.open(hf.Ino, cephFileModeRDWR)
+		_, opened, _, oe := submitFirst(t, sessionS, agentS, "second", "second-open", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpOpen, Args: cephfsOpenArgs(cephOpenReadWrite, 0, 0),
+			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}})
+		if opened.Result != 0 || !opened.Safe {
+			t.Fatalf("second client open differs: %+v", oe)
+		}
+	}
+	// inflightCheck reads the waiting acquire from the current rank-0
+	// daemon's op tracker: waiting, or no longer tracked.
+	inflightCheck := func(t *testing.T, when string, waiting bool) {
+		t.Helper()
+		r, err := control.request(ctx, "lock-inflight", fmt.Sprintf("%d:%d", gidR, cell.WaiterTID))
+		cell.InFlight = append(cell.InFlight, heldLockInFlightRead{When: when, Receipt: r.LockInFlight})
+		if err != nil {
+			t.Fatal("native in-flight lock read", when, err)
+		}
+		if err := checkHeldLockInFlight(r, gidR, cell.WaiterTID, control.mds.GID, waiting); err != nil {
+			t.Fatal(when, err)
+		}
+	}
+	// waiterPending requires the waiting acquire to stay unanswered over a
+	// bounded local wait and to wait natively.
+	waiterPending := func(t *testing.T, when string) {
+		t.Helper()
+		local, stop := context.WithTimeout(ctx, 1500*time.Millisecond)
+		_, err := waiterCall.Wait(local)
+		stop()
+		cell.WaiterLocalWaits = append(cell.WaiterLocalWaits, when+": "+fmt.Sprint(err))
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("the waiting acquire did not keep waiting %s: %v", when, err)
+		}
+		inflightCheck(t, when, true)
+	}
+	// settleWaiter records the outcome of the waiting acquire's reply on its
+	// accepted call.
+	settleWaiter := func(reply cephmsgr.MDSReply, err error) {
+		for i := range hf.Calls {
+			if c := &hf.Calls[i]; c.TID == cell.WaiterTID && c.Rule == waiterLock.Rule && c.Type == waiterLock.Type && c.Client == gidR {
+				c.Outcome = "reply result " + strconv.FormatInt(int64(reply.Result), 10)
+				if err != nil {
+					c.Outcome = "wait error: " + err.Error()
+				}
+			}
+		}
+	}
+	// awaitWaiter waits for the waiting acquire's (resubmitted) reply.
+	awaitWaiter := func(t *testing.T) cephmsgr.MDSReply {
+		t.Helper()
+		wait, stop := context.WithTimeout(ctx, 15*time.Second)
+		reply, err := waiterCall.Wait(wait)
+		stop()
+		settleWaiter(reply, err)
+		if err != nil || reply.Transaction != cell.WaiterTID || reply.Op != cephmsgr.MDSOpSetFileLock {
+			t.Fatal("the waiting acquire's reply differs", reply.Transaction, err)
+		}
+		if _, _, err := agentR2.applyReply("waiter-acquire", reply); err != nil {
+			t.Fatal(err)
+		}
+		return reply
+	}
+	// submitWaiter submits the blocking acquire behind the held locks.
+	submitWaiter := func(t *testing.T) {
+		t.Helper()
+		w := recipe.Waiter
+		waiterLock = w.Lock.held(gidR, gidS)
+		name := "waiter-acquire"
+		request := cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock, MDSMapEpoch: epoch, Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: w.args(waiterLock)}
+		e := &recoveryRequestEvidence{Name: name, Session: "restart", Op: request.Op, MDSMapEpoch: epoch, submitted: time.Now()}
+		requests = append(requests, e)
+		call, err := sessionR.Submit(ctx, request)
+		if err != nil {
+			e.Error = err.Error()
+			t.Fatal("submit the waiting acquire", err)
+		}
+		e.Transaction = call.Transaction()
+		hf.acceptFlock(name, waiterLock, waiterLock.Type)(call.Transaction())
+		waiterCall, cell.WaiterTID = call, call.Transaction()
+		waiterPending(t, "before-restart")
+	}
 
 	if !leaf("open_recovery_session", func(t *testing.T) {
 		snapshot := clientR.Snapshot()
@@ -1314,19 +1451,34 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		if opened.Result != 0 || !opened.Safe {
 			t.Fatalf("flock file open differs: %+v", oe)
 		}
-		// Each lock is recorded once SETFILELOCK granted it; the reconnect blob
-		// carries exactly these locks, in this order.
-		for i, want := range recipe.locks(gidR) {
-			name := recipe.callName("acquire", i)
-			call, first, _, e := submitFirstHooked(t, sessionR, agentR, "restart", name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
-				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: want.args(want.Type)}, hf.acceptFlock(name, want, want.Type), hf.settleFlock)
-			safe := waitSafe(t, sessionR, call, first, e, false)
-			if first.Result != 0 || safe.Result != 0 {
-				t.Fatalf("Go %s acquire failed: %d %d", name, first.Result, safe.Result)
-			}
-			hf.Locks = append(hf.Locks, want)
+		if recipe.hasSecond() {
+			openSecond(t)
 		}
-		err = heldFlockObserve(ctx, control, recipe.probes(len(hf.Locks)), hf.Ino, &heldNativeBaseline, &hf.ProbeBefore)
+		// Each SETFILELOCK is recorded once Submit accepted it. The reconnect
+		// blobs carry exactly the locks the steps leave, in recipe order.
+		for i, st := range recipe.steps() {
+			l := st.Lock.held(gidR, gidS)
+			kind := l.Type
+			if st.Unlock {
+				kind = cephFlockUnlock
+			}
+			name := recipe.stepName(i)
+			s, a, label := sessionR, agentR, "restart"
+			if st.Lock.Second {
+				s, a, label = sessionS, agentS, "second"
+			}
+			call, first, _, e := submitFirstHooked(t, s, a, label, name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
+				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: l.args(kind)}, hf.acceptFlock(name, l, kind), hf.settleFlock)
+			safe := waitSafe(t, s, call, first, e, false)
+			if first.Result != 0 || safe.Result != 0 {
+				t.Fatalf("Go %s failed: %d %d", name, first.Result, safe.Result)
+			}
+		}
+		hf.Locks = recipe.locksFor(gidR, gidS)
+		if recipe.Waiter != nil {
+			submitWaiter(t)
+		}
+		err = heldFlockObserve(ctx, control, recipe.probesFor(hf.Locks, 0), hf.Ino, &heldNativeBaseline, &hf.ProbeBefore)
 		hf.NativeBefore = heldNativeBaseline
 		if err != nil {
 			t.Fatal("native nonblocking probes do not see the Go locks", err)
@@ -1732,6 +1884,21 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("capability agent did not observe the lost session")
 		}
+		if sessionS != nil {
+			select {
+			case <-sessionS.Done():
+			case <-time.After(45 * time.Second):
+				t.Fatal("the second client's session did not end after the MDS restart")
+			}
+			if sessionS.Status().State != cephmsgr.MDSSessionLost {
+				t.Fatal("the second client's session did not end Lost", sessionS.Status(), sessionS.Err())
+			}
+			select {
+			case <-agentS.done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the second capability agent did not observe the lost session")
+			}
+		}
 		// Native: wait for the new incarnation in up:reconnect.
 		var newRank *nativeMDSCephFSDaemon
 		deadline := time.Now().Add(60 * time.Second)
@@ -1766,13 +1933,16 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 			t.Fatal(err)
 		}
 		// The held locks are carried only by this explicit, caller-selected
-		// reconnect record. SETFILELOCK is not submitted again.
-		heldBlob := heldLockBlob(hf.Locks)
+		// reconnect record. SETFILELOCK is not submitted again. The
+		// counterfactual cell sends the record without the blob.
 		heldCap := slices.IndexFunc(caps, func(c cephmsgr.MDSCapReconnect) bool { return c.Ino == hf.Ino })
 		if heldCap < 0 || len(caps[heldCap].Flock) != 0 {
 			t.Fatal("the held-lock inode has no capability to reconnect, or already carries a lock blob")
 		}
-		caps[heldCap].Flock, hf.ReconnectBlobHex = heldBlob, hex.EncodeToString(heldBlob)
+		if !recipe.NoBlob {
+			heldBlob := heldLockBlob(heldLocksOfSession(hf.Locks, recipe, false))
+			caps[heldCap].Flock, hf.ReconnectBlobHex = heldBlob, hex.EncodeToString(heldBlob)
+		}
 		// Stage an explicit pending UPDATE while the old session is Lost.
 		// Its first send precedes MClientReconnect; it is not a retry.
 		agentR.mu.Lock()
@@ -1798,6 +1968,33 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 			InlineVersion: held.InlineVersion, BTime: held.BTime, ChangeAttr: held.ChangeAttr,
 			OldestFlushTID: agentR.oldestFlushTIDLocked(), SnapFollows: heldRealm.Seq, OSDEpochBarrier: agentR.barrier,
 			CallerUID: ^uint32(0), CallerGID: ^uint32(0), Files: -1, Subdirs: -1}
+		pending := []cephmsgr.MDSReconnectCapFlush{{Caps: pendingFlush, FlushTID: flushTID}}
+		if recipe.DirtySize != 0 {
+			// The dirty cell: the lock inode itself carries a size-only flush.
+			lc := agentR.caps[hf.Ino]
+			if lc == nil || lc.Issued&cephCapFileWR == 0 || lc.MaxSize < recipe.DirtySize {
+				agentR.mu.Unlock()
+				t.Fatal("the lock inode lacks the write capability for its pending flush", lc)
+			}
+			lockRealm, ok := realms[lc.Realm]
+			if !ok {
+				agentR.mu.Unlock()
+				t.Fatal("the lock inode lacks its snap realm context")
+			}
+			lc.Size = recipe.DirtySize
+			agentR.flushTID++
+			cell.DirtyFlushTID = agentR.flushTID
+			agentR.flushing[cell.DirtyFlushTID] = hf.Ino
+			dirty := cephmsgr.MDSCaps{Op: cephmsgr.MDSCapOpUpdate, Ino: lc.Ino, CapID: lc.CapID,
+				Caps: lc.Implemented, Wanted: lc.fileWanted() | lc.Wanted, Dirty: cephCapFileWR,
+				UID: lc.UID, GID: lc.GID, Mode: lc.Mode, NLink: lc.NLink,
+				Size: lc.Size, MaxSize: lc.MaxSize, TruncateSize: lc.TruncateSize, TruncateSeq: lc.TruncateSeq,
+				MTime: lc.MTime, ATime: lc.ATime, CTime: lc.CTime, TimeWarpSeq: lc.TimeWarpSeq,
+				InlineVersion: lc.InlineVersion, BTime: lc.BTime, ChangeAttr: lc.ChangeAttr,
+				OldestFlushTID: agentR.oldestFlushTIDLocked(), SnapFollows: lockRealm.Seq, OSDEpochBarrier: agentR.barrier,
+				CallerUID: ^uint32(0), CallerGID: ^uint32(0), Files: -1, Subdirs: -1}
+			pending = append(pending, cephmsgr.MDSReconnectCapFlush{Caps: dirty, FlushTID: cell.DirtyFlushTID})
+		}
 		agentR.mu.Unlock()
 		flushEvidence := map[string]any{"message": pendingFlush, "flush_tid": flushTID, "sparse_metadata_only": true}
 		facts["pre_reconnect_cap_flush"] = flushEvidence
@@ -1812,9 +2009,15 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		if callB != nil {
 			resubmit = append(resubmit, callB)
 		}
+		// The waiting acquire has no reply: it is resubmitted after the
+		// creates, with its original TID, and waits again.
+		creates := len(resubmit)
+		if waiterCall != nil {
+			resubmit = append(resubmit, waiterCall)
+		}
 		reconnectCtx, stopReconnect := context.WithTimeout(ctx, 30*time.Second)
 		sessionR2, calls, err := connR2.ReconnectSession(reconnectCtx, lost, cephmsgr.MDSReconnectState{Caps: caps, Realms: realmState, Resubmit: resubmit,
-			PendingCapFlushes: []cephmsgr.MDSReconnectCapFlush{{Caps: pendingFlush, FlushTID: flushTID}}},
+			PendingCapFlushes: pending},
 			cephmsgr.MDSSessionOptions{Metadata: metadata("recovery"), RenewInterval: 2 * time.Second, MaxEvents: 1024})
 		stopReconnect()
 		restart.ReconnectMicros = time.Since(restart.ReconnectStarted).Microseconds()
@@ -1824,6 +2027,39 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		}
 		active, restart.Phase = sessionR2, "reconnected"
 		agentR2 = startCephFSCapAgentFrom(ctx, sessionR2, agentR)
+		if sessionS != nil {
+			// The second client reconnects right after the first: the new
+			// incarnation stays in up:reconnect until every session of its
+			// map reconnected, so no reply of the first client's
+			// resubmissions arrives before.
+			dialsS.allowMDS(newRank.Endpoint)
+			if err := connS.Close(); err != nil {
+				t.Fatal(err)
+			}
+			capsS, realmsS, err := agentS.reconnectState(realms)
+			if err != nil {
+				t.Fatal(err)
+			}
+			at := slices.IndexFunc(capsS, func(c cephmsgr.MDSCapReconnect) bool { return c.Ino == hf.Ino })
+			if at < 0 || len(capsS[at].Flock) != 0 {
+				t.Fatal("the second client has no capability of the lock inode to reconnect, or it already carries a lock blob")
+			}
+			blob := heldLockBlob(heldLocksOfSession(hf.Locks, recipe, true))
+			capsS[at].Flock, cell.SecondBlobHex = blob, hex.EncodeToString(blob)
+			connS2, err := clientS.OpenMDS(ctx, newTarget)
+			if err != nil {
+				t.Fatal("open the new MDS incarnation from the second client", err)
+			}
+			reconnecting, stop := context.WithTimeout(ctx, 30*time.Second)
+			s2, callsS, err := connS2.ReconnectSession(reconnecting, sessionS, cephmsgr.MDSReconnectState{Caps: capsS, Realms: realmsS},
+				cephmsgr.MDSSessionOptions{Metadata: metadata("second"), RenewInterval: 2 * time.Second, MaxEvents: 1024})
+			stop()
+			if err != nil || len(callsS) != 0 || s2.Status().State != cephmsgr.MDSSessionOpen || s2.Status().GlobalID != gidS {
+				t.Fatal("the second client's reconnect to the new incarnation differs", err)
+			}
+			sessionS2 = s2
+			agentS2 = startCephFSCapAgentFrom(ctx, s2, agentS)
+		}
 		reopened := describeMDSSession("reconnected", identity, sessionR2)
 		restart.Reopened = &reopened
 		status := sessionR2.Status()
@@ -1832,7 +2068,7 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 			t.Fatalf("reconnected session differs: %+v", status)
 		}
 		// The resubmitted calls keep their TIDs.
-		for i, call := range calls {
+		for i, call := range calls[:creates] {
 			name := plan.Replayed
 			if i == 1 {
 				name = plan.Unanswered
@@ -1874,7 +2110,15 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 				inos[name] = ino
 			}
 		}
-		facts["resubmitted_replies"] = requests[len(requests)-len(calls):]
+		facts["resubmitted_replies"] = requests[len(requests)-creates:]
+		if waiterCall != nil {
+			waiterCall = calls[creates]
+			requests = append(requests, &recoveryRequestEvidence{Name: "waiter-acquire resubmitted", Session: "reconnected", Op: cephmsgr.MDSOpSetFileLock,
+				Transaction: waiterCall.Transaction(), ResubmittedFrom: cell.WaiterTID, submitted: restart.ReconnectStarted})
+			if waiterCall.Transaction() != cell.WaiterTID {
+				t.Fatal("the resubmitted waiting acquire changed its TID", waiterCall.Transaction(), cell.WaiterTID)
+			}
+		}
 		// The new incarnation becomes active once reconnect, rejoin and client
 		// replay finish; then the fixture adopts it.
 		deadline = time.Now().Add(60 * time.Second)
@@ -1939,6 +2183,23 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
+		if cell.DirtyFlushTID != 0 {
+			for {
+				snapshot := agentR2.snapshot()
+				if ack := slices.IndexFunc(snapshot.FlushAcks, func(a cephfsFlushAck) bool { return a.Transaction == cell.DirtyFlushTID }); ack >= 0 {
+					a := snapshot.FlushAcks[ack]
+					if a.Caps.Ino != hf.Ino || a.Caps.Dirty != cephCapFileWR {
+						t.Fatal("the lock inode's flush ACK changed inode or dirty mask", a)
+					}
+					cell.DirtyFlushAck = a
+					break
+				}
+				if len(snapshot.Errors) != 0 || time.Now().After(ackDeadline) {
+					t.Fatal("the lock inode's pending flush did not receive its original TID ACK", snapshot.Errors)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
 		heldStat, err := control.stat(ctx, plan.Held)
 		if err != nil || !heldStat.Exists || heldStat.Ino != heldIno || heldStat.Size != pendingFlush.Size {
 			t.Fatal("native stat did not observe the pre-reconnect size flush", heldStat, err)
@@ -1951,7 +2212,11 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		}
 		hf.MDSAfter = *ad
 		// One bounded snapshot: an absent TID may also have aged out of it.
-		acquireInOps := slices.ContainsFunc(hf.Calls, func(c heldFlockCall) bool { return c.Type != cephFlockUnlock && find(c.TID) != nil })
+		// The waiting acquire is still in flight (it is checked through the
+		// in-flight read), and a second client's TIDs are not this session's.
+		acquireInOps := slices.ContainsFunc(hf.Calls, func(c heldFlockCall) bool {
+			return c.Type != cephFlockUnlock && c.Client == gidR && c.TID != cell.WaiterTID && find(c.TID) != nil
+		})
 		hf.AcquireTIDInHistoricOps = &acquireInOps
 		if acquireInOps {
 			t.Fatal("the new incarnation's historic-ops snapshot holds a client request for an original SETFILELOCK TID", hf.Calls)
@@ -2020,47 +2285,130 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		if hf.MDSAfter.GID == hf.MDSBefore.GID || hf.MDSAfter.Nonce == hf.MDSBefore.Nonce || hf.MDSAfter.Rank != hf.MDSBefore.Rank || hf.MDSAfter.Rank != 0 {
 			t.Fatal("held-lock recovery did not cross to a new rank-0 MDS incarnation", hf.MDSBefore, hf.MDSAfter)
 		}
-		if err := heldFlockObserve(ctx, control, recipe.probes(len(hf.Locks)), hf.Ino, &heldNativeBaseline, &hf.ProbeAfter); err != nil {
-			t.Fatal("native nonblocking probes do not see the restored locks", err)
+		// still is the lock state the new incarnation must hold: the restored
+		// locks, none without the blob, and a granted waiter once granted.
+		still := slices.Clone(hf.Locks)
+		if recipe.NoBlob {
+			still = nil
 		}
-		if hf.GetAfter, err = heldLockGets(t, sessionR2, agentR2, "reconnected", "after-restart", hf.Locks); err != nil {
+		if recipe.DirtySize != 0 {
+			// The flushed size changed the file; the next probe fixes the
+			// baseline the later ones must keep.
+			heldNativeBaseline = nil
+		}
+		observeHeld := func(t *testing.T, what string, afterTID uint64) {
+			t.Helper()
+			start := len(hf.ProbeAfter)
+			err := heldFlockObserve(ctx, control, recipe.probesFor(still, recipe.DirtySize), hf.Ino, &heldNativeBaseline, &hf.ProbeAfter)
+			for j := start; j < len(hf.ProbeAfter); j++ {
+				hf.ProbeAfter[j].AfterUnlockTID = afterTID
+			}
+			if err != nil {
+				t.Fatalf("native probes %s with %d Go locks held differ: %v", what, len(still), err)
+			}
+		}
+		observeHeld(t, "after the restart", 0)
+		if hf.GetAfter, err = heldLockGets(t, sessionR2, agentR2, "reconnected", "after-restart", still); err != nil {
 			t.Fatal("GETFILELOCK after restart does not identify the first original Go lock of each rule:", err)
 		}
-		// One explicit unlock per owner, in acquisition order. After each one
-		// the locks of the other owners must still refuse a native exclusive
-		// acquire and GETFILELOCK must name the first of them; after the last one
-		// the native exclusive acquire succeeds.
-		for i, l := range hf.Locks {
-			name := recipe.callName("unlock", i)
-			unlockCall, unlockFirst, _, unlockE := submitFirstHooked(t, sessionR2, agentR2, "reconnected", name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
-				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: l.args(cephFlockUnlock)}, hf.acceptFlock(name, l, cephFlockUnlock), hf.settleFlock)
-			if unlockSafe := waitSafe(t, sessionR2, unlockCall, unlockFirst, unlockE, false); unlockFirst.Result != 0 || unlockSafe.Result != 0 {
-				t.Fatalf("explicit %s after restart failed: %d %d", name, unlockFirst.Result, unlockSafe.Result)
-			}
-			remaining := hf.Locks[i+1:]
-			probeStart := len(hf.ProbeAfter)
-			if err := heldFlockObserve(ctx, control, recipe.probes(len(remaining)), hf.Ino, &heldNativeBaseline, &hf.ProbeAfter); err != nil {
-				t.Fatalf("native probes after %s with %d Go locks still held differ: %v", name, len(remaining), err)
-			}
-			for j := probeStart; j < len(hf.ProbeAfter); j++ {
-				hf.ProbeAfter[j].AfterUnlockTID = unlockCall.Transaction()
-			}
-			if len(remaining) == 0 {
-				break
-			}
-			holders, err := heldLockGets(t, sessionR2, agentR2, "reconnected", "after-"+name, remaining)
-			hf.GetBetween = append(hf.GetBetween, holders)
-			if err != nil {
-				t.Fatalf("GETFILELOCK after %s does not identify the first still-held Go lock of each rule: %v", name, err)
+		if w := recipe.Waiter; w != nil {
+			waiterPending(t, "after-restart")
+			if w.Interrupt {
+				// Client::_interrupt_filelock: the waiter's own arguments with
+				// the *_INTR rule and type unlock.
+				intr := waiterLock
+				intr.Rule += 2
+				name := "waiter-interrupt"
+				call, first, _, e := submitFirstHooked(t, sessionR2, agentR2, "reconnected", name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
+					Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: w.interruptArgs(waiterLock)}, hf.acceptFlock(name, intr, cephFlockUnlock), hf.settleFlock)
+				cell.InterruptTID = call.Transaction()
+				if safe := waitSafe(t, sessionR2, call, first, e, false); first.Result != 0 || safe.Result != 0 {
+					t.Fatalf("the interrupt of the waiting acquire failed: %d %d", first.Result, safe.Result)
+				}
+				if reply := awaitWaiter(t); reply.Result != -int32(syscall.EINTR) {
+					t.Fatal("the interrupted waiting acquire did not answer -EINTR", reply.Result)
+				}
+				inflightCheck(t, "after-interrupt", false)
+				observeHeld(t, "after the interrupt", call.Transaction())
+				if _, err := heldLockGets(t, sessionR2, agentR2, "reconnected", "after-interrupt", still); err != nil {
+					t.Fatal("GETFILELOCK after the interrupt does not identify the held lock:", err)
+				}
 			}
 		}
-		if err := heldFlockCallsExact(hf.Calls, hf.Locks); err != nil || hf.SetFileLockSubmissions != len(hf.Calls) {
-			t.Fatal("application SETFILELOCK submissions differ from one acquire before and one unlock after the restart per owner", err, hf.Calls)
+		// One explicit unlock per held lock, in order, through the session
+		// that holds it. After each one the probes and GETFILELOCK must match
+		// the locks still held. The last unlock wakes a waiting acquire,
+		// which is probed only once the MDS granted it.
+		granted := recipe.Waiter != nil && !recipe.Waiter.Interrupt
+		for i, l := range hf.Locks {
+			name := recipe.callName("unlock", i)
+			s, a, label := sessionR2, agentR2, "reconnected"
+			if recipe.Locks[i].Second {
+				s, a, label = sessionS2, agentS2, "second-reconnected"
+			}
+			unlockCall, unlockFirst, _, unlockE := submitFirstHooked(t, s, a, label, name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
+				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: l.args(cephFlockUnlock)}, hf.acceptFlock(name, l, cephFlockUnlock), hf.settleFlock)
+			if unlockSafe := waitSafe(t, s, unlockCall, unlockFirst, unlockE, false); unlockFirst.Result != 0 || unlockSafe.Result != 0 {
+				t.Fatalf("explicit %s after restart failed: %d %d", name, unlockFirst.Result, unlockSafe.Result)
+			}
+			still = slices.DeleteFunc(still, func(h heldLock) bool { return h == l })
+			if granted && i == len(hf.Locks)-1 {
+				if reply := awaitWaiter(t); reply.Result != 0 {
+					t.Fatal("the waiting acquire was not granted after the last unlock", reply.Result)
+				}
+				inflightCheck(t, "after-grant", false)
+				still = append(still, waiterLock)
+			}
+			observeHeld(t, "after "+name, unlockCall.Transaction())
+			if len(still) != 0 {
+				holders, err := heldLockGets(t, sessionR2, agentR2, "reconnected", "after-"+name, still)
+				hf.GetBetween = append(hf.GetBetween, holders)
+				if err != nil {
+					t.Fatalf("GETFILELOCK after %s does not identify the first still-held Go lock of each rule: %v", name, err)
+				}
+			}
+		}
+		if granted {
+			name := "waiter-unlock"
+			call, first, _, e := submitFirstHooked(t, sessionR2, agentR2, "reconnected", name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
+				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: waiterLock.args(cephFlockUnlock)}, hf.acceptFlock(name, waiterLock, cephFlockUnlock), hf.settleFlock)
+			if safe := waitSafe(t, sessionR2, call, first, e, false); first.Result != 0 || safe.Result != 0 {
+				t.Fatalf("the granted waiter's unlock failed: %d %d", first.Result, safe.Result)
+			}
+			still = nil
+			observeHeld(t, "after the waiter's unlock", call.Transaction())
+		}
+		if err := heldFlockCallsMatch(hf.Calls, recipe.expectedCalls(gidR, gidS)); err != nil || hf.SetFileLockSubmissions != len(hf.Calls) {
+			t.Fatal("application SETFILELOCK submissions differ from the recipe's exact sequence", err, hf.Calls)
 		}
 		// The hooks record only the expected call sites; the common ledger
 		// holds every request the recipe submitted.
 		if err := heldFlockLedgerMatches(requests, hf.Calls); err != nil {
 			t.Fatal("a SETFILELOCK was submitted outside the held-lock calls:", err)
+		}
+		if err := heldLockResubmissions(requests, cell.WaiterTID); err != nil {
+			t.Fatal(err)
+		}
+		if sessionS2 != nil {
+			if _, _, err := agentS2.close(hf.Ino, cephFileModeRDWR); err != nil {
+				t.Fatal("close the second client's lock handle", err)
+			}
+			items, barrier := agentS2.releaseAll()
+			releasing, stop := context.WithTimeout(ctx, 10*time.Second)
+			err := sessionS2.ReleaseCaps(releasing, items, barrier)
+			stop()
+			if err != nil {
+				t.Fatal("release the second client's caps", err)
+			}
+			closing, stopClose := context.WithTimeout(ctx, 15*time.Second)
+			err = sessionS2.Close(closing)
+			stopClose()
+			if err != nil || sessionS2.Status().State != cephmsgr.MDSSessionClosed {
+				t.Fatal("the second client's Close was not confirmed", err)
+			}
+			if r, err := control.request(ctx, "observe", strconv.FormatUint(gidS, 10)); err != nil || r.session(gidS) != nil {
+				t.Fatal("the second client's session remains natively", err)
+			}
 		}
 		if _, _, err := agentR2.close(hf.Ino, cephFileModeRDWR); err != nil {
 			t.Fatal("close held-lock handle", err)

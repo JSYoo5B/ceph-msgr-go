@@ -240,6 +240,8 @@ type nativeMDSCephFSRanksNative struct {
 	Pin            *string                `json:"pin"`
 	PinSet         *string                `json:"pin_set"`
 	Entries        []nativeMDSCephFSEntry `json:"entries"`
+	// Flock is the held-lock takeover's probe (mds_cephfs_ranks_heldflock_test.go).
+	Flock *nativeMDSCephFSFlockProbe `json:"flock"`
 }
 
 type nativeMDSCephFSRanksReplayEnable struct {
@@ -294,6 +296,7 @@ type nativeMDSCephFSRanksReceipt struct {
 	Pin             *nativeMDSCephFSRanksPin             `json:"pin"`
 	Placement       *nativeMDSCephFSRanksPlacement       `json:"placement"`
 	Takeover        *nativeMDSCephFSRanksTakeover        `json:"takeover"`
+	Mutation        *nativeMDSCephFSMutation             `json:"mutation"`
 	Status          *nativeMDSCephFSRanksStatus          `json:"status"`
 	ReplayEnable    *nativeMDSCephFSRanksReplayEnable    `json:"replay_enable"`
 	Runtime         *nativeMDSCephFSRanksRuntime         `json:"runtime"`

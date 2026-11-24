@@ -17,6 +17,7 @@ import native_evidence_capsend as capsend_family
 import native_evidence_soak as family
 import osd_soak_receipts as receipts
 import scenario_plan
+from test_native_evidence import recorded_gate
 
 DURATION = family.DURATION_NS
 TESTED = "a" * 40
@@ -47,9 +48,12 @@ class NativeSoakEvidenceTests(unittest.TestCase):
 
     @staticmethod
     def gate():
-        return {"selector": "", "expected": [],
-                "observed": [{"suite": "api", "test": family.TESTS[label], "result": "PASS"} for label in ("failover", "steady")],
-                "problems": [], "passed": True}
+        """The current recorder's record of the broad row: the fixture announces
+        both parents (its own selector) and runs them; the job selects nothing."""
+        tests = [family.TESTS[label] for label in ("steady", "failover")]
+        value = recorded_gate("", [], tests, tests)
+        assert value["passed"], value["problems"]
+        return value
 
     def stage(self, label, kind, value):
         self.put(self.receipts / ("osd-soak-v1-%s-%s.json" % (label, kind)),
@@ -144,7 +148,8 @@ class NativeSoakEvidenceTests(unittest.TestCase):
     def test_complete_bundle_is_attributed_hashed_and_closed(self):
         manifest = self.collect()
         self.assertEqual({p.name for p in self.output.iterdir()}, family.FILES | {"manifest.json"})
-        self.assertEqual((manifest["kind"], manifest["schema_version"]), ("native-soak-success", 1))
+        self.assertEqual((manifest["kind"], manifest["schema_version"]), ("native-soak-success", 2))
+        self.assertEqual(json.loads((self.output / "tests.json").read_text())["selected"], self.gate()["selected"])
         self.assertEqual((manifest["tested_sha"], manifest["controller_sha"], manifest["run_id"], manifest["attempt"]), (TESTED, CONTROLLER, 202, 3))
         self.assertEqual(manifest["scenario"], family.SCENARIO)
         self.assertEqual(manifest["selector"], family.SELECTOR)
@@ -372,11 +377,39 @@ class NativeSoakEvidenceTests(unittest.TestCase):
                  {"selector": "^x$"}, {"problems": ["a problem"]},
                  {"observed": [dict(both[0], result="SKIP"), both[1]]}, {"observed": [dict(both[0], suite="client"), both[1]]},
                  {"observed": [both[0], both[0]]}, {"observed": both + [{"suite": "api", "test": "TestExtra", "result": "PASS"}]},
-                 {"observed": [dict(both[0], test="TestCephOSDSoakOtherIntegration"), both[1]]}]
+                 {"observed": [dict(both[0], test="TestCephOSDSoakOtherIntegration"), both[1]]},
+                 # The announced selection must be exactly both parents.
+                 {"selected": []}, {"selected": self.gate()["selected"][:1]},
+                 {"selected": self.gate()["selected"][:1] * 2},
+                 {"selected": self.gate()["selected"] + [["client", "TestCephOtherIntegration"]]},
+                 {"selected": [["client", test] for _, test in self.gate()["selected"]]}, {"selected": None}]
         for change in cases:
             with self.subTest(change=change):
                 self.put(self.tests, dict(self.gate(), **change))
                 self.rejected("required-test-not-passed")
+
+    def test_announced_order_legacy_records_and_retained_versions(self):
+        tests = [family.TESTS[label] for label in ("failover", "steady")]
+        self.put(self.tests, recorded_gate("", [], tests, tests))
+        manifest = self.collect()
+        self.assertEqual(json.loads((self.output / "tests.json").read_text())["selected"], [["api", test] for test in tests])
+        retained = json.loads((self.output / "tests.json").read_text())
+        legacy = {key: value for key, value in retained.items() if key != "selected"}
+        family.validate_tests(legacy, 1)
+        family.validate_tests(retained, 2)
+        for value, version in ((retained, 1), (legacy, 2), (retained, 3)):
+            with self.subTest(version=version, fields=sorted(value)), self.assertRaises(evidence.EvidenceError):
+                family.validate_tests(value, version)
+        self.assertEqual(manifest["schema_version"], 2)
+        self.reset_output()
+        no_announcement = recorded_gate("", [], None, tests)
+        self.assertTrue(no_announcement["passed"])
+        record = self.gate()
+        del record["selected"]
+        for value, code in ((no_announcement, "required-test-not-passed"), (record, "schema-fields")):
+            with self.subTest(code=code):
+                self.put(self.tests, value)
+                self.rejected(code)
 
     # Unsafe names, inputs and outputs --------------------------------------
 
