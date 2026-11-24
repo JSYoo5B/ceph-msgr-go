@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -149,41 +150,9 @@ func nativePool(t *testing.T, ctx context.Context, mode string, input any) poolR
 // fields of a mode that live in the mode's own type.
 func nativePoolResult(t *testing.T, ctx context.Context, mode string, input, result any) poolReceipt {
 	t.Helper()
-	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
-	raw, err := json.Marshal(map[string]any{})
-	if input != nil {
-		raw, err = json.Marshal(input)
-	}
-	if err != nil || len(raw) > 1<<20 {
-		t.Fatal("bounded pool oracle input", err)
-	}
-	if err := os.Remove(filepath.Join(dir, "osd-pool-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatal(err)
-	}
-	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-pool", mode, testcluster.ControlInput{Name: "osd-pool-input.json", Data: raw}); err != nil {
-		t.Fatal("native owned-pool oracle "+mode, err)
-	}
-	f, err := os.Open(filepath.Join(dir, "osd-pool-result.json"))
+	receipt, err := readNativePoolResult(ctx, mode, input, result)
 	if err != nil {
 		t.Fatal(err)
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, (512<<10)+1))
-	if err != nil || len(data) > 512<<10 {
-		t.Fatal("pool oracle receipt exceeds bound", err)
-	}
-	var receipt poolReceipt
-	if err := json.Unmarshal(data, &receipt); err != nil {
-		t.Fatal(err)
-	}
-	if result != nil {
-		if err := json.Unmarshal(data, result); err != nil {
-			t.Fatal(err)
-		}
-	}
-	const source = "7f793731f1b39eb4f465e960113d2363c311b964"
-	if receipt.Schema != 1 || receipt.Commit != source || receipt.Mode != mode || !strings.Contains(receipt.DaemonVersion, source) {
-		t.Fatal("pool oracle receipt provenance differs", receipt)
 	}
 	if mode == "cleanup" {
 		// Every caller's cleanup owes the start state these leftovers would
@@ -207,6 +176,48 @@ func nativePoolResult(t *testing.T, ctx context.Context, mode string, input, res
 		}
 	}
 	return receipt
+}
+
+// readNativePoolResult permits diagnostic callers to retain an oracle failure
+// before reporting it, using the same bounds and provenance as nativePoolResult.
+func readNativePoolResult(ctx context.Context, mode string, input, result any) (poolReceipt, error) {
+	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	raw, err := json.Marshal(map[string]any{})
+	if input != nil {
+		raw, err = json.Marshal(input)
+	}
+	if err != nil || len(raw) > 1<<20 {
+		return poolReceipt{}, fmt.Errorf("bounded pool oracle input: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "osd-pool-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return poolReceipt{}, err
+	}
+	if err := testcluster.ControlDaemonInput(ctx, dir, "verify", "osd-pool", mode, testcluster.ControlInput{Name: "osd-pool-input.json", Data: raw}); err != nil {
+		return poolReceipt{}, fmt.Errorf("native owned-pool oracle %s: %w", mode, err)
+	}
+	f, err := os.Open(filepath.Join(dir, "osd-pool-result.json"))
+	if err != nil {
+		return poolReceipt{}, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, (512<<10)+1))
+	if err != nil || len(data) > 512<<10 {
+		return poolReceipt{}, fmt.Errorf("pool oracle receipt exceeds bound: %v", err)
+	}
+	var receipt poolReceipt
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		return poolReceipt{}, err
+	}
+	if result != nil {
+		if err := json.Unmarshal(data, result); err != nil {
+			return poolReceipt{}, err
+		}
+	}
+	const source = "7f793731f1b39eb4f465e960113d2363c311b964"
+	if receipt.Schema != 1 || receipt.Commit != source || receipt.Mode != mode || !strings.Contains(receipt.DaemonVersion, source) {
+		return poolReceipt{}, fmt.Errorf("pool oracle receipt provenance differs: %+v", receipt)
+	}
+	return receipt, nil
 }
 
 type ownedPools struct {
