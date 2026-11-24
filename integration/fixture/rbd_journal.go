@@ -233,6 +233,8 @@ func rbdJournalActionsFor(p profile) []string {
 		return rbdJournalDeadPrimaryActions
 	case p.admits(capRBDJournalPendingHold):
 		return rbdJournalPendingHoldActions
+	case p.admits(capRBDJournalErasureHold):
+		return rbdJournalErasureHoldActions
 	case p.admits(capRBDJournalPrimaryRestart):
 		return rbdJournalPrimaryRestartActions
 	case p.admits(capRBDJournalConsumer):
@@ -396,7 +398,13 @@ func (c *fixtureCluster) rbdJournalPrimaryOps() rbdJournalPrimaryOps {
 	return rbdJournalPrimaryOps{
 		place: func(ctx context.Context, object string) (rbdJournalPlacement, error) {
 			var p rbdJournalPlacement
-			data, err := c.cluster.Ceph(ctx, "osd", "map", x.plan.Pool, object, "--format", "json")
+			// A journal data object is in the journal pool, which names
+			// it after the header's pool (journal/Journaler.cc).
+			pool := x.plan.Pool
+			if strings.HasPrefix(object, "journal_data.") && x.journalPlan.JournalPool != "" {
+				pool = x.journalPlan.JournalPool
+			}
+			data, err := c.cluster.Ceph(ctx, "osd", "map", pool, object, "--format", "json")
 			if err == nil && (len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &p) != nil) {
 				err = errors.New("native object placement unavailable")
 			}
@@ -533,7 +541,11 @@ type rbdJournalEvent struct {
 type rbdJournalPlan struct {
 	// JournalOrder is the journal data object order the setup creates the
 	// image's journal with; 0 leaves librbd's rbd_journal_order default.
-	JournalOrder int               `json:"journal_order"`
+	JournalOrder int `json:"journal_order"`
+	// JournalPool is the pool of the journal's data objects, the
+	// erasure-coded second owned pool of the erasure-hold sequence; empty
+	// keeps them in Pool.
+	JournalPool  string            `json:"journal_pool,omitempty"`
 	Pool         string            `json:"pool"`
 	BaseImage    string            `json:"base_image"`
 	Image        string            `json:"image"`
@@ -648,7 +660,8 @@ if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or ident
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('image') != 'ceph-msgr-journal-' + token or plan.get('features') != 69
         or plan.get('oracle_client') != 'ceph-msgr-oracle-' + token[:8] or plan.get('go_client') != 'ceph-msgr-mirror-' + token[:8]
-        or plan.get('journal_order') not in (0, 12) or action not in ACTIONS or not request_id.isdecimal()):
+        or plan.get('journal_order') not in (0, 12) or plan.get('journal_pool', '') not in ('', 'ceph-msgr-rbd2-' + token)
+        or action not in ACTIONS or not request_id.isdecimal()):
     raise ValueError('native RBD journal driver scope is not owned')
 OUT = '/out'
 CONF = '/tmp/ceph-msgr-test/ceph.conf'
@@ -658,6 +671,11 @@ CONSUMER = bool(plan.get('produce_events'))
 OBJECTS = 16 if CONSUMER else 8
 OBJECT_LIMIT = 256 * 1024
 pool, name = plan['pool'], plan['image']
+# The erasure-hold plan's journal data objects are in their own pool, named
+# after the header's pool (journal/Journaler.cc); every other plan's are in
+# the image's pool.
+JOURNAL_POOL = plan.get('journal_pool', '')
+journal_io = None
 PREFIX = 'rbd-journal-%s-' % action
 # The trim plan creates the journal with small objects; its takeover waits
 # for its own journal trimmer and keeps the trimmer's debug lines.
@@ -792,7 +810,7 @@ def observe(ioctx, out):
     prefix = 'journal_data.%d.%s.' % (ioctx.get_pool_id(), image_id)
     out['header_object'], out['journal_header'], out['journal_prefix'] = 'rbd_header.' + image_id, header, prefix
     out['class_calls'] = journal_calls(ioctx, header)
-    objects, view = journal_objects(ioctx, prefix)
+    objects, view = journal_objects(journal_io or ioctx, prefix)
     out['journal_objects'] = objects
     spec = pool + '/' + image_id
     out['info'] = cli(['journal', 'info', '--format', 'json', spec], json.loads)
@@ -1061,6 +1079,10 @@ LAGGY_LINE = re.compile(r'^\S+ +[0-9a-f]+ +(-?[0-9]+) JournalMetadata: 0x[0-9a-f
 LAGGY_LINES = 16
 laggy_lines, laggy_matched = [], [0]
 conf = {'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'}
+if JOURNAL_POOL:
+    # librbd creates the journal's data objects in rbd_journal_pool
+    # (librbd/image/CreateRequest.cc, librbd/journal/CreateRequest.cc).
+    conf['rbd_journal_pool'] = JOURNAL_POOL
 if action in ('force-break', 'takeover'):
     conf.update(debug_rbd='10/10', log_to_file='true', log_file=LOCK_LOG)
 if TRIM and action == 'takeover':
@@ -1124,6 +1146,9 @@ try:
     ioctx = cluster.open_ioctx(pool)
     try:
         out['pool_id'] = ioctx.get_pool_id()
+        if JOURNAL_POOL:
+            journal_io = cluster.open_ioctx(JOURNAL_POOL)
+            out['journal_pool_id'] = journal_io.get_pool_id()
         if action == 'setup':
             # The clone acceptance's parent and clone may precede this image.
             listed = sorted(text(i) for i in rbd.RBD().list(ioctx))
@@ -1217,6 +1242,8 @@ try:
                 out['close_ns'] = time.monotonic_ns() - started
         observe(ioctx, out)
     finally:
+        if journal_io is not None:
+            journal_io.close()
         ioctx.close()
 finally:
     cluster.shutdown()
@@ -1291,11 +1318,13 @@ type rbdJournalCLI struct {
 // rbdJournalNative is one complete journal-driver output; unknown fields are
 // refused.
 type rbdJournalNative struct {
-	Action         string                 `json:"action"`
-	Token          string                 `json:"token"`
-	RequestID      int64                  `json:"request_id"`
-	Pool           string                 `json:"pool"`
-	PoolID         int64                  `json:"pool_id"`
+	Action    string `json:"action"`
+	Token     string `json:"token"`
+	RequestID int64  `json:"request_id"`
+	Pool      string `json:"pool"`
+	PoolID    int64  `json:"pool_id"`
+	// JournalPoolID is the journal pool's ID when the plan names one.
+	JournalPoolID  int64                  `json:"journal_pool_id,omitempty"`
 	Image          string                 `json:"image"`
 	NativeGlobalID uint64                 `json:"native_global_id"`
 	StartedNS      int64                  `json:"started_ns"`
@@ -1541,7 +1570,8 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 		return rbdJournalNative{}, fmt.Errorf("native RBD journal output decoding: %w", err)
 	}
 	if result.Action != action || result.Token != token || result.RequestID != request || result.Pool != plan.Pool || result.Image != plan.Image ||
-		result.PoolID < 0 || result.NativeGlobalID == 0 || result.StartedNS <= 0 || result.FinishedNS < result.StartedNS {
+		result.PoolID < 0 || result.NativeGlobalID == 0 || result.StartedNS <= 0 || result.FinishedNS < result.StartedNS ||
+		(plan.JournalPool != "") != (result.JournalPoolID > 0) || result.JournalPoolID == result.PoolID {
 		return rbdJournalNative{}, errors.New("native RBD journal output identity differs")
 	}
 	s := result.Stat

@@ -255,9 +255,11 @@ type rbdGroupState struct {
 }
 
 // prepareRBDGroupPool creates and initializes the group acceptance's second
-// owned pool with the first pool's policy, before the identities whose
-// capabilities name both pools. The intent is journaled first; a pool handle
-// returned with an error still identifies it for cleanup.
+// owned pool with the given policy (the first pool's, or the erasure-hold
+// sequence's erasure-coded one, which is not initialized), before the
+// identities whose capabilities name both pools. The intent is journaled
+// first; a pool handle returned with an error still identifies it for
+// cleanup.
 func (c *fixtureCluster) prepareRBDGroupPool(ctx context.Context, config ceph.PoolConfig) error {
 	x := c.rbdBase
 	if x == nil || x.group.secondPoolIntent || x.goIntent || x.nativeIntent {
@@ -272,6 +274,12 @@ func (c *fixtureCluster) prepareRBDGroupPool(ctx context.Context, config ceph.Po
 	x.group.secondPoolHandle, err = c.cluster.CreatePool(ctx, config)
 	if err := c.rbdBaseFinish(m, err); err != nil {
 		return fmt.Errorf("create the second owned RBD pool: %w", err)
+	}
+	if config.ErasureCode != nil {
+		// An erasure-coded pool holds no RBD metadata, only data objects of
+		// images in the first pool, so `rbd pool init` does not apply; the
+		// pool carries the rbd application from its creation.
+		return nil
 	}
 	m, err = c.rbdBaseBegin("group-pool-init", config.Name, 0)
 	if err != nil {
