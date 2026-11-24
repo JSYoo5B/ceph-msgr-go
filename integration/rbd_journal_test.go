@@ -106,7 +106,10 @@ type nativeRBDJournalEvent struct {
 type nativeRBDJournalPlan struct {
 	// JournalOrder is the journal object order the setup created the journal
 	// with, 0 for librbd's default (the trim plan, rbd_journal_trim_test.go).
-	JournalOrder int                     `json:"journal_order"`
+	JournalOrder int `json:"journal_order"`
+	// JournalPool is the pool of the journal's data objects in the
+	// erasure-hold plan (rbd_journal_held_test.go), empty otherwise.
+	JournalPool  string                  `json:"journal_pool"`
 	Pool         string                  `json:"pool"`
 	BaseImage    string                  `json:"base_image"`
 	Image        string                  `json:"image"`
@@ -187,6 +190,7 @@ type nativeRBDJournal struct {
 	Action         string `json:"action"`
 	RequestID      int64  `json:"request_id"`
 	PoolID         int64  `json:"pool_id"`
+	JournalPoolID  int64  `json:"journal_pool_id"`
 	NativeGlobalID uint64 `json:"native_global_id"`
 	StartedNS      int64  `json:"started_ns"`
 	FinishedNS     int64  `json:"finished_ns"`

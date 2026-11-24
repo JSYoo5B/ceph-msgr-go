@@ -873,7 +873,8 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	primaryChange, ownerLoss, forced := variant == rbdJournalVariantPrimaryChange, variant == rbdJournalVariantOwnerLoss, variant == rbdJournalVariantForcedBreak
 	forcedPending := variant == rbdJournalVariantForcedBreakPending
 	inflight, trim := variant == rbdJournalVariantForcedBreakInflight, variant == rbdJournalVariantTrim
-	held := variant == rbdJournalVariantReplicaHold || variant == rbdJournalVariantHeldPrimaryChange || variant == rbdJournalVariantDeadPrimary || rbdJournalHeldPendingMode(variant)
+	erasure := variant == rbdJournalVariantErasureHold
+	held := variant == rbdJournalVariantReplicaHold || variant == rbdJournalVariantHeldPrimaryChange || variant == rbdJournalVariantDeadPrimary || rbdJournalHeldPendingMode(variant) || erasure
 	consumer := variant == rbdJournalVariantConsumer
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
@@ -883,12 +884,26 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		t.Skip("requires the RBD fixture on three replicated BlueStore OSDs")
 	}
 	var oracle nativeRBDOracle
-	if err := readMDSFreshJSON(filepath.Join(dir, "rbd-base-oracle.json"), &oracle); err != nil {
+	var secondOracle nativeRBDGroupOracle
+	if err := errors.Join(readMDSFreshJSON(filepath.Join(dir, "rbd-base-oracle.json"), &oracle), readMDSFreshJSON(filepath.Join(dir, "rbd-base-oracle.json"), &secondOracle)); err != nil {
 		t.Fatal(err)
 	}
 	token, identity := oracle.Token, os.Getenv("CEPH_MSGR_RBD_BASE_IDENTITY")
+	// The erasure-hold sequence's journal data objects are in the
+	// erasure-coded second owned pool; no other variant has a second pool.
+	wantCaps := "profile rbd pool=" + oracle.Plan.Pool
+	journalPool, journalPoolID := oracle.Plan.Pool, oracle.Pool.ID
+	if erasure {
+		if p := secondOracle.SecondPool; p == nil || p.Name != "ceph-msgr-rbd2-"+token || p.ID == oracle.Pool.ID || p.Flags&1 != 0 || !strings.Contains(","+p.FlagNames+",", ",ec_overwrites,") {
+			t.Fatal("native RBD oracle lacks the erasure-coded journal pool with overwrites", p)
+		}
+		wantCaps += ", profile rbd pool=" + secondOracle.SecondPool.Name
+		journalPool, journalPoolID = secondOracle.SecondPool.Name, secondOracle.SecondPool.ID
+	} else if secondOracle.SecondPool != nil {
+		t.Fatal("native RBD oracle names a second pool for a journal variant without one", secondOracle.SecondPool)
+	}
 	if oracle.Source != mdsFreshSource || len(token) != 32 || oracle.FSID != os.Getenv("CEPH_MSGR_FSID") || oracle.Plan.Pool != "ceph-msgr-rbd-"+token || oracle.Pool.Name != oracle.Plan.Pool ||
-		oracle.Pool.Flags&1 != 0 || identity != "client.rbd-base-"+token || oracle.ClientIdentity != identity || oracle.Caps["mon"] != "profile rbd" || oracle.Caps["osd"] != "profile rbd pool="+oracle.Plan.Pool {
+		oracle.Pool.Flags&1 != 0 || identity != "client.rbd-base-"+token || oracle.ClientIdentity != identity || oracle.Caps["mon"] != "profile rbd" || oracle.Caps["osd"] != wantCaps {
 		t.Fatal("native RBD oracle scope differs", oracle.Source, oracle.Pool, identity)
 	}
 	options := integrationOptions(t)
@@ -925,7 +940,7 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		results = "rbd-journal-trim-results.json"
 	case rbdJournalVariantConsumer:
 		results = "rbd-journal-consumer-results.json"
-	case rbdJournalVariantReplicaHold, rbdJournalVariantHeldPrimaryChange, rbdJournalVariantDeadPrimary, rbdJournalVariantPendingHold, rbdJournalVariantPrimaryRestart:
+	case rbdJournalVariantReplicaHold, rbdJournalVariantHeldPrimaryChange, rbdJournalVariantDeadPrimary, rbdJournalVariantPendingHold, rbdJournalVariantPrimaryRestart, rbdJournalVariantErasureHold:
 		results, outcomeFile = "rbd-journal-"+variant+"-results.json", "rbd-journal-"+variant+"-outcome.json"
 	}
 
@@ -988,6 +1003,9 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	}
 	if held {
 		record.Held = &rbdJournalHeld{Mode: variant, Replica: -1}
+		if erasure {
+			record.Held.JournalPool, record.Held.JournalPoolID = journalPool, journalPoolID
+		}
 	}
 	if consumer {
 		record.Consumer = &rbdJournalConsumer{}
@@ -1099,6 +1117,12 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	plan = setupResult.Plan
 	imageID := setup.ImageID
 	journalHeader, prefix, header := "journal."+imageID, fmt.Sprintf("journal_data.%d.%s.", oracle.Pool.ID, imageID), "rbd_header."+imageID
+	// librbd names the journal's data objects after the header's pool
+	// wherever they are (ceph/ceph/blob/v20.2.4/src/journal/Journaler.cc
+	// object_oid_prefix); the native driver reads them in the journal pool.
+	if wantJournal := map[bool]string{true: journalPool}[erasure]; plan.JournalPool != wantJournal || erasure != (setup.JournalPoolID == journalPoolID) || !erasure && setup.JournalPoolID != 0 {
+		t.Fatal("native RBD journal pool differs", plan.JournalPool, setup.JournalPoolID)
+	}
 	if plan.Pool != oracle.Plan.Pool || plan.Image != "ceph-msgr-journal-"+token || len(plan.GoWrites) == 0 || plan.Features != rbdJournalImageFeatures ||
 		setup.JournalHeader != journalHeader || setup.JournalPrefix != prefix || setup.HeaderObject != header || setup.Features != plan.Features ||
 		!setup.Lockers.Empty || len(setup.Watchers) != 0 || len(setup.ClassCalls) != 11 {
@@ -1137,7 +1161,13 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		metadata = append(metadata, out...)
 	}
 	md := &rbdDecoder{data: metadata}
-	order, splay, _, minimumSet, activeSet := md.u8(), md.u8(), md.u64(), md.u64(), md.u64()
+	order, splay, dataPool, minimumSet, activeSet := md.u8(), md.u8(), int64(md.u64()), md.u64(), md.u64()
+	// cls_journal's get_pool_id: the data pool the journal was created
+	// with, -1 for the header's own (cls/journal/cls_journal.cc,
+	// librbd/journal/CreateRequest.cc).
+	if wantPool := map[bool]int64{true: journalPoolID, false: -1}[erasure]; dataPool != wantPool {
+		t.Fatal("journal data pool differs", dataPool, wantPool)
+	}
 	// The trim plan creates the journal with rbdJournalTrimJournalOrder, every other
 	// plan with librbd's default.
 	wantOrder, small := rbdJournalOrder, trim || consumer
@@ -1166,12 +1196,16 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	addresses := osdDumpAddresses(t, ctx, observer)
 	route := func(t *testing.T, object string) rbdRoute {
 		t.Helper()
-		p, err := recoveryObjectPlacement(ctx, observer, plan.Pool, object)
+		pool, poolID := plan.Pool, oracle.Pool.ID
+		if strings.HasPrefix(object, prefix) {
+			pool, poolID = journalPool, journalPoolID
+		}
+		p, err := recoveryObjectPlacement(ctx, observer, pool, object)
 		if err != nil {
 			t.Fatal(err)
 		}
 		r := rbdRoute{Object: object, Pool: p.PoolID, Hash: p.Hash, Epoch: p.Epoch, RawPGID: p.RawPGID, PGID: p.PGID, Primary: p.Primary, Address: addresses[p.Primary]}
-		if r.Pool != oracle.Pool.ID || r.Primary < 0 || r.Address == "" || p.Acting[0] != p.Primary {
+		if r.Pool != poolID || r.Primary < 0 || r.Address == "" || p.Acting[0] != p.Primary {
 			t.Fatal("caller-side RBD object placement differs", r)
 		}
 		return r
@@ -1372,10 +1406,19 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	objectsBlob := readRBDBlob(t, dir, lockedNative.Blobs["journal_objects"])
 	nativeBefore := objectsBlob[lockedNative.JournalObjects[object].Offset : lockedNative.JournalObjects[object].Offset+lockedNative.JournalObjects[object].Size]
 	// A read on the subject's own connection passes the armed-to-be gate and
-	// equals the native read: the gate withholds nothing yet.
-	r = send(t, nil, gid, "append_before", entry.ObjectName, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat}, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: 256 << 10})
-	if !bytes.Equal(r.Operations[1].Data, nativeBefore) || len(nativeBefore) != entry.Offset {
-		t.Fatal("journal object before the append differs between Go and native librados", len(r.Operations[1].Data), len(nativeBefore), entry.Offset)
+	// equals the native read: the gate withholds nothing yet. On an
+	// erasure-coded journal object the read goes alone: the primary
+	// completes an extent read asynchronously and runs the vector again, so
+	// a stat beside it would answer its size and mtime once per run
+	// (ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc execute_ctx,
+	// OpContext::finish_read), which the client refuses as a malformed reply.
+	ops := []cephmsgr.OSDOperation{{Code: cephmsgr.OSDStat}, {Code: cephmsgr.OSDRead, Length: 256 << 10}}
+	if erasure {
+		ops = ops[1:]
+	}
+	r = send(t, nil, gid, "append_before", entry.ObjectName, ops...)
+	if got := r.Operations[len(ops)-1].Data; !bytes.Equal(got, nativeBefore) || len(nativeBefore) != entry.Offset {
+		t.Fatal("journal object before the append differs between Go and native librados", len(got), len(nativeBefore), entry.Offset)
 	}
 	if s := gate.State(); s.LargeWrites != 0 || s.Bound || s.Connections != len(conns) {
 		t.Fatal("the subject already wrote a frame of the append's size, so the gate cannot single out the append", s)

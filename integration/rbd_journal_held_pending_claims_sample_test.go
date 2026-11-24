@@ -78,10 +78,7 @@ func rbdJournalHeldPendingSample(mode string) *rbdJournalLostAppendRecord {
 		q := &nativeRBDJournalPGQuery{State: state, Epoch: epoch, Up: slices.Clone(acting), Acting: slices.Clone(acting), LastUpdate: last, SameIntervalSince: interval, SameUpSince: interval,
 			SamePrimarySince: interval, LastEpochStarted: interval + 1}
 		for _, p := range peers {
-			q.Peers = append(q.Peers, struct {
-				Peer       int32  `json:"peer"`
-				LastUpdate string `json:"last_update"`
-			}{p, last})
+			q.Peers = append(q.Peers, nativeRBDJournalPGPeer{Peer: p, LastUpdate: last})
 		}
 		return q
 	}

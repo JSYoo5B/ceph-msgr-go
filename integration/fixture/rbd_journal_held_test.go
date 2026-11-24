@@ -15,6 +15,7 @@ const (
 	rbdJournalDeadPrimarySelector       = "^TestCephRBDJournalDeadPrimaryIntegration$"
 	rbdJournalPendingHoldSelector       = "^TestCephRBDJournalPendingHoldIntegration$"
 	rbdJournalPrimaryRestartSelector    = "^TestCephRBDJournalPrimaryRestartIntegration$"
+	rbdJournalErasureHoldSelector       = "^TestCephRBDJournalErasureHoldIntegration$"
 )
 
 // rbdJournalProfile loads the profile of one selector with its catalog
@@ -40,7 +41,7 @@ func TestRBDJournalHeldSelectorsAreExclusive(t *testing.T) {
 	one := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1"}
 	for selector, want := range map[string][]string{rbdJournalReplicaHoldSelector: rbdJournalReplicaHoldActions, rbdJournalHeldPrimaryChangeSelector: rbdJournalHeldPrimaryChangeActions,
 		rbdJournalDeadPrimarySelector: rbdJournalDeadPrimaryActions, rbdJournalPendingHoldSelector: rbdJournalPendingHoldActions,
-		rbdJournalPrimaryRestartSelector: rbdJournalPrimaryRestartActions} {
+		rbdJournalPrimaryRestartSelector: rbdJournalPrimaryRestartActions, rbdJournalErasureHoldSelector: rbdJournalErasureHoldActions} {
 		p, err := rbdJournalProfile(t, three, selector)
 		if err != nil || p.testRun != selector || p.rbdReplicas() != "3" || p.osdTopology().poolSize != 3 || p.osdTopology().poolMinSize != 2 ||
 			!slices.Equal(rbdJournalActionsFor(p), want) || !slices.Equal(rbdLockActionsFor(p), rbdLockActions) {
@@ -88,6 +89,7 @@ func TestRBDJournalHeldSelectorsAreExclusive(t *testing.T) {
 		rbdJournalHeldPrimaryChangeSelector: {{"journal_data.3.ab.0", false}},
 		rbdJournalPendingHoldSelector:       {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", true}, {"journal_data.3.ab.2", true}},
 		rbdJournalPrimaryRestartSelector:    {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", false}},
+		rbdJournalErasureHoldSelector:       {{"journal_data.3.ab.0", true}},
 	} {
 		p, err := rbdJournalProfile(t, three, selector)
 		if got := rbdJournalHeldAwaited(p, 3, "ab"); err != nil || !slices.Equal(got, want) {
@@ -100,10 +102,41 @@ func TestRBDJournalHeldDecoders(t *testing.T) {
 	query := `{"state":"active+clean","epoch":30,"up":[0,1,2],"acting":[0,1,2],"info":{"pgid":"3.0","last_update":"29'51","history":{"last_epoch_started":22,` +
 		`"same_up_since":21,"same_interval_since":21,"same_primary_since":21}},"peer_info":[{"peer":"1","last_update":"29'51"},{"peer":"2","last_update":"29'51"}]}`
 	q, err := decodeRBDJournalPGQuery("3.0", []byte(query))
-	if err != nil || q.State != "active+clean" || q.SameIntervalSince != 21 || q.LastEpochStarted != 22 || len(q.Peers) != 2 || q.Peers[1] != (rbdJournalPGPeer{2, "29'51"}) {
+	if err != nil || q.State != "active+clean" || q.SameIntervalSince != 21 || q.LastEpochStarted != 22 || len(q.Peers) != 2 || q.Peers[1] != (rbdJournalPGPeer{Peer: 2, LastUpdate: "29'51"}) {
 		t.Fatal("PG query projection differs", q, err)
 	}
+	// An erasure-coded PG's primary names itself with its shard and each
+	// peer with its shard.
+	ec := strings.NewReplacer(`"pgid":"3.0"`, `"pgid":"3.0s0"`, `"peer":"1"`, `"peer":"1(1)"`, `"peer":"2"`, `"peer":"2(2)"`).Replace(query)
+	q, err = decodeRBDJournalPGQuery("3.0", []byte(ec))
+	if err != nil || q.Shard == nil || *q.Shard != 0 || len(q.Peers) != 2 || q.Peers[0].Peer != 1 || q.Peers[0].Shard == nil || *q.Peers[0].Shard != 1 ||
+		q.Peers[1].Peer != 2 || q.Peers[1].Shard == nil || *q.Peers[1].Shard != 2 || q.Peers[1].LastUpdate != "29'51" {
+		t.Fatal("erasure-coded PG query projection differs", q, err)
+	}
+	if q, err := decodeRBDJournalPGQuery("3.0", []byte(query)); err != nil || q.Shard != nil || q.Peers[0].Shard != nil {
+		t.Fatal("replicated PG query carries a shard", q, err)
+	}
+	// Valid syntax with the wrong shard numbering: each shard must be that
+	// member's acting index (acting [0,1,2]).
+	for name, wrong := range map[string]string{
+		"primary on a peer's shard":   strings.Replace(ec, `"pgid":"3.0s0"`, `"pgid":"3.0s1"`, 1),
+		"peers' shards swapped":       strings.NewReplacer(`"peer":"1(1)"`, `"peer":"1(2)"`, `"peer":"2(2)"`, `"peer":"2(1)"`).Replace(ec),
+		"peer on the primary's shard": strings.Replace(ec, `"peer":"1(1)"`, `"peer":"1(0)"`, 1),
+		"shard beyond the acting set": strings.Replace(ec, `"peer":"2(2)"`, `"peer":"2(3)"`, 1),
+		"primary beyond the acting":   strings.Replace(ec, `"pgid":"3.0s0"`, `"pgid":"3.0s3"`, 1),
+		"one peer without its shard":  strings.Replace(ec, `"peer":"2(2)"`, `"peer":"2"`, 1),
+		"shards in a replicated PG":   strings.Replace(query, `"peer":"1"`, `"peer":"1(1)"`, 1),
+		"the primary listed as peer":  strings.Replace(ec, `"peer":"1(1)"`, `"peer":"0(1)"`, 1),
+		"non-canonical shard":         strings.Replace(ec, `"peer":"1(1)"`, `"peer":"1(01)"`, 1),
+	} {
+		if q, err := decodeRBDJournalPGQuery("3.0", []byte(wrong)); err == nil {
+			t.Fatal("erasure-coded PG query with wrong shard numbering accepted:", name, q)
+		}
+	}
 	for _, bad := range []string{strings.Replace(query, `"pgid":"3.0"`, `"pgid":"3.1"`, 1), strings.Replace(query, `"peer":"1"`, `"peer":"osd"`, 1),
+		strings.Replace(query, `"pgid":"3.0"`, `"pgid":"3.0s"`, 1), strings.Replace(query, `"pgid":"3.0"`, `"pgid":"3.0sx"`, 1),
+		strings.Replace(query, `"pgid":"3.0"`, `"pgid":"3.1s0"`, 1), strings.Replace(query, `"peer":"1"`, `"peer":"1(x)"`, 1),
+		strings.Replace(query, `"peer":"1"`, `"peer":"1(1"`, 1), strings.Replace(query, `"peer":"1"`, `"peer":"(1)"`, 1),
 		strings.Replace(query, `,"history":{"last_epoch_started":22,"same_up_since":21,"same_interval_since":21,"same_primary_since":21}`, "", 1), `{}`} {
 		if _, err := decodeRBDJournalPGQuery("3.0", []byte(bad)); err == nil {
 			t.Fatal("malformed PG query accepted", bad)

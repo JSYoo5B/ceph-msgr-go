@@ -214,7 +214,10 @@ and wire subset (`go doc github.com/JSYoo5B/ceph-msgr-go/cephmsgr`).
   consumer owns path, inode, cache and writeback state.
 - **RBD.** RBD has no wire role of its own: its class calls, watches,
   notifications and object I/O are OSD requests, and image layout, locking
-  and journal policy belong to the consumer.
+  and journal policy belong to the consumer. Without `EnableCephFS` each OSD
+  connection presents its own address nonce, so a blocklist entry made from
+  a lock record's address, as librbd's lock break makes, fences only the
+  connection that took the lock, not a later connection of the same client.
 - **MGR service registration.** `OpenMgrService` registers caller-supplied
   service metadata and status with the active MGR on a dedicated CLIENT
   connection; the handle fails on connection loss or an active-MGR change and
