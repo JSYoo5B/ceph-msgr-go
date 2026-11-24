@@ -38,7 +38,7 @@ var capMDSCharmap = defineExclusiveCapability(fixtureMDSCephFSCompletion, "mds-c
 	"run one test alone on a fresh MDS CephFS completion fixture with the charmap controls",
 	"MDS_FRESH=1 MDS_CEPHFS_COMPLETION=1", nil)
 
-var mdsCephFSCharmapActions = []string{"charmap-set", "charmap-names", "charmap-create", "charmap-require-on", "charmap-require-off"}
+var mdsCephFSCharmapActions = []string{"charmap-set", "charmap-names", "charmap-create", "charmap-require-on", "charmap-require-off", "restart-fire-require"}
 
 // admitMDSCephFSCharmap refuses a charmap action without its capability.
 func admitMDSCephFSCharmap(action string, p profile) error {
@@ -49,10 +49,10 @@ func admitMDSCephFSCharmap(action string, p profile) error {
 }
 
 // mdsCephFSCompletionNativeCapsFor adds "p" to the native identity of a
-// charmap run; every other completion run keeps its caps.
+// charmap or consumer-request run; every other completion run keeps its caps.
 func mdsCephFSCompletionNativeCapsFor(p profile, fsName string) ceph.ClientCaps {
 	caps := mdsCephFSCompletionNativeCaps(fsName)
-	if p.admits(capMDSCharmap) {
+	if p.admits(capMDSCharmap) || p.admits(capMDSConsumerRequests) {
 		caps.MDS = "allow rwps fsname=" + fsName
 	}
 	return caps
@@ -318,9 +318,10 @@ func (c *fixtureCluster) mdsCephFSCharmapAct(ctx context.Context, id int64, acti
 }
 
 // The owned CHARMAP requirement. charmap-require-on adds charmap to the
-// filesystem's required_client_features once, journaled before the command
-// and never replayed after an uncertain outcome; charmap-require-off removes
-// it. Both return once the owned daemon has the resulting MDSMap. The pinned
+// filesystem's required_client_features, journaled before the command and
+// never replayed after an uncertain outcome; charmap-require-off removes it.
+// A requirement can be applied again only after the previous one was
+// restored. Both return once the owned daemon has the resulting MDSMap. The pinned
 // update_required_client_features evicts and blocklists every open session
 // lacking a required bit, so the requirement is refused unless every native
 // session declares bit 22 (the stock client and the Go opt-in do). A new
@@ -359,7 +360,7 @@ func mdsCephFSCharmapRequiresOnly(m mdsSessionsMap, required bool) bool {
 }
 
 func (c *fixtureCluster) mdsCephFSCharmapRequire(ctx context.Context, id int64, on bool, result *mdsCephFSCompletionResult) error {
-	s, x := c.mdsFresh, c.mdsCephFSCompletion
+	x := c.mdsCephFSCompletion
 	if err := admitMDSCephFSCharmap("charmap-require-on", c.profile); err != nil {
 		return err
 	}
@@ -373,11 +374,9 @@ func (c *fixtureCluster) mdsCephFSCharmapRequire(ctx context.Context, id int64, 
 	if err != nil {
 		return err
 	}
-	verb := "rm"
 	if on {
-		verb = "add"
-		if m != nil {
-			return errors.New("MDS CephFS charmap requirement was already applied once")
+		if m != nil && m.State != "restored" {
+			return errors.New("MDS CephFS charmap requirement is applied or uncertain")
 		}
 		if !mdsCephFSCharmapRequiresOnly(current, false) {
 			return errors.New("MDS CephFS charmap requirement refused while the filesystem requires other features")
@@ -391,17 +390,31 @@ func (c *fixtureCluster) mdsCephFSCharmapRequire(ctx context.Context, id int64, 
 				return fmt.Errorf("MDS CephFS charmap requirement refused: native session %d does not declare charmap and would be evicted", session.ID)
 			}
 		}
+	} else if m == nil || m.State != "applied" || !mdsCephFSCharmapRequiresOnly(current, true) {
+		return errors.New("MDS CephFS charmap requirement restore requested without an applied owned requirement")
+	}
+	m, err = c.mdsCephFSCharmapRequireCommand(ctx, id, on, m)
+	result.Mutation = m
+	if err != nil {
+		return err
+	}
+	return c.mdsCephFSCharmapSettle(ctx, on)
+}
+
+// mdsCephFSCharmapRequireCommand runs one journaled change of the owned
+// requirement: a new record to add it, or the applied record m to remove it.
+func (c *fixtureCluster) mdsCephFSCharmapRequireCommand(ctx context.Context, id int64, on bool, m *mdsCephFSMutation) (*mdsCephFSMutation, error) {
+	s, x := c.mdsFresh, c.mdsCephFSCompletion
+	verb := "rm"
+	if on {
+		verb = "add"
 		m = &mdsCephFSMutation{Kind: mdsCephFSCharmapRequiredKind, RequestID: id, Target: s.name, State: "intended"}
 		x.mutations = append(x.mutations, m)
 	} else {
-		if m == nil || m.State != "applied" || !mdsCephFSCharmapRequiresOnly(current, true) {
-			return errors.New("MDS CephFS charmap requirement restore requested without an applied owned requirement")
-		}
 		m.State = "restore-intended"
 	}
-	result.Mutation = m
 	if err := c.mdsCephFSCompletionJournal(); err != nil {
-		return err
+		return m, err
 	}
 	output, err := c.cluster.Ceph(ctx, "fs", "required_client_features", s.name, verb, mdsCephFSCharmapFeature)
 	if len(output) != 0 {
@@ -412,16 +425,212 @@ func (c *fixtureCluster) mdsCephFSCharmapRequire(ctx context.Context, id int64, 
 		if !on {
 			m.State = "restore-uncertain"
 		}
-		return errors.Join(err, c.mdsCephFSCompletionJournal())
+		return m, errors.Join(err, c.mdsCephFSCompletionJournal())
 	}
 	m.State = "applied"
 	if !on {
 		m.State = "restored"
 	}
+	return m, c.mdsCephFSCompletionJournal()
+}
+
+// The ordered requirement (restart-fire-require) fires an armed restart so
+// that the requirement is added while no daemon holds a rank of the owned
+// filesystem: `fs set joinable false`, `mds fail` of the armed GID, `fs
+// required_client_features add charmap` once the FSMap shows rank 0 failed
+// and no ranked daemon, then `fs set joinable true`. Each step is journaled
+// before it runs and never replayed. The pinned
+// Server::update_required_client_features evicts open sessions only from an
+// MDS in reconnect or later, and only on a map change it handles. Here no
+// such daemon exists while the map changes; the respawned daemon, a standby
+// fed a null MDSMap (mon/MDSMonitor.cc check_sub), sees the requirement as a
+// change on its first MDSMap as rank 0, during replay, and checks it on each
+// reconnect against the features its session map kept
+// (mds/MDSRank.cc handle_mds_map, mds/Server.cc handle_client_reconnect at
+// mdsFreshSource). A session that lacks the bit is then answered CLOSE. The
+// requirement stays applied (charmap-require-off removes it); cleanup makes
+// the filesystem joinable again before it expects an active incarnation.
+const mdsCephFSCharmapUnjoinableKind = "fs-unjoinable"
+
+// mdsCephFSCharmapOrdered is the receipt of one ordered requirement.
+type mdsCephFSCharmapOrdered struct {
+	Unjoinable    *mdsCephFSMutation   `json:"unjoinable"`
+	Required      *mdsCephFSMutation   `json:"required,omitempty"`
+	BeforeRequire *mdsCephFSRankStatus `json:"rank_status_before_requirement,omitempty"`
+	AfterRequire  *mdsCephFSRankStatus `json:"rank_status_after_requirement,omitempty"`
+	MapAfter      *mdsSessionsMap      `json:"map_after_requirement,omitempty"`
+	Joinable      bool                 `json:"joinable_after"`
+}
+
+// mdsCephFSCharmapJoinable reads the owned filesystem's joinable flag.
+func (c *fixtureCluster) mdsCephFSCharmapJoinable(ctx context.Context) (bool, error) {
+	s := c.mdsFresh
+	data, err := c.cluster.Ceph(ctx, "fs", "get", s.name, "--format", "json")
+	if err != nil {
+		return false, err
+	}
+	var native struct {
+		ID  *int64 `json:"id"`
+		Map struct {
+			Name       string `json:"fs_name"`
+			FlagsState *struct {
+				Joinable *bool `json:"joinable"`
+			} `json:"flags_state"`
+		} `json:"mdsmap"`
+	}
+	if len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &native) != nil || native.ID == nil || *native.ID != s.oracle.FSCID || native.Map.Name != s.name ||
+		native.Map.FlagsState == nil || native.Map.FlagsState.Joinable == nil {
+		return false, errors.New("MDS CephFS charmap joinable flag readback differs")
+	}
+	return *native.Map.FlagsState.Joinable, nil
+}
+
+// mdsCephFSCharmapSetJoinable runs one journaled joinable change: a new
+// record to make the filesystem unjoinable, or the applied record m to make
+// it joinable again.
+func (c *fixtureCluster) mdsCephFSCharmapSetJoinable(ctx context.Context, id int64, joinable bool, m *mdsCephFSMutation) (*mdsCephFSMutation, error) {
+	s, x := c.mdsFresh, c.mdsCephFSCompletion
+	value := "true"
+	if !joinable {
+		value = "false"
+		m = &mdsCephFSMutation{Kind: mdsCephFSCharmapUnjoinableKind, RequestID: id, Target: s.name, State: "intended"}
+		x.mutations = append(x.mutations, m)
+	} else {
+		m.State = "restore-intended"
+	}
 	if err := c.mdsCephFSCompletionJournal(); err != nil {
+		return m, err
+	}
+	output, err := c.cluster.Ceph(ctx, "fs", "set", s.name, "joinable", value)
+	if len(output) != 0 {
+		m.Output = strings.TrimSpace(string(output[:min(len(output), 4096)]))
+	}
+	if err == nil {
+		var now bool
+		if now, err = c.mdsCephFSCharmapJoinable(ctx); err == nil && now != joinable {
+			err = errors.New("MDS CephFS charmap joinable flag did not change")
+		}
+	}
+	if err != nil {
+		m.State, m.Error = "uncertain", err.Error()
+		if joinable {
+			m.State = "restore-uncertain"
+		}
+		return m, errors.Join(err, c.mdsCephFSCompletionJournal())
+	}
+	m.State = "applied"
+	if joinable {
+		m.State = "restored"
+	}
+	return m, c.mdsCephFSCompletionJournal()
+}
+
+// mdsCephFSCharmapOrderedPrecheck refuses an ordered requirement unless the
+// filesystem is joinable, requires nothing and has no applied or uncertain
+// requirement or joinable change of this run.
+func (c *fixtureCluster) mdsCephFSCharmapOrderedPrecheck(ctx context.Context) error {
+	x := c.mdsCephFSCompletion
+	if err := admitMDSCephFSCharmap("restart-fire-require", c.profile); err != nil {
 		return err
 	}
-	return c.mdsCephFSCharmapSettle(ctx, on)
+	for _, m := range x.mutations {
+		if (m.Kind == mdsCephFSCharmapRequiredKind || m.Kind == mdsCephFSCharmapUnjoinableKind) && m.State != "restored" {
+			return fmt.Errorf("MDS CephFS charmap ordered requirement refused: %s is %s", m.Kind, m.State)
+		}
+	}
+	current, err := c.mdsSessionsReadMap(ctx)
+	if err != nil {
+		return err
+	}
+	joinable, err := c.mdsCephFSCharmapJoinable(ctx)
+	if err != nil {
+		return err
+	}
+	if !mdsCephFSCharmapRequiresOnly(current, false) || !joinable {
+		return errors.New("MDS CephFS charmap ordered requirement refused: the filesystem requires features or is not joinable")
+	}
+	return nil
+}
+
+// mdsCephFSCharmapRankUnheld reports whether no daemon holds a rank of the
+// owned filesystem and rank 0 is failed.
+func mdsCephFSCharmapRankUnheld(status mdsCephFSRankStatus) bool {
+	return status.Rank0 == nil && len(status.Daemons) == 0 && slices.Contains(status.Failed, 0)
+}
+
+// mdsCephFSCharmapOrderedFire runs the requirement and rejoin steps after the
+// armed GID was failed on an unjoinable filesystem. The rejoin is attempted
+// whatever the requirement's outcome.
+func (c *fixtureCluster) mdsCephFSCharmapOrderedFire(ctx context.Context, id int64, armed uint64, o *mdsCephFSCharmapOrdered) error {
+	var requireErr error
+	bounded, stop := context.WithTimeout(ctx, 30*time.Second)
+	for requireErr == nil && o.BeforeRequire == nil {
+		status, err := c.mdsCephFSCompletionRankStatus(bounded, armed)
+		switch {
+		case err != nil:
+			requireErr = err
+		case mdsCephFSCharmapRankUnheld(status) && !status.ArmedPresent:
+			o.BeforeRequire = &status
+		case bounded.Err() != nil:
+			requireErr = fmt.Errorf("MDS CephFS charmap ordered requirement: rank 0 did not become failed and unheld: %w", bounded.Err())
+		default:
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	stop()
+	if requireErr == nil {
+		o.Required, requireErr = c.mdsCephFSCharmapRequireCommand(ctx, id, true, nil)
+	}
+	if requireErr == nil {
+		var current mdsSessionsMap
+		if current, requireErr = c.mdsSessionsReadMap(ctx); requireErr == nil {
+			o.MapAfter = &current
+			if !mdsCephFSCharmapRequiresOnly(current, true) {
+				requireErr = errors.New("MDS CephFS charmap ordered requirement is not in the MDSMap")
+			}
+		}
+	}
+	if requireErr == nil {
+		var status mdsCephFSRankStatus
+		if status, requireErr = c.mdsCephFSCompletionRankStatus(ctx, armed); requireErr == nil {
+			o.AfterRequire = &status
+			if !mdsCephFSCharmapRankUnheld(status) {
+				requireErr = errors.New("MDS CephFS charmap ordered requirement: a daemon held a rank while the requirement changed")
+			}
+		}
+	}
+	_, rejoinErr := c.mdsCephFSCharmapSetJoinable(ctx, id, true, o.Unjoinable)
+	if rejoinErr == nil {
+		o.Joinable = true
+	}
+	return errors.Join(requireErr, rejoinErr)
+}
+
+// mdsCephFSCharmapJoinableReconcile makes the filesystem joinable again when
+// this run left it unjoinable. It reports nil when no joinable change was
+// ever attempted.
+func (c *fixtureCluster) mdsCephFSCharmapJoinableReconcile(ctx context.Context) (*bool, error) {
+	s, x := c.mdsFresh, c.mdsCephFSCompletion
+	if !x.mutated(mdsCephFSCharmapUnjoinableKind) {
+		return nil, nil
+	}
+	restored := false
+	joinable, err := c.mdsCephFSCharmapJoinable(ctx)
+	if err != nil {
+		return &restored, err
+	}
+	if !joinable {
+		if _, err := c.cluster.Ceph(ctx, "fs", "set", s.name, "joinable", "true"); err != nil {
+			return &restored, err
+		}
+		if joinable, err = c.mdsCephFSCharmapJoinable(ctx); err != nil {
+			return &restored, err
+		}
+	}
+	if restored = joinable; !restored {
+		return &restored, errors.New("MDS CephFS charmap left the filesystem unjoinable after cleanup")
+	}
+	return &restored, nil
 }
 
 // mdsCephFSCharmapSettle returns, within a bound, once the MDSMap has

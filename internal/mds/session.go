@@ -68,9 +68,12 @@ var ClientFeatures = []byte{0xff, 0x05, 0, 0, 0, 0, 0, 0}
 // HAS_OWNER_UIDGID (20: owner UID/GID in the v3 request head). Lazy wanted
 // caps, metrics, notify-session-state, getvxattr, client auth-cap checks,
 // charmap and blockdiff stay withheld, so the MDS refuses a session on a
-// filesystem that requires one of them. A directory charmap still arrives in
-// InodeStat optional metadata (InodeStat.DecodeOptionalMetadata), and the MDS
-// answers -EPERM when this profile creates an entry in such a directory.
+// filesystem that requires one of them. The MDS reads neither the getvxattr
+// nor the blockdiff bit, so a caller may still send GETVXATTR and
+// FILE_BLOCKDIFF as raw requests once the MDS advertises them. A directory
+// charmap still arrives in InodeStat optional metadata
+// (InodeStat.DecodeOptionalMetadata), and the MDS answers -EPERM when this
+// profile creates an entry in such a directory.
 // CHARMAP is declared only by CephFSCharmapClientFeatures.
 // Not claimed: multi-rank or failover reclaim, use or release of delegated
 // inodes, and asynchronous directory operations.

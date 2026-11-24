@@ -65,6 +65,18 @@ type nativeMDSCephFSCharmapOutput struct {
 	Probes         []nativeMDSCephFSCharmapProbe  `json:"probes"`
 }
 
+// nativeMDSCephFSCharmapOrdered is the fixture's receipt of an ordered
+// requirement (restart-fire-require): the requirement was added between the
+// two rank status reads, while the filesystem was unjoinable.
+type nativeMDSCephFSCharmapOrdered struct {
+	Unjoinable    *nativeMDSCephFSMutation   `json:"unjoinable"`
+	Required      *nativeMDSCephFSMutation   `json:"required"`
+	BeforeRequire *nativeMDSCephFSRankStatus `json:"rank_status_before_requirement"`
+	AfterRequire  *nativeMDSCephFSRankStatus `json:"rank_status_after_requirement"`
+	MapAfter      *nativeMDSSessionsMap      `json:"map_after_requirement"`
+	Joinable      bool                       `json:"joinable_after"`
+}
+
 // charmapWireNames is this test's consumer name policy for the plan's
 // originals in a case-insensitive NFKC/UTF-8 directory: the name a stock
 // client sends (Client::_wrap_name: NFKC, then full case folding), written
@@ -150,13 +162,21 @@ type charmapReply struct {
 // missing-feature reason, and after the requirement is removed the session
 // creates one more entry, which the stock client resolves.
 //
+// A default CephFS session lacking the bit then holds a cap across a second
+// restart, in which the fixture adds the requirement while the filesystem is
+// unjoinable and no daemon holds rank 0 (restart-fire-require): an open
+// session lacking a newly required bit is evicted only by an incarnation in
+// reconnect or later. The new incarnation reads the requirement on its
+// first MDSMap, OPENs the opt-in reconnect and answers the held session's
+// reconnect with CLOSE (ErrMDSSessionReconnectDenied); its log names the
+// missing bit 22 as the reason, and the denied session is gone from the
+// native session map once the reconnect phase ends.
+//
 // Not exercised: a case-sensitive charmap, the nfd, nfc and nfkd
 // normalizations, an encoding other than utf8, invalid UTF-8 names, a charmap
 // on a nonempty directory, a rename inside or out of the charmap directory,
 // a rename onto an existing entry, alternate names longer than the MDS
-// limit, multiple ranks, and a reconnect refused because a session lacking
-// the bit was held across a restart that added the requirement (the order of
-// the new MDSMap and the reconnect phase is not owned by this fixture).
+// limit, and multiple ranks (TestCephMDSCephFSRanksIntegration).
 //
 //scenario:row mds-cephfs-charmap.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscharmap key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=mds-charmap
 //scenario:row mds-cephfs-charmap.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscharmap key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=memstore osd_replicas=1 osd_profile=legacy-v6 mds_fresh=1 mds_cephfs_completion=1 capabilities=mds-charmap
@@ -170,7 +190,7 @@ func TestCephMDSCephFSCharmapIntegration(t *testing.T) {
 	if dir == "" || os.Getenv("CEPH_MSGR_TEST_MDS_FRESH") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "legacy-v6" {
 		t.Fatal("charmap acceptance requires the owned completion fixture")
 	}
-	ctx, stop := context.WithTimeout(context.Background(), 6*time.Minute)
+	ctx, stop := context.WithTimeout(context.Background(), 9*time.Minute)
 	t.Cleanup(stop)
 	var oracle nativeMDSCephFSCompletionOracle
 	var fresh nativeMDSFresh
@@ -758,6 +778,168 @@ func TestCephMDSCephFSCharmapIntegration(t *testing.T) {
 		facts["native_after_restart"] = checkNative(t, 7, nativeIno)
 		if dials.OSD.Load() != 0 || client.Snapshot().GlobalID != snap.GlobalID || client.Snapshot().CephFSNonce != snap.CephFSNonce {
 			t.Fatal("charmap reconnect issued object I/O or changed client identity")
+		}
+	}) {
+		return
+	}
+
+	if !leaf("reconnect_closed_for_a_missing_required_bit", func(t *testing.T) {
+		// A default CephFS session that lacks bit 22 holds a cap across a
+		// second restart. The fixture adds the requirement while no daemon
+		// holds the rank, so no incarnation could evict the session for it.
+		before := control.mds
+		plainDials := newRecoveryDials(false, before.Endpoint)
+		plain := recoveryClient(t, ctx, identity, key, plainDials, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS = true, true })
+		plainSnap := plain.Snapshot()
+		control.goGIDs[plainSnap.GlobalID] = true
+		plainConn, err := plain.OpenMDS(ctx, target(before))
+		if err != nil {
+			t.Fatal(err)
+		}
+		plainOptions := cephmsgr.MDSSessionOptions{Metadata: metadata("missing"), RenewInterval: 2 * time.Second, MaxEvents: 1024}
+		held, err := plainConn.OpenSession(ctx, plainOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		heldAgent := startCephFSCapAgent(ctx, held)
+		if err := checkNativeCephFSSession(observe(t, plainSnap.GlobalID), identity, plainOptions.Metadata); err != nil {
+			t.Fatal(err)
+		}
+		first, trace := submit(t, "missing", held, heldAgent, "getattr charmap directory held across the restart",
+			cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetattr, Args: cephfsGetattrArgs(cephStatAll), Path: cephmsgr.MDSFilePath{Ino: cIno}})
+		if first.Result != 0 || trace.Target == nil || trace.Target.Ino != cIno {
+			t.Fatal("held session getattr differs", first.Result)
+		}
+		armed := req(t, "restart-arm").Restart
+		fired := req(t, "restart-fire-require")
+		o := fired.Ordered
+		unheld := func(s *nativeMDSCephFSRankStatus) bool {
+			return s != nil && s.Rank0 == nil && len(s.Daemons) == 0 && slices.Contains(s.Failed, 0) && !s.ArmedPresent
+		}
+		if o == nil || o.Unjoinable == nil || o.Unjoinable.State != "restored" || o.Required == nil || o.Required.State != "applied" || !o.Joinable ||
+			!unheld(o.BeforeRequire) || !unheld(o.AfterRequire) || o.MapAfter == nil || len(o.MapAfter.Required) != 1 || o.MapAfter.Required["feature_22"] != "charmap" ||
+			o.AfterRequire.MDSMapEpoch < o.MapAfter.Epoch {
+			t.Fatalf("the requirement was not added while no daemon held the rank: %+v", o)
+		}
+		facts["ordered_requirement"], facts["second_armed"] = o, armed
+		lost := map[string]*cephmsgr.MDSSession{"charmap": session, "missing": held}
+		for name, s := range lost {
+			select {
+			case <-s.Done():
+			case <-time.After(45 * time.Second):
+				t.Fatal("session did not end after the second restart", name)
+			}
+			if s.Status().State != cephmsgr.MDSSessionLost || !describeRecoveryError(s.Err()).SessionReset {
+				t.Fatal("session did not become Lost with RESET", name, s.Status())
+			}
+		}
+		for _, a := range []*cephfsCapAgent{agent, heldAgent} {
+			select {
+			case <-a.done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("a cap agent did not stop after the second restart")
+			}
+		}
+		caps, rs, err := agent.reconnectState(realms)
+		if err != nil {
+			t.Fatal(err)
+		}
+		renamed := charmapWireNames[plan.Entries[5].Name]
+		for i := range caps {
+			if caps[i].Ino == renameIno {
+				caps[i].PathBase, caps[i].Path = cIno, renamed
+			}
+		}
+		heldCaps, heldRealms, err := heldAgent.reconnectState(realms)
+		if err != nil || !slices.ContainsFunc(heldCaps, func(c cephmsgr.MDSCapReconnect) bool { return c.Ino == cIno }) {
+			t.Fatal("the held session has no reconnect cap on the charmap directory", heldCaps, err)
+		}
+		var next *nativeMDSCephFSDaemon
+		until := time.Now().Add(60 * time.Second)
+		for next == nil {
+			status := req(t, "restart-status").RankStatus
+			if status.Rank0 != nil && status.Rank0.GID != armed.Armed.GID && status.Rank0.Name == armed.Armed.Name && status.Rank0.State != "up:replay" {
+				next = status.Rank0
+				break
+			}
+			if time.Now().After(until) {
+				t.Fatal("the second replacement never reached reconnect", status)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if next.State != "up:reconnect" || next.Nonce == armed.Armed.Nonce || next.Incarnation == armed.Armed.Incarnation {
+			t.Fatal("the second replacement incarnation differs", next)
+		}
+		facts["second_replacement"] = next
+		req(t, "mds-log-mark")
+		if err := connection.Close(); err != nil {
+			t.Fatal(err)
+		}
+		dials.allowMDS(next.Endpoint)
+		if connection, err = client.OpenMDS(ctx, target(*next)); err != nil {
+			t.Fatal(err)
+		}
+		opening, cancel := context.WithTimeout(ctx, 30*time.Second)
+		reopened, calls, err := connection.ReconnectSession(opening, session, cephmsgr.MDSReconnectState{Caps: caps, Realms: rs}, options)
+		cancel()
+		if err != nil || len(calls) != 0 || reopened == nil || reopened.Status().State != cephmsgr.MDSSessionOpen || reopened.Status().GlobalID != snap.GlobalID {
+			t.Fatal("the opt-in reconnect did not OPEN while CHARMAP is required", err)
+		}
+		session = reopened
+		agent = startCephFSCapAgentFrom(ctx, reopened, agent)
+		// The held session reconnects to the same incarnation, which checks
+		// the requirement against the features its session map kept.
+		if err := plainConn.Close(); err != nil {
+			t.Fatal(err)
+		}
+		plainDials.allowMDS(next.Endpoint)
+		plainConn2, err := plain.OpenMDS(ctx, target(*next))
+		if err != nil {
+			t.Fatal(err)
+		}
+		opening, cancel = context.WithTimeout(ctx, 30*time.Second)
+		denied, _, err := plainConn2.ReconnectSession(opening, held, cephmsgr.MDSReconnectState{Caps: heldCaps, Realms: heldRealms}, plainOptions)
+		cancel()
+		facts["missing_reconnect_error"] = describeRecoveryError(err)
+		if denied != nil || !errors.Is(err, cephmsgr.ErrMDSSessionReconnectDenied) || !errors.Is(err, cephmsgr.ErrMDSSessionClosed) {
+			t.Fatal("the reconnect of a session lacking the required bit was not answered CLOSE", err)
+		}
+		until = time.Now().Add(90 * time.Second)
+		for {
+			status := req(t, "restart-status").RankStatus
+			if status.Rank0 != nil && status.Rank0.GID == next.GID && status.Rank0.State == "up:active" {
+				break
+			}
+			if time.Now().After(until) {
+				t.Fatal("the second replacement never became active", status)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		req(t, "restart-adopt")
+		// The pinned handler logs the reason once without the client and once
+		// in the cluster log line that names it; the opt-in reconnect is the
+		// only other one in the window.
+		log := req(t, "mds-log", strconv.FormatUint(plainSnap.GlobalID, 10), strconv.FormatUint(uint64(plainSnap.CephFSNonce), 10)).Log
+		facts["denial_log"] = log
+		if log == nil || len(log.find("missing required features '0x0000000000400000', ignoring reconnect, sending close")) != 1 ||
+			len(log.find(fmt.Sprintf("denied reconnect attempt from client.%d ", plainSnap.GlobalID), "(missing required features '0x0000000000400000')")) != 1 {
+			t.Fatal("the daemon log lacks exactly one missing-feature reconnect denial of the held client", log)
+		}
+		if observe(t, plainSnap.GlobalID) != nil {
+			t.Fatal("the denied session remains in the native session map")
+		}
+		if err := checkNativeCephFSCharmapSession(observe(t, snap.GlobalID), identity, options.Metadata); err != nil {
+			t.Fatal("the opt-in session lost its declaration across the second restart", err)
+		}
+		restored := req(t, "charmap-require-off")
+		if restored.Map == nil || len(restored.Map.Required) != 0 || restored.Mutation == nil || restored.Mutation.State != "restored" {
+			t.Fatal("the ordered charmap requirement was not restored", restored.Map, restored.Mutation)
+		}
+		if err := plainConn2.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if plainDials.OSD.Load() != 0 || plain.Snapshot().GlobalID != plainSnap.GlobalID {
+			t.Fatal("the denied client issued object I/O or changed identity")
 		}
 	}) {
 		return
