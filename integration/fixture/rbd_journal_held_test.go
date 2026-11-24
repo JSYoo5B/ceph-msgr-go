@@ -13,6 +13,8 @@ const (
 	rbdJournalReplicaHoldSelector       = "^TestCephRBDJournalReplicaHoldIntegration$"
 	rbdJournalHeldPrimaryChangeSelector = "^TestCephRBDJournalHeldPrimaryChangeIntegration$"
 	rbdJournalDeadPrimarySelector       = "^TestCephRBDJournalDeadPrimaryIntegration$"
+	rbdJournalPendingHoldSelector       = "^TestCephRBDJournalPendingHoldIntegration$"
+	rbdJournalPrimaryRestartSelector    = "^TestCephRBDJournalPrimaryRestartIntegration$"
 )
 
 // rbdJournalProfile loads the profile of one selector with its catalog
@@ -37,7 +39,8 @@ func TestRBDJournalHeldSelectorsAreExclusive(t *testing.T) {
 	three := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1", "CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"}
 	one := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1"}
 	for selector, want := range map[string][]string{rbdJournalReplicaHoldSelector: rbdJournalReplicaHoldActions, rbdJournalHeldPrimaryChangeSelector: rbdJournalHeldPrimaryChangeActions,
-		rbdJournalDeadPrimarySelector: rbdJournalDeadPrimaryActions} {
+		rbdJournalDeadPrimarySelector: rbdJournalDeadPrimaryActions, rbdJournalPendingHoldSelector: rbdJournalPendingHoldActions,
+		rbdJournalPrimaryRestartSelector: rbdJournalPrimaryRestartActions} {
 		p, err := rbdJournalProfile(t, three, selector)
 		if err != nil || p.testRun != selector || p.rbdReplicas() != "3" || p.osdTopology().poolSize != 3 || p.osdTopology().poolMinSize != 2 ||
 			!slices.Equal(rbdJournalActionsFor(p), want) || !slices.Equal(rbdLockActionsFor(p), rbdLockActions) {
@@ -65,7 +68,7 @@ func TestRBDJournalHeldSelectorsAreExclusive(t *testing.T) {
 	}
 	// The sequences' own actions are admitted nowhere else.
 	token := strings.Repeat("a1", 16)
-	for _, action := range []string{"observe-placed", "observe-held", "observe-settled", "observe-primary-lost", "observe-answered"} {
+	for _, action := range []string{"observe-placed", "observe-held", "observe-settled", "observe-primary-lost", "observe-answered", "observe-primary-back", "observe-restarted"} {
 		for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions, rbdJournalPrimaryChangeActions, rbdJournalTrimActions} {
 			for next := 0; next <= len(actions); next++ {
 				if _, _, err := parseRBDJournalRequest(actions, []string{"7", token, action}, token, 6, next); err == nil {
@@ -74,8 +77,22 @@ func TestRBDJournalHeldSelectorsAreExclusive(t *testing.T) {
 			}
 		}
 	}
-	if !rbdJournalReadOnly("observe-held") || !rbdJournalReadOnly("observe-primary-lost") || rbdJournalInspected("observe-held") || rbdJournalBlocklisted("observe-held") {
+	if !rbdJournalReadOnly("observe-held") || !rbdJournalReadOnly("observe-primary-lost") || !rbdJournalReadOnly("observe-primary-back") || !rbdJournalReadOnly("observe-restarted") ||
+		rbdJournalInspected("observe-held") || rbdJournalBlocklisted("observe-held") || rbdJournalInspected("observe-restarted") || rbdJournalBlocklisted("observe-restarted") {
 		t.Fatal("held-request action classification differs")
+	}
+	// observe-held waits for the appends of the selected sequence.
+	for selector, want := range map[string][]rbdJournalHeldAwait{
+		rbdJournalReplicaHoldSelector:       {{"journal_data.3.ab.0", true}},
+		rbdJournalDeadPrimarySelector:       {{"journal_data.3.ab.0", true}},
+		rbdJournalHeldPrimaryChangeSelector: {{"journal_data.3.ab.0", false}},
+		rbdJournalPendingHoldSelector:       {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", true}, {"journal_data.3.ab.2", true}},
+		rbdJournalPrimaryRestartSelector:    {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", false}},
+	} {
+		p, err := rbdJournalProfile(t, three, selector)
+		if got := rbdJournalHeldAwaited(p, 3, "ab"); err != nil || !slices.Equal(got, want) {
+			t.Fatal("awaited held operations differ", selector, got, err)
+		}
 	}
 }
 
@@ -140,7 +157,7 @@ func (f *rbdJournalHeldFake) reads() rbdJournalHeldOps {
 			f.looks++
 			return 30, f.down[at(len(f.down), f.looks-1)], nil
 		},
-		held: 200 * time.Millisecond, lost: 200 * time.Millisecond, pause: time.Millisecond,
+		held: 200 * time.Millisecond, lost: 200 * time.Millisecond, back: 200 * time.Millisecond, pause: time.Millisecond,
 	}
 }
 
@@ -159,7 +176,7 @@ func TestRBDJournalHeldObserveWaits(t *testing.T) {
 	committed := waiting
 	committed.Events = append(slices.Clone(waiting.Events), "op_commit", "sub_op_commit_rec")
 	ctx := context.Background()
-	wait := rbdJournalHeldWait{osd: 0, object: objects[1], committed: true}
+	wait := rbdJournalHeldWait{osd: 0, ops: []rbdJournalHeldAwait{{objects[1], true}}}
 
 	// observe-held waits for the replica commit; a bound without it is
 	// reported as not settled, not as an error.
@@ -175,8 +192,26 @@ func TestRBDJournalHeldObserveWaits(t *testing.T) {
 	}
 	// Without the commit requirement the listing alone settles it.
 	f = &rbdJournalHeldFake{placements: [][]rbdJournalPlacement{placed("3.0", []int{0, 1, 2})}, ops: [][]rbdJournalHeldOp{{waiting}}, down: [][]int{{}}, queries: []rbdJournalPGQuery{query}}
-	if r, err = rbdJournalHeldObserve(ctx, "observe-held", objects, rbdJournalHeldWait{osd: 0, object: objects[1]}, f.reads()); err != nil || !r.Settled {
+	if r, err = rbdJournalHeldObserve(ctx, "observe-held", objects, rbdJournalHeldWait{osd: 0, ops: []rbdJournalHeldAwait{{objects[1], false}}}, f.reads()); err != nil || !r.Settled {
 		t.Fatal("observe-held did not settle on the listed operation", r, err)
+	}
+	// Several awaited operations settle only once all are listed, each as
+	// required; an object whose name extends another's does not stand in.
+	second, longer := committed, waiting
+	second.Description = strings.Replace(committed.Description, objects[1], "journal_data.3.ab.1", 1)
+	longer.Description = strings.Replace(waiting.Description, objects[1], "journal_data.3.ab.10", 1)
+	several := rbdJournalHeldWait{osd: 0, ops: []rbdJournalHeldAwait{{objects[1], true}, {"journal_data.3.ab.1", false}}}
+	f = &rbdJournalHeldFake{placements: [][]rbdJournalPlacement{placed("3.0", []int{0, 1, 2})}, ops: [][]rbdJournalHeldOp{{committed}, {committed, longer}, {committed, second}},
+		down: [][]int{{}}, queries: []rbdJournalPGQuery{query}}
+	if r, err = rbdJournalHeldObserve(ctx, "observe-held", objects, several, f.reads()); err != nil || !r.Settled || f.opReads != 3 || len(r.Ops) != 2 {
+		t.Fatal("observe-held did not wait for every awaited operation", r, err)
+	}
+	f = &rbdJournalHeldFake{placements: [][]rbdJournalPlacement{placed("3.0", []int{0, 1, 2})}, ops: [][]rbdJournalHeldOp{{waiting, second}}, down: [][]int{{}}, queries: []rbdJournalPGQuery{query}}
+	if r, err = rbdJournalHeldObserve(ctx, "observe-held", objects, several, f.reads()); err != nil || r.Settled {
+		t.Fatal("observe-held settled with one awaited operation lacking its replica commit", r, err)
+	}
+	if _, err = rbdJournalHeldObserve(ctx, "observe-held", objects, rbdJournalHeldWait{osd: 0, ops: []rbdJournalHeldAwait{{"", false}}}, f.reads()); err == nil {
+		t.Fatal("an awaited operation without an object accepted")
 	}
 	// observe-primary-lost waits for the old primary down and the PG active
 	// on the others, as the query agrees.
@@ -192,6 +227,29 @@ func TestRBDJournalHeldObserveWaits(t *testing.T) {
 	f = &rbdJournalHeldFake{placements: [][]rbdJournalPlacement{placed("3.0", []int{1, 2})}, down: [][]int{{0}}, queries: []rbdJournalPGQuery{peering}}
 	if r, err = rbdJournalHeldObserve(ctx, "observe-primary-lost", objects, rbdJournalHeldWait{osd: 0}, f.reads()); err != nil || r.Settled {
 		t.Fatal("observe-primary-lost settled on a PG that is not active", r, err)
+	}
+	// observe-primary-back waits for the restarted OSD up and the PG clean
+	// on the original acting set; a clean PG on other members, or one still
+	// recovering, does not settle it.
+	recovering := query
+	recovering.State = "active+recovering"
+	back := rbdJournalHeldWait{osd: 0, acting: []int{0, 1, 2}}
+	f = &rbdJournalHeldFake{placements: [][]rbdJournalPlacement{placed("3.0", []int{1, 2}), placed("3.0", []int{0, 1, 2}), placed("3.0", []int{0, 1, 2}), placed("3.0", []int{0, 1, 2})},
+		down: [][]int{{0}, {}, {}, {}}, queries: []rbdJournalPGQuery{recovering, recovering, recovering, query}}
+	if r, err = rbdJournalHeldObserve(ctx, "observe-primary-back", objects, back, f.reads()); err != nil || !r.Settled || r.Polls != 4 || r.Query == nil || r.Query.State != "active+clean" ||
+		f.opReads != 0 {
+		t.Fatal("observe-primary-back did not wait for the clean PG on its original members", r, err)
+	}
+	moved := query
+	moved.Up, moved.Acting = []int{1, 2, 0}, []int{1, 2, 0}
+	f = &rbdJournalHeldFake{placements: [][]rbdJournalPlacement{placed("3.0", []int{1, 2, 0})}, down: [][]int{{}}, queries: []rbdJournalPGQuery{moved}}
+	if r, err = rbdJournalHeldObserve(ctx, "observe-primary-back", objects, back, f.reads()); err != nil || r.Settled {
+		t.Fatal("observe-primary-back settled on other members", r, err)
+	}
+	for _, bad := range []rbdJournalHeldWait{{osd: -1, acting: []int{0, 1, 2}}, {osd: 0}, {osd: 3, acting: []int{0, 1, 2}}} {
+		if _, err = rbdJournalHeldObserve(ctx, "observe-primary-back", objects, bad, f.reads()); err == nil {
+			t.Fatal("observe-primary-back accepted without its primary in its acting set", bad)
+		}
 	}
 	// Objects in different PGs, an action that is not an observation and a
 	// failed query are errors.

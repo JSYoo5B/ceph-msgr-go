@@ -25,7 +25,9 @@ class OSDErasureSixRowsTest(ci_row_catalog.RowsTestCase):
         self.assertGreater(len(rows), 1)
         for row in rows:
             self.assertEqual({key: value for key, value in row.items() if key not in ("test_run", "capabilities")}, base)
-            self.assertRegex(row["test_run"], r"^\^TestCephOSDErasureOptimizedK4M2[A-Za-z0-9]*Integration\$$")
+            # Optimized pools, and a k=4,m=2 pool left without overwrites,
+            # which allow_ec_optimizations cannot be set on.
+            self.assertRegex(row["test_run"], r"^\^TestCephOSDErasure(Optimized)?K4M2[A-Za-z0-9]*Integration\$$")
             if row["test_run"] != default:
                 self.assertIn(row["capabilities"], {"osd-erasure-width-six", "osd-erasure-width-six,osd-shard-history",
                                                     "osd-erasure-width-six,osd-pg-interval,osd-shard-history"})

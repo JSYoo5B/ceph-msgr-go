@@ -56,9 +56,10 @@ import (
 // entry; consumer choices kept explicit here are which replica is paused,
 // the epoch the held append names and releasing the lock after the fault
 // instead of handing it over. The journaling image has no object map, so no
-// object-map or data companion request travels with the append. Not
-// covered: an erasure-coded pool, a PG log trimmed past the entry, more than
-// one pending append, a fenced owner, and a primary that restarts.
+// object-map or data companion request travels with the append. Several
+// pending appends and a primary that is started again are the cells of
+// rbd_journal_held_pending_test.go. Not covered: an erasure-coded pool, a PG
+// log trimmed past the entry and a fenced owner.
 //
 // Everything journal-specific is the test-only consumer code of
 // rbd_journal_test.go. The product is unchanged.
@@ -201,6 +202,10 @@ func rbdJournalHeldPlan(mode string) (stages, order []string) {
 		return rbdJournalHeldChangeStages, rbdJournalHeldChangeOrder
 	case rbdJournalVariantDeadPrimary:
 		return rbdJournalDeadPrimaryStages, rbdJournalDeadPrimaryOrder
+	case rbdJournalVariantPendingHold:
+		return rbdJournalPendingHoldStages, rbdJournalPendingHoldOrder
+	case rbdJournalVariantPrimaryRestart:
+		return rbdJournalPrimaryRestartStages, rbdJournalPrimaryRestartOrder
 	}
 	return nil, nil
 }
@@ -287,6 +292,9 @@ type rbdJournalHeld struct {
 	Kill                                 *rbdJournalHeldKill
 	// The subject's connection that carried the append, by dial order.
 	AppendConnection int
+	// Pending is set in the pending-append modes
+	// (rbd_journal_held_pending_test.go) only.
+	Pending *rbdJournalHeldPending
 	// The handoff after a change or death of the primary: the watch
 	// reattached on the new primary, the lock record's address and the
 	// address the new primary lists the reattached watch at.
@@ -315,6 +323,10 @@ type rbdJournalHeldSteps struct {
 	// unlocked marks the lock released, so the compensating unlock of a
 	// failed run is not sent.
 	unlocked func()
+	// address is the subject's routing address of an OSD; readdress
+	// rereads every OSD's address from the OSDMap.
+	address   func(int32) string
+	readdress func(*testing.T)
 }
 
 // rbdJournalHeldReadOf runs one fixture observation of a held mode.

@@ -342,7 +342,9 @@ type OSDRequest struct {
 	// client never redirects or repeats it. A replica advances its committed
 	// point only with the next write in the same PG, so an object written
 	// last in its PG can be bounced until another write lands there. A vector
-	// the OSD will not serve on a non-primary is dropped unanswered.
+	// the OSD will not serve on a non-primary is dropped unanswered. Both are
+	// refused before submission for an erasure-coded placement
+	// (ErrUnsupportedOSDOperation, see OSDPlacement).
 	BalanceReads, LocalizeReads bool
 	// IgnoreRedirect (CEPH_OSD_FLAG_IGNORE_REDIRECT) makes the OSD serve a
 	// manifest redirect object itself rather than its target.

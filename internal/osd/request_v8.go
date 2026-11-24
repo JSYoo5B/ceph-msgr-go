@@ -79,6 +79,13 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 	if ErasureReexecutedVector(r.Operations) && r.Shard != -1 {
 		return msgr.MessageData{}, ErrOperation
 	}
+	// A replica-directed read never names a shard: the pinned Objecter sends
+	// one to a replica only on a replicated pool (osdc/Objecter.cc
+	// _calc_target, pi->is_replicated()), and PrimaryLogPG::do_op serves it on
+	// any shard that is not the primary without that check.
+	if (r.BalanceReads || r.LocalizeReads) && r.Shard != -1 {
+		return msgr.MessageData{}, ErrOperation
+	}
 	if (r.IgnoreCache || IsSetChunk(r.Operations) || IsTierRequest(r.Operations)) && r.Shard != -1 {
 		return msgr.MessageData{}, ErrRequest
 	}
