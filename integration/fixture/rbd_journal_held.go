@@ -47,14 +47,14 @@ import (
 //
 // Apart from `change-primary` and `advance-map` the fixture's part is
 // observation only: `observe-placed`, `observe-held`, `observe-settled`,
-// `observe-primary-lost` and `observe-primary-back` run no native driver. Each reads the placement of
-// the image header, journal object 0 and the journal header with `ceph osd
-// map`, the PG's peering history, sets and last updates with `ceph pg
-// <pgid> query`, and the OSDMap's down OSDs; `observe-held` also reads the
-// primary's operations in flight (`dump_ops_in_flight`, with their events),
-// and `observe-held` and `observe-primary-lost` wait for a state to appear,
-// bounded; so does `observe-primary-back`. What the reads mean is the
-// test's to judge.
+// `observe-primary-lost` and `observe-primary-back` run no native driver.
+// Each reads the placement of the image header, journal object 0 and the
+// journal header with `ceph osd map`, the PG's peering history, sets and last
+// updates with `ceph pg <pgid> query`, and the OSDMap's down OSDs;
+// `observe-held` also reads the primary's operations in flight
+// (`dump_ops_in_flight`, with their events). `observe-held`,
+// `observe-primary-lost` and `observe-primary-back` wait for a state to
+// appear, bounded. What the reads mean is the test's to judge.
 
 // capRBDJournalReplicaHold admits the replica-hold sequence: its test runs
 // alone on a fresh three-OSD RBD fixture and pauses one replica OSD under a
