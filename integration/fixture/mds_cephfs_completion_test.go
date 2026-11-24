@@ -120,6 +120,10 @@ func TestMDSCephFSCompletionRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"13", token, "stat", "deleg-grant"}, mdsCephFSCompletionAction{name: "stat", target: "deleg-grant"}},
 		{[]string{"14", token, "charmap-require-on"}, mdsCephFSCompletionAction{name: "charmap-require-on"}},
 		{[]string{"15", token, "charmap-require-off"}, mdsCephFSCompletionAction{name: "charmap-require-off"}},
+		{[]string{"16", token, "restart-fire-require"}, mdsCephFSCompletionAction{name: "restart-fire-require"}},
+		{[]string{"17", token, "consumer-prepare"}, mdsCephFSCompletionAction{name: "consumer-prepare", target: "bdiff"}},
+		{[]string{"18", token, "consumer-read"}, mdsCephFSCompletionAction{name: "consumer-read", target: "bdiff"}},
+		{[]string{"19", token, "consumer-remove"}, mdsCephFSCompletionAction{name: "consumer-remove", target: "bdiff"}},
 	} {
 		id, action, err := parse(0, tc.fields...)
 		if err != nil || action != tc.want || id <= 0 {
@@ -131,6 +135,7 @@ func TestMDSCephFSCompletionRequestIsClosedAndScoped(t *testing.T) {
 		{"1", token, "stat", "/etc/passwd"}, {"1", token, "stat", "dir", "x"}, {"1", token, "list", "dir"}, {"1", token, "blackhole-on", "true"}, {"1", token, "config-set", "x"},
 		{"1", token, "deleg-zero-on", "10"}, {"1", token, "async-dirops-off", "false"}, {"1", token, "deleg-zero"}, {"1", token, "deleg-pct-zero"}, {"1", token, "stat", "deleg-other"},
 		{"1", token, "charmap-require-on", "charmap"}, {"1", token, "charmap-require"}, {"1", token, "charmap-require-on", "blockdiff"},
+		{"1", token, "restart-fire-require", "charmap"}, {"1", token, "consumer-read", "bdiff"}, {"1", token, "consumer-prepare", "file"}, {"1", token, "consumer"},
 		{"1", token, "tell", "mds.a", "config"}, {"1", strings.Repeat("b2", 16), "list"}, {"0", token, "list"}, {"01", token, "list"}, {"1", token},
 	} {
 		if _, _, err := parse(0, fields...); err == nil {
