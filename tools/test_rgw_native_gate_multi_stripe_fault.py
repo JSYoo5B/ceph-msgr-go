@@ -61,6 +61,7 @@ class MultiStripeFaultGateTest(unittest.TestCase):
             (("mgr_takeover", "after", "active_gid"), 13),
             (("mgr_takeover", "before", "standbys"), []),
             (("mgr_takeover", "after", "active_addrs", "addrvec"), []),
+            (("mgr_takeover", "after", "active_addrs", "addrvec", 0, "nonce"), 50),
             (("mgr_takeover", "former_active_stopped"), False),
             (("mgr_takeover", "gateway_connected"), ["client.99"]),
             (("mgr_takeover", "gateway_connected"), []),

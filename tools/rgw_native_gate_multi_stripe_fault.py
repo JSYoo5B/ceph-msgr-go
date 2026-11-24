@@ -52,7 +52,8 @@ def check(line, gate):
     new_addrs = new.get("active_addrs", {}).get("addrvec", [])
     if (not old_addrs or not new_addrs or not new_addrs[0].get("addr")
             or old_addrs[0].get("addr") == new_addrs[0].get("addr")
-            or not new_addrs[0].get("nonce")):
+            or not new_addrs[0].get("nonce")
+            or old_addrs[0].get("nonce") == new_addrs[0].get("nonce")):
         problems.append("takeover lacks the new active endpoint")
     if not takeover.get("gateway_connected_before") or not set(takeover["gateway_connected_before"]).issubset(clients):
         problems.append("original active has no gateway connection")

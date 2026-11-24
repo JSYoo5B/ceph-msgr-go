@@ -245,7 +245,7 @@ func rgwNativeManagerMap(raw []byte) (rgwNativeManagerIdentity, error) {
 		return m, errors.New("invalid available manager map")
 	}
 	for _, addr := range m.Addrs.Addrvec {
-		if addr.Addr == "" || addr.Nonce == 0 {
+		if addr.Addr == "" || addr.Nonce == 0 || addr.Nonce != m.Addrs.Addrvec[0].Nonce {
 			return m, errors.New("manager without endpoint identity")
 		}
 	}
@@ -304,7 +304,7 @@ func rgwNativeStandbyTakeover(t *testing.T, ctx context.Context, cluster *rgw.Co
 	if err := rgwNativeWaitFor(ctx, 2*time.Minute, time.Second, "existing standby promotion", func(read context.Context) (bool, error) {
 		state, err := dump(read)
 		after = state
-		return err == nil && state.Epoch > before.Epoch && state.Name == before.Standbys[0].Name && state.GID == before.Standbys[0].GID && state.GID != before.GID && state.Addrs.Addrvec[0].Addr != before.Addrs.Addrvec[0].Addr, nil
+		return err == nil && state.Epoch > before.Epoch && state.Name == before.Standbys[0].Name && state.GID == before.Standbys[0].GID && state.GID != before.GID && state.Addrs.Addrvec[0].Addr != before.Addrs.Addrvec[0].Addr && state.Addrs.Addrvec[0].Nonce != before.Addrs.Addrvec[0].Nonce, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
