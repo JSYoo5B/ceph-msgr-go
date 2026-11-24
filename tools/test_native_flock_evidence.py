@@ -1,10 +1,14 @@
 """Controls for the ordered shared-FLOCK retention contract."""
 import copy
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
 import native_evidence as evidence
 import native_evidence_flock as flock
 import scenario_plan
+from test_native_evidence import PIN, recorded_gate
 
 
 def raw_receipt():
@@ -80,3 +84,78 @@ class SharedFlockEvidenceTests(unittest.TestCase):
                 value[field].append(value[field][0])
                 with self.assertRaises(evidence.EvidenceError):
                     flock.validate_flock(value)
+
+
+class SharedFlockCollectionTests(unittest.TestCase):
+    """Collection of both catalog rows from the current result recorder's output."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.rows = [row for row in scenario_plan.load_catalog() if row["group"] == "mds-cephfs-sharedflock-recovery"]
+        self.assertEqual(len(self.rows), 2)
+
+    @staticmethod
+    def write(path, value):
+        Path(path).write_text(json.dumps(value), encoding="utf-8")
+
+    def stage(self, row, tests):
+        """(request, receipts, tests, output, status) of one row's attempt."""
+        base = self.root / row["id"]
+        receipts = base / "receipts"
+        receipts.mkdir(parents=True)
+        profile = evidence.context(self.request(row))["profile"]
+        runtime = {"key_type": profile["key"], "service_cipher": profile["service"], "connection_mode": profile["mode"],
+                   "ip_family": profile["family"], "runtime": profile["runtime"], "osd": "1", "osd_profile": "legacy-v6",
+                   "osd_store": profile["osd_store"], "osd_replicas": "1", "mds_fresh": True, "mds_cephfs": True,
+                   "mds_cephfs_data": False, "image": evidence.IMAGE, "image_id": "sha256:" + "c" * 64,
+                   "architecture": "amd64", "daemon_version": "ceph version 20.2.4 (%s) tentacle (stable)" % evidence.SOURCE,
+                   "provider": evidence.PROVIDER, "provider_version": PIN}
+        self.write(receipts / "fixture-manifest.json", runtime)
+        self.write(receipts / "mds-cephfs-sharedflock-recovery-results.json", raw_receipt())
+        self.write(receipts / "mds-cephfs-cleanup.json", dict.fromkeys(flock.CLEAN_FLAGS, True) | {
+            "source_commit": evidence.SOURCE, "residual_owned_sessions": [], "kept_new_blocklist": []})
+        self.write(receipts / "mds-fresh-cleanup.json", dict.fromkeys(flock.FRESH_FLAGS, True) | {"source_commit": evidence.SOURCE})
+        self.write(base / "tests.json", tests)
+        self.write(base / "request.json", self.request(row))
+        return base / "request.json", receipts, base / "tests.json", base / "bundle", base / "status.json"
+
+    @staticmethod
+    def request(row):
+        return {"execution_source": "github-actions", "tested_sha": "a" * 40, "controller_sha": "b" * 40,
+                "run_id": 45280741527, "attempt": 1, "matrix": dict(row["params"], scenario=row["id"])}
+
+    def collect(self, row, tests):
+        request, receipts, tests, output, status = self.stage(row, tests)
+        code = evidence.main(["collect", "--request", str(request), "--receipts", str(receipts), "--tests", str(tests),
+                              "--output", str(output), "--status", str(status), "--provider-pin", PIN])
+        return code, json.loads(status.read_text()), output
+
+    def test_both_rows_collect_the_current_recorder_output(self):
+        for row in self.rows:
+            with self.subTest(row=row["id"]):
+                recorded = recorded_gate(flock.SELECTOR, [flock.TEST], [flock.TEST], [flock.TEST])
+                self.assertTrue(recorded["passed"], recorded["problems"])
+                self.assertEqual(recorded["selected"], [["api", flock.TEST]])
+                code, status, output = self.collect(row, recorded)
+                self.assertEqual((code, status), (0, {"test_result": "passed", "evidence_result": "complete"}))
+                manifest = evidence.verify(output, evidence.context(self.request(row)))
+                self.assertEqual((manifest["schema_version"], manifest["kind"]), (2, flock.KIND))
+                self.assertEqual(json.loads((output / "tests.json").read_text()), recorded)
+
+    def test_a_record_without_the_exact_selection_is_refused(self):
+        legacy = recorded_gate(flock.SELECTOR, [flock.TEST], [flock.TEST], [flock.TEST])
+        del legacy["selected"]
+        cases = [("no announcement", recorded_gate(flock.SELECTOR, [flock.TEST], None, [flock.TEST]), "required-test-not-passed"),
+                 ("legacy record", legacy, "schema-fields")]
+        for name, value, code in cases:
+            with self.subTest(name=name):
+                self.assertTrue(value["passed"])
+                self.root = Path(tempfile.mkdtemp(dir=self.root))
+                result, status, output = self.collect(self.rows[0], value)
+                self.assertEqual((result, status), (1, {"test_result": "unknown", "evidence_result": "incomplete", "reason": code}))
+                self.assertFalse(output.exists())
+        for selected in ([], [["api", flock.TEST], ["client", "TestCephOtherIntegration"]], [["client", flock.TEST]]):
+            with self.subTest(selected=selected), self.assertRaisesRegex(evidence.EvidenceError, "required-test-not-passed"):
+                flock.gate(dict(recorded_gate(flock.SELECTOR, [flock.TEST], [flock.TEST], [flock.TEST]), selected=selected))
