@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -26,6 +27,7 @@ type pruneObservation struct {
 	Ended    time.Time                      `json:"ended"`
 	Deadline time.Time                      `json:"deadline"`
 	Error    string                         `json:"error,omitempty"`
+	Canceled bool                           `json:"canceled,omitempty"`
 	Timeout  bool                           `json:"timeout"`
 	Manager  *pruneMgrState                 `json:"manager,omitempty"`
 	Trim     *copyPurgedTrimState           `json:"trim,omitempty"`
@@ -60,6 +62,8 @@ func pruneRead(ctx context.Context, kind string, bound time.Duration, read func(
 	}
 	if err != nil {
 		o.Error = err.Error()
+		o.Manager = nil
+		o.Canceled = errors.Is(err, context.Canceled)
 	}
 	o.Timeout = ctx.Err() == context.DeadlineExceeded
 	return o
@@ -75,7 +79,7 @@ func (p *pruneTimeline) sampleManagers(ctx context.Context, bound, cadence time.
 		for ctx.Err() == nil {
 			o := pruneRead(ctx, "mgr-map", bound, read)
 			// A caller stopping the sampler is not a new diagnostic failure.
-			if ctx.Err() == context.Canceled {
+			if ctx.Err() == context.Canceled && o.Canceled {
 				return
 			}
 			p.record(o)
@@ -119,8 +123,12 @@ func TestPruneTimelineBoundsAndRetainsFirstFailure(t *testing.T) {
 	}))
 	blocked := func(ctx context.Context, o *pruneObservation) error { <-ctx.Done(); return ctx.Err() }
 	p.record(pruneRead(ctx, "mgr-map", 5*time.Millisecond, blocked))
-	p.record(pruneRead(ctx, "pruned", time.Second, blocked))
-	if len(p.Observations) != 3 || p.Observations[0].Error != "" || p.Observations[0].Manager == nil || *p.Observations[0].Manager.Available || p.Observations[1].Manager != nil || !p.Observations[1].Timeout || !p.Observations[2].Timeout || p.FirstFailure.Kind != "mgr-map" {
+	p.record(pruneRead(ctx, "pruned", time.Second, func(ctx context.Context, o *pruneObservation) error {
+		<-ctx.Done()
+		o.Manager = &pruneMgrState{Epoch: 8, Available: &unavailable}
+		return nil // a late successful callback is still past the read deadline.
+	}))
+	if len(p.Observations) != 3 || p.Observations[0].Error != "" || p.Observations[0].Manager == nil || *p.Observations[0].Manager.Available || p.Observations[1].Manager != nil || !p.Observations[1].Timeout || !p.Observations[2].Timeout || p.Observations[2].Manager != nil || p.FirstFailure.Kind != "mgr-map" {
 		t.Fatalf("lost explicit unavailable, timeout or first failure: %+v", p)
 	}
 	parentDeadline, _ := ctx.Deadline()
