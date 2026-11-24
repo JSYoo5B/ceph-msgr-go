@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,11 +12,32 @@ from unittest import mock
 
 import native_evidence as evidence
 import native_evidence_capsend as capsend
+import native_test_results
 
 REPO = Path(__file__).resolve().parents[1]
 # The release this repository's fixture pins; receipts default to it.
 PIN = evidence.pinned_provider_text((REPO / "integration" / "fixture" / "go.mod").read_bytes())
 import scenario_plan
+
+
+def recorded_gate(selector, expected, announced, passes):
+    """The current result recorder's record of one product-suite run.
+
+    The log is what the fixture prints on its default path: the selection of
+    both suites (announced api tests, no client test) before the first suite
+    runs, then each suite with the given api PASS lines. announced=None is a
+    tested revision from before announcements.
+    """
+    lines = []
+    if announced is not None:
+        lines.append("Ceph test suite api selects %d top-level tests%s"
+                     % (len(announced), ": " + " ".join(announced) if announced else ""))
+        lines.append("Ceph test suite client selects 0 top-level tests")
+    lines.append("Running Ceph test suite: api")
+    lines += ["--- PASS: %s (12.34s)" % test for test in passes]
+    lines += ["PASS", "Running Ceph test suite: client", "PASS"]
+    return native_test_results.verify({"selector": selector, "expected": [["api", test] for test in expected]},
+                                      "\n".join(lines) + "\n")
 
 
 class NativeEvidenceTests(unittest.TestCase):
@@ -29,9 +51,10 @@ class NativeEvidenceTests(unittest.TestCase):
         self.request = {"execution_source": "linux-runner", "tested_sha": "a" * 40, "controller_sha": "b" * 40, "run_id": 101, "attempt": 1,
                         "matrix": dict(profile, scenario=capsend.scenario_id(profile))}
         self.tests = self.root / "tests.json"
-        self.write(self.tests, {"selector": capsend.SELECTOR, "expected": [["api", capsend.TEST]],
-                               "observed": [{"suite": "api", "test": capsend.TEST, "result": "PASS"}],
-                               "problems": [], "passed": True})
+        # The result gate's output as the current recorder writes it.
+        self.recorded = recorded_gate(capsend.SELECTOR, [capsend.TEST], [capsend.TEST], [capsend.TEST])
+        self.assertTrue(self.recorded["passed"], self.recorded["problems"])
+        self.write(self.tests, self.recorded)
         self.raw = self.fixture()
         for name, value in self.raw.items():
             self.write(self.receipts / name, value)
@@ -74,7 +97,8 @@ class NativeEvidenceTests(unittest.TestCase):
     def test_successful_bundle_is_closed_hashed_and_exactly_attributed(self):
         manifest = self.collect()
         self.assertEqual({p.name for p in self.output.iterdir()}, capsend.FILES | {"manifest.json"})
-        self.assertEqual(manifest["schema_version"], 1)
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(json.loads((self.output / "tests.json").read_text()), self.recorded)
         self.assertEqual(manifest["tested_sha"], "a" * 40)
         self.assertEqual(manifest["controller_sha"], "b" * 40)
         self.assertEqual((manifest["run_id"], manifest["attempt"]), (101, 1))
@@ -121,7 +145,12 @@ class NativeEvidenceTests(unittest.TestCase):
     def test_skipped_missing_or_failed_required_parent_is_incomplete(self):
         for change in ({"passed": False}, {"passed": 1}, {"expected": []}, {"observed": []},
                        {"observed": [{"suite": "api", "test": capsend.TEST, "result": "SKIP"}]},
-                       {"observed": [{"suite": "client", "test": capsend.TEST, "result": "PASS"}]}):
+                       {"observed": [{"suite": "client", "test": capsend.TEST, "result": "PASS"}]},
+                       # The announced selection must be exactly the required test.
+                       {"selected": []}, {"selected": [["client", capsend.TEST]]},
+                       {"selected": [["api", capsend.TEST], ["api", capsend.TEST]]},
+                       {"selected": [["api", capsend.TEST], ["api", "TestCephOtherIntegration"]]},
+                       {"selected": [["api", "TestCephOtherIntegration"]]}, {"selected": None}):
             with self.subTest(change=change):
                 data = json.loads(self.tests.read_text())
                 data.update(change)
@@ -129,6 +158,74 @@ class NativeEvidenceTests(unittest.TestCase):
                 with self.assertRaises(evidence.EvidenceError):
                     self.collect()
         self.assertFalse(self.output.exists())
+
+    def test_current_recorder_output_is_collected_and_its_selection_validated(self):
+        request, status = self.root / "request.json", self.root / "status.json"
+        self.write(request, self.request)
+
+        def run():
+            return evidence.main(["collect", "--request", str(request), "--receipts", str(self.receipts),
+                                  "--tests", str(self.tests), "--output", str(self.output), "--status", str(status),
+                                  "--provider-pin", PIN])
+
+        self.assertEqual(run(), 0)
+        self.assertEqual(json.loads(status.read_text()), {"test_result": "passed", "evidence_result": "complete"})
+        self.assertEqual(evidence.verify(self.output, evidence.context(self.request))["schema_version"], 2)
+        # Passing records the current recorder writes that do not show the
+        # exact selection: a revision from before announcements, and a
+        # selection that also names a skipped test.
+        other = "TestCephOtherIntegration"
+        legacy = {key: value for key, value in self.recorded.items() if key != "selected"}
+        shutil.rmtree(self.output)
+        for name, value, code in (
+                ("no announcement", recorded_gate(capsend.SELECTOR, [capsend.TEST], None, [capsend.TEST]), "required-test-not-passed"),
+                ("legacy record", legacy, "schema-fields")):
+            with self.subTest(name=name):
+                self.assertTrue(value["passed"])
+                self.write(self.tests, value)
+                self.assertEqual(run(), 1)
+                self.assertEqual(json.loads(status.read_text()),
+                                 {"test_result": "unknown", "evidence_result": "incomplete", "reason": code})
+                self.assertFalse(self.output.exists())
+        skipped = native_test_results.verify(
+            {"selector": capsend.SELECTOR, "expected": [["api", capsend.TEST]]},
+            "Ceph test suite api selects 2 top-level tests: %s %s\nCeph test suite client selects 0 top-level tests\n"
+            "Running Ceph test suite: api\n--- PASS: %s (1.00s)\n--- SKIP: %s (0.00s)\n" % (capsend.TEST, other, capsend.TEST, other))
+        self.assertTrue(skipped["passed"], skipped["problems"])
+        self.write(self.tests, skipped)
+        with self.assertRaisesRegex(evidence.EvidenceError, "required-test-not-passed"):
+            self.collect()
+
+    def test_retained_versions_are_distinguished_explicitly(self):
+        self.collect()
+        ctx = evidence.context(self.request)
+        manifest_path, tests_path = self.output / "manifest.json", self.output / "tests.json"
+        original = json.loads(manifest_path.read_text())
+        current = json.loads(tests_path.read_text())
+
+        def retain(version, tests):
+            data = (json.dumps(tests, sort_keys=True, indent=2) + "\n").encode()
+            tests_path.write_bytes(data)
+            manifest = copy.deepcopy(original)
+            manifest["schema_version"] = version
+            for record in manifest["files"]:
+                if record["name"] == "tests.json":
+                    record.update(size=len(data), sha256=hashlib.sha256(data).hexdigest())
+            manifest["total_bytes"] = sum(record["size"] for record in manifest["files"])
+            self.write(manifest_path, manifest)
+
+        legacy = {key: value for key, value in current.items() if key != "selected"}
+        # A version 1 bundle keeps the record from before the selection was retained.
+        retain(1, legacy)
+        self.assertEqual(evidence.verify(self.output, ctx)["schema_version"], 1)
+        for version, tests, code in ((1, current, "schema-fields"), (2, legacy, "schema-fields"),
+                                     (2, dict(current, selected=[]), "required-test-not-passed"),
+                                     (3, current, "schema-version"), (0, legacy, "schema-version")):
+            retain(version, tests)
+            with self.subTest(version=version, tests=sorted(tests)), self.assertRaisesRegex(evidence.EvidenceError, code):
+                evidence.verify(self.output, ctx)
+        retain(2, current)
+        self.assertEqual(evidence.verify(self.output, ctx), original)
 
     def test_incomplete_cleanup_profile_mismatch_or_wrong_receipt_is_rejected(self):
         cases = [("mds-cephfs-data-cleanup.json", "completed", False),
@@ -311,7 +408,7 @@ class NativeEvidenceTests(unittest.TestCase):
 
     def test_changed_manifest_context_attempt_or_observation_cannot_validate(self):
         original = self.collect()
-        for field, value in (("schema_version", 2), ("attempt", 2), ("run_id", 102), ("tested_sha", "d" * 40),
+        for field, value in (("schema_version", 1), ("schema_version", 3), ("attempt", 2), ("run_id", 102), ("tested_sha", "d" * 40),
                              ("controller_sha", "e" * 40), ("selector", "^TestOther$"),
                              ("observed", dict(original["observed"], architecture="arm64"))):
             manifest = dict(original, **{field: value})

@@ -26,11 +26,11 @@ omitted raw receipts; they do not let a reader recompute omitted native bytes
 or xattrs, nor establish the truth of a native assertion, and they are not a
 signature.
 
-Every bundle has manifest.json (schema_version 1, the family's kind, the
+Every bundle has manifest.json (schema_version, the family's kind, the
 execution context: execution_source, tested and controller SHA, run ID and
 attempt, scenario, selector, normalized requested profile, configured image,
 observed runtime, and the size and SHA-256 of each payload file), tests.json
-and runtime.json (inspected image ID and architecture, native daemon version,
+(see SCHEMA_VERSION) and runtime.json (inspected image ID and architecture, native daemon version,
 provider version, fixture-reported profile). Every field is required and
 unknown fields are refused. Collection requires the pinned SOURCE and IMAGE,
 and the provider release that the tested commit pins in
@@ -76,7 +76,20 @@ import sys
 import tempfile
 import threading
 
-SCHEMA_VERSION = 1
+# The manifest's schema_version names the shape of the retained tests.json.
+# Version 1 retains the result gate's record from before the gate recorded
+# the fixture's announced selection; version 2 also retains the announced
+# selection ("selected", tools/native_test_results.py), which collection
+# requires to equal exactly the row's required tests. Collection writes
+# SCHEMA_VERSION only. Verification admits every RETAINED_SCHEMA_VERSIONS
+# member and requires the tests.json shape of the manifest's own version, so
+# a version 1 bundle never carries a selection and a version 2 bundle never
+# lacks one.
+SCHEMA_VERSION = 2
+RETAINED_SCHEMA_VERSIONS = frozenset({1, 2})
+# The fields of the result gate's record (native_test_results.py verify).
+GATE_FIELDS = frozenset({"selector", "expected", "selected", "observed", "problems", "passed"})
+LEGACY_GATE_FIELDS = GATE_FIELDS - {"selected"}
 SOURCE = "7f793731f1b39eb4f465e960113d2363c311b964"
 IMAGE = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
 # The trusted collector runs from the controller revision while the receipts
@@ -411,12 +424,21 @@ def validate_context(value):
     need(value == expected, "context-mismatch")
 
 
-def tests_projection(value, test):
-    """The gate of a family whose row selects exactly one API parent test."""
-    keys(value, {"selector", "expected", "observed", "problems", "passed"})
-    need(value["passed"] is True and value == {"selector": "^" + test + "$", "expected": [["api", test]],
-                   "observed": [{"suite": "api", "test": test, "result": "PASS"}],
-                   "problems": [], "passed": True}, "required-test-not-passed")
+def tests_projection(value, test, version=SCHEMA_VERSION):
+    """The gate of a family whose row selects exactly one API parent test.
+
+    The current result gate's record (version 2) must also show that the
+    fixture announced exactly that test as its whole selection; a version 1
+    record is the shape retained before the gate recorded the announcement.
+    """
+    need(version in RETAINED_SCHEMA_VERSIONS, "schema-version")
+    keys(value, GATE_FIELDS if version == 2 else LEGACY_GATE_FIELDS)
+    wanted = {"selector": "^" + test + "$", "expected": [["api", test]],
+              "observed": [{"suite": "api", "test": test, "result": "PASS"}],
+              "problems": [], "passed": True}
+    if version == 2:
+        wanted["selected"] = [["api", test]]
+    need(value["passed"] is True and value == wanted, "required-test-not-passed")
     return value
 
 
@@ -477,7 +499,8 @@ def verify(bundle, expected):
     need({item.name for item in bundle.iterdir()} == files | {"manifest.json"}, "bundle-inventory")
     manifest = document(bundle / "manifest.json", FILE_LIMIT)
     keys(manifest, CONTEXT_KEYS | {"schema_version", "kind", "files", "total_bytes", "observed"})
-    need(type(manifest["schema_version"]) is int and manifest["schema_version"] == SCHEMA_VERSION and manifest["kind"] == family.KIND, "schema-version")
+    need(type(manifest["schema_version"]) is int and manifest["schema_version"] in RETAINED_SCHEMA_VERSIONS
+         and manifest["kind"] == family.KIND, "schema-version")
     ctx = {key: manifest[key] for key in CONTEXT_KEYS}
     validate_context(ctx)
     need(ctx == expected, "manifest-context-mismatch")
@@ -494,7 +517,8 @@ def verify(bundle, expected):
     need(manifest["total_bytes"] == total and total + len(read(bundle / "manifest.json", FILE_LIMIT)) <= TOTAL_LIMIT, "total-limit")
     validate_runtime(payloads["runtime.json"], ctx)
     need(manifest["observed"] == payloads["runtime.json"], "observed-mismatch")
-    family.validate(payloads, ctx)
+    # A family validates the retained tests.json in its manifest's version.
+    family.validate(payloads, dict(ctx, schema_version=manifest["schema_version"]))
     privacy(manifest)
     for value in payloads.values():
         privacy(value)
