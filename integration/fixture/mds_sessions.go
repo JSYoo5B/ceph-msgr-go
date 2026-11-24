@@ -42,17 +42,37 @@ const mdsSessionsMaxGlobalIDs = 8
 // key is the cephfs_dump_features name in the MDSMap dump. reply_encoding is
 // withheld by the session profile (a REJECT); reclaim_client is declared by
 // both profiles (an admission); multi_reconnect and deleg_ino are CephFS-only;
-// charmap is declared only by the CephFS charmap opt-in.
+// charmap is declared only by the CephFS charmap opt-in; the last six are
+// withheld by every profile (a REJECT of each).
 type mdsSessionsRequirement struct {
 	feature, key, kind string
 }
 
 var mdsSessionsRequirements = map[string]mdsSessionsRequirement{
-	"require":         {"reply_encoding", "feature_9", "required_client_features"},
-	"require-reclaim": {"reclaim_client", "feature_10", "required_client_features_reclaim_client"},
-	"require-multi":   {"multi_reconnect", "feature_12", "required_client_features_multi_reconnect"},
-	"require-deleg":   {"deleg_ino", "feature_13", "required_client_features_deleg_ino"},
-	"require-charmap": {"charmap", "feature_22", "required_client_features_charmap"},
+	"require":           {"reply_encoding", "feature_9", "required_client_features"},
+	"require-reclaim":   {"reclaim_client", "feature_10", "required_client_features_reclaim_client"},
+	"require-multi":     {"multi_reconnect", "feature_12", "required_client_features_multi_reconnect"},
+	"require-deleg":     {"deleg_ino", "feature_13", "required_client_features_deleg_ino"},
+	"require-charmap":   {"charmap", "feature_22", "required_client_features_charmap"},
+	"require-lazy":      {"lazy_caps_wanted", "feature_11", "required_client_features_lazy_caps_wanted"},
+	"require-metric":    {"metric_collect", "feature_14", "required_client_features_metric_collect"},
+	"require-notify":    {"notify_session_state", "feature_16", "required_client_features_notify_session_state"},
+	"require-getvxattr": {"op_getvxattr", "feature_17", "required_client_features_op_getvxattr"},
+	"require-authcaps":  {"client_mds_auth_caps", "feature_21", "required_client_features_client_mds_auth_caps"},
+	"require-blockdiff": {"blockdiff", "feature_23", "required_client_features_blockdiff"},
+}
+
+// mdsSessionsToggle names every requirement toggle by the reply_encoding
+// one ("require-on" or "require-off"), which shares its handling; any other
+// action keeps its name.
+func mdsSessionsToggle(action string) string {
+	if _, ok := mdsSessionsRequirementFor(action); ok {
+		if strings.HasSuffix(action, "-on") {
+			return "require-on"
+		}
+		return "require-off"
+	}
+	return action
 }
 
 // mdsSessionsRequirementFor maps a require-*-on/off action to its toggle.
@@ -365,7 +385,7 @@ func parseMDSSessionsRequest(fields []string, token string, previousID int64) (i
 	}
 	action.name = fields[2]
 	args := fields[3:]
-	switch action.name {
+	switch mdsSessionsToggle(action.name) {
 	case "observe":
 		if len(args) == 0 || len(args) > mdsSessionsMaxGlobalIDs {
 			return 0, mdsSessionsAction{}, errors.New("MDS sessions observation requires one to eight GlobalIDs")
@@ -374,7 +394,7 @@ func parseMDSSessionsRequest(fields []string, token string, previousID int64) (i
 		if len(args) != 1 {
 			return 0, mdsSessionsAction{}, errors.New("MDS sessions eviction requires exactly one GlobalID")
 		}
-	case "refuse-on", "refuse-off", "require-on", "require-off", "require-reclaim-on", "require-multi-on", "require-deleg-on", "require-charmap-on", "require-reclaim-off", "require-multi-off", "require-deleg-off", "require-charmap-off", "stale-on", "stale-off", "autoclose-on":
+	case "refuse-on", "refuse-off", "require-on", "require-off", "stale-on", "stale-off", "autoclose-on":
 		if len(args) != 0 {
 			return 0, mdsSessionsAction{}, errors.New("MDS sessions mutation takes no caller arguments")
 		}
@@ -738,10 +758,10 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 		}
 		return nil
 	}
-	switch action.name {
+	switch mdsSessionsToggle(action.name) {
 	case "observe":
 		return nil
-	case "refuse-on", "require-on", "require-reclaim-on", "require-multi-on", "require-deleg-on", "require-charmap-on":
+	case "refuse-on", "require-on":
 		kind, state := "refuse_client_session", x.refuse
 		args := []string{"fs", "set", s.name, "refuse_client_session", "true"}
 		check := func(m mdsSessionsMap) bool { return m.Refuse }
@@ -794,7 +814,7 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 		}
 		_, _, err = c.mdsSessionsSettle(ctx, check)
 		return err
-	case "refuse-off", "require-off", "require-reclaim-off", "require-multi-off", "require-deleg-off", "require-charmap-off":
+	case "refuse-off", "require-off":
 		kind, state := "refuse_client_session", x.refuse
 		args := []string{"fs", "set", s.name, "refuse_client_session", "false"}
 		requirement, requires := mdsSessionsRequirementFor(action.name)
