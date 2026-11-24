@@ -873,7 +873,7 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	primaryChange, ownerLoss, forced := variant == rbdJournalVariantPrimaryChange, variant == rbdJournalVariantOwnerLoss, variant == rbdJournalVariantForcedBreak
 	forcedPending := variant == rbdJournalVariantForcedBreakPending
 	inflight, trim := variant == rbdJournalVariantForcedBreakInflight, variant == rbdJournalVariantTrim
-	held := variant == rbdJournalVariantReplicaHold || variant == rbdJournalVariantHeldPrimaryChange || variant == rbdJournalVariantDeadPrimary
+	held := variant == rbdJournalVariantReplicaHold || variant == rbdJournalVariantHeldPrimaryChange || variant == rbdJournalVariantDeadPrimary || rbdJournalHeldPendingMode(variant)
 	consumer := variant == rbdJournalVariantConsumer
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
@@ -925,7 +925,7 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		results = "rbd-journal-trim-results.json"
 	case rbdJournalVariantConsumer:
 		results = "rbd-journal-consumer-results.json"
-	case rbdJournalVariantReplicaHold, rbdJournalVariantHeldPrimaryChange, rbdJournalVariantDeadPrimary:
+	case rbdJournalVariantReplicaHold, rbdJournalVariantHeldPrimaryChange, rbdJournalVariantDeadPrimary, rbdJournalVariantPendingHold, rbdJournalVariantPrimaryRestart:
 		results, outcomeFile = "rbd-journal-"+variant+"-results.json", "rbd-journal-"+variant+"-outcome.json"
 	}
 
@@ -1274,7 +1274,11 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	// lock cookie.
 	watchRequest := request(headerRoute)
 	watchRequest.Operations = nil
-	w, reply, err := first.WatchObject(ctx, watchRequest, cephmsgr.OSDWatchOptions{TimeoutSeconds: rbdJournalLostAppendWatchTimeout})
+	watchTimeout := uint32(rbdJournalLostAppendWatchTimeout)
+	if variant == rbdJournalVariantPrimaryRestart {
+		watchTimeout = rbdJournalPrimaryRestartWatchTimeout
+	}
+	w, reply, err := first.WatchObject(ctx, watchRequest, cephmsgr.OSDWatchOptions{TimeoutSeconds: watchTimeout})
 	keep("image_watch_register", headerRoute, watchRequest, reply, err)
 	if err != nil {
 		t.Fatal("subject image header watch", err)
@@ -1378,17 +1382,26 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	}
 	if held {
 		writeOutcome := func() error {
-			outcome, err := json.Marshal(map[string]any{"token": token, "image_id": imageID, "subject_global_id": gid, "entry": record.Entry, "outcome": record.Outcome})
+			fields := map[string]any{"token": token, "image_id": imageID, "subject_global_id": gid, "entry": record.Entry, "outcome": record.Outcome}
+			if p := record.Held.Pending; p != nil {
+				fields["calls"] = p.Calls
+			}
+			outcome, err := json.Marshal(fields)
 			if err != nil {
 				return err
 			}
 			return testcluster.WritePublicEvidence(filepath.Join(dir, outcomeFile), outcome)
 		}
-		runRBDJournalHeld(t, rbdJournalHeldSteps{rbdJournalForcedBreakSteps: rbdJournalForcedBreakSteps{ctx: ctx, record: &record, entry: entry, header: header, plan: plan,
+		steps := rbdJournalHeldSteps{rbdJournalForcedBreakSteps: rbdJournalForcedBreakSteps{ctx: ctx, record: &record, entry: entry, header: header, plan: plan,
 			token: token, gid: gid, w: w, conn: first, appendInput: append(rbdLE64(1<<order), rbdJournalBL(entryBytes)...), splay: uint64(splay), locked: lockedNative,
 			route: route, request: request, keep: keep, now: now, send: send, native: native, judge: judge, done: done, released: func() { unlocked = true }},
 			mode: variant, dir: dir, observer: observer, dials: &osdDials, dialOf: func(o *cephmsgr.OSDConnection) int { return dialOf[o] }, closeAll: closeAll, connect: connect,
-			outcome: writeOutcome, unlocked: func() { unlocked = true }})
+			outcome: writeOutcome, unlocked: func() { unlocked = true }}
+		if rbdJournalHeldPendingMode(variant) {
+			runRBDJournalHeldPending(t, steps, imageClient.Positions)
+			return
+		}
+		runRBDJournalHeld(t, steps)
 		return
 	}
 	if trim {

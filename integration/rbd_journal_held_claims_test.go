@@ -71,6 +71,12 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	fail := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	text := rbdJournalHeldText
 	h, e := r.Held, r.Entry
+	if rbdJournalHeldPendingMode(h.Mode) {
+		return rbdJournalHeldPendingClaims(r, stage)
+	}
+	if h.Pending != nil {
+		return []string{"record: a single-append held record carries pending appends"}
+	}
 	stages, order := rbdJournalHeldPlan(h.Mode)
 	reached := slices.Index(stages, stage)
 	if reached < 0 {
