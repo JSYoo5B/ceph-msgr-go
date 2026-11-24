@@ -186,8 +186,11 @@ type rbdBaseScope struct {
 	journalHeldPrimary int
 	journalHeldActing  []int
 	// The RBD group-snapshot acceptance's group and two images in the same
-	// owned pool (rbd_group.go).
+	// owned pool (rbd_group.go). Its second owned pool also holds the
+	// migration acceptance's destinations.
 	group rbdGroupState
+	// The RBD migration acceptance's images and group (rbd_migration.go).
+	migration rbdMigrationState
 }
 
 func (x *rbdBaseScope) mutated(kind string) bool {
@@ -702,9 +705,10 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	if err := c.rbdBaseFinish(m, rbd.InitPool(ctx, c.cluster, x.plan.Pool)); err != nil {
 		return fmt.Errorf("initialize owned RBD pool: %w", err)
 	}
-	if p.admits(capRBDGroupSnapshot) {
+	if p.admits(capRBDGroupSnapshot) || p.admits(capRBDMigration) {
 		// The group acceptance's second owned pool, for its cross-pool
-		// member (rbd_group.go).
+		// member (rbd_group.go), and the migration acceptance's
+		// destination pool (rbd_migration.go).
 		if err := c.prepareRBDGroupPool(ctx, ceph.PoolConfig{PGNum: pgs, Replicas: topology.poolSize, MinSize: topology.poolMinSize, Application: "rbd", NoHashPSPool: true}); err != nil {
 			return err
 		}
