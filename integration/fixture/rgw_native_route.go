@@ -81,7 +81,7 @@ func rgwNativeListed(ctx context.Context, dir, name string) error {
 // one exact checkpoint name, no capability or sequence, and every other input at
 // the value the checkpoint itself uses (its cluster is fixed by
 // rgwNativeStartFixture: Tentacle 20.2.4 pinned image, secure Messenger v2,
-// aes256k keys and service tickets, IPv4, one MON/MGR/BlueStore OSD and one
+// aes256k keys and service tickets, IPv4, one MON/BlueStore OSD, one or two MGRs and one
 // gateway). An input the checkpoint would ignore is refused rather than shown
 // in the job's name without effect.
 func rgwNativeProfileProblem(p profile) error {

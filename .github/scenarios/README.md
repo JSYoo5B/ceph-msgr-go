@@ -56,7 +56,9 @@ way, in files of its own:
 - `tools/test_native_<name>_evidence.py`: the tests of that family.
 - `integration/fixture/rgw_native_<name>_test.go`: a routed RGW checkpoint,
   a `TestRGWNative<Name>Integration` test of the fixture module with its
-  `//scenario:row ... rgw_native=1` declaration.
+  `//scenario:row ... rgw_native=1` declaration. A checkpoint that owns two
+  managers declares `managers=2` so the routed job name reports its actual
+  fixture size; existing single-manager checkpoints omit it.
 - `tools/rgw_native_gate_<name>.py`: that checkpoint's receipt check
   (`tools/rgw_native_gate.py`).
 - `tools/test_rgw_native_gate_<name>.py`: its tests, with the accepted receipt

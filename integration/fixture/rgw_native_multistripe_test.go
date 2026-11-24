@@ -19,7 +19,7 @@ import (
 
 const (
 	rgwNativeMultiPayloadSize   = 6 << 20
-	rgwNativeMultiResponseLimit = 8 << 20
+	rgwNativeMultiResponseLimit = 12 << 20
 )
 
 // TestRGWNativeMultiStripeIntegration is the second dedicated fixture-only RGW
@@ -41,6 +41,10 @@ const (
 //scenario:covers Service-induced paths
 //fixture:isolated starts its own owned RGW cluster and runs one explicit GC process on it
 func TestRGWNativeMultiStripeIntegration(t *testing.T) {
+	rgwNativeMultiStripeScenario(t, false)
+}
+
+func rgwNativeMultiStripeScenario(t *testing.T, faults bool) {
 	if os.Getenv("CEPH_MSGR_TEST_RGW_NATIVE") == "" {
 		t.Skip("set CEPH_MSGR_TEST_RGW_NATIVE=1 on an authorized Linux Docker runner")
 	}
@@ -50,9 +54,13 @@ func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Fatal("RGW native checkpoint requires an authorized Linux Docker runner")
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
 	defer cancel()
-	cluster, gateway := rgwNativeStartFixture(t, ctx)
+	managers := 1
+	if faults {
+		managers = 2
+	}
+	cluster, gateway := rgwNativeStartFixture(t, ctx, managers)
 	control := cluster.Container.Container
 	version := string(rgwNativeExec(t, ctx, control, "ceph", "version"))
 	if !strings.Contains(version, "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964)") {
@@ -88,18 +96,38 @@ func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 	}
 	request(http.MethodPut, "/"+bucket, nil, http.StatusOK, rgwNativeDefaultResponseLimit)
 	bucketInfo := rgwNativeBucket(t, ctx, gateway, bucket)
-	payload := rgwNativeLargePayload(rgwNativeMultiPayloadSize)
+	payloadSize := rgwNativeMultiPayloadSize
+	if faults {
+		// Three complete four-MiB stripes keep the native manifest's stripe
+		// capacities equal to its logical coverage, without truncating an oracle.
+		payloadSize = 12 << 20
+	}
+	payload := rgwNativeLargePayload(payloadSize)
 	payloadHash := rgwNativeHash(payload)
 	head := bucketInfo.Marker + "_" + key
-	// One PUT. No oracle traffic runs between it and the retained reception
-	// snapshot, and an unknown S3 outcome fails the run instead of replaying.
-	request(http.MethodPut, path, payload, http.StatusOK, rgwNativeDefaultResponseLimit)
+	// Materialize the lazily created data pool before the fault observation.
+	// The bootstrap is a different small object and is removed before the PUT.
+	if faults {
+		request(http.MethodPut, "/"+bucket+"/bootstrap", []byte("pool bootstrap"), http.StatusOK, rgwNativeDefaultResponseLimit)
+		request(http.MethodDelete, "/"+bucket+"/bootstrap", nil, http.StatusNoContent, rgwNativeDefaultResponseLimit)
+	} else {
+		request(http.MethodPut, path, payload, http.StatusOK, rgwNativeDefaultResponseLimit)
+	}
 	generation := rgwNativeGeneration(t, ctx, gateway)
 	dataPool, indexPool, dataPoolID, indexPoolID := rgwNativePools(t, ctx, cluster)
 	logPoolID := rgwNativeLogPoolID(t, ctx, cluster)
 	osdName := "osd." + strconv.Itoa(rgwNativeOSDs(t, ctx, cluster)[0].ID)
+	var beforeHistory []byte
+	var osdFault, mgrFault map[string]any
+	if faults {
+		beforeHistory, osdFault = rgwNativeInterruptStripe(t, ctx, cluster, gateway, s3, path, payload, bucketInfo.Marker, dataPoolID, generation)
+	}
 	history, err := rgwNativePollHistory(ctx, func(read context.Context) []byte {
-		return rgwNativeExec(t, read, control, "ceph", "tell", osdName, "dump_historic_ops")
+		raw := rgwNativeExec(t, read, control, "ceph", "tell", osdName, "dump_historic_ops")
+		if len(beforeHistory) != 0 {
+			return rgwNativeJoinHistory(t, beforeHistory, raw)
+		}
+		return raw
 	}, func(output []byte) (bool, error) {
 		return rgwNativeMultiPutPublished(output, generation, head, bucketInfo.Marker, bucketInfo.ID, dataPoolID, indexPoolID)
 	})
@@ -155,6 +183,11 @@ func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 	}
 	if !prepare || !complete {
 		t.Fatalf("incomplete gateway-attributed index reception: prepare=%t complete=%t", prepare, complete)
+	}
+	// Promotion is observed before the independent data/metadata oracles, so
+	// those oracles establish the postcondition with the former active stopped.
+	if faults {
+		mgrFault = rgwNativeStandbyTakeover(t, ctx, cluster, gateway, generation)
 	}
 	// S3 readback and independent native reconstruction in manifest order.
 	if read := request(http.MethodGet, path, nil, http.StatusOK, rgwNativeMultiResponseLimit); !bytes.Equal(read, payload) {
@@ -293,11 +326,16 @@ func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 		"native_index_shard": shard, "gc_chains": tagCount,
 		"put_reception": putReceipt, "delete_head_remove": removeReceipt, "delete_gc_enqueue": enqueueReceipt,
 		"gc_removed_tails": len(tails), "gateway_generation": generation,
+		"osd_fault": osdFault, "mgr_takeover": mgrFault,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("RGW_NATIVE_MULTISTRIPE %s", receipt)
+	marker := "RGW_NATIVE_MULTISTRIPE"
+	if faults {
+		marker = "RGW_NATIVE_MULTISTRIPE_FAULT"
+	}
+	t.Logf("%s %s", marker, receipt)
 }
 
 func rgwNativeLogPoolID(t *testing.T, ctx context.Context, cluster *rgw.Container) int64 {

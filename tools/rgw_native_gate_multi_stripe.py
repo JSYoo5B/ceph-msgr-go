@@ -30,17 +30,18 @@ def check(line, gate):
     return check_receipt(receipt, gate), {"stripes": len(receipt.get("stripes", []))}
 
 
-def check_receipt(receipt, gate):
+def check_receipt(receipt, gate, size=MULTISTRIPE_SIZE):
     problems = []
-    if receipt.get("bytes") != MULTISTRIPE_SIZE:
-        problems.append("receipt object size is not %d" % MULTISTRIPE_SIZE)
-    expected = hashlib.sha256(large_payload(MULTISTRIPE_SIZE)).hexdigest()
+    if receipt.get("bytes") != size:
+        problems.append("receipt object size is not %d" % size)
+    expected = hashlib.sha256(large_payload(size)).hexdigest()
     if receipt.get("sha256") != expected:
         problems.append("receipt payload hash differs from the deterministic input")
     problems.extend(gate.release_problems(receipt))
     stripes = receipt.get("stripes")
     if not isinstance(stripes, list) or len(stripes) < 2 or len(stripes) > 64:
         return problems + ["layout has fewer than two byte-bearing objects"]
+    expected_size = size
     covered, seen = 0, set()
     for position, stripe in enumerate(stripes):
         if not isinstance(stripe, dict) or stripe.get("index") != position or stripe.get("offset") != covered:
@@ -53,7 +54,7 @@ def check_receipt(receipt, gate):
             problems.append("layout repeats a raw object")
         seen.add(stripe.get("oid"))
         covered += size if isinstance(size, int) else 0
-    if covered != MULTISTRIPE_SIZE:
+    if covered != expected_size:
         problems.append("layout covers %d bytes" % covered)
     for field in ("put_reception", "delete_head_remove", "delete_gc_enqueue"):
         if not isinstance(receipt.get(field), list) or not receipt[field]:

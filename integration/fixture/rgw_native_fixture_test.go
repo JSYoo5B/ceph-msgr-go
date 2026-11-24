@@ -17,14 +17,17 @@ import (
 // rgwNativeStartFixture starts the dedicated owned RGW fixture shared by the
 // native checkpoints and registers its independently verified cleanup. Each
 // test gets a new disposable cluster; no cluster is reused across tests.
-func rgwNativeStartFixture(t *testing.T, ctx context.Context) (*rgw.Container, *rgw.Gateway) {
+func rgwNativeStartFixture(t *testing.T, ctx context.Context, managers int) (*rgw.Container, *rgw.Gateway) {
 	t.Helper()
+	if managers != 1 && managers != 2 {
+		t.Fatal("RGW checkpoint requires one or two managers")
+	}
 	config := filepath.Join(t.TempDir(), "rgw-checkpoint.conf")
 	if err := os.WriteFile(config, []byte("[global]\nosd_pool_default_pg_num = 1\n[osd]\nosd_op_history_size = 4096\nosd_op_history_duration = 600\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cluster, err := rgw.Run(ctx, rgwNativeImage,
-		ceph.WithClusterConfig(ceph.ClusterConfig{}.WithMonitorCount(1).WithManagerCount(1).WithOSDCount(1).WithPoolDefaults(1, 1)),
+		ceph.WithClusterConfig(ceph.ClusterConfig{}.WithMonitorCount(1).WithManagerCount(managers).WithOSDCount(1).WithPoolDefaults(1, 1)),
 		ceph.WithOSDStorage(ceph.OSDStorage{}.WithObjectStore(ceph.OSDBlueStore)),
 		ceph.WithNetworkConfig(ceph.NetworkConfig{}.WithMessengerMode(ceph.MessengerV2Secure)),
 		ceph.WithAuth(ceph.AuthConfig{KeyType: ceph.CipherAES256K, ServiceCipher: ceph.CipherAES256K}),
