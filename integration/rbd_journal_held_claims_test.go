@@ -86,14 +86,22 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		return []string{"record: a held-request record carries another variant's part"}
 	}
 	replica, change, dead := h.Mode == rbdJournalVariantReplicaHold, h.Mode == rbdJournalVariantHeldPrimaryChange, h.Mode == rbdJournalVariantDeadPrimary
+	// inventory is the setup observation's journal object count: every
+	// later observation must list exactly as many objects, each with its
+	// size, digest and existence, before any two of them are compared.
+	inventory := -1
 	view := func(name string, at int) *rbdJournalLostAppendView {
 		if reached < at {
 			return nil
 		}
 		v := r.Views[name]
-		if v == nil || v.Action != name || int(e.Object) >= len(v.ObjectSizes) || len(v.ObjectSizes) != len(v.ObjectSHA256) {
-			fail("%s: native observation missing or incomplete", name)
+		if v == nil || v.Action != name || int(e.Object) >= len(v.ObjectSizes) || len(v.ObjectSHA256) != len(v.ObjectSizes) || len(v.ObjectExists) != len(v.ObjectSizes) ||
+			inventory >= 0 && len(v.ObjectSizes) != inventory {
+			fail("%s: native observation missing or incomplete (%d journal objects, the setup listed %d)", name, len(v.ObjectSizes), inventory)
 			return nil
+		}
+		if inventory < 0 {
+			inventory = len(v.ObjectSizes)
 		}
 		return v
 	}

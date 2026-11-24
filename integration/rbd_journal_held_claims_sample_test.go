@@ -257,7 +257,27 @@ func TestRBDJournalHeldClaims(t *testing.T) {
 		"outcome of another transaction": {"*", "replay", func(r *rbdJournalLostAppendRecord) {
 			r.Outcome.Submission.Transaction, r.Outcome.ReplyTransaction = 11, map[bool]uint64{true: 11}[r.Outcome.ReplyTransaction != 0]
 		}},
-		"two invocations":        {"*", "replay", func(r *rbdJournalLostAppendRecord) { r.Outcome.CallerInvocations = 2 }},
+		"two invocations": {"*", "replay", func(r *rbdJournalLostAppendRecord) { r.Outcome.CallerInvocations = 2 }},
+		"replay lists one journal object fewer": {"*", "replay", func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["replay"]
+			v.ObjectSizes, v.ObjectSHA256, v.ObjectExists = v.ObjectSizes[:len(v.ObjectSizes)-1], v.ObjectSHA256[:len(v.ObjectSHA256)-1], v.ObjectExists[:len(v.ObjectExists)-1]
+		}},
+		"replay lists one journal object more": {"*", "replay", func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["replay"]
+			v.ObjectSizes, v.ObjectSHA256, v.ObjectExists = append(v.ObjectSizes, 0), append(v.ObjectSHA256, strings.Repeat("4", 64)), append(v.ObjectExists, false)
+		}},
+		"locked image lists one object fewer": {"*", "observe-held", func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["observe-locked"]
+			v.ObjectSizes, v.ObjectSHA256, v.ObjectExists = v.ObjectSizes[:7], v.ObjectSHA256[:7], v.ObjectExists[:7]
+		}},
+		"replay lists one digest fewer": {"*", "replay", func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["replay"]
+			v.ObjectSHA256 = v.ObjectSHA256[:len(v.ObjectSHA256)-1]
+		}},
+		"replay lists one existence fewer": {"*", "replay", func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["replay"]
+			v.ObjectExists = v.ObjectExists[:len(v.ObjectExists)-1]
+		}},
 		"replay twice":           {"*", "replay", func(r *rbdJournalLostAppendRecord) { r.Views["replay"].LockFree = false }},
 		"replay of another head": {"*", "replay", func(r *rbdJournalLostAppendRecord) { r.Views["replay"].ImageHeadSHA256 = strings.Repeat("f", 64) }},
 		// Replica hold.

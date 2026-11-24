@@ -35,14 +35,22 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	if p == nil || len(p.Calls) != len(holds) {
 		return []string{fmt.Sprintf("record: the pending appends are missing or not %d", len(holds))}
 	}
+	// inventory is the setup observation's journal object count: every
+	// later observation must list exactly as many objects, each with its
+	// size, digest and existence, before any two of them are compared.
+	inventory := -1
 	view := func(name string, at int) *rbdJournalLostAppendView {
 		if reached < at {
 			return nil
 		}
 		v := r.Views[name]
-		if v == nil || v.Action != name || len(v.ObjectSizes) <= int(e.Object)+len(holds) || len(v.ObjectSizes) != len(v.ObjectSHA256) {
-			fail("%s: native observation missing or incomplete", name)
+		if v == nil || v.Action != name || len(v.ObjectSizes) <= int(e.Object)+len(holds) || len(v.ObjectSHA256) != len(v.ObjectSizes) ||
+			len(v.ObjectExists) != len(v.ObjectSizes) || inventory >= 0 && len(v.ObjectSizes) != inventory {
+			fail("%s: native observation missing or incomplete (%d journal objects, the setup listed %d)", name, len(v.ObjectSizes), inventory)
 			return nil
+		}
+		if inventory < 0 {
+			inventory = len(v.ObjectSizes)
 		}
 		return v
 	}
@@ -107,12 +115,16 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	// object of each applied entry is its earlier bytes followed by exactly
 	// that entry, every other object is as the locked image left it.
 	journal := func(name string, v *rbdJournalLostAppendView, applied []bool) {
+		if len(v.ObjectSizes) != len(locked.ObjectSizes) {
+			fail("%s: %d journal objects listed, the locked image had %d", name, len(v.ObjectSizes), len(locked.ObjectSizes))
+			return
+		}
 		for i := range v.ObjectSizes {
 			size, sum := locked.ObjectSizes[i], locked.ObjectSHA256[i]
 			if k := i - int(e.Object); k >= 0 && k < len(p.Calls) && applied[k] {
 				size, sum = p.Calls[k].BeforeSize+uint64(p.Calls[k].Entry.Length), p.Calls[k].AppliedSHA256
 			}
-			if i >= len(locked.ObjectSizes) || v.ObjectSizes[i] != size || v.ObjectSHA256[i] != sum {
+			if v.ObjectSizes[i] != size || v.ObjectSHA256[i] != sum {
 				what := "unchanged"
 				if k := i - int(e.Object); k >= 0 && k < len(applied) && applied[k] {
 					what = fmt.Sprintf("its earlier bytes followed by exactly entry %d", k)

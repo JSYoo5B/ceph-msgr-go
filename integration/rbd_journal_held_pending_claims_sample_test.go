@@ -233,6 +233,26 @@ func TestRBDJournalHeldPendingClaims(t *testing.T) {
 			v := r.Views["replay"]
 			v.InspectOwned = append(v.InspectOwned, v.InspectOwned[0])
 		}},
+		"replay lists one journal object fewer": {"*", "replay", func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["replay"]
+			v.ObjectSizes, v.ObjectSHA256, v.ObjectExists = v.ObjectSizes[:len(v.ObjectSizes)-1], v.ObjectSHA256[:len(v.ObjectSHA256)-1], v.ObjectExists[:len(v.ObjectExists)-1]
+		}},
+		"replay lists one journal object more": {"*", "replay", func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["replay"]
+			v.ObjectSizes, v.ObjectSHA256, v.ObjectExists = append(v.ObjectSizes, 0), append(v.ObjectSHA256, strings.Repeat("4", 64)), append(v.ObjectExists, false)
+		}},
+		"locked image lists one object fewer": {"*", "observe-held", func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["observe-locked"]
+			v.ObjectSizes, v.ObjectSHA256, v.ObjectExists = v.ObjectSizes[:7], v.ObjectSHA256[:7], v.ObjectExists[:7]
+		}},
+		"replay lists one digest fewer": {"*", "replay", func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["replay"]
+			v.ObjectSHA256 = v.ObjectSHA256[:len(v.ObjectSHA256)-1]
+		}},
+		"replay lists one existence fewer": {"*", "replay", func(r *rbdJournalLostAppendRecord) {
+			v := r.Views["replay"]
+			v.ObjectExists = v.ObjectExists[:len(v.ObjectExists)-1]
+		}},
 		"replay journal object grew":      {"*", "replay", func(r *rbdJournalLostAppendRecord) { r.Views["replay"].ObjectSizes[0] += 4198 }},
 		"tag predecessor another entry":   {"*", "replay", func(r *rbdJournalLostAppendRecord) { r.Views["replay"].LastTag.PredecessorEnt++ }},
 		"steps out of order":              {"*", "observe-held", func(r *rbdJournalLostAppendRecord) { r.Order[6], r.Order[7] = r.Order[7], r.Order[6] }},
