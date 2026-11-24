@@ -114,7 +114,20 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	if r.PrimaryChange != nil || r.OwnerLoss != nil || r.Trim != nil || r.Inflight != nil || r.ForcedPending != nil {
 		return []string{"record: a held-request record carries another variant's part"}
 	}
-	replica, change, dead := h.Mode == rbdJournalVariantReplicaHold, h.Mode == rbdJournalVariantHeldPrimaryChange, h.Mode == rbdJournalVariantDeadPrimary
+	// The erasure-hold mode is the replica hold on an erasure-coded journal
+	// pool: its PG follows journal object 0 alone, and the held op records
+	// no shard commit.
+	erasure := h.Mode == rbdJournalVariantErasureHold
+	replica, change, dead := h.Mode == rbdJournalVariantReplicaHold || erasure, h.Mode == rbdJournalVariantHeldPrimaryChange, h.Mode == rbdJournalVariantDeadPrimary
+	followed, dataObject := []string{"rbd_header." + r.ImageID, e.ObjectName, r.JournalHeader}, 1
+	pool, poolID := r.Pool, r.PoolID
+	if erasure {
+		followed, dataObject = []string{e.ObjectName}, 0
+		pool, poolID = h.JournalPool, h.JournalPoolID
+	}
+	if erasure != (h.JournalPool != "") || erasure && (h.JournalPoolID <= 0 || h.JournalPoolID == r.PoolID || h.JournalPool == r.Pool) {
+		return []string{"record: the journal pool does not match the mode: " + text(h.JournalPool)}
+	}
 	// inventory is the setup observation's journal object count: every
 	// later observation must list exactly as many objects, each with its
 	// size, digest and existence, before any two of them are compared.
@@ -186,15 +199,16 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		}
 	}
 	members := func(osds []int32) []int32 { sorted := slices.Clone(osds); slices.Sort(sorted); return sorted }
-	// placedOn checks one read's placements: the three followed objects in
-	// one PG of the owned pool on the acting set acting led by primary.
+	// placedOn checks one read's placements: the followed objects (the
+	// three objects of the owned pool, or the erasure-coded journal
+	// object) in one PG on the acting set acting led by primary.
 	placedOn := func(name string, read *nativeRBDJournalHeldRead, acting []int32, primary int32) {
-		if len(read.Objects) != 3 || read.PGID == "" {
-			fail("%s: the placements of the three followed objects are missing: %s", name, text(read.Objects))
+		if len(read.Objects) != len(followed) || read.PGID == "" {
+			fail("%s: the placements of the %d followed objects are missing: %s", name, len(followed), text(read.Objects))
 			return
 		}
 		for i, o := range read.Objects {
-			if want := []string{"rbd_header." + r.ImageID, e.ObjectName, r.JournalHeader}[i]; o.Object != want || o.Pool != r.Pool || o.PoolID != r.PoolID || o.PGID != read.PGID ||
+			if want := followed[i]; o.Object != want || o.Pool != pool || o.PoolID != poolID || o.PGID != read.PGID ||
 				!slices.Equal(o.Acting, acting) || o.ActingPrimary != primary || o.Epoch == 0 || o.Epoch > read.Epoch {
 				fail("%s: %s is not in the PG on acting set %v led by osd.%d: %s", name, want, acting, primary, text(o))
 			}
@@ -246,7 +260,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 
 	// Held: before the append, the PG on three members led by P, clean.
 	pl := h.Placed
-	if pl == nil || len(pl.Objects) != 3 {
+	if pl == nil || len(pl.Objects) != len(followed) {
 		fail("observe-placed: the fixture's placement is missing: %s", text(pl))
 		return problems
 	}
@@ -270,7 +284,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	}
 	// The OSDMap may gain an epoch between the fixture's read and the
 	// subject's own placement; the PG's interval may not (below).
-	if hd := h.Held; h.SentAtEpoch == 0 || h.SentAtEpoch < pl.Objects[1].Epoch || hd != nil && len(hd.Objects) == 3 && h.SentAtEpoch > hd.Objects[1].Epoch {
+	if hd := h.Held; h.SentAtEpoch == 0 || h.SentAtEpoch < pl.Objects[dataObject].Epoch || hd != nil && len(hd.Objects) == len(followed) && h.SentAtEpoch > hd.Objects[dataObject].Epoch {
 		fail("append: the subject placed the append at epoch %d, outside the fixture's reads around it", h.SentAtEpoch)
 	}
 	wantNamed := h.SentAtEpoch
@@ -288,7 +302,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		fail("pause: an OSD was paused in the held primary-change mode: %s", text(h.Lease))
 	}
 	hd := h.Held
-	if hd == nil || len(hd.Objects) != 3 {
+	if hd == nil || len(hd.Objects) != len(followed) {
 		fail("observe-held: the fixture's read is missing: %s", text(hd))
 		return problems
 	}
@@ -313,7 +327,19 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	}
 	replicas := slices.DeleteFunc(members(acting), func(o int32) bool { return o == h.Primary })
 	waiting := fmt.Sprintf("waiting for subops from %d,%d", replicas[0], replicas[1])
-	if replica || dead {
+	if erasure {
+		// Started on P, whose erasure-coded write pipeline answers once
+		// every shard committed. P writes its own shard with the client op,
+		// which records that sub-write's start and commit and nothing of
+		// the other shards' (osd/ECBackend.cc handle_sub_write and
+		// SubWriteCommitted, osd/ECCommon.cc at ceph/ceph/blob/v20.2.4/src/):
+		// the flag point stays started, and the events are the pre-PG
+		// steps, the PG's steps up to started, then P's shard started and
+		// committed, nothing else.
+		if op.FlagPoint != "started" || !rbdJournalHeldEvents(op.Events, append(slices.Clone(rbdJournalHeldInPG), "sub_op_started"), "sub_op_committed") {
+			fail("observe-held: the append is not waiting for the other shards with only P's shard committed on the erasure-coded primary: %s", text(op))
+		}
+	} else if replica || dead {
 		// Applied on P and sent to both replicas; exactly one replica's
 		// commit recorded; never answered: the op tracker's flag point is the
 		// replica wait, and its events are the pre-PG steps, the PG's own
@@ -371,7 +397,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		// Interval: unchanged across the request, every peer at the
 		// primary's new last update.
 		st := h.Settled
-		if st == nil || len(st.Objects) != 3 {
+		if st == nil || len(st.Objects) != len(followed) {
 			fail("observe-settled: the fixture's read is missing")
 			return problems
 		}
@@ -519,6 +545,17 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		}
 		if r.DialsBeforeClose == nil || *r.DialsBeforeClose != 1 || r.DialsTotal == nil || *r.DialsTotal != 2 || g.Connections != 2 || h.AppendConnection != 1 {
 			fail("transmission: not one subject connection to the old primary and one to the new: gate %s, dials before close %s, in total %s", text(g), text(r.DialsBeforeClose), text(r.DialsTotal))
+		}
+	} else if erasure {
+		// One connection to the header's primary and, when the journal
+		// object's primary is another OSD, one to that, which carried the
+		// append.
+		want := 1
+		if h.HeaderPrimary != h.Primary {
+			want = 2
+		}
+		if r.DialsTotal == nil || *r.DialsTotal != want || g.Connections != want || h.AppendConnection != want || h.HeaderPrimary < 0 {
+			fail("transmission: not %d subject connections with the append on the journal object primary's: gate %s, dials %s, header primary osd.%d", want, text(g), text(r.DialsTotal), h.HeaderPrimary)
 		}
 	} else if r.DialsTotal == nil || *r.DialsTotal != 1 || g.Connections != 1 || h.AppendConnection != 1 {
 		fail("transmission: not one subject connection: gate %s, dials %s", text(g), text(r.DialsTotal))

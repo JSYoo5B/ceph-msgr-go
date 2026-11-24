@@ -14,7 +14,10 @@ import (
 // rbdJournalHeldSample is a consistent record of one held-request run in
 // the given mode with synthetic values: P is osd.0 and osd.2 the paused
 // replica; the setup's tag is 1, the subject's 2 and native librbd's replay
-// allocates 3.
+// allocates 3. In the erasure-hold mode the journal object is in the
+// erasure-coded pool 4, P leads its PG and osd.2 is the paused shard, the
+// header's primary is osd.1 and the append travels on the subject's second
+// connection.
 func rbdJournalHeldSample(mode string) *rbdJournalLostAppendRecord {
 	n := func(v int) *int { return &v }
 	str := func(v string) *string { return &v }
@@ -23,7 +26,8 @@ func rbdJournalHeldSample(mode string) *rbdJournalLostAppendRecord {
 	const subject, cookie, tag, tid = 4866, 77, 2, 10
 	token := strings.Repeat("a1", 16)
 	pool := "ceph-msgr-rbd-" + token
-	replica, change, dead := mode == rbdJournalVariantReplicaHold, mode == rbdJournalVariantHeldPrimaryChange, mode == rbdJournalVariantDeadPrimary
+	erasure := mode == rbdJournalVariantErasureHold
+	replica, change, dead := mode == rbdJournalVariantReplicaHold || erasure, mode == rbdJournalVariantHeldPrimaryChange, mode == rbdJournalVariantDeadPrimary
 	e := rbdJournalLostAppendEntry{Tag: tag, EntryTID: 0, Object: 0, ObjectName: "journal_data.3.ab.0", Offset: 2110, Length: 4198, SHA256: hash("e"),
 		ImageOffset: 40 << 10, ImageLength: 4 << 10, Timestamp: cephmsgr.OSDTime{Seconds: 1700000000, Nanoseconds: 5000}}
 	setupSizes := []uint64{2110, 2110, 1086, 93, 0, 0, 0, 0}
@@ -57,6 +61,10 @@ func rbdJournalHeldSample(mode string) *rbdJournalLostAppendRecord {
 	_, order := rbdJournalHeldPlan(mode)
 	r.Order = slices.Clone(order)
 	objects := []string{"rbd_header.ab", e.ObjectName, "journal.ab"}
+	placedPool, placedID, pgid := pool, int64(3), "3.0"
+	if erasure {
+		objects, placedPool, placedID, pgid = []string{e.ObjectName}, "ceph-msgr-rbd2-"+token, 4, "4.0"
+	}
 	placements := func(epoch uint32, acting []int32) []nativeRBDJournalPlacement {
 		var set []nativeRBDJournalPlacement
 		for _, o := range objects {
@@ -64,7 +72,7 @@ func rbdJournalHeldSample(mode string) *rbdJournalLostAppendRecord {
 			if len(acting) == 3 && acting[2] == 0 {
 				up = acting[:2]
 			}
-			set = append(set, nativeRBDJournalPlacement{Epoch: epoch, Pool: pool, PoolID: 3, Object: o, RawPGID: "3.e3", PGID: "3.0", Up: up, UpPrimary: up[0], Acting: slices.Clone(acting),
+			set = append(set, nativeRBDJournalPlacement{Epoch: epoch, Pool: placedPool, PoolID: placedID, Object: o, RawPGID: "3.e3", PGID: pgid, Up: up, UpPrimary: up[0], Acting: slices.Clone(acting),
 				ActingPrimary: acting[0]})
 		}
 		return set
@@ -89,13 +97,17 @@ func rbdJournalHeldSample(mode string) *rbdJournalLostAppendRecord {
 	op := nativeRBDJournalHeldOp{OSD: 0, Description: description, Client: fmt.Sprintf("client.%d", subject), Transaction: tid, FlagPoint: "waiting for sub ops",
 		Events: []string{"initiated", "header_read", "throttled", "all_read", "dispatched", "queued_for_pg", "reached_pg", "started", "waiting for subops from 1,2", "op_commit", "sub_op_commit_rec"}}
 	last := "30'52"
+	if erasure {
+		op.FlagPoint, op.Events = "started", []string{"initiated", "header_read", "throttled", "all_read", "dispatched", "queued_for_pg", "reached_pg", "started", "sub_op_started",
+			"sub_op_committed"}
+	}
 	if change {
 		op.FlagPoint, op.Events, last = "no flag points reached", []string{"initiated", "header_read", "throttled", "all_read", "dispatched"}, "29'51"
 	}
 	h := &rbdJournalHeld{Mode: mode, Primary: 0, Replica: -1, GoActing: []int32{0, 1, 2}, SentAtEpoch: 30, NamedEpoch: named, SubmittedUTC: "2026-11-23T13:33:49.500000000Z", PendingAfterHeld: true, AppendConnection: 1,
 		PingBefore: &rbdLockOwnerLossAttempt{Label: "watch_ping", Invocations: 1, Class: "applied"},
-		Placed:     &nativeRBDJournalHeldRead{Objects: placements(30, clean), PGID: "3.0", Query: query("active+clean", 30, clean, "29'51", 21, 1, 2), OSD: -1, Epoch: 30, Down: []int32{}, Settled: true, Polls: 1},
-		Held: &nativeRBDJournalHeldRead{Objects: placements(30, clean), PGID: "3.0", Query: query("active+clean", 30, clean, last, 21, 1, 2), OSD: 0, Ops: []nativeRBDJournalHeldOp{op},
+		Placed:     &nativeRBDJournalHeldRead{Objects: placements(30, clean), PGID: pgid, Query: query("active+clean", 30, clean, "29'51", 21, 1, 2), OSD: -1, Epoch: 30, Down: []int32{}, Settled: true, Polls: 1},
+		Held: &nativeRBDJournalHeldRead{Objects: placements(30, clean), PGID: pgid, Query: query("active+clean", 30, clean, last, 21, 1, 2), OSD: 0, Ops: []nativeRBDJournalHeldOp{op},
 			Epoch: 30, Down: []int32{}, Settled: true, Polls: 1}}
 	r.Held = h
 	submitted, _ := time.Parse(time.RFC3339Nano, h.SubmittedUTC)
@@ -122,7 +134,11 @@ func rbdJournalHeldSample(mode string) *rbdJournalLostAppendRecord {
 	case replica:
 		outcome.Class, outcome.ReplyTransaction = "applied", tid
 		r.DialsTotal = n(1)
-		h.Settled = &nativeRBDJournalHeldRead{Objects: placements(30, clean), PGID: "3.0", Query: query("active+clean", 30, clean, "30'52", 21, 1, 2), OSD: -1, Epoch: 30, Down: []int32{},
+		if erasure {
+			h.JournalPool, h.JournalPoolID, h.HeaderPrimary, h.AppendConnection = placedPool, placedID, 1, 2
+			r.DialsTotal, r.Gate.Connections = n(2), 2
+		}
+		h.Settled = &nativeRBDJournalHeldRead{Objects: placements(30, clean), PGID: pgid, Query: query("active+clean", 30, clean, "30'52", 21, 1, 2), OSD: -1, Epoch: 30, Down: []int32{},
 			Settled: true, Polls: 1}
 		r.Views["observe-answered"] = locked(withEntry(view("observe-answered")), true)
 	case dead:
@@ -207,7 +223,7 @@ func TestRBDJournalHeldClaims(t *testing.T) {
 		r.Order = slices.Clone(full[:min(len(full), slices.Index(order, stage)+1)])
 		return rbdJournalLostAppendClaims(r, stage)
 	}
-	for _, mode := range []string{rbdJournalVariantReplicaHold, rbdJournalVariantHeldPrimaryChange, rbdJournalVariantDeadPrimary} {
+	for _, mode := range []string{rbdJournalVariantReplicaHold, rbdJournalVariantHeldPrimaryChange, rbdJournalVariantDeadPrimary, rbdJournalVariantErasureHold} {
 		stages, _ := rbdJournalHeldPlan(mode)
 		for _, stage := range stages {
 			r := rbdJournalHeldSample(mode)
@@ -346,8 +362,45 @@ func TestRBDJournalHeldClaims(t *testing.T) {
 		"image moved": {rbdJournalVariantReplicaHold, "observe-answered", func(r *rbdJournalLostAppendRecord) {
 			r.Views["observe-answered"].ImageHeadSHA256 = strings.Repeat("b", 64)
 		}},
-		"two connections":   {rbdJournalVariantReplicaHold, "replay", func(r *rbdJournalLostAppendRecord) { r.Gate.Connections = 2 }},
-		"replay without it": {rbdJournalVariantReplicaHold, "replay", func(r *rbdJournalLostAppendRecord) { r.Views["replay"].InspectOwned = nil }},
+		"two connections": {rbdJournalVariantReplicaHold, "replay", func(r *rbdJournalLostAppendRecord) { r.Gate.Connections = 2 }},
+		// Erasure hold: the journal object alone in the erasure-coded pool's
+		// PG, a started op without a shard commit, and the append on the
+		// connection to that PG's primary.
+		"erasure: journal pool missing": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) { r.Held.JournalPool = "" }},
+		"erasure: journal pool is the owned pool": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			r.Held.JournalPool, r.Held.JournalPoolID = r.Pool, r.PoolID
+		}},
+		"erasure: object placed in the owned pool": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) { r.Held.Placed.Objects[0].PoolID = 3 }},
+		"erasure: the headers followed too": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			r.Held.Held.Objects = append(r.Held.Held.Objects, r.Held.Held.Objects[0])
+		}},
+		"erasure: another shard paused":    {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) { r.Held.Replica, r.Held.Lease.Daemon = 1, "osd.1" }},
+		"erasure: a shard commit recorded": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = append(op(r).Events, "sub_op_commit_rec") }},
+		"erasure: replica wait flag": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			op(r).FlagPoint = rbdJournalHeldSubOpsFlag
+		}},
+		"erasure: committed before the answer": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = append(op(r).Events, "op_commit") }},
+		"erasure: not started":                 {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = op(r).Events[:7] }},
+		"erasure: own shard not committed":     {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) { op(r).Events = op(r).Events[:9] }},
+		"erasure: own shard not started": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			op(r).Events = slices.DeleteFunc(op(r).Events, func(e string) bool { return e == "sub_op_started" })
+		}},
+		"erasure: own shard committed twice": {rbdJournalVariantErasureHold, "observe-held", func(r *rbdJournalLostAppendRecord) {
+			op(r).Events = append(op(r).Events, "sub_op_committed")
+		}},
+		"erasure: answer unknown": {rbdJournalVariantErasureHold, "observe-answered", func(r *rbdJournalLostAppendRecord) {
+			r.Outcome.Class, r.Outcome.UnknownOutcome = "uncertain", true
+		}},
+		"erasure: entry missing":                     {rbdJournalVariantErasureHold, "observe-answered", func(r *rbdJournalLostAppendRecord) { r.Views["observe-answered"].EntrySHA256 = nil }},
+		"erasure: append on the header's connection": {rbdJournalVariantErasureHold, "replay", func(r *rbdJournalLostAppendRecord) { r.Held.AppendConnection = 1 }},
+		"erasure: one connection to two primaries": {rbdJournalVariantErasureHold, "replay", func(r *rbdJournalLostAppendRecord) {
+			*r.DialsTotal, r.Gate.Connections = 1, 1
+		}},
+		"erasure: one primary, one connection": {rbdJournalVariantErasureHold, "", func(r *rbdJournalLostAppendRecord) {
+			r.Held.HeaderPrimary, r.Held.AppendConnection, *r.DialsTotal, r.Gate.Connections = 0, 1, 1, 1
+		}},
+		"erasure: replay without it": {rbdJournalVariantErasureHold, "replay", func(r *rbdJournalLostAppendRecord) { r.Views["replay"].InspectOwned = nil }},
+		"replay without it":          {rbdJournalVariantReplicaHold, "replay", func(r *rbdJournalLostAppendRecord) { r.Views["replay"].InspectOwned = nil }},
 		// Dead primary.
 		"kill exited cleanly":      {rbdJournalVariantDeadPrimary, "observe-recorded", func(r *rbdJournalLostAppendRecord) { r.Held.Kill.ExitCode = 0 }},
 		"another daemon killed":    {rbdJournalVariantDeadPrimary, "observe-recorded", func(r *rbdJournalLostAppendRecord) { r.Held.Kill.Daemon = "osd.1" }},
