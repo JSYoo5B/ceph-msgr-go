@@ -108,6 +108,12 @@ type shardHistorySnapshot struct {
 // errCopyIntervalChanged; anything else is a plain error that says nothing
 // about the interval.
 func shardHistoryAttributed(s shardHistorySnapshot, o copyIntervalObservation, route osdFixtureOracle) error {
+	// A placement record names its object, so an observation of another
+	// object of the same PG would compare as another placement: it is no
+	// observation of route.
+	if o.Before != nil && (o.Before.Name != route.Name || o.Before.Namespace != route.Namespace) {
+		return fmt.Errorf("the observation is of object %q in namespace %q, not of the route's %q in %q", o.Before.Name, o.Before.Namespace, route.Name, route.Namespace)
+	}
 	if err := copyIntervalHeld(o, route); err != nil {
 		return err
 	}
@@ -261,8 +267,9 @@ func copyFromShardObservation(copyKey, sourceKey []pgHistoryLocation, want copyF
 // holds an object of the owned pool in slot. The oracle stores the first
 // placement, the fixture copies and reads every acting shard's store under
 // it, and the oracle reads the placement again. A read-only copyinterval
-// observation of the PG after the capture must then show the interval in
-// which route was judged still holding (shardHistoryAttributed); a changed
+// observation of route's own object after the capture must then show the
+// interval in which route was judged still holding (shardHistoryAttributed);
+// route may name another object of the same PG than object. A changed
 // interval fails the capture as unattributed before any verdict on its
 // content. It establishes where the identities occur in each shard's own
 // log, never absence. past lists the shards whose log head may be newer
@@ -287,7 +294,7 @@ func shardPGHistory(t *testing.T, ctx context.Context, slot int, object string, 
 		}
 	}
 	content := checkShardHistory(s, route, targets, past)
-	o, n, err := shardHistoryAwaitAttributed(func() copyIntervalObservation { return copyInterval(t, ctx, slot, object) }, s, route, shardHistoryObservations,
+	o, n, err := shardHistoryAwaitAttributed(func() copyIntervalObservation { return copyInterval(t, ctx, slot, route.Name) }, s, route, shardHistoryObservations,
 		func() { time.Sleep(shardHistoryPause) })
 	verdict := "accepted"
 	if content != nil {
@@ -763,7 +770,7 @@ func TestCheckShardHistory(t *testing.T) {
 }
 
 func TestShardHistoryAttributed(t *testing.T) {
-	route := osdFixtureOracle{Up: []int32{1, 3, 2, 0}, Acting: []int32{1, 3, 2, 0}, Replicas: 4, Pool: 4, PoolType: 3, ID: 1, PrimaryID: 1, Shard: 0, Epoch: 28, PGID: "4.2", Address: "v2:192.0.2.11:6800/1"}
+	route := osdFixtureOracle{Up: []int32{1, 3, 2, 0}, Acting: []int32{1, 3, 2, 0}, Replicas: 4, Pool: 4, Name: "dst", PoolType: 3, ID: 1, PrimaryID: 1, Shard: 0, Epoch: 28, PGID: "4.2", Address: "v2:192.0.2.11:6800/1"}
 	targets := []pgHistoryTarget{{Type: "client", Num: 4722, Inc: 9, TID: 2}}
 	raw := []byte(`{"pg_log_t":{"log":[{"reqid":"client.4722.9:2"}],"dups":[]}}`)
 	digest := sha256.Sum256(raw)
@@ -806,6 +813,15 @@ func TestShardHistoryAttributed(t *testing.T) {
 	// An observation that predates the second bracket says nothing.
 	if err := shardHistoryAttributed(s, observe(29, 28), route); err == nil || errors.Is(err, errCopyIntervalChanged) {
 		t.Error("an observation before the capture's second bracket judged:", err)
+	}
+	// The same PG and interval observed through another of its objects is
+	// no observation of the route, and says nothing about the interval.
+	other := observe(30, 28)
+	b := *other.Before
+	b.Name, b.Hash, b.RawPGID = "another-object", 0x30af615c, "4.30af615c"
+	other.Before, other.After = &b, &b
+	if err := shardHistoryAttributed(s, other, route); err == nil || errors.Is(err, errCopyIntervalChanged) {
+		t.Error("an observation of another object of the PG judged:", err)
 	}
 	for name, edit := range map[string]func(*copyIntervalObservation){
 		"another primary": func(o *copyIntervalObservation) {
