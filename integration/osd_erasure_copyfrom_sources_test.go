@@ -82,9 +82,10 @@ func (c copyErasureSourceCell) label() string {
 // the temporary object, the PG log names neither the copy nor a source write,
 // and a fresh session reads the seed. The source head is natively the write.
 //
-// Not verified: snapshot sources of an erasure-coded pool, other widths and
-// plugins as sources, unoptimized EC sources, and an erasure-coded source
-// onto an erasure-coded destination.
+// Snapshot sources and removals of the erasure-coded source, and copies onto
+// an erasure-coded destination, are in osd_erasure_copyfrom_snapshots_test.go.
+// Not verified: other widths and plugins as sources and unoptimized EC
+// sources.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2copyfromsourcechunks key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
