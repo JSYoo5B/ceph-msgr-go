@@ -43,16 +43,33 @@ type ciScenario struct {
 // binary: the one reading of a matrix into fixture inputs. Each request is
 // one JSON matrix on a line and each answer one JSON line. The helper ends
 // when this binary closes its input.
+//
+// An exchange that loses the framing (an answer that does not decode, no
+// answer, a failed write, the helper's exit, or no answer within
+// ciForwardTimeout) retires the forwarder before it is unlocked: the helper
+// is stopped, the writer of that exchange has returned, and every later
+// exchange fails with the first failure. No later exchange can read an
+// answer that belonged to the failed one.
 type ciForwarder struct {
 	mu      sync.Mutex
-	in      io.Writer
+	in      io.WriteCloser
 	answers *bufio.Scanner
+	stop    func()
+	timeout time.Duration
+	retired error
 }
 
-var ciForwarding = sync.OnceValues(func() (*ciForwarder, error) {
-	command := exec.Command("python3", filepath.Join("tools", "native_env.py"), "serve")
-	command.Dir = filepath.Join("..", "..")
-	command.Stderr = os.Stderr
+// ciForwardTimeout bounds one exchange with the helper.
+const ciForwardTimeout = 5 * time.Minute
+
+func newCIForwarder(in io.WriteCloser, out io.Reader, stop func(), timeout time.Duration) *ciForwarder {
+	answers := bufio.NewScanner(out)
+	answers.Buffer(make([]byte, 0, 64<<10), 16<<20)
+	return &ciForwarder{in: in, answers: answers, stop: stop, timeout: timeout}
+}
+
+// startCIForwarder starts command as the helper.
+func startCIForwarder(command *exec.Cmd, timeout time.Duration) (*ciForwarder, error) {
 	in, err := command.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -64,9 +81,19 @@ var ciForwarding = sync.OnceValues(func() (*ciForwarder, error) {
 	if err := command.Start(); err != nil {
 		return nil, err
 	}
-	answers := bufio.NewScanner(out)
-	answers.Buffer(make([]byte, 0, 64<<10), 16<<20)
-	return &ciForwarder{in: in, answers: answers}, nil
+	stop := func() {
+		in.Close()
+		command.Process.Kill()
+		command.Wait()
+	}
+	return newCIForwarder(in, out, stop, timeout), nil
+}
+
+var ciForwarding = sync.OnceValues(func() (*ciForwarder, error) {
+	command := exec.Command("python3", filepath.Join("tools", "native_env.py"), "serve")
+	command.Dir = filepath.Join("..", "..")
+	command.Stderr = os.Stderr
+	return startCIForwarder(command, ciForwardTimeout)
 })
 
 // ciEnvironment is the environment the native workflow's runner receives for
@@ -85,11 +112,15 @@ func ciEnvironment(matrix map[string]string) (map[string]string, error) {
 // are written from another goroutine, so neither side blocks on a full pipe.
 // The error is the helper's failure; refusals[i] is the helper's refusal of
 // matrices[i].
-func ciEnvironments(matrices []map[string]string) (envs []map[string]string, refusals []error, err error) {
+func ciEnvironments(matrices []map[string]string) ([]map[string]string, []error, error) {
 	f, err := ciForwarding()
 	if err != nil {
 		return nil, nil, fmt.Errorf("forwarding helper: %w", err)
 	}
+	return f.exchange(matrices)
+}
+
+func (f *ciForwarder) exchange(matrices []map[string]string) ([]map[string]string, []error, error) {
 	var requests bytes.Buffer
 	for _, matrix := range matrices {
 		request, err := json.Marshal(matrix)
@@ -100,31 +131,68 @@ func ciEnvironments(matrices []map[string]string) (envs []map[string]string, ref
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.retired != nil {
+		return nil, nil, fmt.Errorf("forwarding helper retired by an earlier exchange: %w", f.retired)
+	}
+	// Retiring stops the helper and closes its input, which ends a write or
+	// a read of this exchange that is still blocked.
+	var retire sync.Once
+	stop := func() { retire.Do(f.stop) }
 	written := make(chan error, 1)
 	go func() {
 		_, err := f.in.Write(requests.Bytes())
+		if err != nil {
+			stop()
+		}
 		written <- err
 	}()
-	envs, refusals = make([]map[string]string, len(matrices)), make([]error, len(matrices))
-	for i := range matrices {
+	expired := time.AfterFunc(f.timeout, stop)
+	envs, refusals, err := f.read(len(matrices))
+	if !expired.Stop() {
+		// The deadline stopped the helper, even if every answer had arrived.
+		if err == nil {
+			err = errors.New("the helper was stopped at the deadline")
+		}
+		err = fmt.Errorf("no complete answer within %v: %w", f.timeout, err)
+	}
+	if err != nil {
+		stop()
+	}
+	if werr := <-written; werr != nil && err == nil {
+		err = werr
+	}
+	if err != nil {
+		f.retired = fmt.Errorf("forwarding helper: %w", err)
+		return nil, nil, f.retired
+	}
+	return envs, refusals, nil
+}
+
+// read reads exactly n answers of one exchange.
+func (f *ciForwarder) read(n int) ([]map[string]string, []error, error) {
+	envs, refusals := make([]map[string]string, n), make([]error, n)
+	for i := range n {
 		if !f.answers.Scan() {
-			return nil, nil, fmt.Errorf("forwarding helper ended: %v", f.answers.Err())
+			if err := f.answers.Err(); err != nil {
+				return nil, nil, fmt.Errorf("answer %d of %d: %w", i+1, n, err)
+			}
+			return nil, nil, fmt.Errorf("helper ended after %d of %d answers", i, n)
 		}
 		var answer struct {
 			Environment map[string]string `json:"environment"`
-			Error       string            `json:"error"`
+			Error       *string           `json:"error"`
 		}
 		if err := json.Unmarshal(f.answers.Bytes(), &answer); err != nil {
-			return nil, nil, fmt.Errorf("forwarding helper: %w", err)
+			return nil, nil, fmt.Errorf("answer %d of %d: %w", i+1, n, err)
 		}
-		if answer.Error != "" {
-			refusals[i] = errors.New(answer.Error)
-		} else {
+		switch {
+		case answer.Error != nil && answer.Environment == nil && *answer.Error != "":
+			refusals[i] = errors.New(*answer.Error)
+		case answer.Error == nil && answer.Environment != nil:
 			envs[i] = answer.Environment
+		default:
+			return nil, nil, fmt.Errorf("answer %d of %d is neither an environment nor a refusal: %s", i+1, n, f.answers.Bytes())
 		}
-	}
-	if err := <-written; err != nil {
-		return nil, nil, fmt.Errorf("forwarding helper: %w", err)
 	}
 	return envs, refusals, nil
 }
