@@ -1396,7 +1396,12 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 			token: token, gid: gid, w: w, conn: first, appendInput: append(rbdLE64(1<<order), rbdJournalBL(entryBytes)...), splay: uint64(splay), locked: lockedNative,
 			route: route, request: request, keep: keep, now: now, send: send, native: native, judge: judge, done: done, released: func() { unlocked = true }},
 			mode: variant, dir: dir, observer: observer, dials: &osdDials, dialOf: func(o *cephmsgr.OSDConnection) int { return dialOf[o] }, closeAll: closeAll, connect: connect,
-			outcome: writeOutcome, unlocked: func() { unlocked = true }}
+			outcome: writeOutcome, unlocked: func() { unlocked = true }, address: func(osd int32) string { return addresses[osd] },
+			readdress: func(t *testing.T) {
+				for osd, address := range osdDumpAddresses(t, ctx, observer) {
+					addresses[osd] = address
+				}
+			}}
 		if rbdJournalHeldPendingMode(variant) {
 			runRBDJournalHeldPending(t, steps, imageClient.Positions)
 			return

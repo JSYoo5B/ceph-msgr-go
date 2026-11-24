@@ -389,6 +389,9 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 			(q.SameIntervalSince <= lost.Query.SameIntervalSince || q.SamePrimarySince <= lost.Query.SamePrimarySince) {
 			fail("observe-primary-back: the PG is not in an interval newer than the one without osd.%d: %s, before %s", h.Primary, text(q), text(lost.Query))
 		}
+		if p.AddressBefore == "" || p.AddressAfter == "" || p.AddressAfter == p.AddressBefore {
+			fail("observe-primary-back: the restarted osd.%d kept its address %q (now %q)", h.Primary, p.AddressBefore, p.AddressAfter)
+		}
 		// Journal: byte-identical to the observation without P.
 		journal("observe-restarted", restarted, applied)
 		if !slices.Equal(restarted.ObjectSHA256, recorded.ObjectSHA256) || !slices.Equal(restarted.ObjectSizes, recorded.ObjectSizes) {

@@ -196,6 +196,10 @@ type rbdJournalHeldPending struct {
 	// fixture's read once it was back (primary-restart mode).
 	StartedUTC string
 	Back       *nativeRBDJournalHeldRead
+	// AddressBefore and AddressAfter are the killed primary's address in
+	// the OSDMap before its death and once it was back, as the subject's
+	// routing read them.
+	AddressBefore, AddressAfter string
 }
 
 // rbdJournalHeldPendingMode says whether a held mode is one of this file's.
@@ -449,6 +453,11 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 		}
 		s.done("primary_started")
 		p.Back = rbdJournalHeldReadOf(t, ctx, s, "observe-primary-back")
+		// The restarted OSD has a new address: its messenger binds afresh,
+		// with a new nonce.
+		p.AddressBefore = s.address(h.Primary)
+		s.readdress(t)
+		p.AddressAfter = s.address(h.Primary)
 		s.native(t, "observe-restarted")
 		s.judge(t, "observe-restarted")
 		rbdJournalHeldHandoff(t, s, watchRequest)

@@ -142,6 +142,7 @@ func rbdJournalHeldPendingSample(mode string) *rbdJournalLostAppendRecord {
 			Epoch: 32, Down: []int32{0}, Settled: true, Polls: 2}
 		r.Views["observe-recorded"] = locked(view("observe-recorded", true, false), false)
 		p.StartedUTC = "2026-11-23T13:34:10Z"
+		p.AddressBefore, p.AddressAfter = "10.0.0.10:6800/1200", "10.0.0.10:6800/3400"
 		p.Back = &nativeRBDJournalHeldRead{Objects: placements(36, clean), PGID: "3.0", Query: query("active+clean", 36, clean, "34'60", 34, 1, 2), OSD: -1, Epoch: 36, Down: []int32{},
 			Settled: true, Polls: 40}
 		r.Views["observe-restarted"] = locked(view("observe-restarted", true, false), false)
@@ -308,6 +309,9 @@ func TestRBDJournalHeldPendingClaims(t *testing.T) {
 		"restart executed the map-held entry": {rbdJournalVariantPrimaryRestart, "observe-restarted", func(r *rbdJournalLostAppendRecord) {
 			v := r.Views["observe-restarted"]
 			v.ObjectSizes[1], v.ObjectSHA256[1] = 2110+4198, calls(r)[1].AppliedSHA256
+		}},
+		"restart kept the address": {rbdJournalVariantPrimaryRestart, "observe-restarted", func(r *rbdJournalLostAppendRecord) {
+			r.Held.Pending.AddressAfter = r.Held.Pending.AddressBefore
 		}},
 		"restart lost the lock":      {rbdJournalVariantPrimaryRestart, "observe-restarted", func(r *rbdJournalLostAppendRecord) { r.Views["observe-restarted"].LockFree = true }},
 		"handoff on another primary": {rbdJournalVariantPrimaryRestart, "replay", func(r *rbdJournalLostAppendRecord) { r.Held.HandoffPrimary = 1 }},

@@ -323,6 +323,10 @@ type rbdJournalHeldSteps struct {
 	// unlocked marks the lock released, so the compensating unlock of a
 	// failed run is not sent.
 	unlocked func()
+	// address is the subject's routing address of an OSD; readdress
+	// rereads every OSD's address from the OSDMap.
+	address   func(int32) string
+	readdress func(*testing.T)
 }
 
 // rbdJournalHeldReadOf runs one fixture observation of a held mode.
