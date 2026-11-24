@@ -46,8 +46,12 @@ jobs:
           go-version: '1.27.x'
           cache-dependency-path: integration/fixture/go.sum
       - name: Test Python tools and validate scenarios
+        # The merge proof (tools/test_merge_proof.py) takes most of this
+        # suite's time, so the fixture job runs it instead; it skips here.
+        env:
+          CEPH_MSGR_MERGE_PROOF_JOB: fixture-static
         run: |
-          python3 -m unittest discover -s tools -p 'test_*.py'
+          python3 -m unittest discover -s tools -p 'test_*.py' --durations 20
           python3 tools/scenario_plan.py validate
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -137,6 +141,12 @@ jobs:
             python3 tools/go_test_annotations.py "$RUNNER_TEMP/fixture-tests.jsonl" "$result" || true
           fi
           exit "$result"
+      # The merge proof leaves the Basic CI job above (CEPH_MSGR_MERGE_PROOF_JOB)
+      # and runs here. Every one of its tests must run: a skip fails the step.
+      - name: Merge proof of independent native test registrations
+        run: |
+          python3 -m unittest discover -s tools -p 'test_merge_proof.py' -v --durations 20 2>&1 | tee "$RUNNER_TEMP/merge-proof.log"
+          test "$(tail -n 1 "$RUNNER_TEMP/merge-proof.log")" = OK
       - name: Preserve fixture test evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
