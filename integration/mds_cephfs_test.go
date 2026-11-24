@@ -146,15 +146,16 @@ type nativeMDSCephFSReceipt struct {
 		Output         string `json:"native_output"`
 		Error          string `json:"error"`
 	} `json:"mutation"`
-	Restart       *nativeMDSCephFSRestart     `json:"restart"`
-	RankStatus    *nativeMDSCephFSRankStatus  `json:"rank_status"`
-	HistoricOps   []nativeMDSCephFSHistoricOp `json:"historic_ops"`
-	PushConfig    *nativeMDSCephFSPushConfig  `json:"push_config"`
-	CacheDrop     *nativeMDSCephFSCacheDrop   `json:"cache_drop"`
-	Complete      bool                        `json:"complete"`
-	Error         string                      `json:"error"`
-	ElapsedMillis int64                       `json:"elapsed_ms"`
-	ObservedUTC   string                      `json:"observed_utc"`
+	Restart       *nativeMDSCephFSRestart      `json:"restart"`
+	RankStatus    *nativeMDSCephFSRankStatus   `json:"rank_status"`
+	HistoricOps   []nativeMDSCephFSHistoricOp  `json:"historic_ops"`
+	LockInFlight  *nativeMDSCephFSLockInFlight `json:"lock_in_flight"`
+	PushConfig    *nativeMDSCephFSPushConfig   `json:"push_config"`
+	CacheDrop     *nativeMDSCephFSCacheDrop    `json:"cache_drop"`
+	Complete      bool                         `json:"complete"`
+	Error         string                       `json:"error"`
+	ElapsedMillis int64                        `json:"elapsed_ms"`
+	ObservedUTC   string                       `json:"observed_utc"`
 }
 
 func (r nativeMDSCephFSReceipt) session(gid uint64) *nativeMDSSession {

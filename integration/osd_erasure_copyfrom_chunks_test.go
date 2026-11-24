@@ -22,16 +22,18 @@ import (
 //     destination.
 //   - src/osd/PrimaryLogPG.h:1398-1407 (get_copy_chunk_size) rounds the
 //     destination primary's osd_copyfrom_max_chunk up to the destination
-//     pool's required_alignment, its stripe_width (src/osd/osd_types.h:1794);
-//     a 32 KiB limit is kept by a stripe width that divides it.
+//     pool's required_alignment, its stripe_width (src/osd/osd_types.h:1794):
+//     a 32 KiB limit is kept by a stripe width that divides it, and a k=3
+//     stripe of three data chunks rounds it up. The Objecter prints that
+//     max with every copy-get.
 //     _write_copy_chunk (PrimaryLogPG.cc:10031-10095) writes the data of a
 //     chunk that leaves the cursor incomplete to the temporary object on
 //     every shard, and writes OMAP only on a pool that supports it.
 //   - do_copy_get (9295-9486) runs on the source primary and walks the
 //     source's OMAP when the source pool supports OMAP, whatever the
-//     destination. A 32 KiB data chunk spends the whole budget, so the
-//     first chunk of a source with 32 KiB of data and an OMAP carries the
-//     data only and the second the header and entries.
+//     destination. A chunk of data spends the whole budget, so the first
+//     chunk of a source with one chunk of data and an OMAP carries the data
+//     only and the second the header and entries.
 //   - process_copy_chunk (9694-9890) turns any chunk that carries an OMAP
 //     header or entries into -EOPNOTSUPP when the destination pool does not
 //     support OMAP (9713-9716), before it looks at the cursor; the copy is
@@ -51,10 +53,13 @@ import (
 // resumed, and the next copy-get stays paused and unsent with one temporary
 // object listed in every shard's collection.
 
-// copyErasureChunkFixture starts the fixture of width's topology with a
-// replicated owned source pool (slot 1, the fixture's size) and an optimized
-// isa destination pool of width (slot 2), and the run-level recovery.
-func copyErasureChunkFixture(t *testing.T, bound time.Duration, width erasureWidth) (context.Context, ownedPools, *copyPrimaryRecovery, erasureFacts) {
+// copyErasureChunkFixture starts the fixture of width's topology with an
+// owned source pool (slot 1) and an owned destination pool (slot 2), one of
+// them an optimized isa pool of width and the other replicated at the
+// fixture's size: the destination is erasure-coded unless ecSource says the
+// source is. It returns the run-level recovery and the erasure-coded pool's
+// facts.
+func copyErasureChunkFixture(t *testing.T, bound time.Duration, width erasureWidth, ecSource bool) (context.Context, ownedPools, *copyPrimaryRecovery, erasureFacts) {
 	t.Helper()
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
@@ -84,18 +89,22 @@ func copyErasureChunkFixture(t *testing.T, bound time.Duration, width erasureWid
 	if hash {
 		pg = 8
 	}
-	replicated := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "size": base.Replicas, "min_size": base.MinSize, "hashpspool": hash})
-	if replicated.PoolID <= 0 || replicated.PoolID == base.Pool || replicated.PoolType != 1 {
-		t.Fatal("owned source pool is not a separate replicated pool", replicated.PoolID, replicated.PoolType)
+	ecSlot, replicatedSlot := 2, 1
+	if ecSource {
+		ecSlot, replicatedSlot = 1, 2
 	}
-	created := nativePool(t, ctx, "create", map[string]any{"slot": 2, "pg_num": pg, "hashpspool": hash, "erasure": true, "width": width.name, "optimized": true, "plugin": "isa"})
+	replicated := nativePool(t, ctx, "create", map[string]any{"slot": replicatedSlot, "pg_num": pg, "size": base.Replicas, "min_size": base.MinSize, "hashpspool": hash})
+	if replicated.PoolID <= 0 || replicated.PoolID == base.Pool || replicated.PoolType != 1 {
+		t.Fatal("owned pool is not a separate replicated pool", replicatedSlot, replicated.PoolID, replicated.PoolType)
+	}
+	created := nativePool(t, ctx, "create", map[string]any{"slot": ecSlot, "pg_num": pg, "hashpspool": hash, "erasure": true, "width": width.name, "optimized": true, "plugin": "isa"})
 	if created.PoolType != 3 || !created.ECOptimized || created.Width != width.name || created.ErasureCodeProfile != width.profile || created.PoolID == replicated.PoolID {
-		t.Fatal("destination pool is not the requested erasure-coded shape", created.PoolType, created.ECOptimized, created.Width, created.ErasureCodeProfile)
+		t.Fatal("owned pool is not the requested erasure-coded shape", ecSlot, created.PoolType, created.ECOptimized, created.Width, created.ErasureCodeProfile)
 	}
 	facts := erasurePoolMapFacts(t, ctx, c, created, width, true)
 	// Registered after the pools, so it runs before their removal.
 	t.Cleanup(func() { recovery.restore(t) })
-	return ctx, ownedPools{ids: map[int]int64{1: replicated.PoolID, 2: created.PoolID}, request: replicatedPGRequest}, recovery, facts
+	return ctx, ownedPools{ids: map[int]int64{ecSlot: created.PoolID, replicatedSlot: replicated.PoolID}, request: replicatedPGRequest}, recovery, facts
 }
 
 // copyErasureChunkLimit is the copy-get max the destination primary uses
@@ -121,19 +130,21 @@ func (c copyErasureCell) label() string { return c.name + "/" + c.source }
 // For COPY_FROM and COPY_FROM2, an unversioned copy from an owned replicated
 // pool onto a natively seeded head of an owned optimized isa k=2,m=2 pool
 // runs under the destination primary's osd_copyfrom_max_chunk lowered to
-// 32 KiB, which the pool's native stripe_width must divide.
+// 32 KiB and rounded up to the pool's native stripe_width (the copy-get
+// max, copyErasureChunkLimit); the barrier requires every copy-get to print
+// exactly that max.
 //
-// Data source (64 KiB and one xattr): the copy is held before its second
-// chunk by the barrier described above, with the same temporary object
-// <pgid>s<shard> of the primary listed in all four shard collections. After
-// pause is cleared the same client op is answered once on its original
-// connection with 0, the source's user version and ONDISK; the destination
-// is natively the source (bytes, xattrs, user version, mtime), every shard
-// drops the temporary object, the destination primary's PG log holds the copy
-// once bound to the source write, and a fresh session reads the source bytes
-// with nothing changing later.
+// Data source (two chunks of data and one xattr): the copy is held before
+// its second chunk by the barrier described above, with the same temporary
+// object <pgid>s<shard> of the primary listed in every shard collection.
+// After pause is cleared the same client op is answered once on its
+// original connection with 0, the source's user version and ONDISK; the
+// destination is natively the source (bytes, xattrs, user version, mtime),
+// every shard drops the temporary object, the destination primary's PG log
+// holds the copy once bound to the source write, and a fresh session reads
+// the source bytes with nothing changing later.
 //
-// OMAP source in two chunks (32 KiB of data, one xattr, a header and four
+// OMAP source in two chunks (one chunk of data, one xattr, a header and four
 // entries): held the same way before the second chunk, with the data staged
 // in the temporary object. The second chunk carries the OMAP, so the copy is
 // answered once with -EOPNOTSUPP and per-op -EINPROGRESS; the seed is kept
@@ -147,40 +158,70 @@ func (c copyErasureCell) label() string { return c.name + "/" + c.source }
 //
 // This classifies a server restriction: an erasure-coded destination refuses
 // a source with OMAP or a header. The client does not inspect the source and
-// does not emulate the copy. Not verified: a destination or source loss
-// between chunks on an erasure-coded destination, EC sources, other widths
-// and plugins, unoptimized EC pools, and pg_temp placements.
+// does not emulate the copy. The k=3,m=1 and k=4,m=2 destinations, EC
+// sources and a loss between chunks follow. Not verified: other plugins,
+// unoptimized EC pools, and pg_temp placements.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2copyfromchunks key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
 //fixture:isolated pauses OSDs, sets pause, lowers a copy chunk at runtime, waits osd-ready clean without pg_temp proof
 func TestCephOSDErasureOptimizedK2M2CopyFromChunksIntegration(t *testing.T) {
-	ctx, pools, recovery, facts := copyErasureChunkFixture(t, 1500*time.Second, erasureK2M2)
-	stripe := facts.chunk * erasureK2M2.k
-	if limit := copyErasureChunkLimit(multiChunkLimit, stripe); limit != multiChunkLimit {
-		t.Fatalf("the destination stripe width %d rounds the %d-byte chunk up to %d", stripe, multiChunkLimit, limit)
-	}
-	t.Logf("destination pool %d: %s, stripe width %d, nonprimary shards %v", facts.pool, erasureK2M2, stripe, facts.nonprimary)
-	keep := copyChunkReceipts(t, recovery, "osd-erasure-copyfrom-chunks-results.json")
+	runCopyErasureChunks(t, erasureK2M2, "osd-erasure-copyfrom-chunks-results.json")
+}
+
+// The cells above on an optimized isa k=3,m=1 destination on the four-OSD
+// topology: its stripe width is three data chunks, which never divides
+// 32 KiB, so every copy-get prints the limit rounded up to it, and the
+// sources are sized from that max. There are two nonprimary data shards.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1copyfromchunks key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses OSDs, sets pause, lowers a copy chunk at runtime, waits osd-ready clean without pg_temp proof
+func TestCephOSDErasureOptimizedK3M1CopyFromChunksIntegration(t *testing.T) {
+	runCopyErasureChunks(t, erasureK3M1, "osd-erasure-copyfrom-chunks-k3m1-results.json")
+}
+
+// The cells above on an optimized isa k=4,m=2 destination on the six-OSD
+// topology, whose six shard collections each list the temporary object.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2copyfromchunks key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses OSDs, sets pause, lowers a copy chunk at runtime, waits osd-ready clean without pg_temp proof
+func TestCephOSDErasureOptimizedK4M2CopyFromChunksIntegration(t *testing.T) {
+	runCopyErasureChunks(t, erasureK4M2, "osd-erasure-copyfrom-chunks-k4m2-results.json")
+}
+
+// erasureCopyGetMax is the copy-get max of a copy onto the erasure-coded
+// pool of facts: the lowered limit rounded up to its stripe width.
+func erasureCopyGetMax(facts erasureFacts, width erasureWidth) int {
+	return copyErasureChunkLimit(multiChunkLimit, facts.chunk*width.k)
+}
+
+func runCopyErasureChunks(t *testing.T, width erasureWidth, name string) {
+	ctx, pools, recovery, facts := copyErasureChunkFixture(t, 1500*time.Second, width, false)
+	limit := erasureCopyGetMax(facts, width)
+	t.Logf("destination pool %d: %s, stripe width %d, copy-get max %d, nonprimary shards %v", facts.pool, width, facts.chunk*width.k, limit, facts.nonprimary)
+	keep := copyChunkReceipts(t, recovery, name)
 	for _, tc := range copyPrimaryChangeCases {
 		for _, source := range []string{"data", "omap-second-chunk", "omap-single-chunk"} {
 			cell := copyErasureCell{tc, source}
 			t.Run(cell.label(), func(t *testing.T) {
-				receipt := copyChunkMutationReceipt{Cell: cell.label(), Mutation: "none", Chunk: multiChunkLimit}
+				receipt := copyChunkMutationReceipt{Cell: cell.label(), Mutation: "none", Chunk: uint64(limit)}
 				defer func() {
 					if !t.Skipped() {
 						keep(receipt)
 					}
 				}()
-				copyErasureChunks(t, ctx, pools, recovery, facts, cell, &receipt)
+				copyErasureChunks(t, ctx, pools, recovery, facts, limit, cell, &receipt)
 			})
 		}
 	}
 }
 
-func copyErasureChunks(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, facts erasureFacts, cell copyErasureCell, receipt *copyChunkMutationReceipt) {
+func copyErasureChunks(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, facts erasureFacts, limit int, cell copyErasureCell, receipt *copyChunkMutationReceipt) {
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("ec-%d-%s", cell.code, cell.source))
 	facts.checkPlacement(t, r.dstRoute)
+	r.chunkMax = limit
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), r.dstRoute.ID
 	r.lowerCopyChunk(&receipt.ChunkRestore)
 	seeded := r.seedDestination()
@@ -189,7 +230,7 @@ func copyErasureChunks(t *testing.T, ctx context.Context, pools ownedPools, reco
 	var copied nativeXattrSnapshot
 	switch cell.source {
 	case "data":
-		data := make([]byte, 2*multiChunkLimit)
+		data := make([]byte, 2*limit)
 		for i := range data {
 			data[i] = byte(i*19 + i>>8 + 11)
 		}
@@ -199,7 +240,9 @@ func copyErasureChunks(t *testing.T, ctx context.Context, pools ownedPools, reco
 			t.Fatalf("native source differs from the Go write: code %d version %d (reply %d)", copied.Code, copied.Version, write.UserVersion)
 		}
 	default:
-		data := make([]byte, multiChunkLimit)
+		// One chunk of data spends the first copy-get's whole budget, so the
+		// OMAP comes in the second.
+		data := make([]byte, limit)
 		entries := []cephmsgr.OSDOmapEntry{{Key: "ec-key-0", Value: []byte("v0")}, {Key: "ec-key-1", Value: []byte{}}, {Key: "ec-key-2", Value: []byte{0, 0xff}}, {Key: "ec-key-3", Value: []byte("v3")}}
 		if cell.source == "omap-single-chunk" {
 			data, entries = []byte("small OMAP source"), entries[:1]

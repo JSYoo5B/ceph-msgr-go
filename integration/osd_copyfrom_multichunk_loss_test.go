@@ -157,10 +157,13 @@ func copyTempPrefix(pool int64) string { return "#" + strconv.FormatInt(-2-pool,
 // hexadecimal, and the primary names its temporary objects after its own
 // <pgid>s<shard> (generate_temp_object prints info.pgid, a spg_t). An entry
 // with a generation (an erasure-coded rollback copy) is not a staging object.
-// It returns the one temporary object without the shard, so the listings of
-// every shard of one PG name it alike.
+// The two scrub-error stores a scrub of this collection's own PG shard keeps
+// as temporary objects (src/osd/scrubber/ScrubStore.cc:107-118, scrub_<pg>
+// and deep_scrub_<pg>) are not counted; every other temporary object is
+// refused. It returns the one temporary object without the shard, so the
+// listings of every shard of one PG name it alike.
 func checkCopyTemp(s copyStagingSnapshot, osd int32, route osdFixtureOracle, want int) (string, error) {
-	pgid, prefix, owner := route.PGID, copyTempPrefix(route.Pool), route.PGID
+	pgid, prefix, owner, own := route.PGID, copyTempPrefix(route.Pool), route.PGID, route.PGID
 	shard, err := copyStagingShard(route, osd)
 	if err != nil {
 		return "", err
@@ -170,22 +173,28 @@ func checkCopyTemp(s copyStagingSnapshot, osd int32, route osdFixtureOracle, wan
 		collection = fmt.Sprintf("%ss%d_head", pgid, shard)
 		prefix = strconv.FormatInt(int64(shard), 16) + prefix
 		owner = fmt.Sprintf("%ss%d", pgid, route.Shard)
+		own = fmt.Sprintf("%ss%d", pgid, shard)
 	}
 	if !s.Complete || len(s.Failures) != 0 || s.OSD != osd || s.PGID != pgid || s.Shard != shard || s.Collection != collection || s.Objects == 0 || s.Objects >= s.Max {
 		return "", fmt.Errorf("the listing of %s on osd.%d is not complete: osd.%d %s shard %d %d/%d objects %q", collection, osd, s.OSD, s.Collection, s.Shard, s.Objects, s.Max, s.Failures)
 	}
+	var staged []string
 	for _, entry := range s.Temp {
+		if strings.HasPrefix(entry, prefix) && (strings.HasSuffix(entry, ":::scrub_"+own+":head#") || strings.HasSuffix(entry, ":::deep_scrub_"+own+":head#")) {
+			continue
+		}
 		if !strings.HasPrefix(entry, prefix) || !strings.Contains(entry, ":::temp_"+owner+"_0_") || !strings.HasSuffix(entry, ":head#") {
 			return "", fmt.Errorf("osd.%d lists a temporary object %q that is not a copy staging object of %s", osd, entry, owner)
 		}
+		staged = append(staged, entry)
 	}
-	if len(s.Temp) != want {
-		return "", fmt.Errorf("osd.%d lists %d temporary objects in %s (want %d): %q", osd, len(s.Temp), pgid, want, s.Temp)
+	if len(staged) != want {
+		return "", fmt.Errorf("osd.%d lists %d temporary objects in %s (want %d): %q", osd, len(staged), pgid, want, s.Temp)
 	}
 	if want == 0 {
 		return "", nil
 	}
-	return strings.TrimPrefix(s.Temp[0], strings.TrimSuffix(prefix, copyTempPrefix(route.Pool))), nil
+	return strings.TrimPrefix(staged[0], strings.TrimSuffix(prefix, copyTempPrefix(route.Pool))), nil
 }
 
 // checkSourceWriteHeld judges one bracketed snapshot of the source primary
@@ -220,16 +229,17 @@ func checkSourceWriteHeld(ops opsInFlightSnapshot, route osdFixtureOracle, gid u
 func copyCursorInput(omapOffset int) int { return 29 + omapOffset }
 
 // copyFirstChunk is exactly what the Objecter prints for a copy-get of the
-// lowered chunk without assert-version whose cursor's OMAP position is
-// omapOffset bytes, and copyLaterChunk for one asserting version
-// (tools/osd_objecter_requests_oracle.py). A first copy-get has the initial
-// cursor, omapOffset 0.
-func copyFirstChunk(ops []string, omapOffset int) bool {
-	return slices.Equal(ops, []string{fmt.Sprintf("copy-get max %d in=%db", multiChunkLimit, copyCursorInput(omapOffset))})
+// lowered chunk, max bytes (multiChunkLimit, or that limit rounded up to an
+// erasure-coded destination's stripe width), without assert-version whose
+// cursor's OMAP position is omapOffset bytes, and copyLaterChunk for one
+// asserting version (tools/osd_objecter_requests_oracle.py). A first copy-get
+// has the initial cursor, omapOffset 0.
+func copyFirstChunk(ops []string, max, omapOffset int) bool {
+	return slices.Equal(ops, []string{fmt.Sprintf("copy-get max %d in=%db", max, copyCursorInput(omapOffset))})
 }
 
-func copyLaterChunk(ops []string, version uint64, omapOffset int) bool {
-	return len(ops) == 2 && ops[0] == "assert-version v"+strconv.FormatUint(version, 10) && copyFirstChunk(ops[1:], omapOffset)
+func copyLaterChunk(ops []string, max int, version uint64, omapOffset int) bool {
+	return len(ops) == 2 && ops[0] == "assert-version v"+strconv.FormatUint(version, 10) && copyFirstChunk(ops[1:], max, omapOffset)
 }
 
 // checkFirstChunkSent judges one snapshot of the destination primary's
@@ -248,7 +258,7 @@ func checkFirstChunkSent(objecter objecterRequestsSnapshot, route osdFixtureOrac
 		return objecterRequestsOp{}, fmt.Errorf("the objecter holds %d ops of the source; want the first copy-get", len(objecter.Ops))
 	}
 	read := objecter.Ops[0]
-	if !copyFirstChunk(read.OSDOps, 0) || read.Attempts != 1 || read.Paused != paused || read.OSD != sourcePrimary {
+	if !copyFirstChunk(read.OSDOps, multiChunkLimit, 0) || read.Attempts != 1 || read.Paused != paused || read.OSD != sourcePrimary {
 		return read, fmt.Errorf("the source op is not the first copy-get sent once to osd.%d (paused %t): %+v", sourcePrimary, paused, read)
 	}
 	return read, nil
@@ -260,9 +270,9 @@ func checkFirstChunkSent(objecter objecterRequestsSnapshot, route osdFixtureOrac
 // holds exactly one op of the source, paused and never sent, that is a
 // copy-get of the lowered chunk: a later chunk asserting version when
 // version is not zero, otherwise a first chunk, whose cursor's OMAP position
-// is exactly omapOffset bytes. The op is not one of earlier. It returns both
-// ops.
-func checkChunkHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot, route osdFixtureOracle, gid uint64, incarnation int32, version uint64, omapOffset int, earlier []uint64) (opsInFlightOp, objecterRequestsOp, error) {
+// is exactly omapOffset bytes, of max bytes. The op is not one of earlier. It
+// returns both ops.
+func checkChunkHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot, route osdFixtureOracle, gid uint64, incarnation int32, max int, version uint64, omapOffset int, earlier []uint64) (opsInFlightOp, objecterRequestsOp, error) {
 	op, err := checkCopyClientOp(ops, objecter, route, gid, incarnation)
 	if err != nil {
 		return op, objecterRequestsOp{}, err
@@ -282,12 +292,12 @@ func checkChunkHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot, 
 		return op, objecterRequestsOp{}, fmt.Errorf("the objecter holds %d ops of the source; want one held copy-get", len(objecter.Ops))
 	}
 	read := objecter.Ops[0]
-	chunk := copyFirstChunk(read.OSDOps, omapOffset)
+	chunk := copyFirstChunk(read.OSDOps, max, omapOffset)
 	if version != 0 {
-		chunk = copyLaterChunk(read.OSDOps, version, omapOffset)
+		chunk = copyLaterChunk(read.OSDOps, max, version, omapOffset)
 	}
 	if !read.Paused || read.Attempts != 0 || !chunk || slices.Contains(earlier, read.TID) {
-		return op, read, fmt.Errorf("the source op is not a new paused, never sent copy-get (assert v%d, in=%db): %+v", version, copyCursorInput(omapOffset), read)
+		return op, read, fmt.Errorf("the source op is not a new paused, never sent copy-get (max %d, assert v%d, in=%db): %+v", max, version, copyCursorInput(omapOffset), read)
 	}
 	return op, read, nil
 }
@@ -395,10 +405,13 @@ type copyChunkLossReceipt struct {
 //
 // Three-chunk OMAP sources, the third OSD lost between chunks and versioned
 // or snapshot sources changed between chunks are in
-// osd_copyfrom_multichunk_sources_test.go. Not verified: a loss before the
-// primary's local commit of the final copy transaction (no stock control
-// holds a BlueStore commit; see #7), EC destinations and the legacy one-PG
-// pools when their primaries coincide.
+// osd_copyfrom_multichunk_sources_test.go, and erasure-coded destinations,
+// including a loss before the primary's local commit of the final copy
+// transaction, in osd_erasure_copyfrom_sources_test.go. Not verified: that
+// loss on this replicated destination (no stock control holds a BlueStore
+// commit, and the final transaction is queued locally in the call that
+// issues it; see #7) and the legacy one-PG pools when their primaries
+// coincide.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfrommultichunkloss key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfrommultichunkloss key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
@@ -566,6 +579,8 @@ type copyChunkHold struct {
 	// served are the copy-gets sent before the barrier, oldest first.
 	served []uint64
 	temp   string
+	// max is the copy-get max every chunk prints.
+	max int
 }
 
 type copyChunkOutcome struct {
@@ -591,7 +606,7 @@ func (h *copyChunkHold) pending(t *testing.T, stage string) {
 func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route, source osdFixtureOracle, paused int32, data []byte, receipt *copyChunkLossReceipt) *copyChunkHold {
 	t, ctx := r.t, r.ctx
 	t.Helper()
-	h := &copyChunkHold{done: make(chan copyChunkOutcome, 1), route: route, source: source}
+	h := &copyChunkHold{done: make(chan copyChunkOutcome, 1), route: route, source: source, max: multiChunkLimit}
 	writer := mutationConnection(t, r.client, ctx, source)
 	defer writer.Close()
 	h.o = mutationConnection(t, r.client, ctx, route)
@@ -689,7 +704,7 @@ func (r *copyPrimaryChangeRun) holdBetweenChunks(code cephmsgr.OSDOpcode, route,
 		ops := copyOpsInFlight(t, ctx, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
 		objecter := copyObjecterRequests(t, ctx, 2, r.dest, nil, r.pools.ids[1], r.source)
 		var err error
-		if h.op, h.read, err = checkChunkHeld(ops, objecter, route, r.gid, copyPrimaryCopyIncarnation, h.write.UserVersion, 0, h.served); err == nil {
+		if h.op, h.read, err = checkChunkHeld(ops, objecter, route, r.gid, copyPrimaryCopyIncarnation, h.max, h.write.UserVersion, 0, h.served); err == nil {
 			receipt.BarrierEpoch, receipt.BarrierReqid, receipt.BarrierPoint, receipt.BarrierEvents = ops.Before.Epoch, h.op.Reqid, h.op.FlagPoint, h.op.Events
 			receipt.HeldChunk, receipt.HeldTID = h.read.OSDOps, h.read.TID
 			break
@@ -767,10 +782,18 @@ func (r *copyPrimaryChangeRun) observeWritten(h *copyChunkHold, data []byte) nat
 // barrier and checks the unknown outcome, the kept seed, the temporary
 // object's removal on the survivors and one explicit resubmission.
 func (r *copyPrimaryChangeRun) loseDestinationBetweenChunks(h *copyChunkHold, code cephmsgr.OSDOpcode, seeded nativeXattrSnapshot, copyKey, writeKey pgHistoryTarget, data []byte, receipt *copyChunkLossReceipt) {
+	r.t.Helper()
+	receipt.KillExit = r.recovery.kill(r.t, r.ctx, h.route.ID)
+	r.settleDestinationLoss(h, code, seeded, copyKey, writeKey, data, receipt)
+}
+
+// settleDestinationLoss checks what a destination primary SIGKILLed while
+// it held the copy left: the unknown outcome, the kept seed, the temporary
+// object's removal on the survivors and one explicit resubmission.
+func (r *copyPrimaryChangeRun) settleDestinationLoss(h *copyChunkHold, code cephmsgr.OSDOpcode, seeded nativeXattrSnapshot, copyKey, writeKey pgHistoryTarget, data []byte, receipt *copyChunkLossReceipt) {
 	t, ctx := r.t, r.ctx
 	t.Helper()
 	primary := h.route.ID
-	receipt.KillExit = r.recovery.kill(t, ctx, primary)
 	var lost copyChunkOutcome
 	select {
 	case lost = <-h.done:
@@ -790,9 +813,16 @@ func (r *copyPrimaryChangeRun) loseDestinationBetweenChunks(h *copyChunkHold, co
 	r.restartedPrimary = true
 	moved := r.waitMoved()
 	receipt.NewPrimary, receipt.MovedEpoch = moved.ID, moved.Epoch
+	// An optimized erasure-coded PG leads from another shard under a
+	// pg_temp; every survivor keeps the shard it held, so its collection is
+	// the one the original route names.
+	listing := moved
+	if moved.PGTemp && h.route.Shard >= 0 {
+		listing = h.route
+	}
 	for _, osd := range h.route.Acting {
 		if osd != primary {
-			r.waitTempRemoved(osd, moved)
+			r.waitTempRemoved(osd, listing)
 			receipt.TempRemoved = append(receipt.TempRemoved, osd)
 		}
 	}
@@ -868,7 +898,7 @@ func (r *copyPrimaryChangeRun) loseReplicaBetweenChunks(h *copyChunkHold, lost i
 		h.pending(t, fmt.Sprintf("after osd.%d was lost", lost))
 		ops := copyOpsInFlight(t, ctx, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
 		objecter := copyObjecterRequests(t, ctx, 2, r.dest, nil, r.pools.ids[1], r.source)
-		op, read, err := checkChunkHeld(ops, objecter, at, r.gid, copyPrimaryCopyIncarnation, 0, 0, append(slices.Clone(h.served), h.read.TID))
+		op, read, err := checkChunkHeld(ops, objecter, at, r.gid, copyPrimaryCopyIncarnation, h.max, 0, 0, append(slices.Clone(h.served), h.read.TID))
 		if err == nil && op.TID != h.op.TID {
 			err = fmt.Errorf("the held client op is %s, not the barrier's %s", op.Reqid, h.op.Reqid)
 		}
@@ -883,6 +913,10 @@ func (r *copyPrimaryChangeRun) loseReplicaBetweenChunks(h *copyChunkHold, lost i
 		time.Sleep(250 * time.Millisecond)
 	}
 	for _, osd := range now.Acting {
+		// An erasure-coded PG keeps the lost shard's position empty.
+		if osd == crushItemNone {
+			continue
+		}
 		r.waitTempRemoved(osd, now)
 		receipt.TempRemoved = append(receipt.TempRemoved, osd)
 	}
@@ -934,6 +968,16 @@ func TestCopyFromMultiChunkLossJudgements(t *testing.T) {
 	if _, err := checkCopyTemp(empty, 2, route, 0); err != nil {
 		t.Fatal("empty staging refused:", err)
 	}
+	// The scrub-error stores of the PG are not staging objects.
+	scrubbed := listing
+	scrubbed.Temp = []string{"#-6:e0000000:::deep_scrub_4.3:head#", temp, "#-6:e0000000:::scrub_4.3:head#"}
+	if got, err := checkCopyTemp(scrubbed, 2, route, 1); err != nil || got != temp {
+		t.Fatal("staging beside the scrub stores refused:", got, err)
+	}
+	scrubbed.Temp = scrubbed.Temp[:1]
+	if _, err := checkCopyTemp(scrubbed, 2, route, 0); err != nil {
+		t.Fatal("a scrub store counted as staging:", err)
+	}
 	for name, edit := range map[string]func(*copyStagingSnapshot) (int32, int){
 		"missing temporary":     func(s *copyStagingSnapshot) (int32, int) { s.Temp = nil; return 2, 1 },
 		"temporary left":        func(*copyStagingSnapshot) (int32, int) { return 2, 0 },
@@ -963,6 +1007,18 @@ func TestCopyFromMultiChunkLossJudgements(t *testing.T) {
 			s.Temp = []string{"#-6:c7a5d36b:::temp_4.30_0_4123_1:head#"}
 			return 2, 1
 		},
+		"only a scrub store": func(s *copyStagingSnapshot) (int32, int) {
+			s.Temp = []string{"#-6:e0000000:::deep_scrub_4.3:head#"}
+			return 2, 1
+		},
+		"another PG's scrub store": func(s *copyStagingSnapshot) (int32, int) {
+			s.Temp = []string{"#-6:e0000000:::scrub_4.30:head#"}
+			return 2, 0
+		},
+		"another scrub-like name": func(s *copyStagingSnapshot) (int32, int) {
+			s.Temp = []string{"#-6:e0000000:::deep_scrub_4.3_x:head#"}
+			return 2, 0
+		},
 	} {
 		s := listing
 		osd, want := edit(&s)
@@ -984,6 +1040,16 @@ func TestCopyFromMultiChunkLossJudgements(t *testing.T) {
 	shardListing := copyStagingSnapshot{OSD: 0, PGID: "4.3", Shard: 1, Collection: "4.3s1_head", Max: 4096, Objects: 3, Complete: true, Temp: []string{ecTemp}}
 	if got, err := checkCopyTemp(shardListing, 0, ec, 1); err != nil || got != ecTemp[1:] {
 		t.Fatal("staged EC temporary refused:", got, err)
+	}
+	// A shard's scrub stores are named after that shard of the PG.
+	scrubShard := shardListing
+	scrubShard.Temp = []string{"1#-6:e0000000:::deep_scrub_4.3s1:head#"}
+	if _, err := checkCopyTemp(scrubShard, 0, ec, 0); err != nil {
+		t.Fatal("the shard's own scrub store refused:", err)
+	}
+	scrubShard.Temp = []string{"1#-6:e0000000:::deep_scrub_4.3s0:head#"}
+	if _, err := checkCopyTemp(scrubShard, 0, ec, 0); err == nil {
+		t.Error("another shard's scrub store accepted on osd.0")
 	}
 	for name, edit := range map[string]func(*copyStagingSnapshot, *osdFixtureOracle) int32{
 		"the replicated listing": func(s *copyStagingSnapshot, _ *osdFixtureOracle) int32 {
@@ -1047,8 +1113,8 @@ func TestCopyFromMultiChunkLossJudgements(t *testing.T) {
 	// empty OMAP position, as the first starts with one: both print in=29b.
 	first := []string{"copy-get max 32768 in=29b"}
 	later := []string{"assert-version v5", "copy-get max 32768 in=29b"}
-	if !copyFirstChunk(first, 0) || copyFirstChunk(later, 0) || !copyLaterChunk(later, 5, 0) || copyLaterChunk(later, 4, 0) || copyLaterChunk(first, 5, 0) ||
-		copyFirstChunk([]string{"copy-get max 8388608 in=29b"}, 0) || copyLaterChunk([]string{"assert-version v5", "copy-get max 65536 in=29b"}, 5, 0) {
+	if !copyFirstChunk(first, multiChunkLimit, 0) || copyFirstChunk(later, multiChunkLimit, 0) || !copyLaterChunk(later, multiChunkLimit, 5, 0) || copyLaterChunk(later, multiChunkLimit, 4, 0) || copyLaterChunk(first, multiChunkLimit, 5, 0) ||
+		copyFirstChunk([]string{"copy-get max 8388608 in=29b"}, multiChunkLimit, 0) || copyLaterChunk([]string{"assert-version v5", "copy-get max 65536 in=29b"}, multiChunkLimit, 5, 0) {
 		t.Fatal("copy-get shapes misjudged")
 	}
 	// The cursor is judged by its exact printed length, never by a prefix.
@@ -1064,11 +1130,11 @@ func TestCopyFromMultiChunkLossJudgements(t *testing.T) {
 		"a longer max":        {"copy-get max 327680 in=29b"},
 		"a doubled space":     {"copy-get max  32768 in=29b"},
 	} {
-		if copyFirstChunk(ops, 0) || copyLaterChunk(append([]string{"assert-version v5"}, ops...), 5, 0) {
+		if copyFirstChunk(ops, multiChunkLimit, 0) || copyLaterChunk(append([]string{"assert-version v5"}, ops...), multiChunkLimit, 5, 0) {
 			t.Error("copy-get with the wrong cursor accepted:", name)
 		}
 	}
-	if !copyFirstChunk([]string{"copy-get max 32768 in=40b"}, 11) || copyFirstChunk([]string{"copy-get max 32768 in=40b"}, 12) {
+	if !copyFirstChunk([]string{"copy-get max 32768 in=40b"}, multiChunkLimit, 11) || copyFirstChunk([]string{"copy-get max 32768 in=40b"}, multiChunkLimit, 12) {
 		t.Fatal("an 11-byte OMAP position misjudged")
 	}
 	sent := objecterRequestsSnapshot{Complete: true, Before: at, After: at, OSD: 1, PGID: "4.3",
@@ -1113,28 +1179,28 @@ func TestCopyFromMultiChunkLossJudgements(t *testing.T) {
 		Ops: []opsInFlightOp{{Reqid: "client.4641.33:5", TID: 5, PGID: "4.3", Epoch: 30, FlagPoint: "started", Events: []string{"queued_for_pg", "reached_pg", "started"}}}}
 	held := objecterRequestsSnapshot{Complete: true, Before: at, After: at, OSD: 1, PGID: "4.3",
 		Ops: []objecterRequestsOp{{TID: 10, PG: "3.5", OSD: 0, Paused: true, OSDOps: later, CopyGetMax: []uint64{32768}}}}
-	if op, read, err := checkChunkHeld(client, held, route, gid, inc, 5, 0, []uint64{9}); err != nil || op.TID != 5 || read.TID != 10 {
+	if op, read, err := checkChunkHeld(client, held, route, gid, inc, multiChunkLimit, 5, 0, []uint64{9}); err != nil || op.TID != 5 || read.TID != 10 {
 		t.Fatal("held second chunk refused:", err)
 	}
 	restarted := held
 	restarted.Ops = []objecterRequestsOp{{TID: 11, PG: "3.5", OSD: 2, Paused: true, OSDOps: first, CopyGetMax: []uint64{32768}}}
-	if _, _, err := checkChunkHeld(client, restarted, route, gid, inc, 0, 0, []uint64{9, 10}); err != nil {
+	if _, _, err := checkChunkHeld(client, restarted, route, gid, inc, multiChunkLimit, 0, 0, []uint64{9, 10}); err != nil {
 		t.Fatal("restarted first chunk refused:", err)
 	}
-	if _, _, err := checkChunkHeld(client, restarted, route, gid, inc, 5, 0, []uint64{9, 10}); err == nil {
+	if _, _, err := checkChunkHeld(client, restarted, route, gid, inc, multiChunkLimit, 5, 0, []uint64{9, 10}); err == nil {
 		t.Error("a first chunk accepted as the held later chunk")
 	}
-	if _, _, err := checkChunkHeld(client, held, route, gid, inc, 0, 0, []uint64{9}); err == nil {
+	if _, _, err := checkChunkHeld(client, held, route, gid, inc, multiChunkLimit, 0, 0, []uint64{9}); err == nil {
 		t.Error("a later chunk accepted as a restarted first chunk")
 	}
 	// A fresh TID does not stand in for the cursor: a held copy-get whose
 	// cursor is not the one the claim needs is refused either way.
-	if _, _, err := checkChunkHeld(client, held, route, gid, inc, 5, 11, []uint64{9}); err == nil {
+	if _, _, err := checkChunkHeld(client, held, route, gid, inc, multiChunkLimit, 5, 11, []uint64{9}); err == nil {
 		t.Error("a held copy-get without the expected OMAP position accepted")
 	}
 	omap := held
 	omap.Ops = []objecterRequestsOp{{TID: 10, PG: "3.5", OSD: 0, Paused: true, OSDOps: []string{"assert-version v5", "copy-get max 32768 in=40b"}, CopyGetMax: []uint64{32768}}}
-	if _, _, err := checkChunkHeld(client, omap, route, gid, inc, 5, 0, []uint64{9}); err == nil {
+	if _, _, err := checkChunkHeld(client, omap, route, gid, inc, multiChunkLimit, 5, 0, []uint64{9}); err == nil {
 		t.Error("a held copy-get with an OMAP position accepted as the data-only second chunk")
 	}
 	for name, edit := range map[string]func(*opsInFlightSnapshot, *objecterRequestsSnapshot){
@@ -1168,7 +1234,7 @@ func TestCopyFromMultiChunkLossJudgements(t *testing.T) {
 		o.Ops, r.Ops = slices.Clone(client.Ops), slices.Clone(held.Ops)
 		o.Ops[0].Events = slices.Clone(client.Ops[0].Events)
 		edit(&o, &r)
-		if _, _, err := checkChunkHeld(o, r, route, gid, inc, 5, 0, []uint64{9}); err == nil {
+		if _, _, err := checkChunkHeld(o, r, route, gid, inc, multiChunkLimit, 5, 0, []uint64{9}); err == nil {
 			t.Error("held chunk accepted:", name)
 		}
 	}

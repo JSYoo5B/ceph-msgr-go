@@ -393,8 +393,12 @@ func admitSingleProfile(p profile, getenv func(string) string) (profile, error) 
 		}
 		if p.mdsCephFSRanks == "1" {
 			selected = "^TestCephMDSCephFSRanksIntegration$"
+			// The held-lock standby takeover owns a fresh two-rank fixture
+			// and is admitted only by its capability.
+			admitted = p.admitsExclusive(fixtureMDSCephFSRanks)
 			if p.mdsCephFSRanksReplay == "1" {
 				selected = "^TestCephMDSCephFSRanksReplayIntegration$"
+				admitted = false
 			}
 		}
 		if p.mdsCephFSCompletion == "1" {

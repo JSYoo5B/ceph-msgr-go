@@ -86,6 +86,7 @@ type copyChunkMutationReceipt struct {
 	OmapEntries   int                  `json:"source_omap_entries,omitempty"`
 	SnapID        uint64               `json:"source_snap_id,omitempty"`
 	CopiedUser    uint64               `json:"copied_user_version"`
+	SourceVersion uint64               `json:"request_source_version"`
 	Cursors       []int                `json:"cursor_omap_offset_bytes"`
 	Steps         []copyChunkStep      `json:"chunks"`
 	BarrierReqid  string               `json:"barrier_reqid"`
@@ -292,17 +293,39 @@ func (r *copyPrimaryChangeRun) cloneSource(copied nativeXattrSnapshot) (uint64, 
 	return snap, snapc, cloning
 }
 
-// copyOmapEditCell is one opcode and a head or snapshot source.
+// copyOmapEditCell is one opcode and a head or snapshot source, unversioned
+// or pinned to the copied object's user version.
 type copyOmapEditCell struct {
 	copyPrimaryChangeCase
-	snapshot bool
+	snapshot, pinned bool
 }
 
 func (c copyOmapEditCell) label() string {
+	source := "/head"
 	if c.snapshot {
-		return c.name + "/snapshot"
+		source = "/snapshot"
 	}
-	return c.name + "/head"
+	return c.name + source + copyPinnedSuffix(c.pinned)
+}
+
+// copyPinnedSuffix marks the label of a cell whose copy is pinned.
+func copyPinnedSuffix(pinned bool) string {
+	if pinned {
+		return "-pinned"
+	}
+	return ""
+}
+
+// pinCopy pins request's copy to the user version the source independently
+// read, when pinned, and returns the version the first copy-get must assert:
+// that version (_copy_some, PrimaryLogPG.cc:9564-9573, asserts a version the
+// CopyOp knows from its request, PrimaryLogPG.h:184), zero otherwise.
+func pinCopy(request *cephmsgr.OSDRequest, pinned bool, version uint64) uint64 {
+	if !pinned {
+		return 0
+	}
+	request.Operations[0].CopyFrom.SourceVersion = version
+	return version
 }
 
 // For COPY_FROM and COPY_FROM2, an unversioned copy of the three-chunk OMAP
@@ -329,20 +352,42 @@ func (c copyOmapEditCell) label() string {
 // gone, the PG log holds the copy once without any source request ID, and a
 // fresh session reads the clone's bytes.
 //
-// Not verified: version-pinned copies of an edited source, an edit before the
-// OMAP starts (the second chunk), EC sources, and the legacy one-PG pools
-// when their primaries coincide.
+// The pinned variants follow. Not verified: an edit before the OMAP starts
+// (the second chunk), EC sources with OMAP (an erasure-coded pool has none),
+// and the legacy one-PG pools when their primaries coincide.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromchunkomapedit key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromchunkomapedit key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:covers CLIENT to OSD
 //fixture:isolated pauses OSDs, sets pause, lowers a copy chunk at runtime, allocates self-managed snapshots in its owned pool
 func TestCephOSDCopyFromChunkOmapEditIntegration(t *testing.T) {
+	runCopyChunkOmapEdit(t, false, "osd-copyfrom-chunk-omap-edit-results.json")
+}
+
+// The cells above with the copy pinned: the request carries the source
+// version the native observation of the copied object (the head, or the
+// clone at the snap id) gave, so the first copy-get asserts that version as
+// well as every later one. The expectations are the unversioned cells': a
+// head copy fails the held chunk's assertion with -ERANGE and keeps the seed,
+// a snapshot copy reads the clone, whose user version the head edit leaves
+// alone, and is answered 0 with the clone's OMAP and header. A version that
+// was already stale would fail the first chunk instead and never reach the
+// barrier, which holdAtChunk refuses.
+//
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromchunkpinnedomapedit key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
+//scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromchunkpinnedomapedit key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses OSDs, sets pause, lowers a copy chunk at runtime, allocates self-managed snapshots in its owned pool
+func TestCephOSDCopyFromChunkPinnedOmapEditIntegration(t *testing.T) {
+	runCopyChunkOmapEdit(t, true, "osd-copyfrom-chunk-pinned-omap-edit-results.json")
+}
+
+func runCopyChunkOmapEdit(t *testing.T, pinned bool, name string) {
 	ctx, pools, recovery := copyPrimaryChangeFixture(t, 1500*time.Second)
-	keep := copyChunkReceipts(t, recovery, "osd-copyfrom-chunk-omap-edit-results.json")
+	keep := copyChunkReceipts(t, recovery, name)
 	for _, tc := range copyPrimaryChangeCases {
 		for _, snapshot := range []bool{false, true} {
-			cell := copyOmapEditCell{tc, snapshot}
+			cell := copyOmapEditCell{tc, snapshot, pinned}
 			t.Run(cell.label(), func(t *testing.T) {
 				receipt := copyChunkMutationReceipt{Cell: cell.label(), Mutation: "omap-edit", Chunk: multiChunkLimit}
 				defer func() {
@@ -357,7 +402,7 @@ func TestCephOSDCopyFromChunkOmapEditIntegration(t *testing.T) {
 }
 
 func copyChunkOmapEdit(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, cell copyOmapEditCell, receipt *copyChunkMutationReceipt) {
-	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("omap-%d-%t", cell.code, cell.snapshot))
+	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("omap-%d-%t%s", cell.code, cell.snapshot, copyPinnedSuffix(cell.pinned)))
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), r.dstRoute.ID
 	r.lowerCopyChunk(&receipt.ChunkRestore)
 	seeded := r.seedDestination()
@@ -390,7 +435,10 @@ func copyChunkOmapEdit(t *testing.T, ctx context.Context, pools ownedPools, reco
 	if cell.snapshot {
 		request.Operations[0].CopyFrom.SourceSnapshot = receipt.SnapID
 	}
-	h := r.holdAtChunk(request, route, src, 3, 0, copied.Version, cursors, &receipt.Steps)
+	// The clone keeps the copied head's user version (cloneSource).
+	firstAssert := pinCopy(&request, cell.pinned, copied.Version)
+	receipt.SourceVersion = request.Operations[0].CopyFrom.SourceVersion
+	h := r.holdAtChunk(request, route, src, 3, firstAssert, copied.Version, cursors, &receipt.Steps)
 	receipt.BarrierReqid, receipt.HeldChunk, receipt.Temporary = h.op.Reqid, h.read.OSDOps, h.temp
 
 	edit, model, editedHeader := copyOmapEdit(entries, copyOmapStop(multiChunkLimit, entries))
@@ -435,13 +483,14 @@ func copyChunkOmapEdit(t *testing.T, ctx context.Context, pools ownedPools, reco
 
 // copyRemovalCell is one opcode and what is removed between the chunks: the
 // head of a head source, the head of a snapshot source, or the snapshot a
-// snapshot source reads.
+// snapshot source reads; the copy is unversioned or pinned.
 type copyRemovalCell struct {
 	copyPrimaryChangeCase
 	removal string
+	pinned  bool
 }
 
-func (c copyRemovalCell) label() string { return c.name + "/" + c.removal }
+func (c copyRemovalCell) label() string { return c.name + "/" + c.removal + copyPinnedSuffix(c.pinned) }
 
 func (c copyRemovalCell) snapshot() bool { return c.removal != "head-of-head-source" }
 
@@ -482,20 +531,41 @@ func copyRemovalAnswer(removal string, cloneUser uint64) (int32, uint64) {
 // seed is kept as for the head source; a native read at the snap id is
 // -ENOENT while native listsnaps still lists the clone with that snapshot.
 //
-// Not verified: version-pinned copies, a removal before the first chunk, a
-// trimmed clone (it is -ENOENT by find_object_context as well), EC sources
-// and the legacy one-PG pools when their primaries coincide.
+// The pinned variants follow. Not verified: a removal before the first
+// chunk, a trimmed clone (it is -ENOENT by find_object_context as well),
+// snapshot or removed EC sources and the legacy one-PG pools when their
+// primaries coincide.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromchunksourceremoval key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromchunksourceremoval key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:covers CLIENT to OSD
 //fixture:isolated pauses OSDs, sets pause, lowers a copy chunk at runtime, removes owned snapshots, sets nosnaptrim
 func TestCephOSDCopyFromChunkSourceRemovalIntegration(t *testing.T) {
+	runCopyChunkSourceRemoval(t, false, "osd-copyfrom-chunk-source-removal-results.json")
+}
+
+// The cells above with the copy pinned to the user version the native
+// observation of the copied object gave (the head, or the clone at the snap
+// id), which both copy-gets assert. The expectations are the unversioned
+// cells': a removed head or a removed snapshot is -ENOENT before any op of
+// the held copy-get runs (do_op and find_object_context), and the head
+// removal of a snapshot source leaves the clone and its user version, so the
+// copy is answered 0 with the clone.
+//
+//scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromchunkpinnedsourceremoval key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
+//scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromchunkpinnedsourceremoval key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
+//scenario:covers CLIENT to OSD
+//fixture:isolated pauses OSDs, sets pause, lowers a copy chunk at runtime, removes owned snapshots, sets nosnaptrim
+func TestCephOSDCopyFromChunkPinnedSourceRemovalIntegration(t *testing.T) {
+	runCopyChunkSourceRemoval(t, true, "osd-copyfrom-chunk-pinned-source-removal-results.json")
+}
+
+func runCopyChunkSourceRemoval(t *testing.T, pinned bool, name string) {
 	ctx, pools, recovery := copyPrimaryChangeFixture(t, 1500*time.Second)
-	keep := copyChunkReceipts(t, recovery, "osd-copyfrom-chunk-source-removal-results.json")
+	keep := copyChunkReceipts(t, recovery, name)
 	for _, tc := range copyPrimaryChangeCases {
 		for _, removal := range []string{"head-of-head-source", "head-of-snapshot-source", "snapshot-of-snapshot-source"} {
-			cell := copyRemovalCell{tc, removal}
+			cell := copyRemovalCell{tc, removal, pinned}
 			t.Run(cell.label(), func(t *testing.T) {
 				receipt := copyChunkMutationReceipt{Cell: cell.label(), Mutation: removal, Chunk: multiChunkLimit}
 				defer func() {
@@ -539,7 +609,7 @@ func cloneListed(listing snapCLIListing, snap uint64) bool {
 }
 
 func copyChunkSourceRemoval(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, cell copyRemovalCell, receipt *copyChunkMutationReceipt) {
-	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("removal-%d-%s", cell.code, cell.removal))
+	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("removal-%d-%s%s", cell.code, cell.removal, copyPinnedSuffix(cell.pinned)))
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), r.dstRoute.ID
 	r.lowerCopyChunk(&receipt.ChunkRestore)
 	seeded := r.seedDestination()
@@ -571,8 +641,10 @@ func copyChunkSourceRemoval(t *testing.T, ctx context.Context, pools ownedPools,
 	if cell.snapshot() {
 		request.Operations[0].CopyFrom.SourceSnapshot = receipt.SnapID
 	}
+	firstAssert := pinCopy(&request, cell.pinned, copied.Version)
+	receipt.SourceVersion = request.Operations[0].CopyFrom.SourceVersion
 	// The source has no OMAP: both copy-gets carry an empty OMAP position.
-	h := r.holdAtChunk(request, route, src, 2, 0, copied.Version, receipt.Cursors, &receipt.Steps)
+	h := r.holdAtChunk(request, route, src, 2, firstAssert, copied.Version, receipt.Cursors, &receipt.Steps)
 	receipt.BarrierReqid, receipt.HeldChunk, receipt.Temporary = h.op.Reqid, h.read.OSDOps, h.temp
 
 	if cell.removal == "snapshot-of-snapshot-source" {
@@ -637,6 +709,26 @@ func TestCopyFromChunkMutationJudgements(t *testing.T) {
 	}
 	if _, ok := model[entries[40].Key]; ok || stop >= 40 {
 		t.Fatal("the removed entry is still in the model, or not after the stop entry")
+	}
+
+	// A pinned cell asserts the copied version from the first copy-get on;
+	// an unversioned one sends no version and asserts none first.
+	request := cephmsgr.OSDRequest{Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDCopyFrom}}}
+	if first := pinCopy(&request, false, 7); first != 0 || request.Operations[0].CopyFrom.SourceVersion != 0 {
+		t.Fatal("unversioned copy pinned")
+	}
+	if first := pinCopy(&request, true, 7); first != 7 || request.Operations[0].CopyFrom.SourceVersion != 7 {
+		t.Fatal("pinned copy not pinned to the copied version")
+	}
+	for cell, want := range map[string]string{
+		(copyOmapEditCell{copyPrimaryChangeCases[0], false, false}).label():                    "COPY_FROM/head",
+		(copyOmapEditCell{copyPrimaryChangeCases[1], true, true}).label():                      "COPY_FROM2/snapshot-pinned",
+		(copyRemovalCell{copyPrimaryChangeCases[0], "head-of-head-source", true}).label():      "COPY_FROM/head-of-head-source-pinned",
+		(copyRemovalCell{copyPrimaryChangeCases[1], "head-of-snapshot-source", false}).label(): "COPY_FROM2/head-of-snapshot-source",
+	} {
+		if cell != want {
+			t.Errorf("cell label %q, want %q", cell, want)
+		}
 	}
 
 	if code, user := copyRemovalAnswer("head-of-snapshot-source", 7); code != 0 || user != 7 {

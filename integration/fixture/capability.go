@@ -56,6 +56,7 @@ const (
 	fixtureMDSCephFS           ownFixture = "MDS CephFS metadata"
 	fixtureMDSCephFSCompletion ownFixture = "MDS CephFS completion"
 	fixtureMDSCephFSData       ownFixture = "MDS CephFS data"
+	fixtureMDSCephFSRanks      ownFixture = "MDS CephFS ranks"
 	fixtureRBD                 ownFixture = "RBD"
 	fixtureOSDCachePools       ownFixture = "OSD cache-pool"
 	fixtureOSDErasureCapacity  ownFixture = "four-OSD erasure-capacity"
