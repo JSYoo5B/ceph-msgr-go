@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -84,6 +87,7 @@ type copyStalledCommit struct {
 	Baseline         copyCommitStall    `json:"stall_baseline"`
 	Stall            copyCommitStall    `json:"stall"`
 	Settled          *copyCommitStall   `json:"stall_after_restore"`
+	Verified         bool               `json:"stall_cleanup_verified"`
 	Trigger          string             `json:"trigger_object"`
 	TriggerReqid     string             `json:"trigger_reqid"`
 	TriggerPoint     string             `json:"trigger_flag_point"`
@@ -245,55 +249,84 @@ func (g *copyStallGate) admit() error {
 // the stop that undoes it otherwise.
 type copyStallGuard struct {
 	r            *copyPrimaryChangeRun
+	gate         *copyStallGate
 	osd          int32
 	stalled      *copyStalledCommit
 	armRequested bool
 	killed       bool
 	stopErr      error
+	// restore and show are the cell's final recovery attempt and the
+	// readback of both runtime options; a cluster-free test replaces them.
+	restore func() error
+	show    func(context.Context) copyCommitStall
 }
+
+// errCopyStopNotCompleted is the stop result until the stop request
+// returns: a stop that never ran or never returned is not a success.
+var errCopyStopNotCompleted = errors.New("the stop of the armed daemon did not complete")
 
 // guardCommitStall registers the verification of osd's commit stall. It must
 // be registered before lowerCopyChunk: cleanups run in reverse, so it runs
 // after every other recovery of the cell, makes the final restore attempt
 // itself (restore is idempotent) and reads the options last
-// (settleCommitStall). A failed settle fails the cell and closes gate.
+// (settleCommitStall). The gate fails closed: attempt marks it unverified
+// before anything is armed, and only a settle that returns without error
+// clears it. A settle that fails records its error, and one that never
+// returns (t.Fatal or FailNow in a readback, runtime.Goexit, a panic) leaves
+// the attempt's mark, so every later cell is refused.
 func (r *copyPrimaryChangeRun) guardCommitStall(gate *copyStallGate, osd int32, stalled *copyStalledCommit) *copyStallGuard {
 	t := r.t
 	t.Helper()
-	g := &copyStallGuard{r: r, osd: osd, stalled: stalled}
-	t.Cleanup(func() {
-		if !g.armRequested {
-			return
+	g := &copyStallGuard{r: r, gate: gate, osd: osd, stalled: stalled}
+	g.restore = func() error {
+		r.recovery.restore(t)
+		if r.recovery.killed[osd] || r.recovery.restarted {
+			return errors.New("restore did not start it again and republish routing")
 		}
-		cleanup, cancel := context.WithTimeout(context.Background(), 300*time.Second)
-		defer cancel()
-		restore := func() error {
-			r.recovery.restore(t)
-			if r.recovery.killed[osd] || r.recovery.restarted {
-				return errors.New("restore did not start it again and republish routing")
-			}
-			return nil
-		}
-		show := func() copyCommitStall { return commitStall(t, cleanup, osd, "show") }
-		settled, err := settleCommitStall(g.killed, stalled.Baseline, func() error { return g.stopErr }, restore, show)
-		stalled.Settled = &settled
-		if err != nil {
-			gate.unverified = err
-			t.Error(err)
-		}
-	})
+		return nil
+	}
+	g.show = func(ctx context.Context) copyCommitStall { return commitStall(t, ctx, osd, "show") }
+	t.Cleanup(g.verify)
 	return g
 }
 
-// arm reads the OSD's two runtime options as the baseline, registers the
-// stop that undoes the stall unless the test SIGKILLs the OSD itself, and
-// arms it. The stop is registered after lowerCopyChunk's cleanups, so it runs
-// before them: no other recovery step runs against an armed daemon. It
-// returns the time before the arm request, before which the stall cannot
-// have started.
+// verify is the guard's cleanup (guardCommitStall).
+func (g *copyStallGuard) verify() {
+	if !g.armRequested {
+		return
+	}
+	cleanup, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+	settled, err := settleCommitStall(g.killed, g.stalled.Baseline, func() error { return g.stopErr }, g.restore, func() copyCommitStall { return g.show(cleanup) })
+	g.stalled.Settled = &settled
+	if err != nil {
+		g.gate.unverified = fmt.Errorf("osd.%d: %w", g.osd, err)
+		g.r.t.Error(err)
+		return
+	}
+	g.stalled.Verified = true
+	g.gate.unverified = nil
+}
+
+// attempt records that the cell is about to arm the stall: from here on the
+// cleanup must undo and verify it, the stop counts as not completed until it
+// returns, and the gate is unverified until verify clears it.
+func (g *copyStallGuard) attempt() {
+	g.armRequested = true
+	g.stopErr = errCopyStopNotCompleted
+	g.gate.unverified = fmt.Errorf("osd.%d: the commit stall was armed and its cleanup has not been verified", g.osd)
+}
+
+// arm marks the attempt, reads the OSD's two runtime options as the
+// baseline, registers the stop that undoes the stall unless the test SIGKILLs
+// the OSD itself, and arms it. The stop is registered after lowerCopyChunk's
+// cleanups, so it runs before them: no other recovery step runs against an
+// armed daemon. It returns the time before the arm request, before which the
+// stall cannot have started.
 func (g *copyStallGuard) arm() time.Time {
 	r, t, osd, stalled := g.r, g.r.t, g.osd, g.stalled
 	t.Helper()
+	g.attempt()
 	stalled.Baseline = commitStall(t, r.ctx, osd, "show")
 	if b := stalled.Baseline; b.OSD != osd || b.Crash != 0 || len(b.Failures) != 0 {
 		t.Fatalf("the commit stall of osd.%d is not unarmed before the test arms it: %+v", osd, b)
@@ -308,7 +341,6 @@ func (g *copyStallGuard) arm() time.Time {
 		r.recovery.killed[osd] = true
 		g.stopErr = testcluster.ControlDaemon(cleanup, r.recovery.dir, "stop", "osd", fmt.Sprint(osd))
 	})
-	g.armRequested = true
 	armed := time.Now()
 	stalled.Stall = commitStall(t, r.ctx, osd, "arm")
 	if s := stalled.Stall; !s.Armed || !s.Set || s.Crash != 1<<30 || s.Delay != int64(copyCommitStallDelay/time.Second) || len(s.Failures) != 0 {
@@ -666,6 +698,121 @@ func judgeLoggedResubmission(reply cephmsgr.OSDReply, tid, user uint64) error {
 			reply.Transaction, reply.RetryAttempt, reply.Code, len(reply.Operations), reply.UserVersion, tid, user)
 	}
 	return nil
+}
+
+// copyStallGateChildEnv selects the scenario TestCopyStallGateFailClosed
+// runs in a child test process.
+const copyStallGateChildEnv = "CEPH_MSGR_COPY_STALL_GATE_CASE"
+
+// TestCopyStallGateFailClosed runs two cells in a child test process: the
+// first attempts the arm and its guard's cleanup then ends at the real
+// option readback (commitStall through nativePoolResult) with an unavailable
+// control directory, an invalid JSON result or a missing result, or ends in
+// its restore by runtime.Goexit or a panic, or reads the baseline back
+// although its stop never ran; the second cell asks the gate.
+// In every case the second cell must not be admitted. A readback of the
+// baseline is the positive control: the gate opens again.
+func TestCopyStallGateFailClosed(t *testing.T) {
+	if name := os.Getenv(copyStallGateChildEnv); name != "" {
+		copyStallGateChild(t, name)
+		return
+	}
+	for _, name := range []string{"unavailable-control", "invalid-json", "missing-result", "goexit", "panic", "stop-not-run", "verified"} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCopyStallGateFailClosed$", "-test.v", "-test.count=1")
+			cmd.Env = append(os.Environ(), copyStallGateChildEnv+"="+name)
+			out, err := cmd.CombinedOutput()
+			text := string(out)
+			admitted, refused := strings.Contains(text, "GATE-ADMITTED"), strings.Contains(text, "GATE-REFUSED")
+			switch name {
+			case "verified":
+				if err != nil || !admitted || refused {
+					t.Fatalf("a verified cleanup did not reopen the gate (%v):\n%s", err, text)
+				}
+			case "stop-not-run":
+				// The readback is the baseline, but the stop never returned.
+				if err == nil || admitted || !refused || !strings.Contains(text, "did not complete") {
+					t.Fatalf("a stop that never ran was settled (%v):\n%s", err, text)
+				}
+			case "panic":
+				// The panic ends the child before the second cell.
+				if err == nil || admitted || !strings.Contains(text, "injected cleanup panic") {
+					t.Fatalf("a panicking cleanup let the next cell through (%v):\n%s", err, text)
+				}
+			default:
+				if err == nil || admitted || !refused || !strings.Contains(text, "has not been verified") {
+					t.Fatalf("an aborted cleanup let the next cell through (%v):\n%s", err, text)
+				}
+			}
+		})
+	}
+}
+
+func copyStallGateChild(t *testing.T, name string) {
+	gate := &copyStallGate{}
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	switch name {
+	case "unavailable-control":
+		dir = filepath.Join(dir, "absent")
+	case "invalid-json", "missing-result", "verified":
+		go fakeCommitStallControl(ctx, dir, name)
+	case "stop-not-run":
+		go fakeCommitStallControl(ctx, dir, "verified")
+	}
+	t.Setenv("CEPH_MSGR_CONTROL_DIR", dir)
+	t.Run("COPY_FROM", func(t *testing.T) {
+		r := &copyPrimaryChangeRun{t: t, ctx: ctx, recovery: &copyPrimaryRecovery{out: map[int32]bool{}, frozen: map[int32]bool{}, killed: map[int32]bool{}}}
+		stalled := &copyStalledCommit{}
+		g := r.guardCommitStall(gate, 2, stalled)
+		g.restore = func() error {
+			switch name {
+			case "goexit":
+				runtime.Goexit()
+			case "panic":
+				panic("injected cleanup panic")
+			}
+			return nil
+		}
+		g.attempt()
+		// The stop is under test only when its cleanup never ran; otherwise
+		// the test killed the OSD itself.
+		g.killed = name != "stop-not-run"
+		stalled.Baseline = copyCommitStall{OSD: 2, Action: "show", Delay: 2}
+	})
+	t.Run("COPY_FROM2", func(t *testing.T) {
+		if err := gate.admit(); err != nil {
+			t.Log("GATE-REFUSED:", err)
+			t.FailNow()
+		}
+		t.Log("GATE-ADMITTED")
+	})
+}
+
+// fakeCommitStallControl answers every owned-pool oracle request published
+// in dir: an invalid result, no result, or the baseline readback.
+func fakeCommitStallControl(ctx context.Context, dir, name string) {
+	for ctx.Err() == nil {
+		requests, _ := filepath.Glob(filepath.Join(dir, "verify-osd-pool.*.request"))
+		for _, request := range requests {
+			id := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(request), "verify-osd-pool."), ".request")
+			os.Remove(request)
+			result := filepath.Join(dir, "osd-pool-result.json")
+			switch name {
+			case "invalid-json":
+				os.WriteFile(result, []byte("{not json"), 0644)
+			case "verified":
+				os.WriteFile(result, []byte(`{"schema_version":1,"source_commit":"7f793731f1b39eb4f465e960113d2363c311b964","mode":"commitstall",`+
+					`"fixture_daemon_version":"ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",`+
+					`"commit_stall":{"osd":2,"action":"show","crash":0,"delay":2,"set":false,"armed":false,"failures":[]}}`), 0644)
+			}
+			os.WriteFile(filepath.Join(dir, "osd-pool-verify."+id), nil, 0644)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // TestPublishAfterCleanups checks that a receipt is published after the
