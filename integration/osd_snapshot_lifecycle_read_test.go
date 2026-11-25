@@ -148,9 +148,13 @@ func TestCephOSDSnapshotLifecycleReadIntegration(t *testing.T) {
 		States       map[string]copyPurgedTrimState            `json:"trim_states"`
 		Observations map[string]int                            `json:"observations"`
 		Clones       map[string]map[string]map[uint64][]uint64 `json:"clones"`
+		Timeline     *pruneTimeline                            `json:"prune_timeline"`
 		Cells        []cell                                    `json:"cells"`
-	}{Snaps: map[string]uint64{}, Models: map[string]snapLifecycleModel{}, States: map[string]copyPurgedTrimState{}, Observations: map[string]int{}, Clones: map[string]map[string]map[uint64][]uint64{}}
+	}{Timeline: &pruneTimeline{}, Snaps: map[string]uint64{}, Models: map[string]snapLifecycleModel{}, States: map[string]copyPurgedTrimState{}, Observations: map[string]int{}, Clones: map[string]map[string]map[uint64][]uint64{}}
 	t.Cleanup(func() {
+		if receipt.Timeline.Verdict == "incomplete" {
+			receipt.Timeline.Verdict = "failed"
+		}
 		raw, err := json.Marshal(receipt)
 		if err == nil {
 			err = testcluster.WritePublicEvidence(filepath.Join(control, "osd-snapshot-lifecycle-read-results.json"), raw)
@@ -162,7 +166,12 @@ func TestCephOSDSnapshotLifecycleReadIntegration(t *testing.T) {
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		defer stop()
-		if r := nativePool(t, cleanup, "cleanup", nil); !r.PoolsRemoved {
+		if !receipt.Timeline.Deadline.IsZero() {
+			receipt.Timeline.record(pruneRead(cleanup, "mgr-after-restoration", 2*time.Second, func(ctx context.Context, o *pruneObservation) error { return readPruneManager(ctx, c, o) }))
+		}
+		r := nativePool(t, cleanup, "cleanup", nil)
+		receipt.Timeline.Cleanup = &r
+		if !r.PoolsRemoved {
 			t.Error("owned pool was not removed")
 		}
 	})
@@ -514,10 +523,18 @@ func TestCephOSDSnapshotLifecycleReadIntegration(t *testing.T) {
 		var errs []error
 		for _, name := range managers {
 			if lease := leases[name]; lease != nil {
-				if _, err := resumeDaemon(ctx, lease); err != nil {
+				o := pruneRead(ctx, "resume", 15*time.Second, func(ctx context.Context, o *pruneObservation) error {
+					r, err := resumeDaemon(ctx, lease)
+					o.Resume = &r
+					return err
+				})
+				receipt.Timeline.record(o)
+				if o.Error != "" {
+					err := errors.New(o.Error)
 					errs = append(errs, err)
 				} else {
 					delete(leases, name)
+					receipt.Timeline.record(pruneRead(ctx, "mgr-after-resume", 2*time.Second, func(ctx context.Context, o *pruneObservation) error { return readPruneManager(ctx, c, o) }))
 				}
 			}
 		}
@@ -532,24 +549,61 @@ func TestCephOSDSnapshotLifecycleReadIntegration(t *testing.T) {
 		t.Fatal("remove self-managed snap", s1, receipt.Removal, err)
 	}
 	epoch = receipt.Removal.Epoch
+	var pruneCtx context.Context
 	wait := func(t *testing.T, label string, passing []string, want string, bound time.Duration) copyPurgedTrimState {
 		t.Helper()
 		started := time.Now()
+		waitCtx, stop := context.WithTimeout(ctx, bound)
+		defer stop()
+		if label == "pruned" {
+			waitCtx = pruneCtx
+		}
 		for count := 1; ; count++ {
-			s := observe(t, label, nil)
+			var s copyPurgedTrimState
+			o := pruneRead(waitCtx, label, 10*time.Second, func(ctx context.Context, o *pruneObservation) error {
+				var result struct {
+					SnapTrim copyPurgedTrimState `json:"snap_trim"`
+				}
+				_, err := readNativePoolResult(ctx, "snaptrim", map[string]any{"slot": 1, "object": shared, "objects": []string{}}, &result)
+				if err != nil {
+					return err
+				}
+				s = result.SnapTrim
+				o.Trim = &s
+				if s.PoolID != receipt.Pool || s.PGID != fmt.Sprintf("%d.0", receipt.Pool) || len(s.ListSnaps) != 0 {
+					return fmt.Errorf("snaptrim observation is not the owned PG's")
+				}
+				return nil
+			})
+			if label == "pruned" {
+				receipt.Timeline.record(o)
+			}
 			receipt.Observations[label] = count
+			if o.Error != "" {
+				t.Fatalf("%s observation: %s", label, o.Error)
+			}
+			receipt.States[label] = s
 			phase := copyPurgedPhase(s, s1)
 			if phase == want {
 				t.Logf("%s after %s and %d native observations: %+v", label, time.Since(started).Round(time.Millisecond), count, s)
 				return s
 			}
 			if !slices.Contains(passing, phase) {
+				if label == "pruned" {
+					receipt.Timeline.record(pruneObservation{Kind: "prune-verdict", Started: time.Now().UTC(), Ended: time.Now().UTC(), Error: fmt.Sprintf("unexpected trim phase %q", phase), Trim: &s})
+				}
 				t.Fatalf("%s: unexpected trim phase %q: %+v", label, phase, s)
 			}
-			if time.Since(started) > bound {
+			if waitCtx.Err() != nil {
+				if label == "pruned" {
+					receipt.Timeline.record(pruneObservation{Kind: "prune-verdict", Started: time.Now().UTC(), Ended: time.Now().UTC(), Deadline: receipt.Timeline.Deadline, Error: waitCtx.Err().Error(), Timeout: true, Trim: &s})
+				}
 				t.Fatalf("%s: the removed snapshot did not reach %s: %+v", label, want, s)
 			}
-			time.Sleep(250 * time.Millisecond)
+			select {
+			case <-waitCtx.Done():
+			case <-time.After(250 * time.Millisecond):
+			}
 		}
 	}
 	// phase runs the cells in one trim phase and requires the same phase
@@ -576,10 +630,19 @@ func TestCephOSDSnapshotLifecycleReadIntegration(t *testing.T) {
 		return
 	}
 
-	if err := resume(ctx); err != nil {
+	var stopPrune context.CancelFunc
+	pruneCtx, stopPrune = context.WithTimeout(ctx, 180*time.Second)
+	defer stopPrune()
+	receipt.Timeline.Deadline, _ = pruneCtx.Deadline()
+	receipt.Timeline.Verdict = "incomplete"
+	stopSampler := receipt.Timeline.sampleManagers(pruneCtx, 2*time.Second, time.Second, func(ctx context.Context, o *pruneObservation) error { return readPruneManager(ctx, c, o) })
+	defer stopSampler()
+	if err := resume(pruneCtx); err != nil {
 		t.Fatal("resume the MGRs", err)
 	}
 	pruned := wait(t, "pruned", []string{"purged", "unqueued"}, "pruned", 180*time.Second)
+	stopSampler()
+	receipt.Timeline.Verdict = "pruned"
 	epoch = uint32(max(int64(epoch), pruned.OSDMapEpoch, pruned.Epoch))
 	phase("pruned", "pruned", true)
 	if t.Failed() {
