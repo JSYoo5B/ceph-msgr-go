@@ -408,6 +408,15 @@ func requireLocations(t *testing.T, s pgHistorySnapshot, target int, tier, versi
 	}
 }
 
+// A checkpoint can end this run after either independently validated store
+// capture. Restart testing uses a terminal continuation because a restart
+// reloads persisted P alone at the shared key; the old live P/S model must
+// never be reused to judge that new interval. Nil runs both resubmissions.
+type dupHistoryCheckpoint struct {
+	run                          func(*dupHistoryRun, *cephmsgr.OSDConnection, osdFixtureOracle, shardHistorySnapshot, []pgHistoryTarget, bool) bool
+	boundsRestored, poolsRemoved bool
+}
+
 // dupHistoryScenario: with the OSDs' PG-log bounds lowered through the
 // fixture, the Go client issues a seed WRITEFULL and a known APPEND K of
 // object A under their own incarnations, and one COPY_FROM2 P of a source
@@ -442,11 +451,11 @@ func requireLocations(t *testing.T, s pgHistorySnapshot, target int, tier, versi
 // the native object holds the tail twice, and the live log holds K as a new
 // ordinary entry. That is the loss of request history after eviction.
 //
-// Not claimed: anything about a shard's live duplicate index, the shards'
+// The default continuation does not claim a shard's live duplicate index, the shards'
 // stores after the second resubmission, an OSD restart (which reloads the persisted
 // records), a PG interval change, the default bounds, or any other
 // operation than APPEND and COPY_FROM2.
-func dupHistoryScenario(t *testing.T, width *erasureWidth) {
+func dupHistoryScenario(t *testing.T, width *erasureWidth, checkpoint *dupHistoryCheckpoint) {
 	shards, topology := width != nil, "3"
 	if shards {
 		topology = width.topology
@@ -468,6 +477,9 @@ func dupHistoryScenario(t *testing.T, width *erasureWidth) {
 		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		defer stop()
 		r := nativePool(t, cleanup, "cleanup", nil)
+		if checkpoint != nil {
+			checkpoint.poolsRemoved = r.PoolsRemoved && (!shards || !slices.Contains(r.ECProfilesRemaining, width.profile))
+		}
 		if !r.PoolsRemoved {
 			t.Error("owned pools were not removed")
 		}
@@ -544,6 +556,9 @@ func dupHistoryScenario(t *testing.T, width *erasureWidth) {
 		defer stop()
 		var restored pgLogBoundsReceipt
 		nativePoolResult(t, cleanup, "pglogbounds", map[string]any{"action": "restore"}, &restored)
+		if checkpoint != nil {
+			checkpoint.boundsRestored = !restored.Bounds.Claimed && restored.Bounds.Restored && len(restored.Bounds.Failures) == 0
+		}
 		if restored.Bounds.Claimed || !restored.Bounds.Restored {
 			t.Errorf("PG-log bounds were not restored: %q, central entries %v", restored.Bounds.Failures, restored.Bounds.Entries)
 		}
@@ -669,7 +684,10 @@ func dupHistoryScenario(t *testing.T, width *erasureWidth) {
 		fills, kKey, pKey, sKey, r.want[ki].Version, r.want[pi].Version, at, len(r.want), s.DupEntries)
 
 	if shards {
-		dupHistoryShards(t, r, width, s, at, targets(last), ki, pi, si, false)
+		captured := dupHistoryShards(t, r, width, s, at, targets(last), ki, pi, si, false)
+		if checkpoint != nil && checkpoint.run(r, sourceConn, base, captured, targets(last), false) {
+			return
+		}
 	}
 
 	// The explicit resubmission while K is a duplicate record.
@@ -711,7 +729,10 @@ func dupHistoryScenario(t *testing.T, width *erasureWidth) {
 	t.Logf("after F%d K is in no tier of the live primary log; %d duplicate records remain, the oldest K's successor %s (%s at %s) with S beside it, and every later request is there",
 		fills, at.Log-at.First, oldest.Label, oldest.Reqid, oldest.Version)
 	if shards {
-		dupHistoryShards(t, r, width, s, at, targets(last), ki, pi, si, true)
+		captured := dupHistoryShards(t, r, width, s, at, targets(last), ki, pi, si, true)
+		if checkpoint != nil && checkpoint.run(r, sourceConn, base, captured, targets(last), true) {
+			return
+		}
 	}
 	if native := poolObserve(t, ctx, slot, known, "", ""); native.Code != 0 || !bytes.Equal(native.Data, once) || native.Version != k.UserVersion {
 		t.Fatal("the native object changed before the second resubmission", native.Code, len(native.Data), native.Version)
@@ -805,7 +826,7 @@ func shardEvictedVerdict(p, live dupHistoryPosition, ki, pi, si int) error {
 // after the eviction (evicted true) each must pass shardEvictedVerdict and
 // hold P but no record of K. S is never persisted beside P at their shared
 // key.
-func dupHistoryShards(t *testing.T, r *dupHistoryRun, width *erasureWidth, s pgHistorySnapshot, at dupHistoryPosition, targets []pgHistoryTarget, ki, pi, si int, evicted bool) {
+func dupHistoryShards(t *testing.T, r *dupHistoryRun, width *erasureWidth, s pgHistorySnapshot, at dupHistoryPosition, targets []pgHistoryTarget, ki, pi, si int, evicted bool) shardHistorySnapshot {
 	t.Helper()
 	verdict := shardPersistedVerdict
 	if evicted {
@@ -857,6 +878,7 @@ func dupHistoryShards(t *testing.T, r *dupHistoryRun, width *erasureWidth, s pgH
 		t.Logf("shard %s (osd.%d): persisted history %+v of %d requests, K %s, %d duplicate records; same-version key: %s",
 			shard.SPG, shard.OSD, p, len(r.want), p.tier(ki), shard.DupEntries, collision)
 	}
+	return captured
 }
 
 func requireShardLocation(t *testing.T, shard shardHistoryShard, target int, tier, version string) {
@@ -884,7 +906,7 @@ func lastVersion(t *testing.T, eversion string) uint64 {
 //scenario:covers CLIENT to OSD
 //fixture:isolated pauses each acting OSD for a store copy and lowers every OSD's PG-log bounds for the run
 func TestCephOSDErasureOptimizedK2M2DupHistoryIntegration(t *testing.T) {
-	dupHistoryScenario(t, &erasureK2M2)
+	dupHistoryScenario(t, &erasureK2M2, nil)
 }
 
 // TestCephOSDReplicatedDupHistoryIntegration is dupHistoryScenario on an
@@ -896,7 +918,7 @@ func TestCephOSDErasureOptimizedK2M2DupHistoryIntegration(t *testing.T) {
 //scenario:covers CLIENT to OSD
 //fixture:shareable I/O in its own pools only; checked restores put back the PG-log bounds on every OSD and remove the pools
 func TestCephOSDReplicatedDupHistoryIntegration(t *testing.T) {
-	dupHistoryScenario(t, nil)
+	dupHistoryScenario(t, nil, nil)
 }
 
 func TestMatchDupHistory(t *testing.T) {
