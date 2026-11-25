@@ -116,7 +116,7 @@ func copyErasureSource(t *testing.T, ctx context.Context, pools ownedPools, reco
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("ecsrc-%d-%t%s", cell.code, cell.changed, copyPinnedSuffix(cell.pinned)))
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), r.dstRoute.ID
 	facts.checkPlacement(t, r.srcRoute)
-	r.lowerCopyChunk(&receipt.ChunkRestore)
+	r.lowerCopyChunk(&receipt.ChunkRestore, nil)
 	seeded := r.seedDestination()
 
 	data := make([]byte, 2*multiChunkLimit)
@@ -337,7 +337,7 @@ func copyErasureChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, r
 	facts.checkPlacement(t, r.dstRoute)
 	r.chunkMax = limit
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), r.dstRoute.ID
-	r.lowerCopyChunk(&receipt.ChunkRestore)
+	r.lowerCopyChunk(&receipt.ChunkRestore, nil)
 	seeded := r.seedDestination()
 
 	data := make([]byte, 2*limit)
@@ -587,7 +587,7 @@ func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPoo
 	held := &copyHeldCommit{Frozen: frozen, BlockerShard: 1}
 	receipt.Held, receipt.Lost, receipt.Shard = held, primary, int(r.dstRoute.Shard)
 	receipt.SourcePrimary, receipt.Primary = r.sourceBesides(primary, frozen), primary
-	r.lowerCopyChunk(&receipt.ChunkRestore)
+	r.lowerCopyChunk(&receipt.ChunkRestore, nil)
 	seeded := r.seedDestination()
 
 	// The blocker: one stripe, seeded before the interval change so that no

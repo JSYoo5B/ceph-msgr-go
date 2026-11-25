@@ -102,6 +102,7 @@ type copyChunkMutationReceipt struct {
 	FinalOmap     string               `json:"destination_omap_sha256,omitempty"`
 	FreshTID      uint64               `json:"fresh_read_tid"`
 	ChunkRestore  bool                 `json:"chunk_restored"`
+	ChunkReadback *copyChunkSetting    `json:"chunk_restore_readback,omitempty"`
 }
 
 // judgeChunkAnswer decides whether the answer to a held copy is the one its
@@ -390,11 +391,7 @@ func runCopyChunkOmapEdit(t *testing.T, pinned bool, name string) {
 			cell := copyOmapEditCell{tc, snapshot, pinned}
 			t.Run(cell.label(), func(t *testing.T) {
 				receipt := copyChunkMutationReceipt{Cell: cell.label(), Mutation: "omap-edit", Chunk: multiChunkLimit}
-				defer func() {
-					if !t.Skipped() {
-						keep(receipt)
-					}
-				}()
+				publishAfterCleanups(t, func() { keep(receipt) })
 				copyChunkOmapEdit(t, ctx, pools, recovery, cell, &receipt)
 			})
 		}
@@ -404,7 +401,7 @@ func runCopyChunkOmapEdit(t *testing.T, pinned bool, name string) {
 func copyChunkOmapEdit(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, cell copyOmapEditCell, receipt *copyChunkMutationReceipt) {
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("omap-%d-%t%s", cell.code, cell.snapshot, copyPinnedSuffix(cell.pinned)))
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), r.dstRoute.ID
-	r.lowerCopyChunk(&receipt.ChunkRestore)
+	r.lowerCopyChunk(&receipt.ChunkRestore, &receipt.ChunkReadback)
 	seeded := r.seedDestination()
 	seededOmap := poolOmapState(t, ctx, 2, r.dest)
 	if seededOmap.Header == nil || len(*seededOmap.Header) != 0 || len(omapPage(t, seededOmap)) != 0 {
@@ -568,11 +565,7 @@ func runCopyChunkSourceRemoval(t *testing.T, pinned bool, name string) {
 			cell := copyRemovalCell{tc, removal, pinned}
 			t.Run(cell.label(), func(t *testing.T) {
 				receipt := copyChunkMutationReceipt{Cell: cell.label(), Mutation: removal, Chunk: multiChunkLimit}
-				defer func() {
-					if !t.Skipped() {
-						keep(receipt)
-					}
-				}()
+				publishAfterCleanups(t, func() { keep(receipt) })
 				copyChunkSourceRemoval(t, ctx, pools, recovery, cell, &receipt)
 			})
 		}
@@ -612,7 +605,7 @@ func cloneListed(listing snapCLIListing, snap uint64) bool {
 func copyChunkSourceRemoval(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, cell copyRemovalCell, receipt *copyChunkMutationReceipt) {
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("removal-%d-%s%s", cell.code, cell.removal, copyPinnedSuffix(cell.pinned)))
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), r.dstRoute.ID
-	r.lowerCopyChunk(&receipt.ChunkRestore)
+	r.lowerCopyChunk(&receipt.ChunkRestore, &receipt.ChunkReadback)
 	seeded := r.seedDestination()
 	if cell.removal == "snapshot-of-snapshot-source" {
 		holdSnapTrim(t, ctx, r.client)
