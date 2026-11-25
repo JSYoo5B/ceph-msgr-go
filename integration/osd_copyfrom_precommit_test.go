@@ -109,8 +109,9 @@ type copyStalledCommit struct {
 // copyPrecommitReceipt is the archived public receipt of one cell.
 type copyPrecommitReceipt struct {
 	copyChunkLossReceipt
-	Steps   []copyChunkStep   `json:"chunks"`
-	Stalled copyStalledCommit `json:"stalled_commit"`
+	Steps   []copyChunkStep           `json:"chunks"`
+	Stalled copyStalledCommit         `json:"stalled_commit"`
+	Replica *copyPrecommitReplicaLoss `json:"replica_loss,omitempty"`
 }
 
 // checkStalledEvents judges the events of a write op whose transaction went
@@ -254,6 +255,7 @@ type copyStallGuard struct {
 	stalled      *copyStalledCommit
 	armRequested bool
 	killed       bool
+	stopped      bool
 	stopErr      error
 	// restore and show are the cell's final recovery attempt and the
 	// readback of both runtime options; a cluster-free test replaces them.
@@ -332,14 +334,12 @@ func (g *copyStallGuard) arm() time.Time {
 		t.Fatalf("the commit stall of osd.%d is not unarmed before the test arms it: %+v", osd, b)
 	}
 	t.Cleanup(func() {
-		if g.killed {
+		if g.killed || g.stopped {
 			return
 		}
 		cleanup, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
-		// Recorded first, so an uncertain stop is still started again.
-		r.recovery.killed[osd] = true
-		g.stopErr = testcluster.ControlDaemon(cleanup, r.recovery.dir, "stop", "osd", fmt.Sprint(osd))
+		g.stop(cleanup)
 	})
 	armed := time.Now()
 	stalled.Stall = commitStall(t, r.ctx, osd, "arm")
@@ -347,6 +347,18 @@ func (g *copyStallGuard) arm() time.Time {
 		t.Fatalf("the commit stall of osd.%d was not armed: %+v", osd, s)
 	}
 	return armed
+}
+
+// stop undoes an armed stall without injecting another crash. Once the
+// fixture confirms the stop, later cleanup must not stop its restarted daemon.
+// An uncertain stop remains retryable by the registered cleanup.
+func (g *copyStallGuard) stop(ctx context.Context) {
+	if g.stopped {
+		return
+	}
+	g.r.recovery.killed[g.osd] = true
+	g.stopErr = testcluster.ControlDaemon(ctx, g.r.recovery.dir, "stop", "osd", fmt.Sprint(g.osd))
+	g.stopped = g.stopErr == nil
 }
 
 // publishAfterCleanups registers publish as a cleanup of the subtest t; it
@@ -398,8 +410,9 @@ func publishAfterCleanups(t *testing.T, publish func()) {
 // This replaces the earlier reason this interval had no replicated cell
 // (no stock control held a BlueStore commit). Not verified: an interval in
 // which the replicas did not commit either (a frozen replica would apply the
-// in-flight sub-op when resumed), a loss of a replica in this interval, and
-// the legacy one-PG pools when their primaries coincide.
+// in-flight sub-op when resumed) and the legacy one-PG pools when their
+// primaries coincide. The separate precommit replica-loss test reuses this
+// barrier without resubmitting the copy.
 //
 //scenario:row osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprecommitloss key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
 //scenario:row osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprecommitloss key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=replicated-pg-v8
@@ -444,8 +457,11 @@ func copyPrecommitLoss(t *testing.T, ctx context.Context, pools ownedPools, reco
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), primary
 	// Before lowerCopyChunk, so it verifies the stall after its recovery.
 	guard := r.guardCommitStall(gate, primary, stalled)
-	r.lowerCopyChunk(&receipt.ChunkRestore, nil)
-	r.seedDestination()
+	r.lowerCopyChunk(&receipt.ChunkRestore, &receipt.ChunkReadback)
+	seed := r.seedDestination()
+	if receipt.Replica != nil {
+		receipt.Replica.Seed = nativeDigest(seed)
+	}
 	trigger, triggerRoute := r.blockerObject()
 	stalled.Trigger = trigger
 
@@ -505,6 +521,7 @@ func copyPrecommitLoss(t *testing.T, ctx context.Context, pools ownedPools, reco
 		if err == nil && work.Err() == nil {
 			seen++
 			stalled.TriggerReqid, stalled.TriggerPoint, stalled.TriggerEvents = op.Reqid, op.FlagPoint, op.Events
+			stalled.TriggerSubmitTID = op.TID
 			time.Sleep(time.Second)
 			continue
 		}
@@ -569,6 +586,10 @@ func copyPrecommitLoss(t *testing.T, ctx context.Context, pools ownedPools, reco
 		stalled.Renamed, primary, stalled.HeldFor, h.op.Reqid, stalled.CopyPoint, stalled.CopyEvents, interval.Query.Epoch, stalled.PlacementEpoch, interval.Query.SameIntervalSince)
 	if work.Err() != nil {
 		t.Fatal("the observations of the stalled primary outlasted their budget")
+	}
+	if receipt.Replica != nil {
+		r.losePrecommitReplica(work, armed, guard, h, copied, copyKey, writeKey, receipt, o, blocked, cancel, triggerAt.Epoch, trigger, written)
+		return
 	}
 	receipt.KillExit = r.recovery.kill(t, ctx, primary)
 	guard.killed = true
