@@ -26,7 +26,7 @@ Action arm reads both options of one OSD, refuses unless the stall is
 unarmed (``bdev_inject_crash`` is 0), sets the delay to DELAY and reads it
 back, then sets ``bdev_inject_crash`` to ODDS and reads it back. Nothing is
 retried and nothing is restored: the OSD exits at the latest DELAY seconds
-after its next flush, and the test that armed it kills it before that.
+after its next flush, and the test that armed it stops or kills it before that.
 Action show only reads. A refused command is reported, not raised.
 """
 import json
