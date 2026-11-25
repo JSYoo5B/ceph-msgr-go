@@ -102,6 +102,12 @@ type copyChunkSetting struct {
 	Failures []string `json:"failures"`
 }
 
+// copyChunkRestored requires the native effective readback, not just the
+// oracle's summary flag. A missing/failed observation cannot establish cleanup.
+func copyChunkRestored(s copyChunkSetting, osd int32) bool {
+	return s.OSD == osd && s.Action == "restore" && s.Restored && !s.Claimed && len(s.Failures) == 0 && s.Prior > multiChunkLimit && s.Value == s.Prior
+}
+
 // copyStagingShard is the shard osd holds of route's PG: its index in the
 // acting set of an erasure-coded route without pg_temp, -1 for a replicated
 // route, and an error when osd holds none.
@@ -373,9 +379,10 @@ type copyChunkLossReceipt struct {
 		Replay      string  `json:"replay_version"`
 		Front       int     `json:"raw_front_bytes"`
 	} `json:"reply"`
-	Final        string  `json:"native_final"`
-	TempAfter    []int32 `json:"no_temporary_after_recovery_on"`
-	ChunkRestore bool    `json:"chunk_restored"`
+	Final         string            `json:"native_final"`
+	TempAfter     []int32           `json:"no_temporary_after_recovery_on"`
+	ChunkRestore  bool              `json:"chunk_restored"`
+	ChunkReadback *copyChunkSetting `json:"chunk_restore_readback,omitempty"`
 }
 
 // For COPY_FROM and COPY_FROM2, an unversioned copy of a 64 KiB source onto
@@ -435,14 +442,11 @@ func TestCephOSDCopyFromMultiChunkPrimaryLossIntegration(t *testing.T) {
 			cell := copyChunkLossCell{tc, lost}
 			t.Run(cell.label(), func(t *testing.T) {
 				receipt := copyChunkLossReceipt{Cell: cell.label(), Chunk: multiChunkLimit}
-				defer func() {
-					if t.Skipped() {
-						return
-					}
+				publishAfterCleanups(t, func() {
 					mu.Lock()
 					receipts = append(receipts, receipt)
 					mu.Unlock()
-				}()
+				})
 				copyChunkLoss(t, ctx, pools, recovery, cell, &receipt)
 			})
 		}
@@ -465,7 +469,8 @@ func copyChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery
 		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		defer stop()
 		restored := copyChunk(t, cleanup, primary, "restore")
-		receipt.ChunkRestore = restored.Restored && !restored.Claimed
+		receipt.ChunkReadback = &restored
+		receipt.ChunkRestore = copyChunkRestored(restored, primary)
 		if !receipt.ChunkRestore {
 			t.Errorf("osd_copyfrom_max_chunk of osd.%d was not restored: %+v", primary, restored)
 		}

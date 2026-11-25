@@ -251,7 +251,7 @@ func sameOmap(t *testing.T, a, b omapWriteState) bool {
 // lowerCopyChunk lowers the destination primary's osd_copyfrom_max_chunk
 // and registers its restoration, which runs after the cluster is restored
 // (cleanups run in reverse), so it reads a running destination primary.
-func (r *copyPrimaryChangeRun) lowerCopyChunk(restored *bool) {
+func (r *copyPrimaryChangeRun) lowerCopyChunk(restored *bool, readback **copyChunkSetting) {
 	t, ctx := r.t, r.ctx
 	t.Helper()
 	primary := r.dstRoute.ID
@@ -259,7 +259,10 @@ func (r *copyPrimaryChangeRun) lowerCopyChunk(restored *bool) {
 		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		defer stop()
 		setting := copyChunk(t, cleanup, primary, "restore")
-		*restored = setting.Restored && !setting.Claimed
+		if readback != nil {
+			*readback = &setting
+		}
+		*restored = copyChunkRestored(setting, primary)
 		if !*restored {
 			t.Errorf("osd_copyfrom_max_chunk of osd.%d was not restored: %+v", primary, setting)
 		}
@@ -512,14 +515,11 @@ func TestCephOSDCopyFromThreeChunkLossIntegration(t *testing.T) {
 			cell := copyChunkLossCell{tc, lost}
 			t.Run(cell.name+"/"+lost, func(t *testing.T) {
 				receipt := copyThreeChunkReceipt{copyChunkLossReceipt: copyChunkLossReceipt{Cell: cell.name + "/" + lost, Chunk: multiChunkLimit, Paused: -1}}
-				defer func() {
-					if t.Skipped() {
-						return
-					}
+				publishAfterCleanups(t, func() {
 					mu.Lock()
 					receipts = append(receipts, receipt)
 					mu.Unlock()
-				}()
+				})
 				copyThreeChunkLoss(t, ctx, pools, recovery, cell, &receipt)
 			})
 		}
@@ -554,7 +554,7 @@ func copyThreeChunkLoss(t *testing.T, ctx context.Context, pools ownedPools, rec
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("three-%d-%s", cell.code, cell.lost))
 	sourcePrimary, third := r.separatePrimaries()
 	receipt.SourcePrimary, receipt.Primary, receipt.Frozen, receipt.Third = sourcePrimary, r.dstRoute.ID, sourcePrimary, third
-	r.lowerCopyChunk(&receipt.ChunkRestore)
+	r.lowerCopyChunk(&receipt.ChunkRestore, &receipt.ChunkReadback)
 	seeded := r.seedDestination()
 
 	data := make([]byte, multiChunkLimit)
@@ -640,10 +640,11 @@ type copySourceChangeReceipt struct {
 		Replay      string  `json:"replay_version"`
 		Front       int     `json:"raw_front_bytes"`
 	} `json:"reply"`
-	TempRemoved  []int32 `json:"temporary_removed_on"`
-	Final        string  `json:"native_final"`
-	FreshTID     uint64  `json:"fresh_read_tid"`
-	ChunkRestore bool    `json:"chunk_restored"`
+	TempRemoved   []int32           `json:"temporary_removed_on"`
+	Final         string            `json:"native_final"`
+	FreshTID      uint64            `json:"fresh_read_tid"`
+	ChunkRestore  bool              `json:"chunk_restored"`
+	ChunkReadback *copyChunkSetting `json:"chunk_restore_readback,omitempty"`
 }
 
 // judgeSourceChange decides what the held copy's answer must be once the
@@ -709,14 +710,11 @@ func TestCephOSDCopyFromChunkSourceChangeIntegration(t *testing.T) {
 				cell := copySourceChangeCell{tc, snapshot, versioned}
 				t.Run(cell.label(), func(t *testing.T) {
 					receipt := copySourceChangeReceipt{Cell: cell.label(), Chunk: multiChunkLimit}
-					defer func() {
-						if t.Skipped() {
-							return
-						}
+					publishAfterCleanups(t, func() {
 						mu.Lock()
 						receipts = append(receipts, receipt)
 						mu.Unlock()
-					}()
+					})
 					copyChunkSourceChange(t, ctx, pools, recovery, cell, &receipt)
 				})
 			}
@@ -740,7 +738,7 @@ func copyChunkSourceChange(t *testing.T, ctx context.Context, pools ownedPools, 
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, label)
 	sourcePrimary, _ := r.separatePrimaries()
 	receipt.SourcePrimary, receipt.Primary = sourcePrimary, r.dstRoute.ID
-	r.lowerCopyChunk(&receipt.ChunkRestore)
+	r.lowerCopyChunk(&receipt.ChunkRestore, &receipt.ChunkReadback)
 	seeded := r.seedDestination()
 
 	data := make([]byte, 2*multiChunkLimit)

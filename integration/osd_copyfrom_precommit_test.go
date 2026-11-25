@@ -444,7 +444,7 @@ func copyPrecommitLoss(t *testing.T, ctx context.Context, pools ownedPools, reco
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), primary
 	// Before lowerCopyChunk, so it verifies the stall after its recovery.
 	guard := r.guardCommitStall(gate, primary, stalled)
-	r.lowerCopyChunk(&receipt.ChunkRestore)
+	r.lowerCopyChunk(&receipt.ChunkRestore, nil)
 	r.seedDestination()
 	trigger, triggerRoute := r.blockerObject()
 	stalled.Trigger = trigger

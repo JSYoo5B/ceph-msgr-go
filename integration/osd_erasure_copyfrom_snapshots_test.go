@@ -115,7 +115,7 @@ func copyErasureSnapshotChange(t *testing.T, ctx context.Context, pools ownedPoo
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("ecsnap-%d%s", cell.code, copyPinnedSuffix(cell.pinned)))
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), r.dstRoute.ID
 	facts.checkPlacement(t, r.srcRoute)
-	r.lowerCopyChunk(&receipt.ChunkRestore)
+	r.lowerCopyChunk(&receipt.ChunkRestore, nil)
 	seeded := r.seedDestination()
 
 	data := make([]byte, 2*multiChunkLimit)
@@ -312,7 +312,7 @@ func copyErasureToErasure(t *testing.T, ctx context.Context, pools ownedPools, r
 	r.chunkMax = limit
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), r.dstRoute.ID
 	srcFacts.checkPlacement(t, r.srcRoute)
-	r.lowerCopyChunk(&receipt.ChunkRestore)
+	r.lowerCopyChunk(&receipt.ChunkRestore, nil)
 	seeded := r.seedDestination()
 
 	data := make([]byte, 2*limit)

@@ -223,7 +223,7 @@ func copyErasureChunks(t *testing.T, ctx context.Context, pools ownedPools, reco
 	facts.checkPlacement(t, r.dstRoute)
 	r.chunkMax = limit
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), r.dstRoute.ID
-	r.lowerCopyChunk(&receipt.ChunkRestore)
+	r.lowerCopyChunk(&receipt.ChunkRestore, nil)
 	seeded := r.seedDestination()
 
 	var write cephmsgr.OSDReply
