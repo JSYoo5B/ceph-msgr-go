@@ -275,9 +275,10 @@ func copyErasureToErasureAnswer(source string, copiedUser uint64) (int32, uint64
 // version, the destination is natively the clone, and the PG log holds the
 // copy once without any source request ID.
 //
-// Not verified: other pairs of widths and plugins, unoptimized pools, a loss
-// between chunks of an erasure-coded copy onto an erasure-coded
-// destination, and a held final transaction there.
+// Daemon loss between chunks of an unversioned head copy on this pool pair
+// is exercised in osd_erasure_copyfrom_pair_loss_test.go. Other pairs of
+// widths and plugins, unoptimized pools, pinned/snapshot loss and a held
+// final transaction on this pair remain outside these cells.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedcopyfromerasuretoerasure key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
