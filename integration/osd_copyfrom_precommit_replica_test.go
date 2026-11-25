@@ -16,6 +16,13 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+// This scenario receives no copy wire reply. Publish null instead of the
+// shared receipt's zero-valued success-looking reply summary.
+type copyPrecommitReplicaReceipt struct {
+	copyPrecommitReceipt
+	Reply *json.RawMessage `json:"reply"`
+}
+
 type copyPrecommitReplicaLoss struct {
 	AfterKillPlacementEpoch uint32             `json:"after_kill_placement_epoch"`
 	AfterKillActing         []int32            `json:"after_kill_acting"`
@@ -64,7 +71,7 @@ type copyPrecommitReplicaLoss struct {
 //fixture:isolated loses an owned replica while its primary has an owned bounded commit stall
 func TestCephOSDCopyFromPrecommitReplicaLossIntegration(t *testing.T) {
 	ctx, pools, recovery := copyPrimaryChangeFixture(t, 1500*time.Second)
-	var receipts []copyPrecommitReceipt
+	var receipts []copyPrecommitReplicaReceipt
 	t.Cleanup(func() {
 		raw, err := json.MarshalIndent(receipts, "", "  ")
 		if err == nil {
@@ -81,7 +88,7 @@ func TestCephOSDCopyFromPrecommitReplicaLossIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 			receipt := copyPrecommitReceipt{copyChunkLossReceipt: copyChunkLossReceipt{Cell: tc.name + "/replica-before-primary-commit", Chunk: multiChunkLimit, Paused: -1}, Replica: &copyPrecommitReplicaLoss{OSD: -1}}
-			publishAfterCleanups(t, func() { receipts = append(receipts, receipt) })
+			publishAfterCleanups(t, func() { receipts = append(receipts, copyPrecommitReplicaReceipt{copyPrecommitReceipt: receipt}) })
 			copyPrecommitLoss(t, ctx, pools, recovery, gate, tc, &receipt)
 		})
 	}
@@ -132,6 +139,7 @@ func (r *copyPrimaryChangeRun) losePrecommitReplica(work context.Context, armed 
 		t.Fatal("undo primary commit stall:", guard.stopErr)
 	}
 	loss.PrimaryStopped = true
+	r.restartedPrimary = true
 	r.recovery.restore(t)
 	if t.Failed() {
 		return
@@ -275,5 +283,25 @@ func TestCopyPrecommitReplicaLossJudgement(t *testing.T) {
 				t.Fatal("invalid post-loss observation accepted")
 			}
 		})
+	}
+}
+
+func TestCopyPrecommitReplicaReceipt(t *testing.T) {
+	var published []copyPrecommitReplicaReceipt
+	t.Run("unknown without a wire reply", func(t *testing.T) {
+		receipt := copyPrecommitReceipt{copyChunkLossReceipt: copyChunkLossReceipt{Unknown: &copyChunkUnknown{TID: 2, GlobalID: 4758, Incarnation: 33, Epoch: 23, Cause: "other"}}, Replica: &copyPrecommitReplicaLoss{OSD: 1}}
+		publishAfterCleanups(t, func() { published = append(published, copyPrecommitReplicaReceipt{copyPrecommitReceipt: receipt}) })
+		t.Cleanup(func() { receipt.ChunkRestore = true; receipt.Stalled.Verified = true })
+	})
+	raw, err := json.Marshal(published)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || string(records[0]["reply"]) != "null" || string(records[0]["chunk_restored"]) != "true" || len(records[0]["unknown_outcome"]) == 0 || !published[0].Stalled.Verified {
+		t.Fatalf("unknown outcome/cleanup receipt lost or fabricated a wire reply: %s", raw)
 	}
 }
