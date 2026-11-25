@@ -162,7 +162,9 @@ func copyUncommittedReplica(t *testing.T, ctx context.Context, pools ownedPools,
 	request.ModificationTime = cephmsgr.OSDTime{Seconds: 1700010310}
 	triggerDone := make(chan copyChunkOutcome, 1)
 	go func() { reply, err := triggerConn.Request(ctx, request); triggerDone <- copyChunkOutcome{reply, err} }()
+	var heldFor time.Duration
 	observe := func(object string, at osdFixtureOracle, inc int32, done <-chan copyChunkOutcome) (opsInFlightOp, copyReplicaTransaction, string) {
+		var firstObserved time.Time
 		var prior copyReplicaTransaction
 		var verdict error
 		for seen := 0; seen < 2; {
@@ -201,8 +203,10 @@ func copyUncommittedReplica(t *testing.T, ctx context.Context, pools ownedPools,
 			prior = rep
 			seen++
 			if seen == 2 {
+				heldFor = time.Since(firstObserved)
 				return op, rep, snapshot.SHA256
 			}
+			firstObserved = time.Now()
 			time.Sleep(time.Second)
 		}
 		panic("unreachable")
@@ -216,11 +220,10 @@ func copyUncommittedReplica(t *testing.T, ctx context.Context, pools ownedPools,
 		reply, err := copyConn.Request(ctx, r.copyRequest(tc.code, route))
 		done <- copyChunkOutcome{reply, err}
 	}()
-	heldStart := time.Now()
 	op, rep, sha := observe(r.dest, route, copyPrimaryCopyIncarnation, done)
 	receipt.Receiver, receipt.ReceiverSHA = rep, sha
 	receipt.Stalled.Observations = 2
-	receipt.Stalled.HeldFor = time.Since(heldStart).String()
+	receipt.Stalled.HeldFor = heldFor.String()
 	receipt.BarrierEpoch, receipt.BarrierReqid, receipt.BarrierPoint, receipt.BarrierEvents = route.Epoch, op.Reqid, op.FlagPoint, op.Events
 	receipt.Stalled.CopyPoint, receipt.Stalled.CopyEvents = op.FlagPoint, op.Events
 	copyConn.Close()
