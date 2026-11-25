@@ -51,7 +51,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Minute)
 	defer cancel()
-	cluster, gateway := rgwNativeStartFixture(t, ctx)
+	cluster, gateway := rgwNativeStartFixture(t, ctx, 1)
 	control := cluster.Container.Container
 	version := string(rgwNativeExec(t, ctx, control, "ceph", "version"))
 	if !strings.Contains(version, "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964)") {

@@ -42,7 +42,11 @@ class RGWRowsTest(ci_row_catalog.RowsTestCase):
         routed = [entry for entry in self.entries if plan.routed(entry["params"])]
         self.assertEqual(sorted(entry["params"]["test_run"] for entry in routed), sorted("^%s$" % name for name in gate.TESTS))
         for entry in routed:
-            self.assertEqual(entry, row(entry["id"], test_run=entry["params"]["test_run"]))
+            params = {"test_run": entry["params"]["test_run"]}
+            if "managers" in entry["params"]:
+                self.assertEqual(entry["params"]["managers"], "2")
+                params["managers"] = "2"
+            self.assertEqual(entry, row(entry["id"], **params))
         self.assertIn(row(CHECKPOINT_ROW, test_run="^%s$" % CHECKPOINT), routed)
         self.assertEqual(self.routed_ids(), sorted(self.routed_ids(), key=lambda sid: scenario_declarations.planning_key({"id": sid})))
         # No other row names the routing parameter, so every existing row
@@ -80,10 +84,10 @@ class RGWRowsTest(ci_row_catalog.RowsTestCase):
         match = re.search(r"^    name: \$\{\{ matrix\.rgw_native == '1' && format\('([^']*)', ([^)]*)\) \|\| format\('([^']*)', ", self.workflow, re.M)
         self.assertIsNotNone(match)
         routed, args, ordinary = match.groups()
-        self.assertEqual(args.split(", "), ["matrix.scenario", "matrix.key", "matrix.service", "matrix.family"])
-        self.assertIn("MON=1, MGR=1, OSD=1 BlueStore, gateway=1", routed)
+        self.assertEqual(args.split(", "), ["matrix.scenario", "matrix.key", "matrix.service", "matrix.family", "matrix.managers || '1'"])
+        self.assertIn("MON=1, MGR={4}, OSD=1 BlueStore, gateway=1", routed)
         self.assertIn("secure", routed)
-        for unused in ("MGR={", "OSD={", "store=", "profile=", "replicas="):
+        for unused in ("OSD={", "store=", "profile=", "replicas="):
             self.assertNotIn(unused, routed)
         self.assertNotIn("RGW", ordinary)
 
