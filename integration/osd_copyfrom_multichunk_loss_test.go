@@ -876,6 +876,13 @@ func (r *copyPrimaryChangeRun) settleDestinationLoss(h *copyChunkHold, code ceph
 // copy restarts from its first chunk under the same client op and is
 // answered once.
 func (r *copyPrimaryChangeRun) loseReplicaBetweenChunks(h *copyChunkHold, lost int32, copyKey, writeKey pgHistoryTarget, data []byte, receipt *copyChunkLossReceipt) {
+	now := r.restartCopyAfterReplicaLoss(h, lost, 0, receipt)
+	r.finishCopyAfterReplicaLoss(h, now, copyKey, writeKey, data, receipt)
+}
+
+// restartCopyAfterReplicaLoss observes the restarted first copy-get with
+// the original request still pending and pauserd still in effect.
+func (r *copyPrimaryChangeRun) restartCopyAfterReplicaLoss(h *copyChunkHold, lost int32, firstVersion uint64, receipt *copyChunkLossReceipt) osdFixtureOracle {
 	t, ctx := r.t, r.ctx
 	t.Helper()
 	receipt.KillExit = r.recovery.kill(t, ctx, lost)
@@ -901,7 +908,7 @@ func (r *copyPrimaryChangeRun) loseReplicaBetweenChunks(h *copyChunkHold, lost i
 		h.pending(t, fmt.Sprintf("after osd.%d was lost", lost))
 		ops := copyOpsInFlight(t, ctx, 2, r.dest, nil, r.gid, copyPrimaryCopyIncarnation)
 		objecter := copyObjecterRequests(t, ctx, 2, r.dest, nil, r.pools.ids[1], r.source)
-		op, read, err := checkChunkHeld(ops, objecter, at, r.gid, copyPrimaryCopyIncarnation, h.max, 0, 0, append(slices.Clone(h.served), h.read.TID))
+		op, read, err := checkChunkHeld(ops, objecter, at, r.gid, copyPrimaryCopyIncarnation, h.max, firstVersion, 0, append(slices.Clone(h.served), h.read.TID))
 		if err == nil && op.TID != h.op.TID {
 			err = fmt.Errorf("the held client op is %s, not the barrier's %s", op.Reqid, h.op.Reqid)
 		}
@@ -923,6 +930,12 @@ func (r *copyPrimaryChangeRun) loseReplicaBetweenChunks(h *copyChunkHold, lost i
 		r.waitTempRemoved(osd, now)
 		receipt.TempRemoved = append(receipt.TempRemoved, osd)
 	}
+	return now
+}
+
+func (r *copyPrimaryChangeRun) finishCopyAfterReplicaLoss(h *copyChunkHold, now osdFixtureOracle, copyKey, writeKey pgHistoryTarget, data []byte, receipt *copyChunkLossReceipt) {
+	t, ctx := r.t, r.ctx
+	t.Helper()
 	r.recovery.clearPauseReads(t, ctx)
 
 	var got copyChunkOutcome
