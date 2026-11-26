@@ -350,6 +350,9 @@ func TestCephMgrPeerResetIntegration(t *testing.T) {
 			t.Logf("%s osd.0 %v", label, e)
 		}
 		mgrLog := mgrHandshakeLog(t, ctx, control, label+"-mgr", "mgr", after.ActiveName, osdEndpoint)
+		if len(mgrLog.Processes) == 0 {
+			t.Fatalf("%s: mgr.%s log has no daemon start banner", label, after.ActiveName)
+		}
 		current := mgrLog.Processes[len(mgrLog.Processes)-1].Process
 		received := slices.IndexFunc(mgrLog.Events, func(e handshakeEvent) bool {
 			return e.Process == current && e.Kind == "client_ident_received" && !e.at(t).Before(since) && e.Flags == "1" && e.Cookie == "0"

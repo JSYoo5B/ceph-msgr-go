@@ -34,12 +34,14 @@ var errHandshakeEventsExceedBound = errors.New("handshake log has more events th
 // c_cookie=<hex> s_cookie=<hex> reconnecting=.. rev1=.. crypto rx=.. tx=..
 // comp rx=.. tx=..).<function>", and AsyncConnection.cc its own lines with
 // "-- <own addrs> >> <peer addrs> conn(<connection> msgr2=<protocol> <mode>
-// :<port> s=<state> l=<lossy>).<function>". A Ceph log line starts with its
-// timestamp.
+// :<port> s=<state> l=<lossy>).<function>"; an accepted connection's peer
+// address vector prints empty until its CLIENT_IDENT is handled. A Ceph log
+// line starts with its
+// timestamp, after an optional stderr prefix word (log_stderr_prefix).
 var (
-	handshakeV2Prefix   = regexp.MustCompile(`--2- (\S+) >> (\S+) conn\((0x[0-9a-f]+) 0x[0-9a-f]+ \S+ :-?\d+ s=(\S+) pgs=\d+ gs=\d+ cs=\d+ l=([01]) c_cookie=([0-9a-f]+) s_cookie=([0-9a-f]+) reconnecting=[01] rev1=[01] crypto rx=\S+ tx=\S+ comp rx=\S+ tx=\S+\)\.(\w+)(.*)$`)
-	handshakeConnPrefix = regexp.MustCompile(`-- (\S+) >> (\S+) conn\((0x[0-9a-f]+) msgr2=0x[0-9a-f]+ \S+ :-?\d+ s=(\S+) l=([01])\)\.(\w+) injecting socket failure`)
-	handshakeStamp      = regexp.MustCompile(`^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+[+-]\d{4}) `)
+	handshakeV2Prefix   = regexp.MustCompile(`--2- (\S+) >> (\S*) conn\((0x[0-9a-f]+) 0x[0-9a-f]+ \S+ :-?\d+ s=(\S+) pgs=\d+ gs=\d+ cs=\d+ l=([01]) c_cookie=([0-9a-f]+) s_cookie=([0-9a-f]+) reconnecting=[01] rev1=[01] crypto rx=\S+ tx=\S+ comp rx=\S+ tx=\S+\)\.(\w+)(.*)$`)
+	handshakeConnPrefix = regexp.MustCompile(`-- (\S+) >> (\S*) conn\((0x[0-9a-f]+) msgr2=0x[0-9a-f]+ \S+ :-?\d+ s=(\S+) l=([01])\)\.(\w+) injecting socket failure`)
+	handshakeStamp      = regexp.MustCompile(`^(?:\S+ )?(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+[+-]\d{4}) `)
 	handshakeBanner     = regexp.MustCompile(`, process (\S+), pid (\d+)`)
 
 	// Identification frames (debug_ms 5): send_client_ident and

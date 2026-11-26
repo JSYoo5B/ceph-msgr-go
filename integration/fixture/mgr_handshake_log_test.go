@@ -25,9 +25,11 @@ const mgrHandshakeSampleLog = `2026-11-20T00:00:00.000+0000 7f0 0 ceph version 2
 2026-11-20T00:00:02.301+0000 7f0  1 --2- [v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] >> v2:192.0.2.1:41000/77 conn(0x1 0x11 crc :-1 s=SESSION_RECONNECTING pgs=3 gs=13 cs=1 l=0 c_cookie=0 s_cookie=a1b2c3d4 reconnecting=0 rev1=1 crypto rx=0 tx=0 comp rx=0 tx=0).reset_session
 2026-11-20T00:00:03.000+0000 7f0  5 --2- [v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] >> v2:192.0.2.1:41000/78 conn(0x2 0x21 crc :-1 s=SESSION_CONNECTING pgs=0 gs=14 cs=0 l=1 c_cookie=0 s_cookie=0 reconnecting=0 rev1=1 crypto rx=0 tx=0 comp rx=0 tx=0).send_client_ident sending identification: addrs=[v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] target=v2:192.0.2.1:41000/78 gid=0 global_seq=14 features_supported=3f01cfbffffdffff features_required=800000000002201 flags=1 cookie=0
 2026-11-20T00:00:03.100+0000 7f0  0 -- [v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] >> v2:192.0.2.1:41000/77 conn(0x1 msgr2=0x11 crc :-1 s=STATE_CONNECTION_ESTABLISHED l=0)._try_send injecting socket failure
+2026-11-20T00:00:03.900+0000 7f0  5 --2- v2:192.0.2.1:41000/77 >>  conn(0x3 0x31 crc :-1 s=SESSION_ACCEPTING pgs=0 gs=0 cs=0 l=1 c_cookie=0 s_cookie=0 reconnecting=0 rev1=1 crypto rx=0 tx=0 comp rx=0 tx=0).handle_client_ident received client identification: addrs=[v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] target=v2:192.0.2.1:41000/77 gid=0 global_seq=15 features_supported=3f01cfbffffdffff features_required=800000000002201 flags=1 cookie=0
+2026-11-20T00:00:03.901+0000 7f0  5 --2- v2:192.0.2.1:41000/77 >>  conn(0x4 0x41 crc :-1 s=SESSION_ACCEPTING pgs=0 gs=0 cs=0 l=1 c_cookie=0 s_cookie=0 reconnecting=0 rev1=1 crypto rx=0 tx=0 comp rx=0 tx=0).handle_client_ident received client identification: addrs=192.0.2.30:0/5 target=v2:192.0.2.1:41000/77 gid=9 global_seq=4 features_supported=3f01cfbffffdffff features_required=800000000002201 flags=1 cookie=0
 2026-11-20T00:00:04.000+0000 7f0  5 --2- v2:192.0.2.1:41000/77 >> v2:192.0.2.20:6802/9 conn(0x3 0x31 crc :6802 s=SESSION_ACCEPTING pgs=0 gs=0 cs=0 l=1 c_cookie=0 s_cookie=0 reconnecting=0 rev1=1 crypto rx=0 tx=0 comp rx=0 tx=0).handle_reconnect received reconnect: client_cookie=0 server_cookie=a1b2c3d4 gs=13 cs=1 ms=0
 2026-11-20T00:00:04.001+0000 7f0  0 --2- v2:192.0.2.1:41000/77 >> v2:192.0.2.20:6802/9 conn(0x3 0x31 crc :6802 s=SESSION_ACCEPTING pgs=0 gs=0 cs=0 l=1 c_cookie=0 s_cookie=0 reconnecting=0 rev1=1 crypto rx=0 tx=0 comp rx=0 tx=0).handle_reconnect no existing connection exists, reseting client
-2026-11-20T00:00:05.000+0000 7f0 0 ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable), process ceph-osd, pid 8
+debug 2026-11-20T00:00:05.000+0000 7f0 0 ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable), process ceph-osd, pid 8
 2026-11-20T00:00:06.000+0000 7f0  5 --2- [v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] >> v2:192.0.2.1:41000/77 conn(0x1 0x11 crc :-1 s=SESSION_CONNECTING pgs=0 gs=2 cs=0 l=1 c_cookie=0 s_cookie=0 reconnecting=0 rev1=1 crypto rx=0 tx=0 comp rx=0 tx=0).send_client_ident sending identification: addrs=[v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] target=v2:192.0.2.1:41000/77 gid=0 global_seq=2 features_supported=3f01cfbffffdffff features_required=800000000002201 flags=1 cookie=0
 `
 
@@ -46,7 +48,7 @@ func TestMgrHandshakesKeepResetsTimesAndExactEndpoints(t *testing.T) {
 			t.Fatalf("another nonce on the same port was kept: %+v", e)
 		}
 	}
-	want := []string{"connect", "client_ident_sent", "server_ident_received", "ready", "message_sent", "fault_reconnect", "reconnect_sent", "reset_received", "reset_session", "socket_failure_injected", "reconnect_received", "reset_sent", "client_ident_sent"}
+	want := []string{"connect", "client_ident_sent", "server_ident_received", "ready", "message_sent", "fault_reconnect", "reconnect_sent", "reset_received", "reset_session", "socket_failure_injected", "client_ident_received", "reconnect_received", "reset_sent", "client_ident_sent"}
 	if !slices.Equal(kinds, want) {
 		t.Fatalf("kinds %v, want %v", kinds, want)
 	}
@@ -74,6 +76,9 @@ func TestMgrHandshakesKeepResetsTimesAndExactEndpoints(t *testing.T) {
 	}
 	if r := byKind("socket_failure_injected"); r.Conn != "0x1" || r.Lossy != "0" {
 		t.Fatalf("injected %+v", r)
+	}
+	if r := byKind("client_ident_received"); r.Endpoint != 1 || r.Peer != "" || r.Conn != "0x3" || r.GlobalSeq != "15" {
+		t.Fatalf("accepted identification %+v", r)
 	}
 	if r := byKind("reconnect_received"); r.Endpoint != 1 || r.PeerCookie != "k1" {
 		t.Fatalf("accepted reconnect %+v", r)
