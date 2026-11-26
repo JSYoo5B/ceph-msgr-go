@@ -473,9 +473,16 @@ func fsidString(f [16]byte) string {
 // and the native network namespace has no established connection to the
 // MGR's address left.
 //
+// Stock OSD dynamic perf metrics use the native-produced CLIENT_ID query:
+// legacy configure on the first session, OSD variant configure after reconnect,
+// and populated OSD variant reports matched by a separate native client's
+// global ID to its six verified requests and 10758 data bytes. Each phase
+// observes explicit empty-variant query withdrawal on two reports. See
+// mgr_perf_metrics_test.go and tools/osd_pool_mode_mgrperf_oracle.py.
+//
 // Not verified here: MMgrUpdate (only a stock MON sends it, after its own
 // version changes; native vectors and synthetic tests cover it), MDS
-// peers, OSD perf-metric queries and metric payloads on a live session,
+// peers and MDS metric payloads on a live session,
 // MgrDaemon.Close racing pending peer waits (the listener's Close is the
 // one raced here), a stock peer that stops reading a published session,
 // and the unsent or uncertain reply outcomes, including induced partial
@@ -852,6 +859,7 @@ func TestCephMgrDaemonMessagesIntegration(t *testing.T) {
 	if !matched {
 		t.Fatal("no stable native sample in three attempts")
 	}
+	mgrPerfLive(t, ctx, first, false)
 	declared := []string{}
 	for _, c := range lastReport.Counters {
 		declared = append(declared, c.Path)
@@ -876,6 +884,7 @@ func TestCephMgrDaemonMessagesIntegration(t *testing.T) {
 		t.Fatalf("new session declared %d of %d packed counters; %d were declared before", len(fresh.Declare), len(fresh.Counters), len(declared))
 	}
 	t.Logf("session generation %d after reconnection: the first report declares all %d counters again", second.Identity().Generation, len(fresh.Declare))
+	mgrPerfLive(t, ctx, second, true)
 	served.Add(1)
 	go func() {
 		defer served.Done()
