@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -153,42 +154,113 @@ func v2Endpoint(t *testing.T, addrvec []nativeMgrAddress) string {
 // there, together with the reset events themselves.
 var resumeKinds = []string{"reconnect_sent", "reconnect_received", "reset_received", "reset_sent", "retry_sent", "retry_received", "retry_global_sent", "retry_global_received", "reconnect_ok_sent", "reconnect_existing"}
 
-// freshOSDSession returns the first connection of osd.0's log, from since
-// on, that completed a fresh lossy handshake with the MGR at endpoint (gid)
-// and then sent MMgrOpen and MMgrReport, with the events of that
-// connection from since on. It reports false when the log has none yet.
-func freshOSDSession(t *testing.T, log handshakeLog, since time.Time, endpoint int, gid uint64) (string, []handshakeEvent, bool) {
-	t.Helper()
-	conns := map[string][]handshakeEvent{}
-	var order []string
-	for _, e := range log.Events {
-		if e.Endpoint != endpoint || e.at(t).Before(since) {
-			continue
+// pairSession is one healthy post-fault session of the stock pair: the
+// osd.0 connection, the MGR connection that served it, and their events.
+type pairSession struct {
+	OSDConn, MGRConn     string
+	OSDEvents, MGREvents []handshakeEvent
+}
+
+// healthyPair finds, from since on, a fresh lossy session of osd.0 with
+// the MGR (gid) and its delivery evidence. On osd.0's log (endpoint 0 is
+// the MGR): CLIENT_IDENT (flags 1, cookie 0), SERVER_IDENT from gid (flags
+// 1, cookie 0), READY with no server cookie, then write attempts of
+// MMgrOpen and MMgrReport. Those are attempts only (write_message logs
+// before _try_send), so the MGR's log, in its latest process, must show
+// the same session: a received CLIENT_IDENT with the OSD's global_seq, a
+// sent SERVER_IDENT with the global_seq the OSD received, and the received
+// MMgrOpen and MMgrReport with the sequences the OSD attempted. The error
+// names how far the best candidate got.
+func healthyPair(osd, mgr handshakeLog, since time.Time, gid uint64) (pairSession, error) {
+	group := func(l handshakeLog, keep func(handshakeEvent) bool) ([]string, map[string][]handshakeEvent) {
+		conns := map[string][]handshakeEvent{}
+		var order []string
+		for _, e := range l.Events {
+			at, err := e.stamp()
+			if err != nil || at.Before(since) || !keep(e) {
+				continue
+			}
+			if _, ok := conns[e.Conn]; !ok {
+				order = append(order, e.Conn)
+			}
+			conns[e.Conn] = append(conns[e.Conn], e)
 		}
-		if _, ok := conns[e.Conn]; !ok {
-			order = append(order, e.Conn)
-		}
-		conns[e.Conn] = append(conns[e.Conn], e)
+		return order, conns
 	}
+	if len(mgr.Processes) == 0 {
+		return pairSession{}, fmt.Errorf("%s log has no daemon start banner", mgr.Daemon)
+	}
+	current := mgr.Processes[len(mgr.Processes)-1].Process
+	osdOrder, osdConns := group(osd, func(e handshakeEvent) bool { return e.Endpoint == 0 })
+	mgrOrder, mgrConns := group(mgr, func(e handshakeEvent) bool { return e.Process == current })
 	want := fmt.Sprint(gid)
-	for _, conn := range order {
+	best := fmt.Errorf("osd.0 logged no fresh lossy CLIENT_IDENT to the MGR since %s", since.UTC().Format(time.RFC3339Nano))
+	for _, conn := range osdOrder {
+		var clientSeq, serverSeq, openSeq, reportSeq string
 		step := 0
-		for _, e := range conns[conn] {
+		for _, e := range osdConns[conn] {
 			switch {
 			case step == 0 && e.Kind == "client_ident_sent" && e.Flags == "1" && e.Cookie == "0":
-				step = 1
+				step, clientSeq = 1, e.GlobalSeq
 			case step == 1 && e.Kind == "server_ident_received" && e.GID == want && e.Flags == "1" && e.Cookie == "0":
-				step = 2
+				step, serverSeq = 2, e.GlobalSeq
 			case step == 2 && e.Kind == "ready" && e.Lossy == "1" && e.ServerCookie == "0":
 				step = 3
-			case step == 3 && e.Kind == "message_sent" && e.Message == "mgropen":
-				step = 4
-			case step == 4 && e.Kind == "message_sent" && e.Message == "mgrreport":
-				return conn, conns[conn], true
+			case step == 3 && e.Kind == "message_write_attempt" && e.Message == "mgropen":
+				step, openSeq = 4, e.Seq
+			case step == 4 && e.Kind == "message_write_attempt" && e.Message == "mgrreport":
+				step, reportSeq = 5, e.Seq
+			}
+			if step == 5 {
+				break
+			}
+		}
+		if step < 5 {
+			if step > 0 {
+				best = fmt.Errorf("osd.0 connection %s stopped at step %d of 5 (ident, server ident, ready, open and report attempts)", conn, step)
+			}
+			continue
+		}
+		best = fmt.Errorf("osd.0 connection %s attempted MMgrOpen and MMgrReport, but %s process %d logged no matching session", conn, mgr.Daemon, current)
+		for _, served := range mgrOrder {
+			got := 0
+			for _, e := range mgrConns[served] {
+				switch {
+				case got == 0 && e.Kind == "client_ident_received" && e.GlobalSeq == clientSeq && e.Flags == "1" && e.Cookie == "0":
+					got = 1
+				case got == 1 && e.Kind == "server_ident_sent" && e.GID == want && e.GlobalSeq == serverSeq && e.Flags == "1" && e.Cookie == "0":
+					got = 2
+				case got == 2 && e.Kind == "message_received" && e.Message == "mgropen" && e.Seq == openSeq:
+					got = 3
+				case got == 3 && e.Kind == "message_received" && e.Message == "mgrreport" && e.Seq == reportSeq:
+					return pairSession{OSDConn: conn, MGRConn: served, OSDEvents: osdConns[conn], MGREvents: mgrConns[served]}, nil
+				}
+			}
+			if got > 0 {
+				best = fmt.Errorf("osd.0 connection %s attempted MMgrOpen seq %s and MMgrReport seq %s, but %s connection %s stopped at receipt step %d of 4 (ident, server ident, open, report)", conn, openSeq, reportSeq, mgr.Daemon, served, got)
 			}
 		}
 	}
-	return "", nil, false
+	return pairSession{}, best
+}
+
+// injectedCut returns the first socket failure injected at or after
+// activated on a connection to endpoint 0 whose fault followed it on the
+// same connection, with that connection. A lossy fault without an
+// injected failure, or an injection before activation, does not count.
+func injectedCut(l handshakeLog, activated time.Time) (time.Time, string, bool) {
+	for i, e := range l.Events {
+		at, err := e.stamp()
+		if e.Kind != "socket_failure_injected" || e.Endpoint != 0 || err != nil || at.Before(activated) {
+			continue
+		}
+		for _, f := range l.Events[i+1:] {
+			if f.Conn == e.Conn && f.Process == e.Process && (f.Kind == "fault_lossy" || f.Kind == "fault_backoff") {
+				return at, e.Conn, true
+			}
+		}
+	}
+	return time.Time{}, "", false
 }
 
 // TestCephMgrPeerResetIntegration determines when a stock OSD receives
@@ -214,19 +286,24 @@ func freshOSDSession(t *testing.T, log handshakeLog, since time.Time, endpoint i
 //
 //   - transport cut, unchanged listener: osd.0's ms_inject_socket_failures,
 //     set and cleared through its admin socket, shuts one of its sockets;
-//     the cell requires the injection on the connection to the active MGR
-//     and an unchanged MgrMap
+//     the cell requires the injection marker on a connection to the active
+//     MGR, logged after the injection was requested and followed by a fault
+//     of that connection (injectedCut; a lossy fault alone does not
+//     qualify), and an unchanged MgrMap
 //   - active-GID change: `mgr fail` of the active MGR promotes the standby
 //   - restarted listener: with the standby stopped and failed out, the
 //     active MGR container restarts; MON drops its old GID and promotes the
 //     new process (new nonce)
 //
-// For each, a complete post-fault handshake is required: on one OSD
-// connection, CLIENT_IDENT (lossy, cookie 0), SERVER_IDENT from the
-// expected GID (lossy, cookie 0), READY, MMgrOpen and MMgrReport (the
-// healthy positive control for the pair), and on the MGR's log the matching
-// received CLIENT_IDENT and sent SERVER_IDENT. Neither log may show any
-// resume event (resumeKinds) for the pair across the whole run.
+// For each, a healthy post-fault session is required (healthyPair): on one
+// OSD connection, CLIENT_IDENT (lossy, cookie 0), SERVER_IDENT from the
+// expected GID (lossy, cookie 0), READY and write attempts of MMgrOpen and
+// MMgrReport; on the MGR's log, the same session by both global sequences
+// and the receipt of that MMgrOpen and MMgrReport by sequence. The OSD's
+// write marker precedes _try_send, so the MGR's receipt is the delivery
+// evidence. Neither log may show any resume event (resumeKinds) for the
+// pair across the whole run, also among events of connections whose peer
+// the log never named: one of those makes the verdict inconclusive.
 //
 // Reset-observer positive control: the stock MGRs stop, a Go MgrDaemon
 // becomes active, and statefulIdentListener rewrites its first SERVER_IDENT
@@ -336,56 +413,47 @@ func TestCephMgrPeerResetIntegration(t *testing.T) {
 		t.Logf("%s: MgrMap epoch %d active %s/%d at %s -> epoch %d active %s/%d at %s", label,
 			before.Epoch, before.ActiveName, before.ActiveGID, v2Endpoint(t, before.ActiveAddrs.Addrvec), after.Epoch, after.ActiveName, after.ActiveGID, endpoint)
 		deadline := time.Now().Add(3 * time.Minute)
-		var conn string
-		var events []handshakeEvent
+		var pair pairSession
 		for attempt := 1; ; attempt++ {
-			log := mgrHandshakeLog(t, ctx, control, fmt.Sprintf("%s-osd-%d", label, attempt), "osd", "0", endpoint)
-			var ok bool
-			if conn, events, ok = freshOSDSession(t, log, since, 0, after.ActiveGID); ok {
+			osdLog := mgrHandshakeLog(t, ctx, control, fmt.Sprintf("%s-osd-%d", label, attempt), "osd", "0", endpoint)
+			mgrLog := mgrHandshakeLog(t, ctx, control, fmt.Sprintf("%s-mgr-%d", label, attempt), "mgr", after.ActiveName, osdEndpoint)
+			var err error
+			if pair, err = healthyPair(osdLog, mgrLog, since, after.ActiveGID); err == nil {
 				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("%s: no fresh osd.0 session to %s/%d after the fault: %v", label, endpoint, after.ActiveGID, log.Events)
+				t.Fatalf("%s: no healthy osd.0 session with %s/%d after the fault: %v; osd.0 %v; mgr.%s %v", label, endpoint, after.ActiveGID, err, osdLog.Events, after.ActiveName, mgrLog.Events)
 			}
 			time.Sleep(3 * time.Second)
 		}
-		for _, e := range events {
+		for _, e := range pair.OSDEvents {
 			t.Logf("%s osd.0 %v", label, e)
 		}
-		mgrLog := mgrHandshakeLog(t, ctx, control, label+"-mgr", "mgr", after.ActiveName, osdEndpoint)
-		if len(mgrLog.Processes) == 0 {
-			t.Fatalf("%s: mgr.%s log has no daemon start banner", label, after.ActiveName)
+		for _, e := range pair.MGREvents {
+			if e.Kind != "message_received" || e.Message == "mgropen" || e.Message == "mgrreport" {
+				t.Logf("%s mgr.%s %v", label, after.ActiveName, e)
+			}
 		}
-		current := mgrLog.Processes[len(mgrLog.Processes)-1].Process
-		received := slices.IndexFunc(mgrLog.Events, func(e handshakeEvent) bool {
-			return e.Process == current && e.Kind == "client_ident_received" && !e.at(t).Before(since) && e.Flags == "1" && e.Cookie == "0"
-		})
-		if received < 0 || !slices.ContainsFunc(mgrLog.Events[received:], func(e handshakeEvent) bool {
-			return e.Conn == mgrLog.Events[received].Conn && e.Kind == "server_ident_sent" && e.GID == fmt.Sprint(after.ActiveGID) && e.Flags == "1" && e.Cookie == "0"
-		}) {
-			t.Fatalf("%s: mgr.%s (process %d) logged no fresh identification exchange with osd.0: %v", label, after.ActiveName, current, mgrLog.Events)
-		}
-		t.Logf("%s: osd.0 connection %s and mgr.%s process %d connection %s completed a fresh lossy exchange (both cookies 0); no resume event", label, conn, after.ActiveName, current, mgrLog.Events[received].Conn)
+		t.Logf("%s: osd.0 connection %s and mgr.%s connection %s completed a fresh lossy exchange (both cookies 0) and the MGR received the OSD's MMgrOpen and MMgrReport", label, pair.OSDConn, after.ActiveName, pair.MGRConn)
 	}
 
 	// 1. Transport cut with an unchanged listener.
 	cell("transport-cut", func(before nativeMgrDump) (nativeMgrDump, time.Time) {
 		endpoint := v2Endpoint(t, before.ActiveAddrs.Addrvec)
-		start := time.Now().Add(-time.Second)
+		// The injection cannot act before the admin-socket request is
+		// sent; the host and container clocks are the same clock.
+		activated := time.Now().Truncate(time.Millisecond)
 		osdInject(t, ctx, control, "transport-cut-on", 10)
 		var cut time.Time
-		for deadline := time.Now().Add(3 * time.Minute); cut.IsZero(); {
+		for deadline := time.Now().Add(3 * time.Minute); ; {
 			log := mgrHandshakeLog(t, ctx, control, "transport-cut-inject", "osd", "0", endpoint)
-			for _, e := range log.kinds("socket_failure_injected", "fault_lossy") {
-				if at := e.at(t); !at.Before(start) {
-					t.Logf("transport-cut: %v", e)
-					if cut.IsZero() {
-						cut = at
-					}
-				}
+			if at, conn, ok := injectedCut(log, activated); ok {
+				cut = at
+				t.Logf("transport-cut: socket failure injected on osd.0 connection %s to %s at %s, then a fault on that connection", conn, endpoint, at.UTC().Format(time.RFC3339Nano))
+				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatal("transport-cut: no socket failure on the osd.0 connection to", endpoint)
+				t.Fatal("transport-cut: no injected socket failure followed by a fault on the osd.0 connection to", endpoint, log.Events)
 			}
 			time.Sleep(2 * time.Second)
 		}
@@ -402,7 +470,7 @@ func TestCephMgrPeerResetIntegration(t *testing.T) {
 		if len(before.Standbys) == 0 {
 			before = waitMgrDump(t, ctx, control, "active-change-standby", func(d nativeMgrDump) bool { return d.Available && len(d.Standbys) > 0 })
 		}
-		since := time.Now().Add(-time.Second)
+		since := time.Now().Truncate(time.Millisecond)
 		adminCommand(t, ctx, admin, map[string]any{"prefix": "mgr fail", "who": before.ActiveName})
 		return waitMgrDump(t, ctx, control, "active-change-after", func(d nativeMgrDump) bool {
 			return d.Available && d.ActiveGID != before.ActiveGID && d.ActiveName != before.ActiveName
@@ -426,7 +494,7 @@ func TestCephMgrPeerResetIntegration(t *testing.T) {
 			t.Fatal("stop active MGR", before.ActiveName, err)
 		}
 		stopped[before.ActiveName] = true
-		since := time.Now().Add(-time.Second)
+		since := time.Now().Truncate(time.Millisecond)
 		if err := testcluster.ControlDaemon(ctx, control, "start", "mgr", before.ActiveName); err != nil {
 			t.Fatal("start active MGR", before.ActiveName, err)
 		}
@@ -441,20 +509,17 @@ func TestCephMgrPeerResetIntegration(t *testing.T) {
 		return after, since
 	})
 
-	// No resume event anywhere in either log of the stock pair.
+	// No resume event anywhere in either log of the stock pair, and none
+	// on a connection whose peer the log never named.
 	osdLog := mgrHandshakeLog(t, ctx, control, "stock-osd-all", "osd", "0", pairEndpoints...)
-	if resumed := osdLog.kinds(resumeKinds...); len(resumed) != 0 {
-		t.Fatalf("osd.0 resumed a session with a stock MGR: %v", resumed)
-	}
+	unnamed := osdLog.absent(t, "stock pair", resumeKinds...)
 	idents := len(osdLog.kinds("client_ident_sent"))
 	for _, name := range mgrNames {
 		mgrLog := mgrHandshakeLog(t, ctx, control, "stock-mgr-all-"+name, "mgr", name, osdEndpoint)
-		if resumed := mgrLog.kinds(resumeKinds...); len(resumed) != 0 {
-			t.Fatalf("mgr.%s resumed a session with osd.0: %v", name, resumed)
-		}
-		t.Logf("mgr.%s: %d processes, %d identification exchanges with osd.0, no resume event", name, len(mgrLog.Processes), len(mgrLog.kinds("client_ident_received")))
+		n := mgrLog.absent(t, "stock pair", resumeKinds...)
+		t.Logf("mgr.%s: %d processes, %d identification exchanges with osd.0, no resume event; %d events on connections that never named a peer, none of a resume kind", name, len(mgrLog.Processes), len(mgrLog.kinds("client_ident_received")), n)
 	}
-	t.Logf("stock pair: osd.0 sent %d CLIENT_IDENTs to MGR endpoints %v and logged no SESSION_RECONNECT, SESSION_RESET or retry", idents, pairEndpoints)
+	t.Logf("stock pair: osd.0 attempted %d CLIENT_IDENTs to MGR endpoints %v and logged no SESSION_RECONNECT, SESSION_RESET or retry; %d unattributed osd.0 events, none of a resume kind", idents, pairEndpoints, unnamed)
 
 	resetSpecimen(t, ctx, control, admin, base)
 }
@@ -654,7 +719,7 @@ func resetSpecimen(t *testing.T, ctx context.Context, control string, admin *cep
 	log := mgrHandshakeLog(t, ctx, control, "specimen-reset", "osd", "0", endpoint)
 	var sequence []handshakeEvent
 	for _, e := range log.Events {
-		if e.Conn == claimed.Conn && !e.at(t).Before(cut) && e.Kind != "message_sent" {
+		if e.Conn == claimed.Conn && !e.at(t).Before(cut) && e.Kind != "message_write_attempt" {
 			sequence = append(sequence, e)
 		}
 	}
@@ -777,3 +842,92 @@ func (c writeOnlyConn) RemoteAddr() net.Addr             { return nil }
 func (c writeOnlyConn) SetDeadline(time.Time) error      { return nil }
 func (c writeOnlyConn) SetReadDeadline(time.Time) error  { return nil }
 func (c writeOnlyConn) SetWriteDeadline(time.Time) error { return nil }
+
+// pairLogs are synthetic receipts shaped like a fresh lossy osd.0 to MGR
+// session: the OSD's ident exchange, READY and write attempts of MMgrOpen
+// seq 1 and MMgrReport seq 2, and on the MGR the matching session. extra
+// events follow on each side.
+func pairLogs(osdExtra, mgrExtra []handshakeEvent, mgrReceives bool) (handshakeLog, handshakeLog) {
+	osd := handshakeLog{Daemon: "osd.0", Events: []handshakeEvent{
+		{Time: "2026-11-20T00:00:01.000+0000", Conn: "0xa", Kind: "client_ident_sent", Flags: "1", Cookie: "0", GlobalSeq: "12"},
+		{Time: "2026-11-20T00:00:01.001+0000", Conn: "0xa", Kind: "server_ident_received", GID: "4167", Flags: "1", Cookie: "0", GlobalSeq: "40"},
+		{Time: "2026-11-20T00:00:01.002+0000", Conn: "0xa", Kind: "ready", Lossy: "1", ServerCookie: "0"},
+		{Time: "2026-11-20T00:00:01.003+0000", Conn: "0xa", Kind: "message_write_attempt", Message: "mgropen", Seq: "1"},
+		{Time: "2026-11-20T00:00:01.004+0000", Conn: "0xa", Kind: "message_write_attempt", Message: "mgrreport", Seq: "2"},
+	}}
+	mgr := handshakeLog{Daemon: "mgr.a", Processes: []handshakeProcess{{Process: 1}}, Events: []handshakeEvent{
+		{Time: "2026-11-20T00:00:01.000+0000", Process: 1, Conn: "0xb", Kind: "client_ident_received", Flags: "1", Cookie: "0", GlobalSeq: "12"},
+		{Time: "2026-11-20T00:00:01.001+0000", Process: 1, Conn: "0xb", Kind: "server_ident_sent", GID: "4167", Flags: "1", Cookie: "0", GlobalSeq: "40"},
+	}}
+	if mgrReceives {
+		mgr.Events = append(mgr.Events,
+			handshakeEvent{Time: "2026-11-20T00:00:01.005+0000", Process: 1, Conn: "0xb", Kind: "message_received", Message: "mgropen", Seq: "1"},
+			handshakeEvent{Time: "2026-11-20T00:00:01.006+0000", Process: 1, Conn: "0xb", Kind: "message_received", Message: "mgrreport", Seq: "2"})
+	}
+	osd.Events = append(osd.Events, osdExtra...)
+	mgr.Events = append(mgr.Events, mgrExtra...)
+	return osd, mgr
+}
+
+// TestHealthyPairNeedsTheMgrReceiptOfOpenAndReport: OSD write attempts
+// followed by an injected failure and a lossy fault, with no MGR receipt,
+// are not a healthy pair; neither is a receipt of another sequence or on
+// another MGR session. Only the MGR's receipt of the attempted MMgrOpen and
+// MMgrReport makes the session healthy.
+func TestHealthyPairNeedsTheMgrReceiptOfOpenAndReport(t *testing.T) {
+	since := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+	lost := []handshakeEvent{
+		{Time: "2026-11-20T00:00:01.005+0000", Conn: "0xa", Kind: "socket_failure_injected"},
+		{Time: "2026-11-20T00:00:01.005+0000", Conn: "0xa", Kind: "fault_lossy"},
+	}
+	osd, mgr := pairLogs(lost, nil, false)
+	if _, err := healthyPair(osd, mgr, since, 4167); err == nil || !strings.Contains(err.Error(), "receipt step 2 of 4") {
+		t.Fatal("a report lost after its write attempt was accepted as healthy:", err)
+	}
+	osd, mgr = pairLogs(nil, []handshakeEvent{
+		{Time: "2026-11-20T00:00:01.005+0000", Process: 1, Conn: "0xb", Kind: "message_received", Message: "mgropen", Seq: "1"},
+		{Time: "2026-11-20T00:00:01.006+0000", Process: 1, Conn: "0xb", Kind: "message_received", Message: "mgrreport", Seq: "7"},
+	}, false)
+	if _, err := healthyPair(osd, mgr, since, 4167); err == nil {
+		t.Fatal("a report of another sequence was accepted")
+	}
+	osd, mgr = pairLogs(nil, nil, true)
+	mgr.Events[0].GlobalSeq = "13" // another session's CLIENT_IDENT
+	if _, err := healthyPair(osd, mgr, since, 4167); err == nil {
+		t.Fatal("a receipt on another MGR session was accepted")
+	}
+	osd, mgr = pairLogs(nil, nil, true)
+	pair, err := healthyPair(osd, mgr, since, 4167)
+	if err != nil || pair.OSDConn != "0xa" || pair.MGRConn != "0xb" {
+		t.Fatal("received open and report", pair, err)
+	}
+	if _, err := healthyPair(osd, mgr, since.Add(time.Hour), 4167); err == nil {
+		t.Fatal("a session before since was accepted")
+	}
+}
+
+// TestInjectedCutNeedsTheInjectionMarker: a lossy fault without an injected
+// socket failure, an injection logged before the injection was requested,
+// and an injection on a connection that then logs no fault do not set the
+// transport cut.
+func TestInjectedCutNeedsTheInjectionMarker(t *testing.T) {
+	activated := time.Date(2026, 11, 20, 0, 0, 1, 0, time.UTC)
+	log := func(events ...handshakeEvent) handshakeLog { return handshakeLog{Daemon: "osd.0", Events: events} }
+	fault := handshakeEvent{Time: "2026-11-20T00:00:02.000+0000", Conn: "0xa", Kind: "fault_lossy"}
+	if _, _, ok := injectedCut(log(fault), activated); ok {
+		t.Fatal("a generic lossy fault set the cut")
+	}
+	early := handshakeEvent{Time: "2026-11-20T00:00:00.500+0000", Conn: "0xa", Kind: "socket_failure_injected"}
+	if _, _, ok := injectedCut(log(early, fault), activated); ok {
+		t.Fatal("an injection before activation set the cut")
+	}
+	injected := handshakeEvent{Time: "2026-11-20T00:00:01.500+0000", Conn: "0xa", Kind: "socket_failure_injected"}
+	other := handshakeEvent{Time: "2026-11-20T00:00:02.000+0000", Conn: "0xb", Kind: "fault_lossy"}
+	if _, _, ok := injectedCut(log(injected, other), activated); ok {
+		t.Fatal("a fault of another connection was correlated with the injection")
+	}
+	at, conn, ok := injectedCut(log(early, injected, fault), activated)
+	if !ok || conn != "0xa" || !at.Equal(time.Date(2026, 11, 20, 0, 0, 1, 500_000_000, time.UTC)) {
+		t.Fatal("injected cut", at, conn, ok)
+	}
+}
