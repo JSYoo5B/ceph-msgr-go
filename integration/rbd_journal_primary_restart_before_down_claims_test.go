@@ -12,9 +12,10 @@ import (
 // after the kill request and ended rbdJournalBeforeDownWindow or more after
 // it, every OSDMap read listed P up, flagged, at the address the subject
 // routed to before the kill, with every followed object on the original
-// acting set led by P and no OSD down. The subject's own reread in the
-// window found that address too. The caller outcomes and the kill itself are
-// the restart cell's claims.
+// acting set led by P and no OSD down. Every sample is judged, so a change
+// that recovers before the window ends is still refused. The subject's own
+// reread in the window found that address too. The caller outcomes and the
+// kill itself are the restart cell's claims.
 func rbdJournalBeforeDownWindowClaims(r *rbdJournalLostAppendRecord, acting []int32, fail func(string, ...any)) {
 	h, p := r.Held, r.Held.Pending
 	text := rbdJournalHeldText
@@ -34,27 +35,41 @@ func rbdJournalBeforeDownWindowClaims(r *rbdJournalLostAppendRecord, acting []in
 		fail("observe-primary-dead: the fixture's read or the kill is missing: %s", text(d))
 		return
 	}
+	if d.OSD != h.Primary || d.Address != address || len(d.Samples) < 2 {
+		fail("observe-primary-dead: not a window of two or more reads of osd.%d at %s: %s", h.Primary, address, text(d))
+		return
+	}
+	// Every sample is judged on its own: a state that changed and
+	// recovered within the window is a violation like one that lasted.
 	killed, killErr := time.Parse(time.RFC3339Nano, h.Kill.RequestedUTC)
-	first, firstErr := time.Parse(time.RFC3339Nano, d.FirstUTC)
-	last, lastErr := time.Parse(time.RFC3339Nano, d.LastUTC)
-	if killErr != nil || firstErr != nil || lastErr != nil || !first.After(killed) || last.Sub(killed) < rbdJournalBeforeDownWindow || d.Polls < 2 {
-		fail("observe-primary-dead: the window did not begin after the kill and last %v after it: %s (killed %s)", rbdJournalBeforeDownWindow, text(d), h.Kill.RequestedUTC)
-	}
-	for _, info := range []nativeRBDJournalOSDInfo{d.First, d.Last} {
-		if info.OSD != h.Primary || !info.Up || info.Address != address || !slices.Contains(info.State, "nodown") || len(info.Down) != 0 || info.Epoch < k.After.Epoch {
-			fail("observe-primary-dead: the OSDMap did not list osd.%d up and flagged at %s with every OSD up: %s", h.Primary, address, text(info))
+	followed := []string{"rbd_header." + r.ImageID, r.Entry.ObjectName, r.JournalHeader}
+	var previous time.Time
+	var epoch uint32
+	for i, sample := range d.Samples {
+		at, err := time.Parse(time.RFC3339Nano, sample.UTC)
+		if err != nil || killErr != nil || !at.After(killed) || i > 0 && at.Before(previous) {
+			fail("observe-primary-dead: sample %d at %q is not after the kill (%s) and the sample before it", i, sample.UTC, h.Kill.RequestedUTC)
+		}
+		previous = at
+		info := sample.Info
+		if info.OSD != h.Primary || !info.Up || info.Address != address || !slices.Contains(info.State, "nodown") || len(info.Down) != 0 || info.Epoch < k.After.Epoch ||
+			info.Epoch < epoch {
+			fail("observe-primary-dead: sample %d (epoch %d) does not list osd.%d up and flagged at %s with every OSD up: %s", i, info.Epoch, h.Primary, address, text(info))
+		}
+		epoch = max(epoch, info.Epoch)
+		if len(sample.Objects) != len(followed) {
+			fail("observe-primary-dead: sample %d has %d placements, want %d", i, len(sample.Objects), len(followed))
+			continue
+		}
+		for j, o := range sample.Objects {
+			if o.Object != followed[j] || !slices.Equal(o.Acting, acting) || !slices.Equal(o.Up, acting) || o.ActingPrimary != h.Primary || o.Epoch < k.After.Epoch {
+				fail("observe-primary-dead: sample %d (epoch %d) places %s off the original acting set %v led by osd.%d: %s", i, info.Epoch, followed[j], acting, h.Primary, text(o))
+			}
 		}
 	}
-	if d.OSD != h.Primary || d.Address != address || !d.Up || d.Last.Epoch < d.First.Epoch {
-		fail("observe-primary-dead: some read of the window listed osd.%d down or at another address: %s", h.Primary, text(d))
-	}
-	if len(d.Objects) != 3 {
-		fail("observe-primary-dead: the placements of the three followed objects are missing: %s", text(d.Objects))
-	}
-	for _, o := range d.Objects {
-		if !slices.Equal(o.Acting, acting) || !slices.Equal(o.Up, acting) || o.ActingPrimary != h.Primary || o.Epoch < d.First.Epoch {
-			fail("observe-primary-dead: %s is not on the original acting set %v led by osd.%d: %s", o.Object, acting, h.Primary, text(o))
-		}
+	if last, err := time.Parse(time.RFC3339Nano, d.Samples[len(d.Samples)-1].UTC); err != nil || killErr != nil || last.Sub(killed) < rbdJournalBeforeDownWindow {
+		fail("observe-primary-dead: the window did not last %v after the kill (killed %s, last sample %s)", rbdJournalBeforeDownWindow, h.Kill.RequestedUTC,
+			d.Samples[len(d.Samples)-1].UTC)
 	}
 	if p.AddressDead != address {
 		fail("observe-primary-dead: the subject's reread routes osd.%d to %q, not the killed instance's %q", h.Primary, p.AddressDead, address)
@@ -71,21 +86,27 @@ func rbdJournalBeforeDownBackClaims(r *rbdJournalLostAppendRecord, placed *nativ
 	h, p := r.Held, r.Held.Pending
 	text := rbdJournalHeldText
 	back := p.Back
-	if back == nil || len(back.Objects) != 3 || back.Query == nil || back.OSDInfo == nil || p.Dead == nil {
+	if back == nil || len(back.Objects) != 3 || back.Query == nil || back.OSDInfo == nil || p.Dead == nil || len(p.Dead.Samples) == 0 {
 		fail("observe-primary-back: the fixture's read is missing: %s", text(back))
 		return false
 	}
 	started, err := time.Parse(time.RFC3339Nano, p.StartedUTC)
-	windowEnd, endErr := time.Parse(time.RFC3339Nano, p.Dead.LastUTC)
+	// The window ends with its last sample, at its highest epoch.
+	end := p.Dead.Samples[len(p.Dead.Samples)-1]
+	var windowEpoch uint32
+	for _, sample := range p.Dead.Samples {
+		windowEpoch = max(windowEpoch, sample.Info.Epoch)
+	}
+	windowEnd, endErr := time.Parse(time.RFC3339Nano, end.UTC)
 	if err != nil || endErr != nil || !started.After(windowEnd) {
-		fail("observe-primary-back: osd.%d was not started after the window (started %q, window to %q)", h.Primary, p.StartedUTC, p.Dead.LastUTC)
+		fail("observe-primary-back: osd.%d was not started after the window (started %q, window to %q)", h.Primary, p.StartedUTC, end.UTC)
 	}
 	if !back.Settled || len(back.Down) != 0 || back.OSD != -1 || len(back.Ops) != 0 {
 		fail("observe-primary-back: osd.%d is not up again with every OSD up: %s", h.Primary, text(back))
 	}
 	info := back.OSDInfo
-	if info.OSD != h.Primary || !info.Up || info.DownAt <= p.Dead.Last.Epoch || info.UpFrom <= info.DownAt || info.Epoch < info.UpFrom {
-		fail("observe-primary-back: osd.%d was not marked down after the window (last read at epoch %d) and up again later: %s", h.Primary, p.Dead.Last.Epoch, text(info))
+	if info.OSD != h.Primary || !info.Up || info.DownAt <= windowEpoch || info.UpFrom <= info.DownAt || info.Epoch < info.UpFrom {
+		fail("observe-primary-back: osd.%d was not marked down after the window (last read at epoch %d) and up again later: %s", h.Primary, windowEpoch, text(info))
 	}
 	if p.AddressAfter == "" || p.AddressAfter == p.AddressBefore || info.Address != p.AddressAfter {
 		fail("observe-primary-back: the restarted osd.%d kept its address %q (now %q, OSDMap %q)", h.Primary, p.AddressBefore, p.AddressAfter, info.Address)

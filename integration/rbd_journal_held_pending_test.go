@@ -240,16 +240,16 @@ type nativeRBDJournalKeepUp struct {
 }
 
 type nativeRBDJournalPrimaryDead struct {
-	OSD       int32                       `json:"osd"`
-	Address   string                      `json:"address"`
-	First     nativeRBDJournalOSDInfo     `json:"first"`
-	Last      nativeRBDJournalOSDInfo     `json:"last"`
-	Objects   []nativeRBDJournalPlacement `json:"objects"`
-	Up        bool                        `json:"up"`
-	Polls     int                         `json:"polls"`
-	FirstUTC  string                      `json:"first_utc"`
-	LastUTC   string                      `json:"last_utc"`
-	ElapsedMS int64                       `json:"elapsed_ms"`
+	OSD       int32                           `json:"osd"`
+	Address   string                          `json:"address"`
+	Samples   []nativeRBDJournalPrimarySample `json:"samples"`
+	ElapsedMS int64                           `json:"elapsed_ms"`
+}
+
+type nativeRBDJournalPrimarySample struct {
+	UTC     string                      `json:"utc"`
+	Info    nativeRBDJournalOSDInfo     `json:"info"`
+	Objects []nativeRBDJournalPlacement `json:"objects"`
 }
 
 // rbdJournalHeldCall is one pending append: its entry, how it is held, the

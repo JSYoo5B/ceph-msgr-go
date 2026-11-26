@@ -236,16 +236,24 @@ func TestRBDJournalObservePrimaryDead(t *testing.T) {
 	}
 	objects := []string{"rbd_header.ab", "journal_data.3.ab.0", "journal.ab"}
 	r, err := rbdJournalObservePrimaryDead(ctx, 0, "v2:10.0.0.10:6802/1200", objects, info(-1), place, 20*time.Millisecond, time.Millisecond)
-	if err != nil || !r.Up || r.Polls < 2 || r.First.Epoch != 31 || r.Last.Epoch != uint32(30+r.Polls) || len(r.Objects) != 3 || r.FirstUTC == "" || r.LastUTC == "" {
+	if err != nil || len(r.Samples) < 2 || r.Samples[0].Info.Epoch != 31 {
 		t.Fatal("primary-dead window differs", r, err)
 	}
-	reads = 0
-	if r, err := rbdJournalObservePrimaryDead(ctx, 0, "v2:10.0.0.10:6802/1200", objects, info(2), place, 20*time.Millisecond, time.Millisecond); err != nil || r.Up {
-		t.Fatal("a window with the primary marked down once reads up", r, err)
+	for i, sample := range r.Samples {
+		if sample.Info.Epoch != uint32(31+i) || len(sample.Objects) != 3 || sample.UTC == "" {
+			t.Fatal("a sample of the window was not kept as read", i, sample)
+		}
 	}
+	// A sample that differs and recovers stays in the receipt.
 	reads = 0
-	if r, err := rbdJournalObservePrimaryDead(ctx, 0, "v2:10.0.0.10:6802/9", objects, info(-1), place, 5*time.Millisecond, time.Millisecond); err != nil || r.Up {
-		t.Fatal("a window at another address reads up", r, err)
+	r, err = rbdJournalObservePrimaryDead(ctx, 0, "v2:10.0.0.10:6802/1200", objects, info(2), place, 20*time.Millisecond, time.Millisecond)
+	if err != nil || len(r.Samples) < 3 || !r.Samples[0].Info.Up || r.Samples[1].Info.Up || !r.Samples[len(r.Samples)-1].Info.Up {
+		t.Fatal("an intermediate down sample was not kept", r, err)
+	}
+	// The sample bound is an error, not a truncation.
+	reads = 0
+	if r, err := rbdJournalObservePrimaryDead(ctx, 0, "v2:10.0.0.10:6802/1200", objects, info(-1), place, time.Hour, 0); err == nil || len(r.Samples) != rbdJournalPrimaryDeadSamples {
+		t.Fatal("a window past its sample bound accepted", len(r.Samples), err)
 	}
 	if _, err := rbdJournalObservePrimaryDead(ctx, -1, "a", objects, info(-1), place, time.Millisecond, time.Millisecond); err == nil {
 		t.Fatal("a window without a primary accepted")

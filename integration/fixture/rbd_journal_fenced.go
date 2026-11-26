@@ -317,60 +317,67 @@ type rbdJournalKeepUp struct {
 	ElapsedMS int64             `json:"elapsed_ms"`
 }
 
-// rbdJournalPrimaryDead is the `observe-primary-dead` read: the PG's
-// primary's OSDMap entry and the followed objects' placements, read
-// repeatedly for rbdJournalPrimaryDeadDwell. Up says the OSDMap listed the
-// OSD up at Address in every read.
+// rbdJournalPrimaryDead is the `observe-primary-dead` read: every sample
+// of the PG's primary's OSDMap entry and the followed objects' placements,
+// read repeatedly for rbdJournalPrimaryDeadDwell. The fixture keeps each
+// sample as it was read and judges none of them; a sample never replaces an
+// earlier one, so a state that changes and recovers within the window stays
+// visible.
 type rbdJournalPrimaryDead struct {
-	OSD       int                   `json:"osd"`
-	Address   string                `json:"address"`
-	First     rbdJournalOSDInfo     `json:"first"`
-	Last      rbdJournalOSDInfo     `json:"last"`
-	Objects   []rbdJournalPlacement `json:"objects"`
-	Up        bool                  `json:"up"`
-	Polls     int                   `json:"polls"`
-	FirstUTC  string                `json:"first_utc"`
-	LastUTC   string                `json:"last_utc"`
-	ElapsedMS int64                 `json:"elapsed_ms"`
+	OSD       int                       `json:"osd"`
+	Address   string                    `json:"address"`
+	Samples   []rbdJournalPrimarySample `json:"samples"`
+	ElapsedMS int64                     `json:"elapsed_ms"`
+}
+
+// rbdJournalPrimarySample is one read of the window: when it was taken, the
+// primary's OSDMap entry and the followed objects' placements.
+type rbdJournalPrimarySample struct {
+	UTC     string                `json:"utc"`
+	Info    rbdJournalOSDInfo     `json:"info"`
+	Objects []rbdJournalPlacement `json:"objects"`
 }
 
 // rbdJournalPrimaryDeadDwell is how long observe-primary-dead keeps
 // reading: several times the 2.2 s and 2.3 s the cluster took to mark the
 // killed primary down from its peers' reports in the primary-restart rows.
-const rbdJournalPrimaryDeadDwell = 10 * time.Second
+// rbdJournalPrimaryDeadSamples bounds the samples one window keeps; a
+// window that would need more is an error, not a truncated receipt.
+const (
+	rbdJournalPrimaryDeadDwell   = 10 * time.Second
+	rbdJournalPrimaryDeadSamples = 64
+)
 
 // rbdJournalObservePrimaryDead reads osd's entry and the objects'
-// placements until the dwell has passed, and stops early only on a read
-// error. It never reads the PG itself: its primary is dead while the
-// OSDMap names it up, so a PG query or object read would wait for it.
+// placements until the dwell has passed, keeping every sample, and stops
+// early only on a read error or at the sample bound. It never reads the PG
+// itself: its primary is dead while the OSDMap names it up, so a PG query or
+// object read would block on it.
 func rbdJournalObservePrimaryDead(ctx context.Context, osd int, address string, objects []string, info func(context.Context, int) (rbdJournalOSDInfo, error),
 	place func(context.Context, string) (rbdJournalPlacement, error), dwell, pause time.Duration) (r rbdJournalPrimaryDead, err error) {
 	started := time.Now()
-	r = rbdJournalPrimaryDead{OSD: osd, Address: address, Objects: []rbdJournalPlacement{}, Up: true}
+	r = rbdJournalPrimaryDead{OSD: osd, Address: address, Samples: []rbdJournalPrimarySample{}}
 	defer func() { r.ElapsedMS = time.Since(started).Milliseconds() }()
 	if osd < 0 || address == "" || len(objects) == 0 {
 		return r, errors.New("invalid primary-dead observation scope")
 	}
 	for deadline := time.Now().Add(dwell); ; {
-		r.Polls++
+		if len(r.Samples) == rbdJournalPrimaryDeadSamples {
+			return r, errors.New("the primary-dead window exceeds its sample bound")
+		}
 		got, err := info(ctx, osd)
 		if err != nil {
 			return r, err
 		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		if r.Polls == 1 {
-			r.First, r.FirstUTC = got, now
-		}
-		r.Last, r.LastUTC = got, now
-		r.Up = r.Up && got.Up && got.Address == address
-		r.Objects = r.Objects[:0]
+		sample := rbdJournalPrimarySample{UTC: time.Now().UTC().Format(time.RFC3339Nano), Info: got, Objects: []rbdJournalPlacement{}}
 		for _, object := range objects {
 			p, err := place(ctx, object)
 			if err != nil {
 				return r, err
 			}
-			r.Objects = append(r.Objects, p)
+			sample.Objects = append(sample.Objects, p)
 		}
+		r.Samples = append(r.Samples, sample)
 		if !time.Now().Before(deadline) {
 			return r, nil
 		}

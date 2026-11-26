@@ -8,9 +8,9 @@ import (
 // rbdJournalBeforeDownSample is a consistent record of one pre-down restart
 // run: the restart sample of rbdJournalHeldPendingSample (P is osd.0, killed
 // at 13:33:50.5 and started at 13:34:10) with P flagged nodown at epoch 30,
-// listed up at its old address through a window from 13:33:51 to 13:34:00 at
-// epoch 30, then marked down at 33 and up from 34 at a new address, with the
-// PG clean again in the interval from 34.
+// listed up at its old address in three samples of a window from 13:33:51 to
+// 13:34:00 at epoch 30, then marked down at 33 and up from 34 at a new
+// address, with the PG clean again in the interval from 34.
 func rbdJournalBeforeDownSample() *rbdJournalLostAppendRecord {
 	r := rbdJournalHeldPendingSample(rbdJournalVariantPrimaryRestart)
 	h, p := r.Held, r.Held.Pending
@@ -27,8 +27,15 @@ func rbdJournalBeforeDownSample() *rbdJournalLostAppendRecord {
 		return nativeRBDJournalOSDInfo{Epoch: epoch, OSD: 0, Up: true, State: state, UpFrom: 12, Address: address, Down: []int32{}}
 	}
 	p.KeepUp = &nativeRBDJournalKeepUp{OSD: 0, Commands: []string{"osd add-nodown 0"}, Before: info(29, p.AddressBefore, false), After: info(30, p.AddressBefore, true)}
-	p.Dead = &nativeRBDJournalPrimaryDead{OSD: 0, Address: p.AddressBefore, First: info(30, p.AddressBefore, true), Last: info(30, p.AddressBefore, true),
-		Objects: slices.Clone(h.Placed.Objects), Up: true, Polls: 19, FirstUTC: "2026-11-23T13:33:51Z", LastUTC: "2026-11-23T13:34:00Z"}
+	p.Dead = &nativeRBDJournalPrimaryDead{OSD: 0, Address: p.AddressBefore}
+	for _, at := range []string{"2026-11-23T13:33:51Z", "2026-11-23T13:33:55.5Z", "2026-11-23T13:34:00Z"} {
+		objects := []nativeRBDJournalPlacement{}
+		for _, o := range h.Placed.Objects {
+			o.Up, o.Acting = slices.Clone(o.Up), slices.Clone(o.Acting)
+			objects = append(objects, o)
+		}
+		p.Dead.Samples = append(p.Dead.Samples, nativeRBDJournalPrimarySample{UTC: at, Info: info(30, p.AddressBefore, true), Objects: objects})
+	}
 	p.AddressDead = p.AddressBefore
 	back := info(36, p.AddressAfter, true)
 	back.DownAt, back.UpFrom = 33, 34
@@ -57,6 +64,7 @@ func TestRBDJournalBeforeDownClaims(t *testing.T) {
 	}
 	type rec = rbdJournalLostAppendRecord
 	p := func(r *rec) *rbdJournalHeldPending { return r.Held.Pending }
+	s := func(r *rec, i int) *nativeRBDJournalPrimarySample { return &r.Held.Pending.Dead.Samples[i] }
 	cases := map[string]struct {
 		stage  string
 		change func(*rec)
@@ -71,23 +79,39 @@ func TestRBDJournalBeforeDownClaims(t *testing.T) {
 		"appends before the flag": {"observe-primary-dead", func(r *rec) { p(r).KeepUp.After.Epoch = 31 }},
 		// The window.
 		"no window read":             {"observe-primary-dead", func(r *rec) { p(r).Dead = nil }},
-		"marked down in the window":  {"observe-primary-dead", func(r *rec) { p(r).Dead.Last.Up, p(r).Dead.Up = false, false }},
-		"a read saw another address": {"observe-primary-dead", func(r *rec) { p(r).Dead.Up = false }},
-		"window too short":           {"observe-primary-dead", func(r *rec) { p(r).Dead.LastUTC = "2026-11-23T13:33:55Z" }},
-		"window before the kill":     {"observe-primary-dead", func(r *rec) { p(r).Dead.FirstUTC = "2026-11-23T13:33:50Z" }},
-		"one read only":              {"observe-primary-dead", func(r *rec) { p(r).Dead.Polls = 1 }},
-		"an OSD down in the window":  {"observe-primary-dead", func(r *rec) { p(r).Dead.Last.Down = []int32{2} }},
-		"PG led by another member":   {"observe-primary-dead", func(r *rec) { p(r).Dead.Objects[1].ActingPrimary = 1 }},
-		"subject rerouted":           {"observe-primary-dead", func(r *rec) { p(r).AddressDead = p(r).AddressAfter }},
-		"a lost read kept":           {"observe-primary-dead", func(r *rec) { r.Held.Lost = &nativeRBDJournalHeldRead{} }},
+		"marked down at the end":     {"observe-primary-dead", func(r *rec) { s(r, 2).Info.Up = false }},
+		"a read saw another address": {"observe-primary-dead", func(r *rec) { s(r, 0).Info.Address = p(r).AddressAfter }},
+		"window too short":           {"observe-primary-dead", func(r *rec) { s(r, 2).UTC = "2026-11-23T13:33:55.6Z" }},
+		"window before the kill":     {"observe-primary-dead", func(r *rec) { s(r, 0).UTC = "2026-11-23T13:33:50Z" }},
+		"samples out of order":       {"observe-primary-dead", func(r *rec) { s(r, 1).UTC = "2026-11-23T13:33:50.9Z" }},
+		"one read only":              {"observe-primary-dead", func(r *rec) { p(r).Dead.Samples = p(r).Dead.Samples[2:] }},
+		"an OSD down at the end":     {"observe-primary-dead", func(r *rec) { s(r, 2).Info.Down = []int32{2} }},
+		"PG led by another member":   {"observe-primary-dead", func(r *rec) { s(r, 2).Objects[1].ActingPrimary = 1 }},
+		"epoch went back":            {"observe-primary-dead", func(r *rec) { s(r, 0).Info.Epoch, s(r, 1).Info.Epoch = 31, 30 }},
+		"another object followed":    {"observe-primary-dead", func(r *rec) { s(r, 1).Objects[2].Object = "journal.cd" }},
+		// Violations in the middle sample only; the last sample has recovered.
+		"nodown lost in the middle":      {"observe-primary-dead", func(r *rec) { s(r, 1).Info.State = []string{"exists", "up"} }},
+		"marked down in the middle":      {"observe-primary-dead", func(r *rec) { s(r, 1).Info.Up = false }},
+		"another OSD down in the middle": {"observe-primary-dead", func(r *rec) { s(r, 1).Info.Down = []int32{2} }},
+		"acting set changed in the middle": {"observe-primary-dead", func(r *rec) {
+			for i := range s(r, 1).Objects {
+				s(r, 1).Objects[i].Acting = []int32{1, 2}
+			}
+		}},
+		"up set changed in the middle": {"observe-primary-dead", func(r *rec) { s(r, 1).Objects[0].Up = []int32{1, 2, 0} }},
+		"subject rerouted":             {"observe-primary-dead", func(r *rec) { p(r).AddressDead = p(r).AddressAfter }},
+		"a lost read kept":             {"observe-primary-dead", func(r *rec) { r.Held.Lost = &nativeRBDJournalHeldRead{} }},
 		// The return.
 		"started within the window": {"observe-restarted", func(r *rec) { p(r).StartedUTC = "2026-11-23T13:33:59Z" }},
 		"down before the window":    {"observe-restarted", func(r *rec) { p(r).Back.OSDInfo.DownAt = 30 }},
-		"up before down":            {"observe-restarted", func(r *rec) { p(r).Back.OSDInfo.UpFrom = 33 }},
-		"no OSD entry after":        {"observe-restarted", func(r *rec) { p(r).Back.OSDInfo = nil }},
-		"address kept":              {"observe-restarted", func(r *rec) { p(r).AddressAfter, p(r).Back.OSDInfo.Address = p(r).AddressBefore, p(r).AddressBefore }},
-		"interval before the boot":  {"observe-restarted", func(r *rec) { p(r).Back.Query.SameIntervalSince = 33; p(r).Back.Query.SamePrimarySince = 33 }},
-		"PG not clean after":        {"observe-restarted", func(r *rec) { p(r).Back.Query.State = "active+recovering" }},
+		"down before the window's highest epoch": {"observe-restarted", func(r *rec) {
+			s(r, 1).Info.Epoch, s(r, 2).Info.Epoch, p(r).Back.OSDInfo.DownAt = 33, 33, 33
+		}},
+		"up before down":           {"observe-restarted", func(r *rec) { p(r).Back.OSDInfo.UpFrom = 33 }},
+		"no OSD entry after":       {"observe-restarted", func(r *rec) { p(r).Back.OSDInfo = nil }},
+		"address kept":             {"observe-restarted", func(r *rec) { p(r).AddressAfter, p(r).Back.OSDInfo.Address = p(r).AddressBefore, p(r).AddressBefore }},
+		"interval before the boot": {"observe-restarted", func(r *rec) { p(r).Back.Query.SameIntervalSince = 33; p(r).Back.Query.SamePrimarySince = 33 }},
+		"PG not clean after":       {"observe-restarted", func(r *rec) { p(r).Back.Query.State = "active+recovering" }},
 		"entry 1 executed": {"observe-restarted", func(r *rec) {
 			v := r.Views["observe-restarted"]
 			v.ObjectSizes[1], v.ObjectSHA256[1] = p(r).Calls[1].BeforeSize+4198, p(r).Calls[1].AppliedSHA256
