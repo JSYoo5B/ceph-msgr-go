@@ -132,8 +132,11 @@ func wipeIDs(keys MgrRotatingKeys) []uint64 {
 // the daemon's MON session must reach that auth epoch.
 //
 // Invalidation, joined from independent observations: a second authorizer
-// of the retained pre-wipe ticket, presented while it is still valid, is
-// refused at the authentication stage; the daemon counts one more
+// of the retained pre-wipe ticket, presented as soon as the daemon holds
+// the raised auth epoch and while the ticket is still valid, is refused as
+// an authorizer whose secret ID is no longer held or whose ticket no held
+// key decrypts, and the client sees the explicit -EACCES; the daemon
+// counts one more
 // invalidation and publishes a nonempty set carrying that invalidation
 // count and the current MON session; that set's keys share no keyed
 // fingerprint with the pre-wipe keys. Secret IDs and MaxVersion may repeat
@@ -378,8 +381,9 @@ func TestCephMgrDaemonRotatingWipeIntegration(t *testing.T) {
 	target := msgr.Address{Type: 2, Nonce: advertised[0].Nonce, Endpoint: advertised[0].Endpoint}
 	// present opens a CLIENT session to the Go listener with authorizer and
 	// returns the listener's record of it: the admitted identity, or the
-	// refusal of the connection from the returned local address.
-	present := func(label string, authorizer *cephx.Authorizer) (MgrPeerIdentity, *MgrListenerRefusal) {
+	// refusal of the connection from the returned local address with the
+	// client's own handshake error.
+	present := func(label string, authorizer *cephx.Authorizer) (MgrPeerIdentity, *MgrListenerRefusal, error) {
 		t.Helper()
 		before := listener.State()
 		dial, stop := context.WithTimeout(ctx, 30*time.Second)
@@ -407,7 +411,7 @@ func TestCephMgrDaemonRotatingWipeIntegration(t *testing.T) {
 						t.Fatal(label, "admitted session not published first", err)
 					}
 					peer.Close()
-					return state.LastAccepted, nil
+					return state.LastAccepted, nil, nil
 				}
 				select {
 				case <-dial.Done():
@@ -424,8 +428,7 @@ func TestCephMgrDaemonRotatingWipeIntegration(t *testing.T) {
 				t.Fatalf("%s: handshake failed (%v) with no listener record: %v", label, err, werr)
 			}
 			if r.Remote == localAddress {
-				t.Logf("%s: client handshake error %v", label, err)
-				return MgrPeerIdentity{}, &r
+				return MgrPeerIdentity{}, &r, err
 			}
 			after = r.Sequence
 		}
@@ -456,7 +459,7 @@ func TestCephMgrDaemonRotatingWipeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id, refusal := present("pre-wipe retained ticket", beforeUse); refusal != nil || id.SecretID != retainedTicket.SecretID {
+	if id, refusal, _ := present("pre-wipe retained ticket", beforeUse); refusal != nil || id.SecretID != retainedTicket.SecretID {
 		t.Fatal("the retained pre-wipe ticket was not admitted before the wipe", refusal, id)
 	}
 	pre := daemon.State()
@@ -519,12 +522,21 @@ func TestCephMgrDaemonRotatingWipeIntegration(t *testing.T) {
 		t.Fatal("the retained ticket expired before it could be presented; a refusal would not be attributable to the wipe")
 	}
 	left := time.Until(retainedTicket.Expires).Round(time.Millisecond)
-	if id, refusal := present("post-wipe retained ticket", afterUse); refusal == nil {
+	// Only the authorizer refusals a replaced key set can cause qualify: the
+	// secret ID is no longer held, or a held key of that ID does not
+	// decrypt the ticket. Another authentication-stage end (a mode
+	// refusal, a challenge mismatch, a timeout) is not this observation,
+	// and the client must see the explicit -EACCES the listener wrote.
+	var authorizer *cephx.AuthorizerError
+	var rejection *AuthenticationError
+	if id, refusal, clientErr := present("post-wipe retained ticket", afterUse); refusal == nil {
 		t.Fatalf("pre-wipe MGR ticket (secret ID %d) admitted after the wipe: %+v", retainedTicket.SecretID, id)
-	} else if !refusal.Refused || refusal.Stage != "authentication" {
-		t.Fatalf("pre-wipe MGR ticket ended without an authentication refusal: %+v", refusal)
+	} else if !refusal.Refused || refusal.Stage != "authentication" || !errors.As(refusal.Err, &authorizer) ||
+		(authorizer.Reason != cephx.RefusedUnknownSecret && authorizer.Reason != cephx.RefusedTicket) ||
+		!errors.As(clientErr, &rejection) || rejection.Code != -13 {
+		t.Fatalf("pre-wipe MGR ticket was not refused for its key: listener %+v, client %v", refusal, clientErr)
 	} else {
-		t.Logf("post-wipe: the daemon saw auth epoch %d %v after the wipe was sent; the retained ticket (secret ID %d, %v of validity left) was refused at %s: %s", daemon.State().Monitor.AuthEpoch, seen, retainedTicket.SecretID, left, refusal.Stage, refusal.Reason)
+		t.Logf("post-wipe: the daemon saw auth epoch %d %v after the wipe was sent; the retained ticket (secret ID %d, %v of validity left) was refused at %s: %s; the client saw method %d code %d", daemon.State().Monitor.AuthEpoch, seen, retainedTicket.SecretID, left, refusal.Stage, refusal.Reason, rejection.Method, rejection.Code)
 	}
 	if reply == nil {
 		r := <-submitted
@@ -592,7 +604,7 @@ func TestCephMgrDaemonRotatingWipeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id, refusal := present("post-wipe fresh ticket", freshUse); refusal != nil {
+	if id, refusal, _ := present("post-wipe fresh ticket", freshUse); refusal != nil {
 		t.Fatalf("a MGR ticket issued after the wipe was refused: %+v", refusal)
 	} else if !slices.Contains(wipeIDs(daemon.State().RotatingKeys), id.SecretID) {
 		t.Fatal("fresh ticket secret ID", id.SecretID, wipeIDs(daemon.State().RotatingKeys))
