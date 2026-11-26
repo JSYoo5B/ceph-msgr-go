@@ -117,8 +117,9 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	// The erasure-hold mode is the replica hold on an erasure-coded journal
 	// pool: its PG follows journal object 0 alone, and the held op records
 	// no shard commit.
-	erasure := h.Mode == rbdJournalVariantErasureHold
-	replica, change, dead := h.Mode == rbdJournalVariantReplicaHold || erasure, h.Mode == rbdJournalVariantHeldPrimaryChange, h.Mode == rbdJournalVariantDeadPrimary
+	erasure := rbdJournalErasure(h.Mode)
+	mode := rbdJournalHeldMode(h.Mode)
+	replica, change, dead := mode == rbdJournalVariantReplicaHold, mode == rbdJournalVariantHeldPrimaryChange, mode == rbdJournalVariantDeadPrimary
 	followed, dataObject := []string{"rbd_header." + r.ImageID, e.ObjectName, r.JournalHeader}, 1
 	pool, poolID := r.Pool, r.PoolID
 	if erasure {
@@ -341,7 +342,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	}
 	replicas := slices.DeleteFunc(members(acting), func(o int32) bool { return o == h.Primary })
 	waiting := fmt.Sprintf("waiting for subops from %d,%d", replicas[0], replicas[1])
-	if erasure {
+	if erasure && !change {
 		// Started on P, whose erasure-coded write pipeline answers once
 		// every shard committed. P writes its own shard with the client op,
 		// which records that sub-write's start and commit and nothing of
@@ -400,6 +401,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		}
 	}
 
+	appliedAfterLoss := true
 	switch {
 	case replica:
 		// Outcome: one known answer 0 on disk to the listed transaction.
@@ -448,23 +450,37 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		// Interval: P down, the PG active again in a newer interval led by
 		// one of the two others, without P.
 		lost := h.Lost
-		if lost == nil || len(lost.Objects) != 3 || lost.Query == nil {
+		if lost == nil || len(lost.Objects) != len(followed) || lost.Query == nil {
 			fail("observe-primary-lost: the fixture's read is missing: %s", text(lost))
 			return problems
 		}
 		after := lost.Objects[0].Acting
-		if !lost.Settled || !slices.Contains(lost.Down, h.Primary) || !slices.Equal(members(after), replicas) {
+		live := slices.DeleteFunc(members(after), rbdJournalMissingShard)
+		if !lost.Settled || !slices.Contains(lost.Down, h.Primary) || !slices.Equal(live, replicas) {
 			fail("observe-primary-lost: osd.%d is not down with the PG on the two others: %s", h.Primary, text(lost))
 		} else {
-			placedOn("observe-primary-lost", lost, after, after[0])
+			replacement := lost.Objects[0].ActingPrimary
+			placedOn("observe-primary-lost", lost, after, replacement)
+			if !slices.Contains(live, replacement) || erasure && !rbdJournalECSlots(acting, after, h.Primary, false) {
+				fail("observe-primary-lost: the replacement primary or shard slots differ: %s", text(lost.Objects[0]))
+			}
 			q := lost.Query
+			if erasure && (q.Shard == nil || int(*q.Shard) != slices.Index(after, replacement)) {
+				fail("observe-primary-lost: query primary shard does not name the new primary: %s", text(q))
+			}
 			if !strings.HasPrefix(q.State, "active") || !slices.Equal(q.Acting, after) || placedQuery != nil && (q.SameIntervalSince <= placedQuery.SameIntervalSince ||
 				q.SamePrimarySince <= placedQuery.SamePrimarySince) || q.SameIntervalSince > q.Epoch {
 				fail("observe-primary-lost: the PG is not active in a newer interval with a new primary: %s, before %s", text(q), text(placedQuery))
 			}
 		}
-		// Journal: the entry survived on the member that committed it.
-		entryAt("observe-recorded", recorded)
+		// The EC primary only witnesses its own shard commit. Native
+		// readback decides whether the transaction survived or rolled back.
+		if erasure && recorded.EntrySHA256 == nil {
+			appliedAfterLoss = false
+			absent("observe-recorded", recorded)
+		} else {
+			entryAt("observe-recorded", recorded)
+		}
 		lockRecord("observe-recorded", recorded, false)
 		unmoved("observe-recorded", recorded)
 		if reached < 2 {
@@ -472,15 +488,20 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		}
 	case change:
 		n := h.PrimaryChange
-		if n == nil || len(n.Objects) != 3 || n.Out != h.Primary || !slices.Equal(n.Commands, []string{fmt.Sprintf("osd out %d", h.Primary)}) {
+		if n == nil || len(n.Objects) != len(followed) || n.Out != h.Primary || !slices.Equal(n.Commands, []string{fmt.Sprintf("osd out %d", h.Primary)}) {
 			fail("change-primary: not one `osd out` of the primary osd.%d: %s", h.Primary, text(n))
 			return problems
 		}
 		for _, m := range n.Objects {
 			a := m.After
 			rest := slices.DeleteFunc(members(m.Before.Acting), func(osd int32) bool { return osd == n.Out })
-			if !m.Moved || m.Before.ActingPrimary != h.Primary || a.PGID != pl.PGID || len(a.Up) != 2 || !slices.Equal(members(a.Up), rest) ||
-				!slices.Equal(a.Acting, append(slices.Clone(a.Up), n.Out)) || a.ActingPrimary != a.Up[0] || a.Epoch >= h.NamedEpoch || m.Before.Epoch < h.SentAtEpoch {
+			shape := len(a.Up) == 2 && slices.Equal(members(a.Up), rest) &&
+				slices.Equal(a.Acting, append(slices.Clone(a.Up), n.Out)) && a.ActingPrimary == a.Up[0]
+			if erasure {
+				shape = rbdJournalECSlots(m.Before.Acting, a.Up, n.Out, false) &&
+					rbdJournalECSlots(m.Before.Acting, a.Acting, n.Out, true) && slices.Contains(rest, a.ActingPrimary)
+			}
+			if !m.Moved || m.Before.ActingPrimary != h.Primary || a.PGID != pl.PGID || !shape || a.Epoch >= h.NamedEpoch || m.Before.Epoch < h.SentAtEpoch {
 				fail("change-primary: %s did not move to another member before the named epoch %d: %s", m.Object, h.NamedEpoch, text(m))
 			}
 		}
@@ -513,12 +534,12 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		if len(before) != 1 || before[0].OSD != int(h.Primary) || before[0].Transaction != op.Transaction || before[0].Description != op.Description || len(after) != 0 {
 			fail("advance-map: the old primary osd.%d did not list the held append once before the advance and none after: before %s, after %s", h.Primary, text(before), text(after))
 		}
-		if a.Pool != r.Pool || a.EpochBefore <= h.SentAtEpoch || a.EpochBefore >= h.NamedEpoch || a.EpochAfter < h.NamedEpoch || a.EpochAfter < a.EpochTarget || a.FlagFinally ||
+		if a.Pool != pool || a.EpochBefore <= h.SentAtEpoch || a.EpochBefore >= h.NamedEpoch || a.EpochAfter < h.NamedEpoch || a.EpochAfter < a.EpochTarget || a.FlagFinally ||
 			len(a.Commands) == 0 || len(a.Commands) != len(a.Epochs) {
 			fail("advance-map: the epoch did not go from after the change past the named epoch %d with the pool flag clear: %s", h.NamedEpoch, text(a))
 		}
 		for i, command := range a.Commands {
-			if want := fmt.Sprintf("osd pool set %s %s %t", r.Pool, a.Flag, i%2 == 0); command != want || a.Flag != "nodeep-scrub" {
+			if want := fmt.Sprintf("osd pool set %s %s %t", pool, a.Flag, i%2 == 0); command != want || a.Flag != "nodeep-scrub" {
 				fail("advance-map: command %d is %q, want %q", i, command, want)
 			}
 		}
@@ -529,11 +550,11 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 			fail("change-primary: the PG has no acting set after the change: %s", text(n.Objects[0]))
 			return problems
 		}
-		if st == nil || len(st.Objects) != 3 || st.Query == nil {
+		if st == nil || len(st.Objects) != len(followed) || st.Query == nil {
 			fail("observe-settled: the fixture's read is missing: %s", text(st))
 			return problems
 		}
-		placedOn("observe-settled", st, newActing, newActing[0])
+		placedOn("observe-settled", st, newActing, n.Objects[0].After.ActingPrimary)
 		if q := st.Query; placedQuery != nil && (q.SameIntervalSince <= placedQuery.SameIntervalSince || q.SamePrimarySince <= placedQuery.SamePrimarySince ||
 			!slices.Equal(q.Acting, newActing) || !strings.HasPrefix(q.State, "active")) || len(st.Down) != 0 {
 			fail("observe-settled: the PG is not active in a newer interval led by the new primary: %s", text(st.Query))
@@ -554,11 +575,15 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	// The handoff after a change or death of the primary.
 	if change || dead {
 		x := h.Reconnect
-		if x == nil || x.Class != "applied" || x.Code != 0 || x.Invocations != 1 || h.HandoffPrimary == h.Primary || h.LockerAddress == "" || h.WatcherAddress == "" {
+		if x == nil || x.Class != "applied" || x.Code != 0 || x.Invocations != 1 || h.HandoffPrimary < 0 || (!erasure || dead) && h.HandoffPrimary == h.Primary || h.LockerAddress == "" || h.WatcherAddress == "" {
 			fail("handoff: the watch was not reattached on a new primary with the lock record read there: %s (primary osd.%d, lock %q, watch %q)", text(x), h.HandoffPrimary, h.LockerAddress, h.WatcherAddress)
 		}
-		if r.DialsBeforeClose == nil || *r.DialsBeforeClose != 1 || r.DialsTotal == nil || *r.DialsTotal != 2 || g.Connections != 2 || h.AppendConnection != 1 {
-			fail("transmission: not one subject connection to the old primary and one to the new: gate %s, dials before close %s, in total %s", text(g), text(r.DialsBeforeClose), text(r.DialsTotal))
+		before := 1
+		if erasure && h.HeaderPrimary != h.Primary {
+			before++
+		}
+		if r.DialsBeforeClose == nil || *r.DialsBeforeClose != before || r.DialsTotal == nil || *r.DialsTotal != before+1 || g.Connections != before+1 || h.AppendConnection != before {
+			fail("transmission: want %d initial subject connections and one after handoff: gate %s, dials before close %s, in total %s", before, text(g), text(r.DialsBeforeClose), text(r.DialsTotal))
 		}
 	} else if erasure {
 		// One connection to the header's primary and, when the journal
@@ -590,7 +615,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	if !replay.LockFree || replay.SubjectWatcher {
 		fail("replay: the lock is held or the subject's watch is listed after the replay")
 	}
-	if change {
+	if change || !appliedAfterLoss {
 		absent("replay", replay)
 		inspect("replay", replay, 0)
 		if replay.ImageHeadSHA256 != r.ExpectedHeadBefore || !reflect.DeepEqual(replay.ImageCommit, setup.ImageCommit) || replay.LastTag.TID != e.Tag+1 || replay.NextTag != e.Tag+2 {

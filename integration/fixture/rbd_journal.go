@@ -227,11 +227,11 @@ func rbdJournalActionsFor(p profile) []string {
 		return rbdJournalForcedBreakPendingActions
 	case p.admits(capRBDJournalReplicaHold):
 		return rbdJournalReplicaHoldActions
-	case p.admits(capRBDJournalHeldPrimaryChange):
+	case p.admits(capRBDJournalHeldPrimaryChange) || p.admits(capRBDJournalErasureHeldPrimaryChange):
 		return rbdJournalHeldPrimaryChangeActions
-	case p.admits(capRBDJournalDeadPrimary):
+	case p.admits(capRBDJournalDeadPrimary) || p.admits(capRBDJournalErasureDeadPrimary):
 		return rbdJournalDeadPrimaryActions
-	case p.admits(capRBDJournalPendingHold):
+	case p.admits(capRBDJournalPendingHold) || p.admits(capRBDJournalErasurePendingHold):
 		return rbdJournalPendingHoldActions
 	case p.admits(capRBDJournalErasureHold):
 		return rbdJournalErasureHoldActions
@@ -295,6 +295,25 @@ func (p rbdJournalPlacement) movedFrom(before rbdJournalPlacement, out int) bool
 		slices.Equal(p.Acting, append(slices.Clone(p.Up), out)) && p.UpPrimary == p.Up[0] && p.ActingPrimary == p.Up[0]
 }
 
+func (p rbdJournalPlacement) erasureMovedFrom(before rbdJournalPlacement, out int) bool {
+	if p.Epoch <= before.Epoch || p.Pool != before.Pool || p.PoolID != before.PoolID || p.Object != before.Object ||
+		p.PGID != before.PGID || p.ActingPrimary == out || !slices.Contains(before.Acting, p.ActingPrimary) ||
+		len(p.Up) != len(before.Acting) || len(p.Acting) != len(before.Acting) {
+		return false
+	}
+	for i, osd := range before.Acting {
+		if osd == out {
+			if p.Up[i] != -1 && p.Up[i] != 0x7fffffff ||
+				p.Acting[i] != out && p.Acting[i] != -1 && p.Acting[i] != 0x7fffffff {
+				return false
+			}
+		} else if p.Up[i] != osd || p.Acting[i] != osd {
+			return false
+		}
+	}
+	return true
+}
+
 // rbdJournalPrimaryMove is one object's placement before and after the
 // primary was marked out.
 type rbdJournalPrimaryMove struct {
@@ -323,6 +342,7 @@ type rbdJournalPrimaryOps struct {
 	marking func(osd int) error
 	bound   time.Duration
 	pause   time.Duration
+	erasure bool
 }
 
 // rbdJournalChangePrimary moves the acting primary of the objects' PG by
@@ -369,7 +389,12 @@ func rbdJournalChangePrimary(ctx context.Context, pool string, objects []string,
 			if err != nil {
 				return r, err
 			}
-			m.After, m.Moved = after, after.movedFrom(m.Before, osd)
+			m.After = after
+			if ops.erasure {
+				m.Moved = after.erasureMovedFrom(m.Before, osd)
+			} else {
+				m.Moved = after.movedFrom(m.Before, osd)
+			}
 			moved = moved && m.Moved
 		}
 		if moved {
@@ -1803,7 +1828,12 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 		if x.journalImageID == "" || x.poolID < 0 {
 			return c.rbdBaseFinish(m, errors.New("the journaling image is unknown"))
 		}
-		change, err := rbdJournalChangePrimary(ctx, x.plan.Pool, rbdJournalPrimaryObjects(x.poolID, x.journalImageID), c.rbdJournalPrimaryOps())
+		pool, objects := x.plan.Pool, rbdJournalPrimaryObjects(x.poolID, x.journalImageID)
+		ops := c.rbdJournalPrimaryOps()
+		if c.profile.admits(capRBDJournalErasureHeldPrimaryChange) {
+			pool, objects, ops.erasure = x.journalPlan.JournalPool, objects[1:2], true
+		}
+		change, err := rbdJournalChangePrimary(ctx, pool, objects, ops)
 		result["primary_change"] = change
 		if err != nil {
 			return c.rbdBaseFinish(m, err)
@@ -1818,8 +1848,12 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	if action == "advance-map" {
 		// The fixture's own administrative commands only; the Go test's
 		// observations follow as their own actions.
-		ops := c.rbdLockAdvanceOps(x.plan.Pool)
-		if c.profile.admits(capRBDJournalHeldPrimaryChange) {
+		pool := x.plan.Pool
+		if c.profile.admits(capRBDJournalErasureHeldPrimaryChange) {
+			pool = x.journalPlan.JournalPool
+		}
+		ops := c.rbdLockAdvanceOps(pool)
+		if c.profile.admits(capRBDJournalHeldPrimaryChange) || c.profile.admits(capRBDJournalErasureHeldPrimaryChange) {
 			// On three OSDs the samples are the old primary's, which holds
 			// the append (rbd_journal_held.go).
 			if x.journalHeldPrimary < 0 || len(x.osdsMarkedOut) != 1 || x.osdsMarkedOut[0] != x.journalHeldPrimary {
@@ -1828,7 +1862,7 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 			held := x.journalHeldPrimary
 			ops.osds = func(context.Context) ([]int, error) { return []int{held}, nil }
 		}
-		advance, err := rbdLockAdvanceMap(ctx, x.plan.Pool, ops)
+		advance, err := rbdLockAdvanceMap(ctx, pool, ops)
 		result["advance"] = advance
 		return c.rbdBaseFinish(m, err)
 	}
@@ -1911,6 +1945,9 @@ var _ = collectDiagnosticFiles(
 	"rbd-journal-primary-change-results.json",
 	"rbd-journal-primary-restart-outcome.json",
 	"rbd-journal-primary-restart-results.json",
+	"rbd-journal-erasure-dead-primary-results.json",
+	"rbd-journal-erasure-held-primary-change-results.json",
+	"rbd-journal-erasure-pending-hold-results.json",
 	"rbd-journal-produce.json",
 	"rbd-journal-replay.json",
 	"rbd-journal-replica-hold-outcome.json",

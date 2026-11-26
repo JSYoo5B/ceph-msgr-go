@@ -114,6 +114,26 @@ var capRBDJournalErasureHold = defineExclusiveCapability(fixtureRBD, "rbd-journa
 	"run one test alone on a fresh three-OSD RBD fixture whose journal data objects are in an erasure-coded pool, with the journal sequence whose append is held for a paused shard's commit",
 	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
 
+var capRBDJournalErasureDeadPrimary = defineExclusiveCapability(fixtureRBD, "rbd-journal-erasure-dead-primary",
+	"run one isolated erasure-coded journal test that kills the primary with an append still pending",
+	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
+
+var capRBDJournalErasureHeldPrimaryChange = defineExclusiveCapability(fixtureRBD, "rbd-journal-erasure-held-primary-change",
+	"run one isolated erasure-coded journal test that moves the data PG primary while an append waits for an OSDMap",
+	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
+
+var capRBDJournalErasurePendingHold = defineExclusiveCapability(fixtureRBD, "rbd-journal-erasure-pending-hold",
+	"run one isolated erasure-coded journal test that holds three appends during a shard pause",
+	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
+
+func (p profile) rbdJournalErasureFault() bool {
+	return p.declares(capRBDJournalErasureDeadPrimary) || p.declares(capRBDJournalErasureHeldPrimaryChange) || p.declares(capRBDJournalErasurePendingHold)
+}
+
+func (p profile) rbdJournalErasure() bool {
+	return p.declares(capRBDJournalErasureHold) || p.rbdJournalErasureFault()
+}
+
 // rbdJournalErasureK and rbdJournalErasureM are the erasure-coded journal
 // pool's data and coding shards: all three OSDs hold one shard each.
 const (
@@ -139,7 +159,7 @@ var (
 // the three-OSD topology.
 func (p profile) rbdJournalThreeOSD() bool {
 	return p.declares(capRBDJournalPrimaryChange) || p.declares(capRBDJournalReplicaHold) || p.declares(capRBDJournalHeldPrimaryChange) || p.declares(capRBDJournalDeadPrimary) ||
-		p.declares(capRBDJournalPendingHold) || p.declares(capRBDJournalPrimaryRestart) || p.declares(capRBDJournalErasureHold)
+		p.declares(capRBDJournalPendingHold) || p.declares(capRBDJournalPrimaryRestart) || p.rbdJournalErasure()
 }
 
 // rbdJournalHeldAdmin names the fixture's own read-only actions of the
@@ -606,10 +626,10 @@ func (c *fixtureCluster) rbdJournalHeldControl(ctx context.Context, action strin
 func rbdJournalHeldAwaited(p profile, poolID int64, imageID string) []rbdJournalHeldAwait {
 	object := func(n int) string { return fmt.Sprintf("journal_data.%d.%s.%d", poolID, imageID, n) }
 	switch {
-	case p.admits(capRBDJournalPendingHold):
+	case p.admits(capRBDJournalPendingHold) || p.admits(capRBDJournalErasurePendingHold):
 		return []rbdJournalHeldAwait{{object(0), true}, {object(1), true}, {object(2), true}}
 	case p.admits(capRBDJournalPrimaryRestart):
 		return []rbdJournalHeldAwait{{object(0), true}, {object(1), false}}
 	}
-	return []rbdJournalHeldAwait{{object(0), !p.admits(capRBDJournalHeldPrimaryChange)}}
+	return []rbdJournalHeldAwait{{object(0), !(p.admits(capRBDJournalHeldPrimaryChange) || p.admits(capRBDJournalErasureHeldPrimaryChange))}}
 }

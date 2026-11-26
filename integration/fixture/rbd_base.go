@@ -713,13 +713,18 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 		if err := c.prepareRBDGroupPool(ctx, ceph.PoolConfig{PGNum: pgs, Replicas: topology.poolSize, MinSize: topology.poolMinSize, Application: "rbd", NoHashPSPool: true}); err != nil {
 			return err
 		}
-	} else if p.admits(capRBDJournalErasureHold) {
+	} else if p.rbdJournalErasure() {
 		// The erasure-coded journal pool of the erasure-hold sequence
 		// (rbd_journal_held.go), created as the second owned pool: k=2,
 		// m=1 over the three OSDs with overwrites, which journal appends
 		// need (osd/osd_types.h requires_aligned_append at rbdBaseSource),
 		// and one PG.
-		if err := c.prepareRBDGroupPool(ctx, ceph.PoolConfig{PGNum: pgs, Application: "rbd", NoHashPSPool: true,
+		minSize := 0
+		if p.rbdJournalErasureFault() {
+			// The degraded readback requires the two remaining shards.
+			minSize = rbdJournalErasureK
+		}
+		if err := c.prepareRBDGroupPool(ctx, ceph.PoolConfig{PGNum: pgs, MinSize: minSize, Application: "rbd", NoHashPSPool: true,
 			ErasureCode: &ceph.ErasureCodeConfig{K: rbdJournalErasureK, M: rbdJournalErasureM, AllowOverwrites: true}}); err != nil {
 			return err
 		}

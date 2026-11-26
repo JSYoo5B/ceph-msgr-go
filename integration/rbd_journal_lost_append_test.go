@@ -873,7 +873,7 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	primaryChange, ownerLoss, forced := variant == rbdJournalVariantPrimaryChange, variant == rbdJournalVariantOwnerLoss, variant == rbdJournalVariantForcedBreak
 	forcedPending := variant == rbdJournalVariantForcedBreakPending
 	inflight, trim := variant == rbdJournalVariantForcedBreakInflight, variant == rbdJournalVariantTrim
-	erasure := variant == rbdJournalVariantErasureHold
+	erasure := rbdJournalErasure(variant)
 	held := variant == rbdJournalVariantReplicaHold || variant == rbdJournalVariantHeldPrimaryChange || variant == rbdJournalVariantDeadPrimary || rbdJournalHeldPendingMode(variant) || erasure
 	consumer := variant == rbdJournalVariantConsumer
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
@@ -925,7 +925,7 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	defer cancel()
 	started := time.Now()
 	results, outcomeFile := "rbd-journal-lost-append-results.json", "rbd-journal-lost-append-outcome.json"
-	switch variant {
+	switch rbdJournalHeldMode(variant) {
 	case rbdJournalVariantPrimaryChange:
 		results, outcomeFile = "rbd-journal-primary-change-results.json", "rbd-journal-primary-change-outcome.json"
 	case rbdJournalVariantOwnerLoss:
