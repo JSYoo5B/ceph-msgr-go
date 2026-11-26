@@ -323,7 +323,7 @@ func runCopyErasureChunkLoss(t *testing.T, width erasureWidth, name string) {
 					mu.Unlock()
 				})
 				if lost == "destination-before-commit" {
-					copyErasureHeldCommitLoss(t, ctx, pools, recovery, facts, width, limit, cell, &receipt)
+					copyErasureHeldCommitLoss(t, ctx, pools, recovery, facts, width, limit, cell, &receipt, 0)
 					return
 				}
 				copyErasureChunkLoss(t, ctx, pools, recovery, facts, limit, cell, &receipt)
@@ -469,15 +469,16 @@ func TestCopyFromErasureSourceJudgements(t *testing.T) {
 	}
 }
 
-// sourceBesides gives the source a fresh name, when it needs one, whose
-// primary is none of avoid, and returns that primary.
-func (r *copyPrimaryChangeRun) sourceBesides(avoid ...int32) int32 {
+// sourceWhere gives the source a fresh name, when the current placement
+// fails ok, whose placement passes it, and returns that source's primary;
+// want says what ok requires.
+func (r *copyPrimaryChangeRun) sourceWhere(want string, ok func(osdFixtureOracle) bool) int32 {
 	t, ctx := r.t, r.ctx
 	t.Helper()
 	base := r.source
-	for i := 0; slices.Contains(avoid, r.srcRoute.ID); i++ {
+	for i := 0; !ok(r.srcRoute); i++ {
 		if i == 64 {
-			t.Fatalf("no fresh source name in 64 has a primary other than %v", avoid)
+			t.Fatalf("no fresh source name in 64 has %s", want)
 		}
 		name := fmt.Sprintf("%s-%d", base, i)
 		route := poolPlace(t, ctx, 1, name, "")
@@ -486,6 +487,17 @@ func (r *copyPrimaryChangeRun) sourceBesides(avoid ...int32) int32 {
 		}
 	}
 	return r.srcRoute.ID
+}
+
+// heldCommitSource says whether a source placement suits the held final
+// transaction: its primary is neither the destination primary nor the
+// frozen OSD, and, for an erasure-coded source of k data shards, the frozen
+// OSD holds none of them.
+func heldCommitSource(src osdFixtureOracle, primary, frozen int32, k int) bool {
+	if src.ID == primary || src.ID == frozen || src.ID != src.PrimaryID {
+		return false
+	}
+	return k == 0 || len(src.Acting) > k && !slices.Contains(src.Acting[:k], frozen)
 }
 
 // blockerObject names an object of the destination's PG, on its placement,
@@ -579,15 +591,28 @@ func checkCommitHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot,
 // locally in the call that issues it (ReplicatedBackend.cc:551-640), is held
 // in BlueStore instead (osd_copyfrom_precommit_test.go). Not verified: a loss
 // of a replica in this interval.
-func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, facts erasureFacts, width erasureWidth, limit int, cell copyChunkLossCell, receipt *copyErasureLossReceipt) {
+//
+// sourceK is zero for a replicated source and the source pool's k for an
+// erasure-coded one. The source primary reads the extents a copy-get asks
+// for from the data shards that hold them and no others: the wanted shards
+// come from the read's extent (get_min_want_to_read_shards,
+// src/osd/ECCommon.cc:345-352), and with every shard available
+// minimum_to_decode needs only those (get_min_avail_to_read_shards,
+// ECCommon.cc:210-260; fast_read is off on the owned pools). Every chunk of
+// the copy spans more than one stripe, so it reads all k data shards. The
+// frozen OSD must therefore hold no data shard of the source PG, or the
+// source read itself would stall on it. It returns the run and the hold.
+func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, facts erasureFacts, width erasureWidth, limit int, cell copyChunkLossCell, receipt *copyErasureLossReceipt, sourceK int) (*copyPrimaryChangeRun, *copyChunkHold) {
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("echeld-%d", cell.code))
 	facts.checkPlacement(t, r.dstRoute)
 	r.chunkMax = limit
 	primary, frozen := r.dstRoute.ID, r.dstRoute.Acting[1]
 	held := &copyHeldCommit{Frozen: frozen, BlockerShard: 1}
 	receipt.Held, receipt.Lost, receipt.Shard = held, primary, int(r.dstRoute.Shard)
-	receipt.SourcePrimary, receipt.Primary = r.sourceBesides(primary, frozen), primary
-	r.lowerCopyChunk(&receipt.ChunkRestore, nil)
+	receipt.SourcePrimary = r.sourceWhere(fmt.Sprintf("a primary other than osd.%d and osd.%d, and none of its first %d shards on osd.%d", primary, frozen, sourceK, frozen),
+		func(src osdFixtureOracle) bool { return heldCommitSource(src, primary, frozen, sourceK) })
+	receipt.Primary = primary
+	r.lowerCopyChunk(&receipt.ChunkRestore, &receipt.ChunkReadback)
 	seeded := r.seedDestination()
 
 	// The blocker: one stripe, seeded before the interval change so that no
@@ -734,4 +759,5 @@ func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPoo
 		}
 		receipt.TempAfter = append(receipt.TempAfter, osd)
 	}
+	return r, h
 }
