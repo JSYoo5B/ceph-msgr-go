@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 // the kinds) from the daemon's own container log, never through the Go
 // library. Cookies are "0" or labels equal exactly when the raw values are.
 type handshakeEvent struct {
+	Line         int    `json:"line"`
 	Time         string `json:"time"`
 	Process      int    `json:"process"`
 	Endpoint     int    `json:"endpoint"`
@@ -56,7 +58,7 @@ func (e handshakeEvent) String() string {
 		s += " full=" + e.Full
 	case e.Kind == "ready":
 		s += fmt.Sprintf(" entity=%s cookies=%s/%s", e.Entity, e.Cookie, e.PeerCookie)
-	case e.Kind == "message_sent":
+	case strings.HasPrefix(e.Kind, "message_"):
 		s += fmt.Sprintf(" %s seq=%s", e.Message, e.Seq)
 	}
 	return s
@@ -65,11 +67,15 @@ func (e handshakeEvent) String() string {
 // at parses the log timestamp.
 func (e handshakeEvent) at(t *testing.T) time.Time {
 	t.Helper()
-	at, err := time.Parse("2006-01-02T15:04:05.999999-0700", e.Time)
+	at, err := e.stamp()
 	if err != nil {
 		t.Fatal("handshake event time", e.Time, err)
 	}
 	return at
+}
+
+func (e handshakeEvent) stamp() (time.Time, error) {
+	return time.Parse("2006-01-02T15:04:05.999999-0700", e.Time)
 }
 
 // handshakeProcess is one daemon start banner of the container log.
@@ -85,6 +91,25 @@ type handshakeLog struct {
 	Endpoints []string           `json:"endpoints"`
 	Processes []handshakeProcess `json:"processes"`
 	Events    []handshakeEvent   `json:"events"`
+	// Unattributed are events of connections that never named a peer; an
+	// absence verdict must not count one of its kinds there as absent.
+	Unattributed []handshakeEvent `json:"unattributed"`
+}
+
+// absent fails the test unless no event of kinds is attributed to the
+// requested endpoints, and calls the verdict inconclusive when one is
+// among the unattributed events. It returns the unattributed count.
+func (l handshakeLog) absent(t *testing.T, label string, kinds ...string) int {
+	t.Helper()
+	if found := l.kinds(kinds...); len(found) != 0 {
+		t.Fatalf("%s: %s logged %v", label, l.Daemon, found)
+	}
+	for _, e := range l.Unattributed {
+		if slices.Contains(kinds, e.Kind) {
+			t.Fatalf("%s: inconclusive, %s logged %v on a connection whose peer it never named", label, l.Daemon, e)
+		}
+	}
+	return len(l.Unattributed)
 }
 
 // kinds returns the events of the given kinds.

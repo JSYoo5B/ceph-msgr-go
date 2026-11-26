@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -52,6 +53,7 @@ var (
 	handshakeReady     = regexp.MustCompile(`^ entity=(\S+) client_cookie=([0-9a-f]+) server_cookie=([0-9a-f]+) in_seq=(\d+) out_seq=(\d+)$`)
 	handshakeFull      = regexp.MustCompile(`^ received session reset full=([01])$`)
 	handshakeSent      = regexp.MustCompile(`^ sending message m=0x[0-9a-f]+ seq=(\d+) ([a-z_]+)\(`)
+	handshakeReceived  = regexp.MustCompile(`^ received message m=0x[0-9a-f]+ seq=(\d+) from=\S+ type=\d+ ([a-z_]+)\(`)
 )
 
 // mgrHandshakeEvent is one messenger event of a stock daemon's log on a
@@ -78,7 +80,16 @@ var (
 //   - ident_mismatch: the server identified with addresses that do not
 //     include the target
 //   - socket_failure_injected: ms_inject_socket_failures shut the socket
-//   - message_sent: a message written, Message its type name and Seq
+//   - message_write_attempt: write_message logged a message before
+//     _try_send, so it was not necessarily transmitted; Message is its type
+//     name and Seq its sequence
+//   - message_received: handle_message decoded a message from the peer,
+//     the delivery evidence for the sender's attempt
+//
+// Every *_sent kind and message_write_attempt is logged before its write
+// (WRITE or _try_send) and is an attempt; only the peer's matching
+// *_received kind shows that the frame arrived. reset_sent and the retry
+// and reconnect_ok decisions are likewise decisions to write.
 //
 // Cookies are never published: ClientCookie, ServerCookie (the connection
 // prefix's c_cookie and s_cookie) and Cookie (an identification or
@@ -86,9 +97,10 @@ var (
 // label "k<N>" that is equal exactly when the raw values are equal within
 // one receipt.
 type mgrHandshakeEvent struct {
+	Line         int    `json:"line"`
 	Time         string `json:"time"`
 	Process      int    `json:"process"`
-	Endpoint     int    `json:"endpoint"`
+	Endpoint     int    `json:"endpoint"` // -1 when unattributed
 	Conn         string `json:"conn"`
 	Kind         string `json:"kind"`
 	State        string `json:"state"`
@@ -132,6 +144,10 @@ type mgrHandshakeLogReceipt struct {
 	Endpoints []string              `json:"endpoints"`
 	Processes []mgrHandshakeProcess `json:"processes"`
 	Events    []mgrHandshakeEvent   `json:"events"`
+	// Unattributed holds the events of connections that never named a
+	// peer (Endpoint -1). An absence verdict that finds one of the kinds it
+	// looks for here is inconclusive, not an absence.
+	Unattributed []mgrHandshakeEvent `json:"unattributed"`
 }
 
 // cookieLabels replaces raw cookies with labels that keep only zero,
@@ -280,24 +296,46 @@ func classifyHandshake(e *mgrHandshakeEvent, function, message string) bool {
 		if m == nil {
 			return false
 		}
-		e.Kind, e.Seq, e.Message = "message_sent", m[1], m[2]
+		e.Kind, e.Seq, e.Message = "message_write_attempt", m[1], m[2]
+		return true
+	case "handle_message":
+		m := handshakeReceived.FindStringSubmatch(message)
+		if m == nil {
+			return false
+		}
+		e.Kind, e.Seq, e.Message = "message_received", m[1], m[2]
 		return true
 	}
 	return false
 }
 
-// scanMgrHandshakes reads one complete log within limit bytes and keeps,
-// in log order, the events of connections to the requested msgr2 endpoints
-// ("v2:<ip>:<port>/<nonce>"): a line is kept when its connection's peer
-// address vector, the target of a sent CLIENT_IDENT or the addresses of a
-// received identification contains one of them exactly.
-func scanMgrHandshakes(r io.Reader, endpoints []string, limit, maxEvents int) ([]mgrHandshakeProcess, []mgrHandshakeEvent, error) {
+// scanMgrHandshakes reads one complete log within limit bytes and keeps
+// the events of connections to the requested msgr2 endpoints
+// ("v2:<ip>:<port>/<nonce>"). A line names its peer by its connection's
+// peer address vector, the target of a sent CLIENT_IDENT or the addresses
+// of a received identification. An accepted connection prints an empty
+// peer vector until handle_client_ident or handle_reconnect sets it, and
+// handle_reconnect logs the received SESSION_RECONNECT before that
+// (pinned ProtocolV2.cc), as it logs accept and any fault before
+// identification. Such a line is held with its connection (process and
+// pointer) until a later line of that connection names a peer: it is kept
+// when that peer is requested and dropped when it is another, and a new
+// accept or connect of the pointer ends the lifetime. Lines whose
+// connection never names a peer are returned as unattributed, so that an
+// absence verdict can see what it could not attribute. Kept events are in
+// log order (Line).
+func scanMgrHandshakes(r io.Reader, endpoints []string, limit, maxEvents int) ([]mgrHandshakeProcess, []mgrHandshakeEvent, []mgrHandshakeEvent, error) {
 	counted := &countedReader{r: io.LimitReader(r, int64(limit)+1)}
 	scanner := bufio.NewScanner(counted)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)
-	cookies := cookieLabels{}
 	var processes []mgrHandshakeProcess
-	var events []mgrHandshakeEvent
+	var events, unattributed []mgrHandshakeEvent
+	type lifetime struct {
+		process int
+		conn    string
+	}
+	pending := map[lifetime][]mgrHandshakeEvent{}
+	held := 0
 	match := func(vectors ...string) int {
 		for i, endpoint := range endpoints {
 			for _, v := range vectors {
@@ -308,7 +346,20 @@ func scanMgrHandshakes(r io.Reader, endpoints []string, limit, maxEvents int) ([
 		}
 		return -1
 	}
-	for scanner.Scan() {
+	keep := func(list *[]mgrHandshakeEvent, e ...mgrHandshakeEvent) error {
+		if len(events)+len(unattributed)+held+len(e) > maxEvents {
+			return errHandshakeEventsExceedBound
+		}
+		*list = append(*list, e...)
+		return nil
+	}
+	end := func(key lifetime) error {
+		held -= len(pending[key])
+		err := keep(&unattributed, pending[key]...)
+		delete(pending, key)
+		return err
+	}
+	for number := 1; scanner.Scan(); number++ {
 		line := scanner.Text()
 		stamp := handshakeStamp.FindStringSubmatch(line)
 		if stamp == nil {
@@ -318,7 +369,7 @@ func scanMgrHandshakes(r io.Reader, endpoints []string, limit, maxEvents int) ([
 			processes = append(processes, mgrHandshakeProcess{Process: len(processes) + 1, Time: stamp[1], Name: m[1], PID: m[2]})
 			continue
 		}
-		e := mgrHandshakeEvent{Time: stamp[1], Process: len(processes)}
+		e := mgrHandshakeEvent{Line: number, Time: stamp[1], Process: len(processes), Endpoint: -1}
 		if m := handshakeV2Prefix.FindStringSubmatch(line); m != nil {
 			e.Peer, e.Conn, e.State, e.Lossy = m[2], m[3], m[4], m[5]
 			if !classifyHandshake(&e, m[8], m[9]) {
@@ -332,8 +383,14 @@ func scanMgrHandshakes(r io.Reader, endpoints []string, limit, maxEvents int) ([
 		} else {
 			continue
 		}
-		// An identification names the peer by the addresses it received or
-		// the target it sent; the addresses a daemon sends are its own.
+		key := lifetime{e.Process, e.Conn}
+		if e.Kind == "accept" || e.Kind == "connect" {
+			if err := end(key); err != nil {
+				return nil, nil, nil, err
+			}
+		}
+		// The addresses a daemon sends in its own identification are its
+		// own, never the peer's.
 		peer := []string{e.Peer}
 		switch e.Kind {
 		case "client_ident_sent":
@@ -341,26 +398,57 @@ func scanMgrHandshakes(r io.Reader, endpoints []string, limit, maxEvents int) ([
 		case "client_ident_received", "server_ident_received":
 			peer = append(peer, e.Addrs)
 		}
-		if e.Endpoint = match(peer...); e.Endpoint < 0 {
+		named := slices.ContainsFunc(peer, func(v string) bool { return v != "" })
+		if !named {
+			pending[key] = append(pending[key], e)
+			if held++; len(events)+len(unattributed)+held > maxEvents {
+				return nil, nil, nil, errHandshakeEventsExceedBound
+			}
 			continue
 		}
-		// Labels are assigned in the order of kept events only, so two
-		// receipts of one log label a cookie alike when their earlier
-		// events match.
-		for _, c := range []*string{&e.ClientCookie, &e.ServerCookie, &e.Cookie, &e.PeerCookie} {
-			if *c != "" {
-				*c = cookies.label(*c)
-			}
+		endpoint := match(peer...)
+		earlier := pending[key]
+		held -= len(earlier)
+		delete(pending, key)
+		if endpoint < 0 {
+			continue // the connection's peer is another endpoint
 		}
-		if len(events) == maxEvents {
-			return nil, nil, errHandshakeEventsExceedBound
+		for i := range earlier {
+			earlier[i].Endpoint = endpoint
 		}
-		events = append(events, e)
+		e.Endpoint = endpoint
+		if err := keep(&events, append(earlier, e)...); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	if counted.n > int64(limit) {
-		return nil, nil, errContainerLogExceedsBound
+		return nil, nil, nil, errContainerLogExceedsBound
 	}
-	return processes, events, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	for key := range pending {
+		if err := end(key); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	byLine := func(a, b mgrHandshakeEvent) int { return a.Line - b.Line }
+	slices.SortFunc(events, byLine)
+	slices.SortFunc(unattributed, byLine)
+	// Labels follow the log order of kept events, then of unattributed
+	// ones, so two receipts of one log label a cookie alike when their
+	// earlier events match.
+	cookies := cookieLabels{}
+	for _, list := range [][]mgrHandshakeEvent{events, unattributed} {
+		for i := range list {
+			for _, c := range []*string{&list[i].ClientCookie, &list[i].ServerCookie, &list[i].Cookie, &list[i].PeerCookie} {
+				if *c != "" {
+					*c = cookies.label(*c)
+				}
+			}
+		}
+	}
+	return processes, events, unattributed, nil
 }
 
 // parseHandshakeEndpoint accepts "<ip>:<port>/<nonce>" and returns its
@@ -388,7 +476,7 @@ func (c *fixtureCluster) mgrHandshakeLog(ctx context.Context, out string, fields
 	if len(fields) < 5 || len(fields) > 12 || (fields[2] != "osd" && fields[2] != "mgr") {
 		return errors.New("invalid MGR handshake log request")
 	}
-	receipt := mgrHandshakeLogReceipt{Label: fields[1], Admitted: c.profile.admits(capMgrDaemonControl), Daemon: fields[2] + "." + fields[3], Processes: []mgrHandshakeProcess{}, Events: []mgrHandshakeEvent{}}
+	receipt := mgrHandshakeLogReceipt{Label: fields[1], Admitted: c.profile.admits(capMgrDaemonControl), Daemon: fields[2] + "." + fields[3], Processes: []mgrHandshakeProcess{}, Events: []mgrHandshakeEvent{}, Unattributed: []mgrHandshakeEvent{}}
 	for _, field := range fields[4:] {
 		endpoint, err := parseHandshakeEndpoint(field)
 		if err != nil {
@@ -403,9 +491,11 @@ func (c *fixtureCluster) mgrHandshakeLog(ctx context.Context, out string, fields
 		}
 		call, cancel := context.WithTimeout(ctx, time.Minute)
 		err = withContainerLog(call, daemon.Logs, func(r io.Reader) error {
-			processes, events, scanErr := scanMgrHandshakes(r, receipt.Endpoints, mgrHandshakeLogLimit, mgrHandshakeEventLimit)
+			processes, events, unattributed, scanErr := scanMgrHandshakes(r, receipt.Endpoints, mgrHandshakeLogLimit, mgrHandshakeEventLimit)
 			if scanErr == nil {
-				receipt.Processes, receipt.Events = append(receipt.Processes, processes...), append(receipt.Events, events...)
+				receipt.Processes = append(receipt.Processes, processes...)
+				receipt.Events = append(receipt.Events, events...)
+				receipt.Unattributed = append(receipt.Unattributed, unattributed...)
 			}
 			return scanErr
 		})

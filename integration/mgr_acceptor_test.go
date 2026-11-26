@@ -504,6 +504,9 @@ func TestCephMgrAcceptorIntegration(t *testing.T) {
 		if client < 0 || server < 0 || server < client || idents[client].Conn != idents[server].Conn {
 			t.Fatalf("generation %d: osd.0 log lacks the CLIENT_IDENT (global_seq %d) and SERVER_IDENT pair on one connection: %v", s.Generation, s.PeerGlobalSeq, idents)
 		}
+		// The CLIENT_IDENT line is the OSD's write attempt; its delivery is
+		// the acceptor's own record of the same global_seq (s). The
+		// SERVER_IDENT line is the OSD's receipt.
 		// A one-entry address vector prints without brackets
 		// (entity_addrvec_t's operator<<).
 		c, v := idents[client], idents[server]
@@ -514,10 +517,9 @@ func TestCephMgrAcceptorIntegration(t *testing.T) {
 		}
 	}
 	// The Go acceptor is a lossy server: the stock OSD never resumes, so it
-	// never sends SESSION_RECONNECT here and never receives SESSION_RESET.
-	if resumed := osdLog.kinds("reconnect_sent", "reset_received", "retry_received", "retry_global_received"); len(resumed) != 0 {
-		t.Fatalf("osd.0 resumed a session with the lossy Go acceptor: %v", resumed)
-	}
+	// never sends SESSION_RECONNECT here and never receives SESSION_RESET,
+	// also on no connection whose peer its log did not name.
+	osdLog.absent(t, "lossy Go acceptor", "reconnect_sent", "reset_received", "retry_received", "retry_global_received")
 	t.Logf("osd.0 log: %d identification lines and no SESSION_RECONNECT or SESSION_RESET for the MGR endpoint; every one of the %d accepted sessions matches its CLIENT_IDENT global_seq and its SERVER_IDENT MGR global ID %d and generation on one connection", len(idents), len(sessions), gid)
 	authorizedMu.Lock()
 	t.Logf("Authorize hook calls: %d, every one for osd.0", len(authorized))
