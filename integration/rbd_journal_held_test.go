@@ -205,6 +205,11 @@ func TestCephRBDJournalErasureHoldIntegration(t *testing.T) {
 	runRBDJournalLostAppend(t, rbdJournalVariantErasureHold)
 }
 
+// TestCephRBDJournalErasureDeadPrimaryIntegration kills the primary of a
+// k=2/m=1 journal data pool while an append is pending. The caller gets an
+// unknown outcome. After the two surviving shards activate in place, native
+// readback and replay agree about that append's survival.
+//
 //scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasuredeadprimary key=aes service=aes family=4 stress= runtime=host mode=crc osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-dead-primary
 //scenario:row rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasuredeadprimary key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-dead-primary
 //scenario:covers RBD underlying I/O
@@ -213,6 +218,11 @@ func TestCephRBDJournalErasureDeadPrimaryIntegration(t *testing.T) {
 	runRBDJournalLostAppend(t, "erasure-"+rbdJournalVariantDeadPrimary)
 }
 
+// TestCephRBDJournalErasureHeldPrimaryChangeIntegration sends an append
+// naming a future epoch and changes the journal PG's acting primary without
+// moving its shards. After that epoch, the old primary drops the request,
+// the Go wait is canceled, and native replay confirms the append is absent.
+//
 //scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasureheldprimarychange key=aes service=aes family=4 stress= runtime=host mode=crc osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-held-primary-change
 //scenario:row rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasureheldprimarychange key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-held-primary-change
 //scenario:covers RBD underlying I/O
@@ -221,6 +231,11 @@ func TestCephRBDJournalErasureHeldPrimaryChangeIntegration(t *testing.T) {
 	runRBDJournalLostAppend(t, "erasure-"+rbdJournalVariantHeldPrimaryChange)
 }
 
+// TestCephRBDJournalErasurePendingHoldIntegration holds three distinct
+// appends behind one paused EC shard. One canceled wait has an unknown
+// outcome, the other two get their own signed result, and native replay
+// applies all three entries once in journal order.
+//
 //scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasurependinghold key=aes service=aes family=4 stress= runtime=host mode=crc osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-pending-hold
 //scenario:row rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasurependinghold key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-pending-hold
 //scenario:covers RBD underlying I/O
@@ -566,7 +581,7 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 	}
 
 	// The one append, submitted once and never again: on the connection
-	// to the journal object's primary, which in the erasure-hold mode may
+	// to the journal object's primary, which in an erasure-coded mode may
 	// be another OSD than the header's.
 	appendConn := s.conn
 	if erasure {
@@ -575,8 +590,8 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 	h.AppendConnection = s.dialOf(appendConn)
 	appendRequest := s.request(targetRoute, classOp("journal", "append", cephmsgr.OSDCallWrite, s.appendInput))
 	if mode == rbdJournalVariantHeldPrimaryChange {
-		// An epoch the cluster reaches only through the fixture's `osd out`
-		// and advance-map, whatever else changes the map meanwhile.
+		// Leave room to change the acting primary before advancing the map
+		// to the request's epoch.
 		appendRequest.MapEpoch = targetRoute.Epoch + rbdJournalForcedPendingEpochs
 	}
 	h.NamedEpoch = appendRequest.MapEpoch

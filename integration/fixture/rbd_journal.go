@@ -306,7 +306,7 @@ func (p rbdJournalPlacement) erasureMovedFrom(before rbdJournalPlacement, replac
 }
 
 // rbdJournalPrimaryMove is one object's placement before and after the
-// primary was marked out.
+// primary changed.
 type rbdJournalPrimaryMove struct {
 	Object string              `json:"object"`
 	Moved  bool                `json:"moved"`
@@ -315,7 +315,7 @@ type rbdJournalPrimaryMove struct {
 }
 
 // rbdJournalPrimaryChange is the administrative part of the `change-primary`
-// receipt. Out is -1 until the OSD to mark out is known.
+// receipt. Out is -1 if the action did not mark an OSD out.
 type rbdJournalPrimaryChange struct {
 	Objects   []rbdJournalPrimaryMove `json:"objects"`
 	Out       int                     `json:"osd_out"`
@@ -336,12 +336,10 @@ type rbdJournalPrimaryOps struct {
 	primaryTemp func(context.Context, string, int) error
 }
 
-// rbdJournalChangePrimary moves the acting primary of the objects' PG by
-// marking their one common primary out. Every object must start on a
-// settled three-member placement led by that OSD. It succeeds once each
-// object, in a newer epoch and in the same PG, has the two other members
-// as its up set, led by one of them, with the old primary as the last member
-// of the acting set.
+// rbdJournalChangePrimary moves the acting primary from a settled
+// three-member placement. Replicated objects share a primary that the
+// fixture marks out. The EC journal object has one owned PG, whose
+// temporary primary changes while all three shard slots stay in place.
 func rbdJournalChangePrimary(ctx context.Context, pool string, objects []string, ops rbdJournalPrimaryOps) (r rbdJournalPrimaryChange, err error) {
 	started := time.Now()
 	r = rbdJournalPrimaryChange{Objects: []rbdJournalPrimaryMove{}, Out: -1, Commands: []string{}}

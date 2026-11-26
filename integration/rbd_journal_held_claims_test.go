@@ -114,9 +114,8 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	if r.PrimaryChange != nil || r.OwnerLoss != nil || r.Trim != nil || r.Inflight != nil || r.ForcedPending != nil {
 		return []string{"record: a held-request record carries another variant's part"}
 	}
-	// The erasure-hold mode is the replica hold on an erasure-coded journal
-	// pool: its PG follows journal object 0 alone, and the held op records
-	// no shard commit.
+	// The EC data pool has its own PG for the journal object. The
+	// replicated image and journal headers are outside that PG.
 	erasure := rbdJournalErasure(h.Mode)
 	mode := rbdJournalHeldMode(h.Mode)
 	replica, change, dead := mode == rbdJournalVariantReplicaHold, mode == rbdJournalVariantHeldPrimaryChange, mode == rbdJournalVariantDeadPrimary
