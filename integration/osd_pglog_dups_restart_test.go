@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -17,6 +18,28 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+// persistedPGLog retains every dumped field, including signed result codes,
+// extra-request overrides and op_returns. UseNumber avoids rounding large
+// integers; maps disregard object-key order but preserve absent versus explicit
+// zero/null/empty fields and array order. The identity parser remains a separate
+// structural check, not a lossless representation of persisted request results.
+// Ceph v20.2.4 src/osd/osd_types.cc pg_log_entry_t::dump/pg_log_dup_t::dump;
+// src/osd/PGLog.h IndexedLog::get_request returns the stored code/op_returns.
+func persistedPGLog(raw []byte) (map[string]any, error) {
+	var document struct {
+		Log map[string]any `json:"pg_log_t"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&document); err != nil {
+		return nil, err
+	}
+	if document.Log == nil {
+		return nil, fmt.Errorf("missing persisted pg_log_t")
+	}
+	return document.Log, nil
+}
+
 // persistedDupRestart compares independent store copies, not the live duplicate
 // index. No write or resubmission is allowed between these two captures.
 func persistedDupRestart(before, after shardHistorySnapshot) error {
@@ -28,20 +51,23 @@ func persistedDupRestart(before, after shardHistorySnapshot) error {
 		if !a.Complete || !b.Complete || len(a.Failures)+len(b.Failures) != 0 || a.Index != i || b.Index != i || a.OSD != after.Acting[i] || b.OSD != before.Acting[i] || a.Index != b.Index || a.OSD != b.OSD || a.SPG != b.SPG || a.Head != b.Head || a.Tail != b.Tail || a.LogEntries != b.LogEntries || a.DupEntries != b.DupEntries || a.ExtraReqidEntries != b.ExtraReqidEntries {
 			return fmt.Errorf("shard %d identity or history boundary changed", i)
 		}
-		var parsed [2][]pgLogRecord
+		var parsed [2]map[string]any
 		for j, shard := range []shardHistoryShard{b, a} {
 			raw, err := base64.StdEncoding.DecodeString(shard.Raw)
 			if err != nil {
 				return err
 			}
-			head, tail, records, err := parsePGLogRecords(raw)
+			head, tail, _, err := parsePGLogRecords(raw)
 			if err != nil {
 				return err
 			}
 			if head != shard.Head || tail != shard.Tail {
 				return fmt.Errorf("shard %d raw boundary differs", i)
 			}
-			parsed[j] = records
+			parsed[j], err = persistedPGLog(raw)
+			if err != nil {
+				return err
+			}
 		}
 		if !reflect.DeepEqual(parsed[0], parsed[1]) {
 			return fmt.Errorf("shard %d persisted request records changed", i)
@@ -210,7 +236,10 @@ func TestCephOSDErasureDupHistoryRestartIntegration(t *testing.T) {
 				for i, a := range after.Shards {
 					b := before.Shards[i]
 					raw, _ := base64.StdEncoding.DecodeString(a.Raw)
-					_, _, records, _ := parsePGLogRecords(raw)
+					records, err := persistedPGLog(raw)
+					if err != nil {
+						t.Fatal(err)
+					}
 					shards = append(shards, map[string]any{"osd": a.OSD, "spg": a.SPG, "head": a.Head, "tail": a.Tail, "before_sha256": b.SHA256, "after_sha256": a.SHA256, "records": records})
 				}
 				proof["shards"], proof["object_digests"] = shards, digests
@@ -253,6 +282,24 @@ func TestPersistedDupRestart(t *testing.T) {
 		"changed version": func(s *shardHistorySnapshot) {
 			s.Shards[2].Raw = base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(raw, `"user_version":"4"`, `"user_version":"5"`)))
 		},
+		"duplicate result": func(s *shardHistorySnapshot) {
+			s.Shards[2].Raw = base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(raw, `"return_code":"0"`, `"return_code":"-5"`)))
+		},
+		"ordinary result": func(s *shardHistorySnapshot) {
+			s.Shards[2].Raw = base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(raw, `"return_code":0`, `"return_code":-5`)))
+		},
+		"missing duplicate result": func(s *shardHistorySnapshot) {
+			s.Shards[2].Raw = base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(raw, `,"return_code":"0"`, ``)))
+		},
+		"missing ordinary result": func(s *shardHistorySnapshot) {
+			s.Shards[2].Raw = base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(raw, `,"return_code":0`, ``)))
+		},
+		"ordinary op returns": func(s *shardHistorySnapshot) {
+			s.Shards[2].Raw = base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(raw, `"return_code":0`, `"return_code":0,"op_returns":[{"rval":-5,"bl_length":0}]`)))
+		},
+		"duplicate op returns": func(s *shardHistorySnapshot) {
+			s.Shards[2].Raw = base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(raw, `"return_code":"0"`, `"return_code":"0","op_returns":[{"rval":-5,"bl_length":0}]`)))
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			after := makeSnapshot(50)
@@ -278,6 +325,46 @@ func TestDupRestartBoot(t *testing.T) {
 			mutate(&after)
 			if dupRestartBoot(before, after) == nil {
 				t.Fatal("accepted missing restart proof")
+			}
+		})
+	}
+}
+
+// Synthetic values isolate result semantics from request identity and version.
+func TestPersistedPGLogResults(t *testing.T) {
+	wrap := func(entry string) []byte {
+		return []byte(`{"pg_log_t":{"head":"30'5","tail":"30'4","log":[` + entry + `],"dups":[]}}`)
+	}
+	entry := `{"reqid":"client.1.1:1","return_code":0,"extra_reqids":[{"reqid":"client.1.1:2","return_code":0}],"op_returns":[{"rval":0,"bl_length":9007199254740992}]}`
+	before, err := persistedPGLog(wrap(entry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Formatting and map key order are not persisted semantic differences.
+	reordered := `{"op_returns":[{"bl_length":9007199254740992,"rval":0}],"extra_reqids":[{"return_code":0,"reqid":"client.1.1:2"}],"return_code":0,"reqid":"client.1.1:1"}`
+	same, err := persistedPGLog(wrap(reordered))
+	if err != nil || !reflect.DeepEqual(before, same) {
+		t.Fatal("equivalent formatted dump differs", err)
+	}
+	for name, changed := range map[string]string{
+		"extra negative override": strings.Replace(entry, `"client.1.1:2","return_code":0`, `"client.1.1:2","return_code":-5`, 1),
+		"extra absent override":   strings.Replace(entry, `"client.1.1:2","return_code":0`, `"client.1.1:2"`, 1),
+		"extra null override":     strings.Replace(entry, `"client.1.1:2","return_code":0`, `"client.1.1:2","return_code":null`, 1),
+		"operation result":        strings.Replace(entry, `"rval":0`, `"rval":-5`, 1),
+		"operation result absent": strings.Replace(entry, `"rval":0,`, "", 1),
+		"large operation length":  strings.Replace(entry, "9007199254740992", "9007199254740993", 1),
+		"operation length absent": strings.Replace(entry, `,"bl_length":9007199254740992`, "", 1),
+		"empty operations":        strings.Replace(entry, `[{"rval":0,"bl_length":9007199254740992}]`, `[]`, 1),
+		"absent operations":       strings.Replace(entry, `,"op_returns":[{"rval":0,"bl_length":9007199254740992}]`, "", 1),
+		"null operations":         strings.Replace(entry, `[{"rval":0,"bl_length":9007199254740992}]`, `null`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			after, err := persistedPGLog(wrap(changed))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reflect.DeepEqual(before, after) {
+				t.Fatal("dropped persisted result difference")
 			}
 		})
 	}
