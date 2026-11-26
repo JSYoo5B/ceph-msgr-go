@@ -36,7 +36,7 @@ type copyLossShardReceipt struct {
 //     request ID of that entry with that write's user version: the final
 //     copy-get returns the source object's request IDs newest first
 //     (get_object_reqids walks the source log from its end,
-//     src/osd/PGLog.h:476-505), and the second source write that the
+//     src/osd/PGLog.h:477-507), and the second source write that the
 //     resubmission copied is the newest;
 //   - every other identity (the blocker the primary lost with the copy, and
 //     near misses of the copy) nowhere.

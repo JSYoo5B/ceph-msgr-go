@@ -29,7 +29,7 @@ func copyErasurePairSnapshotLossCells() []copyErasurePairLossCell {
 // copy from a snapshot: the source head of the owned optimized isa k=2,m=2
 // pool is written once, a self-managed snapshot is allocated and one Go
 // SETXATTR under its context clones the head (make_writeable,
-// src/osd/PrimaryLogPG.cc:8641-8790; on an erasure-coded PG every shard
+// src/osd/PrimaryLogPG.cc:8641-8812; on an erasure-coded PG every shard
 // applies the clone in the same transaction). The copy names the snap id
 // and is unversioned, or pinned to the clone's user version, which the
 // first copy-get then asserts too. It is held before its second chunk onto
@@ -63,7 +63,7 @@ func copyErasurePairSnapshotLossCells() []copyErasurePairLossCell {
 // primary's PG log holds the copy once as a successful modify without any
 // source request ID: the final copy-get returns the request IDs of the
 // copied object's own source log entries (get_object_reqids,
-// src/osd/PGLog.h:476-505, called at PrimaryLogPG.cc:9439-9446), and the
+// src/osd/PGLog.h:477-507, called at PrimaryLogPG.cc:9439-9446), and the
 // entry that creates a clone carries an empty request ID
 // (PrimaryLogPG.cc:8777-8782).
 // The source head and the clone are natively unchanged. After recovery the
