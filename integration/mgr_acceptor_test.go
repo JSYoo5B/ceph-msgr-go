@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -22,38 +21,6 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
-
-// osdIdent is one identification frame the stock osd.0 logged for the MGR
-// endpoint, read by the fixture (control mgr-acceptor-osd-log) from the
-// daemon's own debug_ms 5 log, never through the Go library.
-type osdIdent struct {
-	Kind      string `json:"kind"`
-	Addrs     string `json:"addrs"`
-	Target    string `json:"target"`
-	GID       string `json:"gid"`
-	GlobalSeq string `json:"global_seq"`
-	Supported string `json:"features_supported"`
-	Required  string `json:"features_required"`
-	Flags     string `json:"flags"`
-	Cookie    string `json:"cookie"`
-}
-
-func osdIdents(t *testing.T, ctx context.Context, control, label string, port int) []osdIdent {
-	t.Helper()
-	if err := testcluster.RequestControl(ctx, control, "mgr-acceptor-osd-log", "mgr-acceptor-osd-log-completed", label, strconv.Itoa(port)); err != nil {
-		t.Fatal("osd.0 log", label, err)
-	}
-	data, err := os.ReadFile(filepath.Join(control, "mgr-acceptor-osd-log.json"))
-	var receipt struct {
-		Label    string     `json:"label"`
-		Admitted bool       `json:"admitted"`
-		Idents   []osdIdent `json:"idents"`
-	}
-	if err != nil || json.Unmarshal(data, &receipt) != nil || receipt.Label != label || !receipt.Admitted {
-		t.Fatal("osd.0 log receipt", label, err)
-	}
-	return receipt.Idents
-}
 
 // nativeOSDEntry is one OSD of the native `osd dump --format json`.
 type nativeOSDEntry struct {
@@ -159,11 +126,14 @@ func acceptOSD(t *testing.T, ctx context.Context, listener *cephmsgr.MgrListener
 // accepted identity (osd.0, its ticket global ID and secret ID, its
 // CLIENT_IDENT numeric ID 0 and address vector, which must equal its
 // public addrs in the native OSDMap), the MGR global ID and the connection
-// generation. The OSD's own debug_ms 5 log must show a CLIENT_IDENT to the
-// advertised target with the global sequence and supported mask the
-// acceptor received, and a SERVER_IDENT naming the MGR's global ID, the
-// generation the acceptor assigned, its supported mask, the native required
-// mask 0x800000000200000, the lossy flag and a zero cookie. The first
+// generation. The OSD's own debug_ms 5 log (control mgr-handshake-log, for
+// the exact advertised endpoint and nonce) must show, on one connection, a
+// CLIENT_IDENT to the advertised target with the global sequence and
+// supported mask the acceptor received, and a SERVER_IDENT naming the MGR's
+// global ID, the generation the acceptor assigned, its supported mask, the
+// native required mask 0x800000000200000, the lossy flag and a zero cookie;
+// it must log no SESSION_RECONNECT, SESSION_RESET or retry for that
+// endpoint, since a lossy server's peer never resumes. The first
 // message the OSD sends is its MMgrOpen naming daemon "0".
 //
 // Failure and recovery on the stock peer: closing the session makes the
@@ -520,17 +490,19 @@ func TestCephMgrAcceptorIntegration(t *testing.T) {
 	}
 	peer, _ = accept(listener, "after-listener-restart")
 
-	// The OSD's own log, read by the fixture, for every published session.
-	idents := osdIdents(t, ctx, control, "acceptor-sessions", port)
+	// The OSD's own log, read by the fixture, for every published session:
+	// connections to the exact advertised endpoint and nonce.
+	osdLog := mgrHandshakeLog(t, ctx, control, "acceptor-sessions", "osd", "0", fmt.Sprintf("%s/%d", advertised[0].Endpoint, advertised[0].Nonce))
+	idents := osdLog.kinds("client_ident_sent", "server_ident_received")
 	for _, s := range sessions {
-		client := slices.IndexFunc(idents, func(i osdIdent) bool {
-			return i.Kind == "client" && i.Target == formatAddress(advertised[0]) && i.GlobalSeq == strconv.FormatUint(s.PeerGlobalSeq, 10)
+		client := slices.IndexFunc(idents, func(i handshakeEvent) bool {
+			return i.Kind == "client_ident_sent" && i.Target == formatAddress(advertised[0]) && i.GlobalSeq == strconv.FormatUint(s.PeerGlobalSeq, 10)
 		})
-		server := slices.IndexFunc(idents, func(i osdIdent) bool {
-			return i.Kind == "server" && i.GlobalSeq == strconv.FormatUint(s.Generation, 10)
+		server := slices.IndexFunc(idents, func(i handshakeEvent) bool {
+			return i.Kind == "server_ident_received" && i.GlobalSeq == strconv.FormatUint(s.Generation, 10)
 		})
-		if client < 0 || server < 0 || server < client {
-			t.Fatalf("generation %d: osd.0 log lacks the CLIENT_IDENT (global_seq %d) or SERVER_IDENT pair: %+v", s.Generation, s.PeerGlobalSeq, idents)
+		if client < 0 || server < 0 || server < client || idents[client].Conn != idents[server].Conn {
+			t.Fatalf("generation %d: osd.0 log lacks the CLIENT_IDENT (global_seq %d) and SERVER_IDENT pair on one connection: %v", s.Generation, s.PeerGlobalSeq, idents)
 		}
 		// A one-entry address vector prints without brackets
 		// (entity_addrvec_t's operator<<).
@@ -538,10 +510,15 @@ func TestCephMgrAcceptorIntegration(t *testing.T) {
 		if c.GID != "0" || c.Supported != strconv.FormatUint(s.PeerSupported, 16) || c.Required != strconv.FormatUint(s.PeerRequired, 16) ||
 			v.GID != strconv.FormatUint(gid, 10) || v.Addrs != formatAddress(advertised[0]) ||
 			v.Supported != strconv.FormatUint(session.MgrOSDPeerFeatures, 16) || v.Required != "800000000200000" || v.Flags != "1" || v.Cookie != "0" {
-			t.Fatalf("generation %d: osd.0 logged CLIENT_IDENT %+v and SERVER_IDENT %+v", s.Generation, c, v)
+			t.Fatalf("generation %d: osd.0 logged CLIENT_IDENT %v and SERVER_IDENT %v", s.Generation, c, v)
 		}
 	}
-	t.Logf("osd.0 log: %d identification lines for the MGR endpoint; every one of the %d accepted sessions matches its CLIENT_IDENT global_seq and its SERVER_IDENT MGR global ID %d and generation", len(idents), len(sessions), gid)
+	// The Go acceptor is a lossy server: the stock OSD never resumes, so it
+	// never sends SESSION_RECONNECT here and never receives SESSION_RESET.
+	if resumed := osdLog.kinds("reconnect_sent", "reset_received", "retry_received", "retry_global_received"); len(resumed) != 0 {
+		t.Fatalf("osd.0 resumed a session with the lossy Go acceptor: %v", resumed)
+	}
+	t.Logf("osd.0 log: %d identification lines and no SESSION_RECONNECT or SESSION_RESET for the MGR endpoint; every one of the %d accepted sessions matches its CLIENT_IDENT global_seq and its SERVER_IDENT MGR global ID %d and generation on one connection", len(idents), len(sessions), gid)
 	authorizedMu.Lock()
 	t.Logf("Authorize hook calls: %d, every one for osd.0", len(authorized))
 	authorizedMu.Unlock()
