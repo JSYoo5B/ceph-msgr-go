@@ -264,6 +264,7 @@ type rbdJournalLostAppendOutcome struct {
 	Submission        cephmsgr.OSDSubmission
 	ReplyTransaction  uint64
 	ReplyCode         int32
+	OperationCode     *int32 `json:",omitempty"`
 	RecordedUTC       string
 }
 
@@ -873,7 +874,7 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	primaryChange, ownerLoss, forced := variant == rbdJournalVariantPrimaryChange, variant == rbdJournalVariantOwnerLoss, variant == rbdJournalVariantForcedBreak
 	forcedPending := variant == rbdJournalVariantForcedBreakPending
 	inflight, trim := variant == rbdJournalVariantForcedBreakInflight, variant == rbdJournalVariantTrim
-	erasure := variant == rbdJournalVariantErasureHold
+	erasure := rbdJournalErasure(variant)
 	held := variant == rbdJournalVariantReplicaHold || variant == rbdJournalVariantHeldPrimaryChange || variant == rbdJournalVariantDeadPrimary || rbdJournalHeldPendingMode(variant) || erasure
 	consumer := variant == rbdJournalVariantConsumer
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
@@ -889,8 +890,8 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		t.Fatal(err)
 	}
 	token, identity := oracle.Token, os.Getenv("CEPH_MSGR_RBD_BASE_IDENTITY")
-	// The erasure-hold sequence's journal data objects are in the
-	// erasure-coded second owned pool; no other variant has a second pool.
+	// The erasure sequences put the journal data objects in the second
+	// owned pool, while the image and journal headers stay replicated.
 	wantCaps := "profile rbd pool=" + oracle.Plan.Pool
 	journalPool, journalPoolID := oracle.Plan.Pool, oracle.Pool.ID
 	if erasure {
@@ -925,7 +926,7 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	defer cancel()
 	started := time.Now()
 	results, outcomeFile := "rbd-journal-lost-append-results.json", "rbd-journal-lost-append-outcome.json"
-	switch variant {
+	switch rbdJournalHeldMode(variant) {
 	case rbdJournalVariantPrimaryChange:
 		results, outcomeFile = "rbd-journal-primary-change-results.json", "rbd-journal-primary-change-outcome.json"
 	case rbdJournalVariantOwnerLoss:

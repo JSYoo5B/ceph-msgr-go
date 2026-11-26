@@ -15,6 +15,9 @@ HELD = {
     "^TestCephRBDJournalReplicaHoldIntegration$": "rbd-journal-replica-hold",
     "^TestCephRBDJournalHeldPrimaryChangeIntegration$": "rbd-journal-held-primary-change",
     "^TestCephRBDJournalDeadPrimaryIntegration$": "rbd-journal-dead-primary",
+    "^TestCephRBDJournalErasureDeadPrimaryIntegration$": "rbd-journal-erasure-dead-primary",
+    "^TestCephRBDJournalErasureHeldPrimaryChangeIntegration$": "rbd-journal-erasure-held-primary-change",
+    "^TestCephRBDJournalErasurePendingHoldIntegration$": "rbd-journal-erasure-pending-hold",
 }
 
 

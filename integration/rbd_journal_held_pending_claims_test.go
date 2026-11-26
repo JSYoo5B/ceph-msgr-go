@@ -29,9 +29,20 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	if r.PrimaryChange != nil || r.OwnerLoss != nil || r.Trim != nil || r.Inflight != nil || r.ForcedPending != nil || r.Consumer != nil {
 		return []string{"record: a held-request record carries another variant's part"}
 	}
-	restart := h.Mode == rbdJournalVariantPrimaryRestart
+	mode := rbdJournalHeldMode(h.Mode)
+	restart := mode == rbdJournalVariantPrimaryRestart
+	erasure := rbdJournalErasure(h.Mode)
+	followed, journalIndex := []string{"rbd_header." + r.ImageID, e.ObjectName, r.JournalHeader}, 1
+	pool, poolID := r.Pool, r.PoolID
+	if erasure {
+		followed, journalIndex = []string{e.ObjectName}, 0
+		pool, poolID = h.JournalPool, h.JournalPoolID
+		if pool == "" || pool == r.Pool || poolID <= 0 || poolID == r.PoolID {
+			return []string{"record: the erasure-coded journal pool is missing or aliases the image pool"}
+		}
+	}
 	p := h.Pending
-	holds := rbdJournalHeldPendingHolds[h.Mode]
+	holds := rbdJournalHeldPendingHolds[mode]
 	if p == nil || len(p.Calls) != len(holds) {
 		return []string{fmt.Sprintf("record: the pending appends are missing or not %d", len(holds))}
 	}
@@ -146,12 +157,12 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	}
 	members := func(osds []int32) []int32 { sorted := slices.Clone(osds); slices.Sort(sorted); return sorted }
 	placedOn := func(name string, read *nativeRBDJournalHeldRead, acting []int32, primary int32) {
-		if len(read.Objects) != 3 || read.PGID == "" {
-			fail("%s: the placements of the three followed objects are missing: %s", name, text(read.Objects))
+		if len(read.Objects) != len(followed) || read.PGID == "" {
+			fail("%s: the placements of the followed objects are missing: %s", name, text(read.Objects))
 			return
 		}
 		for i, o := range read.Objects {
-			if want := []string{"rbd_header." + r.ImageID, e.ObjectName, r.JournalHeader}[i]; o.Object != want || o.Pool != r.Pool || o.PoolID != r.PoolID || o.PGID != read.PGID ||
+			if want := followed[i]; o.Object != want || o.Pool != pool || o.PoolID != poolID || o.PGID != read.PGID ||
 				!slices.Equal(o.Acting, acting) || o.ActingPrimary != primary || o.Epoch == 0 || o.Epoch > read.Epoch {
 				fail("%s: %s is not in the PG on acting set %v led by osd.%d: %s", name, want, acting, primary, text(o))
 			}
@@ -167,8 +178,18 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 			fail("%s: the PG query %s: %s", name, problem, text(q))
 			return nil
 		}
+		atIndex := func(shard *int32, osd int32) bool {
+			index := slices.Index(acting, osd)
+			return index >= 0 && shard != nil && *shard == int32(index)
+		}
+		if erasure && !atIndex(q.Shard, acting[0]) || !erasure && q.Shard != nil {
+			fail("%s: query primary shard differs from placement: %s", name, text(q))
+		}
 		peers := []int32{}
 		for _, peer := range q.Peers {
+			if erasure && !atIndex(peer.Shard, peer.Peer) || !erasure && peer.Shard != nil {
+				fail("%s: peer shard differs from placement: %s", name, text(peer))
+			}
 			peers = append(peers, peer.Peer)
 			if state == "active+clean" && peer.LastUpdate != q.LastUpdate {
 				fail("%s: peer osd.%d is at %s, the primary at %s", name, peer.Peer, peer.LastUpdate, q.LastUpdate)
@@ -187,7 +208,7 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 
 	// Held: before the appends, the PG on three members led by P, clean.
 	pl := h.Placed
-	if pl == nil || len(pl.Objects) != 3 {
+	if pl == nil || len(pl.Objects) != len(followed) {
 		fail("observe-placed: the fixture's placement is missing: %s", text(pl))
 		return problems
 	}
@@ -210,11 +231,11 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 		fail("ping: the subject's watch was not renewed before the fault: %s", text(ping))
 	}
 	hd := h.Held
-	if hd == nil || len(hd.Objects) != 3 {
+	if hd == nil || len(hd.Objects) != len(followed) {
 		fail("observe-held: the fixture's read is missing: %s", text(hd))
 		return problems
 	}
-	if h.SentAtEpoch == 0 || h.SentAtEpoch < pl.Objects[1].Epoch || h.SentAtEpoch > hd.Objects[1].Epoch || h.NamedEpoch != h.SentAtEpoch {
+	if h.SentAtEpoch == 0 || h.SentAtEpoch < pl.Objects[journalIndex].Epoch || h.SentAtEpoch > hd.Objects[journalIndex].Epoch || h.NamedEpoch != h.SentAtEpoch {
 		fail("append: the subject placed the appends at epoch %d, outside the fixture's reads around it", h.SentAtEpoch)
 	}
 	if h.Replica != acting[2] || h.Lease == nil || h.Lease.Daemon != fmt.Sprintf("osd.%d", h.Replica) || h.Lease.Deadline == 0 {
@@ -256,7 +277,11 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 		listed[i] = op.Transaction
 		switch c.Hold {
 		case rbdJournalHoldSubOps:
-			if op.FlagPoint != rbdJournalHeldSubOpsFlag || !rbdJournalHeldEvents(op.Events, append(slices.Clone(rbdJournalHeldInPG), waiting), "op_commit", "sub_op_commit_rec") {
+			if erasure {
+				if op.FlagPoint != "started" || !rbdJournalHeldEvents(op.Events, append(slices.Clone(rbdJournalHeldInPG), "sub_op_started"), "sub_op_committed") {
+					fail("observe-held: entry %d does not show its primary shard commit: %s", i, text(op))
+				}
+			} else if op.FlagPoint != rbdJournalHeldSubOpsFlag || !rbdJournalHeldEvents(op.Events, append(slices.Clone(rbdJournalHeldInPG), waiting), "op_commit", "sub_op_commit_rec") {
 				fail("observe-held: entry %d is not waiting for one of its two replica commits on the primary: %s", i, text(op))
 			}
 		case rbdJournalHoldMap:
@@ -316,6 +341,10 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 			if o == nil {
 				continue
 			}
+			if erasure && (i == rbdJournalHeldPendingCanceled && o.OperationCode != nil ||
+				i != rbdJournalHeldPendingCanceled && (o.OperationCode == nil || *o.OperationCode != 0)) {
+				fail("outcome: entry %d has the wrong operation result: %s", i, text(o))
+			}
 			if i == rbdJournalHeldPendingCanceled {
 				if o.Class != "uncertain" || !o.UnknownOutcome || !o.Canceled || o.ReplyTransaction != 0 || o.ReplyCode != 0 {
 					fail("outcome: entry %d is not an unknown outcome of a canceled wait: %s", i, text(o))
@@ -331,7 +360,7 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 		// Interval: unchanged across the requests, every peer at the
 		// primary's new last update.
 		st := h.Settled
-		if st == nil || len(st.Objects) != 3 {
+		if st == nil || len(st.Objects) != len(followed) {
 			fail("observe-settled: the fixture's read is missing")
 			return problems
 		}
@@ -431,8 +460,14 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 		if r.DialsBeforeClose == nil || *r.DialsBeforeClose != 1 || r.DialsTotal == nil || *r.DialsTotal != 2 || g.Connections != 2 || h.AppendConnection != 1 {
 			fail("transmission: not one subject connection to the primary before its death and one after its restart: gate %s, dials before close %s, in total %s", text(g), text(r.DialsBeforeClose), text(r.DialsTotal))
 		}
-	} else if r.DialsTotal == nil || *r.DialsTotal != 1 || g.Connections != 1 || h.AppendConnection != 1 {
-		fail("transmission: not one subject connection: gate %s, dials %s", text(g), text(r.DialsTotal))
+	} else {
+		want := 1
+		if erasure && h.HeaderPrimary != h.Primary {
+			want++
+		}
+		if r.DialsTotal == nil || *r.DialsTotal != want || g.Connections != want || h.AppendConnection != want {
+			fail("transmission: not %d subject connections with the append on the data primary's: gate %s, dials %s", want, text(g), text(r.DialsTotal))
+		}
 	}
 	if g.LargeWrites != len(p.Calls) {
 		fail("transmission: %d writes of the append size for %d entries; an append may have been sent again", g.LargeWrites, len(p.Calls))

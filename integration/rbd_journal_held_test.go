@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -204,6 +205,45 @@ func TestCephRBDJournalErasureHoldIntegration(t *testing.T) {
 	runRBDJournalLostAppend(t, rbdJournalVariantErasureHold)
 }
 
+// TestCephRBDJournalErasureDeadPrimaryIntegration kills the primary of a
+// k=2/m=1 journal data pool while an append is pending. The caller gets an
+// unknown outcome. After the two surviving shards activate in place, native
+// readback and replay agree about that append's survival.
+//
+//scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasuredeadprimary key=aes service=aes family=4 stress= runtime=host mode=crc osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-dead-primary
+//scenario:row rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasuredeadprimary key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-dead-primary
+//scenario:covers RBD underlying I/O
+//fixture:isolated owns a replicated image/header pool and an erasure-coded journal data pool on three BlueStore OSDs
+func TestCephRBDJournalErasureDeadPrimaryIntegration(t *testing.T) {
+	runRBDJournalLostAppend(t, "erasure-"+rbdJournalVariantDeadPrimary)
+}
+
+// TestCephRBDJournalErasureHeldPrimaryChangeIntegration sends an append
+// naming a future epoch and changes the journal PG's acting primary without
+// moving its shards. After that epoch, the old primary drops the request,
+// the Go wait is canceled, and native replay confirms the append is absent.
+//
+//scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasureheldprimarychange key=aes service=aes family=4 stress= runtime=host mode=crc osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-held-primary-change
+//scenario:row rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasureheldprimarychange key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-held-primary-change
+//scenario:covers RBD underlying I/O
+//fixture:isolated owns a replicated image/header pool and an erasure-coded journal data pool on three BlueStore OSDs
+func TestCephRBDJournalErasureHeldPrimaryChangeIntegration(t *testing.T) {
+	runRBDJournalLostAppend(t, "erasure-"+rbdJournalVariantHeldPrimaryChange)
+}
+
+// TestCephRBDJournalErasurePendingHoldIntegration holds three distinct
+// appends behind one paused EC shard. One canceled wait has an unknown
+// outcome, the other two get their own signed result, and native replay
+// applies all three entries once in journal order.
+//
+//scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasurependinghold key=aes service=aes family=4 stress= runtime=host mode=crc osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-pending-hold
+//scenario:row rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasurependinghold key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-pending-hold
+//scenario:covers RBD underlying I/O
+//fixture:isolated owns a replicated image/header pool and an erasure-coded journal data pool on three BlueStore OSDs
+func TestCephRBDJournalErasurePendingHoldIntegration(t *testing.T) {
+	runRBDJournalLostAppend(t, "erasure-"+rbdJournalVariantPendingHold)
+}
+
 // The variants of runRBDJournalLostAppend this file adds, and the record's
 // Mode of each.
 const (
@@ -247,10 +287,42 @@ var (
 	rbdJournalDeadPrimaryStages = []string{"observe-held", "observe-recorded", "replay"}
 )
 
+func rbdJournalMissingShard(osd int32) bool {
+	return osd == -1 || osd == 0x7fffffff
+}
+
+// rbdJournalECSlots checks that surviving shards retain their original slots.
+func rbdJournalECSlots(before, after []int32, lost int32) bool {
+	if len(before) != len(after) {
+		return false
+	}
+	for i, osd := range before {
+		if osd == lost {
+			if !rbdJournalMissingShard(after[i]) {
+				return false
+			}
+		} else if after[i] != osd {
+			return false
+		}
+	}
+	return true
+}
+
+func rbdJournalErasure(variant string) bool {
+	return strings.HasPrefix(variant, "erasure-")
+}
+
+func rbdJournalHeldMode(variant string) string {
+	if variant == rbdJournalVariantErasureHold {
+		return rbdJournalVariantReplicaHold
+	}
+	return strings.TrimPrefix(variant, "erasure-")
+}
+
 // rbdJournalHeldPlan returns the stages and the order of a held mode.
 func rbdJournalHeldPlan(mode string) (stages, order []string) {
-	switch mode {
-	case rbdJournalVariantReplicaHold, rbdJournalVariantErasureHold:
+	switch rbdJournalHeldMode(mode) {
+	case rbdJournalVariantReplicaHold:
 		return rbdJournalReplicaHoldStages, rbdJournalReplicaHoldOrder
 	case rbdJournalVariantHeldPrimaryChange:
 		return rbdJournalHeldChangeStages, rbdJournalHeldChangeOrder
@@ -458,7 +530,8 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 	}
 	s.done("ping")
 
-	erasure := s.mode == rbdJournalVariantErasureHold
+	erasure := rbdJournalErasure(s.mode)
+	mode := rbdJournalHeldMode(s.mode)
 	followed := 3
 	if erasure {
 		// The fixture follows the journal object's erasure-coded PG alone.
@@ -488,7 +561,7 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 
 	// The replica modes pause the last acting member under a lease.
 	var pause *heldPause
-	if s.mode != rbdJournalVariantHeldPrimaryChange {
+	if mode != rbdJournalVariantHeldPrimaryChange {
 		h.Replica = h.GoActing[2]
 		pause = startHeldPause(t, ctx, s.dir, "osd", strconv.Itoa(int(h.Replica)), time.Now().Add(rbdJournalHeldLeaseBudget), rbdJournalHeldLeaseReserve)
 		h.Lease = &rbdJournalHeldLease{Daemon: pause.daemon(), Deadline: pause.lease.Deadline.UnixNano()}
@@ -508,7 +581,7 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 	}
 
 	// The one append, submitted once and never again: on the connection
-	// to the journal object's primary, which in the erasure-hold mode may
+	// to the journal object's primary, which in an erasure-coded mode may
 	// be another OSD than the header's.
 	appendConn := s.conn
 	if erasure {
@@ -516,9 +589,9 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 	}
 	h.AppendConnection = s.dialOf(appendConn)
 	appendRequest := s.request(targetRoute, classOp("journal", "append", cephmsgr.OSDCallWrite, s.appendInput))
-	if s.mode == rbdJournalVariantHeldPrimaryChange {
-		// An epoch the cluster reaches only through the fixture's `osd out`
-		// and advance-map, whatever else changes the map meanwhile.
+	if mode == rbdJournalVariantHeldPrimaryChange {
+		// Leave room to change the acting primary before advancing the map
+		// to the request's epoch.
 		appendRequest.MapEpoch = targetRoute.Epoch + rbdJournalForcedPendingEpochs
 	}
 	h.NamedEpoch = appendRequest.MapEpoch
@@ -545,6 +618,9 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 		r.Outcome = &rbdJournalLostAppendOutcome{Label: "journal_append", CallerInvocations: 1, Class: class, UnknownOutcome: errors.As(got.err, &unknown),
 			Canceled: errors.Is(got.err, context.Canceled), Error: detail, Submission: got.reply.Submission, ReplyTransaction: got.reply.Transaction, ReplyCode: got.reply.Code,
 			RecordedUTC: time.Now().UTC().Format(time.RFC3339Nano)}
+		if got.reply.Transaction != 0 && len(got.reply.Operations) == 1 {
+			r.Outcome.OperationCode = &got.reply.Operations[0].Result
+		}
 		if err := s.outcome(); err != nil {
 			t.Fatal("record the append's outcome", err)
 		}
@@ -570,8 +646,8 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 	}
 	s.judge(t, "observe-held")
 
-	switch s.mode {
-	case rbdJournalVariantReplicaHold, rbdJournalVariantErasureHold:
+	switch mode {
+	case rbdJournalVariantReplicaHold:
 		resume(t)
 		select {
 		case got := <-finished:

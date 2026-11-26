@@ -81,7 +81,7 @@ func rbdJournalPlanOf(token string, p profile) rbdJournalPlan {
 		return rbdJournalConsumerPlanFor(token)
 	}
 	plan := rbdJournalPlanFor(token, p.admits(capRBDJournalTrim))
-	if p.admits(capRBDJournalErasureHold) {
+	if p.rbdJournalErasure() {
 		plan.JournalPool = rbdGroupSecondPoolName(token)
 	}
 	return plan

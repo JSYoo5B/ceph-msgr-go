@@ -204,6 +204,7 @@ type rbdJournalHeldPending struct {
 
 // rbdJournalHeldPendingMode says whether a held mode is one of this file's.
 func rbdJournalHeldPendingMode(mode string) bool {
+	mode = rbdJournalHeldMode(mode)
 	return mode == rbdJournalVariantPendingHold || mode == rbdJournalVariantPrimaryRestart
 }
 
@@ -214,7 +215,9 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 	p := &rbdJournalHeldPending{}
 	h.Pending = p
 	ctx := s.ctx
-	restart := s.mode == rbdJournalVariantPrimaryRestart
+	mode := rbdJournalHeldMode(s.mode)
+	restart := mode == rbdJournalVariantPrimaryRestart
+	erasure := rbdJournalErasure(s.mode)
 	classOp := func(class, method string, mode cephmsgr.OSDCallMode, input []byte) cephmsgr.OSDOperation {
 		return cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: class, Method: method, Mode: mode, MaxOutputBytes: 65536}}
 	}
@@ -234,16 +237,23 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 	s.done("ping")
 
 	h.Placed = rbdJournalHeldReadOf(t, ctx, s, "observe-placed")
-	if len(h.Placed.Objects) != 3 || len(h.Placed.Objects[0].Acting) != 3 {
+	followed, pool := 3, s.plan.Pool
+	if erasure {
+		followed, pool = 1, h.JournalPool
+	}
+	if len(h.Placed.Objects) != followed || len(h.Placed.Objects[0].Acting) != 3 {
 		t.Fatal("the PG is not on three acting members", h.Placed.Objects)
 	}
 	targetRoute := s.route(t, e.ObjectName)
-	goPlacement, err := recoveryObjectPlacement(ctx, s.observer, s.plan.Pool, e.ObjectName)
-	if err != nil || len(goPlacement.Acting) != 3 || goPlacement.Primary != targetRoute.Primary || headerRoute.Primary != targetRoute.Primary {
+	goPlacement, err := recoveryObjectPlacement(ctx, s.observer, pool, e.ObjectName)
+	if err != nil || len(goPlacement.Acting) != 3 || goPlacement.Primary != targetRoute.Primary || !erasure && headerRoute.Primary != targetRoute.Primary {
 		t.Fatalf("the subject's placement of the journal object and the header is not one three-member acting set (%v, osd.%d, osd.%d): %v", goPlacement.Acting, targetRoute.Primary, headerRoute.Primary, err)
 	}
 	h.Primary, h.Replica, h.GoActing = targetRoute.Primary, goPlacement.Acting[2], goPlacement.Acting
 	h.SentAtEpoch, h.NamedEpoch = targetRoute.Epoch, targetRoute.Epoch
+	if erasure {
+		h.HeaderPrimary = headerRoute.Primary
+	}
 
 	// The entries and their journal objects' bytes before them.
 	objects := readRBDBlob(t, s.dir, s.locked.Blobs["journal_objects"])
@@ -252,7 +262,7 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 	// Entry 0 is the record's entry, built by the common sequence.
 	phases := []string{"go-lost-append", "go-held-pending", "go-held-pending"}
 	var inputs [][]byte
-	for i, hold := range rbdJournalHeldPendingHolds[s.mode] {
+	for i, hold := range rbdJournalHeldPendingHolds[mode] {
 		entry, input := *e, s.appendInput
 		if i > 0 {
 			at := s.now()
@@ -303,6 +313,9 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 		err    error
 	}
 	appendConn := s.conn
+	if erasure {
+		appendConn = s.connect(t, targetRoute)
+	}
 	h.AppendConnection = s.dialOf(appendConn)
 	calls := make([]*call, len(p.Calls))
 	defer func() {
@@ -362,6 +375,9 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 		p.Calls[i].Outcome = &rbdJournalLostAppendOutcome{Label: p.Calls[i].Label, CallerInvocations: 1, Class: class, UnknownOutcome: errors.As(c.err, &unknown),
 			Canceled: errors.Is(c.err, context.Canceled), Error: detail, Submission: c.reply.Submission, ReplyTransaction: c.reply.Transaction, ReplyCode: c.reply.Code,
 			RecordedUTC: time.Now().UTC().Format(time.RFC3339Nano)}
+		if c.reply.Transaction != 0 && len(c.reply.Operations) == 1 {
+			p.Calls[i].Outcome.OperationCode = &c.reply.Operations[0].Result
+		}
 	}
 	recorded := func(t *testing.T) {
 		t.Helper()
