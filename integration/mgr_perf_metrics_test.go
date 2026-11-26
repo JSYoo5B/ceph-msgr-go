@@ -225,7 +225,7 @@ func mgrPerfLive(t *testing.T, ctx context.Context, peer *cephmsgr.MgrPeer, vari
 		t.Fatal(err)
 	}
 	name := fmt.Sprintf("mgr-perf-%t.json", variant)
-	if err := os.WriteFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), name), encoded, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), name), encoded, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("stock OSD metric report: variant configure=%t, generation=%d, native %s, OPS=%d BYTES=%d; explicit withdrawal checked with new native traffic", variant, peer.Identity().Generation, key, total.Ops, total.Bytes)
