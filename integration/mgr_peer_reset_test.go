@@ -12,7 +12,9 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -210,9 +212,10 @@ func freshOSDSession(t *testing.T, log handshakeLog, since time.Time, endpoint i
 // and cookie labels (zero, nonzero, equality). Three faults are bracketed
 // by native `mgr dump` samples (epoch, active name, GID, address vector):
 //
-//   - transport cut, unchanged listener: osd.0's ms_inject_socket_failures
-//     shuts one of its sockets; the cell requires the injection on the
-//     connection to the active MGR and an unchanged MgrMap
+//   - transport cut, unchanged listener: osd.0's ms_inject_socket_failures,
+//     set and cleared through its admin socket, shuts one of its sockets;
+//     the cell requires the injection on the connection to the active MGR
+//     and an unchanged MgrMap
 //   - active-GID change: `mgr fail` of the active MGR promotes the standby
 //   - restarted listener: with the standby stopped and failed out, the
 //     active MGR container restarts; MON drops its old GID and promotes the
@@ -294,7 +297,7 @@ func TestCephMgrPeerResetIntegration(t *testing.T) {
 	defer func() {
 		cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
 		defer stop()
-		remove(cleanup, "osd.0", "ms_inject_socket_failures")
+		osdInject(t, cleanup, control, "cleanup", 0)
 		remove(cleanup, "osd.0", "debug_ms")
 		remove(cleanup, "mgr", "debug_ms")
 	}()
@@ -369,7 +372,7 @@ func TestCephMgrPeerResetIntegration(t *testing.T) {
 	cell("transport-cut", func(before nativeMgrDump) (nativeMgrDump, time.Time) {
 		endpoint := v2Endpoint(t, before.ActiveAddrs.Addrvec)
 		start := time.Now().Add(-time.Second)
-		set("osd.0", "ms_inject_socket_failures", "10")
+		osdInject(t, ctx, control, "transport-cut-on", 10)
 		var cut time.Time
 		for deadline := time.Now().Add(3 * time.Minute); cut.IsZero(); {
 			log := mgrHandshakeLog(t, ctx, control, "transport-cut-inject", "osd", "0", endpoint)
@@ -386,7 +389,7 @@ func TestCephMgrPeerResetIntegration(t *testing.T) {
 			}
 			time.Sleep(2 * time.Second)
 		}
-		remove(ctx, "osd.0", "ms_inject_socket_failures")
+		osdInject(t, ctx, control, "transport-cut-off", 0)
 		after, _ := mgrDaemonDump(t, ctx, control, "transport-cut-after")
 		if after.ActiveGID != before.ActiveGID || !sameAddrvec(after.ActiveAddrs.Addrvec, before.ActiveAddrs.Addrvec) {
 			t.Fatalf("transport-cut changed the MgrMap: %+v -> %+v", before, after)
@@ -457,6 +460,27 @@ func TestCephMgrPeerResetIntegration(t *testing.T) {
 }
 
 func sameAddrvec(a, b []nativeMgrAddress) bool { return slices.Equal(a, b) }
+
+// osdInject sets osd.0's ms_inject_socket_failures through its admin socket
+// (control mgr-osd-inject). A MON config change is not used: the OSD would
+// learn it over its MON session, which the injection itself keeps cutting,
+// and a first run left the injection on for the rest of the test that way.
+func osdInject(t *testing.T, ctx context.Context, control, label string, period int) {
+	t.Helper()
+	if err := testcluster.RequestControl(ctx, control, "mgr-osd-inject", "mgr-osd-inject-completed", label, strconv.Itoa(period)); err != nil {
+		t.Fatal("osd.0 socket failure injection", label, err)
+	}
+	data, err := os.ReadFile(filepath.Join(control, "mgr-osd-inject.json"))
+	var receipt struct {
+		Label    string `json:"label"`
+		Admitted bool   `json:"admitted"`
+		Code     int    `json:"code"`
+		Output   string `json:"output"`
+	}
+	if err != nil || json.Unmarshal(data, &receipt) != nil || receipt.Label != label || !receipt.Admitted || receipt.Code != 0 {
+		t.Fatalf("osd.0 socket failure injection %s: %+v %v", label, receipt, err)
+	}
+}
 
 // resetSpecimen is the reset observer's native positive control: a stock
 // OSD decoding a SESSION_RESET on its connection to a Go MGR acceptor.
