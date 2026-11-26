@@ -93,8 +93,10 @@ func mgrPerfProjection(payload, query []byte, descriptors []uint8) (map[string]m
 // interval deltas, so accumulate reports instead of treating the last as total.
 func mgrPerfLive(t *testing.T, ctx context.Context, peer *cephmsgr.MgrPeer, variant bool) {
 	t.Helper()
+	ctx, stop := context.WithTimeout(ctx, 90*time.Second)
+	defer stop()
 	query := mgrPerfQuery(t)
-	c := cephmsgr.MgrConfigure{StatsPeriod: 1, OSDPerfMetricQueries: []cephmsgr.MgrOpaqueEntry{query}}
+	c := cephmsgr.MgrConfigure{StatsPeriod: 1, StatsThreshold: 5, OSDPerfMetricQueries: []cephmsgr.MgrOpaqueEntry{query}}
 	if variant {
 		var body, envelope wire.Encoder
 		body.U32(1)
@@ -130,18 +132,17 @@ func mgrPerfLive(t *testing.T, ctx context.Context, peer *cephmsgr.MgrPeer, vari
 		}
 		return values
 	}
-	// Wait for the exact query envelope, not merely a Configure write receipt.
-	installed := false
-	for i := 0; i < 5; i++ {
-		r := next()
-		projection(r)
-		if bytes.Contains(r.MetricReport.Payload, query.Key) {
-			installed = true
-			break
-		}
+	// Stock OSD does not emit a query entry before any matching operation:
+	// DynamicPerfStats::merge only inserts queries with populated groups.
+	// The schema withdrawal in this same configure is a receiver-side witness:
+	// MgrClient applies the query before emitting the changed-threshold report.
+	for len(next().Undeclare) == 0 {
 	}
-	if !installed {
-		t.Fatal("stock OSD did not report the configured query")
+	c.StatsThreshold = 0
+	if err := peer.Configure(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	for len(next().Declare) == 0 {
 	}
 	var native struct {
 		Workload struct {
