@@ -71,6 +71,8 @@ func rbdJournalFencedSample(erasure, override bool) *rbdJournalLostAppendRecord 
 		a.Before.Epoch, a.Before.ActingPrimary, a.Before.UpPrimary = 28, 1, 1
 		a.Commands = []string{"osd primary-temp 4.0 0"}
 		a.Query = h.Placed.Query
+		// The read before the alignment went to the CRUSH primary.
+		r.DialsTotal, r.Gate.Connections = n(2), 2
 	}
 	return r
 }
@@ -169,11 +171,12 @@ func TestRBDJournalFencedHoldClaims(t *testing.T) {
 		"image applied after fence": {false, "observe-fenced", func(r *rbdJournalLostAppendRecord) { r.Views["observe-fenced"].ImageHeadSHA256 = r.ExpectedHeadAfter }},
 		"erasure answer with error": {true, "observe-fenced", func(r *rbdJournalLostAppendRecord) { code := int32(-5); r.Outcome.OperationCode = &code }},
 		// Transmission and the replay.
-		"second connection":  {false, "replay", func(r *rbdJournalLostAppendRecord) { n := 2; r.DialsTotal, r.Gate.Connections = &n, 2 }},
-		"second large write": {false, "replay", func(r *rbdJournalLostAppendRecord) { r.Gate.LargeWrites = 2 }},
-		"erasure append on another connection": {true, "replay", func(r *rbdJournalLostAppendRecord) {
-			n := 2
-			r.DialsTotal, r.Gate.Connections, r.Held.AppendConnection = &n, 2, 2
+		"second connection":                    {false, "replay", func(r *rbdJournalLostAppendRecord) { n := 2; r.DialsTotal, r.Gate.Connections = &n, 2 }},
+		"second large write":                   {false, "replay", func(r *rbdJournalLostAppendRecord) { r.Gate.LargeWrites = 2 }},
+		"erasure append on another connection": {true, "replay", func(r *rbdJournalLostAppendRecord) { r.Held.AppendConnection = 2 }},
+		"erasure extra connection": {true, "replay", func(r *rbdJournalLostAppendRecord) {
+			n := *r.DialsTotal + 1
+			r.DialsTotal, r.Gate.Connections = &n, n
 		}},
 		"replayed twice": {false, "replay", func(r *rbdJournalLostAppendRecord) {
 			v := r.Views["replay"]

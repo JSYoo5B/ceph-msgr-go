@@ -341,16 +341,24 @@ func rbdJournalFencedHoldClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		return problems
 	}
 
-	// Transmission: one subject connection, which took the lock, carried
-	// the append and the stat.
-	if r.DialsTotal == nil || *r.DialsTotal != 1 || g.Connections != 1 || h.AppendConnection != 1 || g.LargeWrites != 1 {
-		fail("transmission: not one subject connection with one write of the append size: gate %s, dials %s", text(g), text(r.DialsTotal))
+	// Transmission: the subject's first connection took the lock and
+	// carried the append and the stat. On the erasure-coded pool under an
+	// override the subject read the journal object before the alignment
+	// from its CRUSH primary, on a second connection that carried no write
+	// of the append size.
+	want := 1
+	if erasure && f.Align != nil && len(f.Align.Commands) != 0 {
+		want = 2
+	}
+	if r.DialsTotal == nil || *r.DialsTotal != want || g.Connections != want || h.AppendConnection != 1 || g.LargeWrites != 1 {
+		fail("transmission: not %d subject connections with the append on the lock's and one write of the append size: gate %s, dials %s, append on %d", want, text(g), text(r.DialsTotal),
+			h.AppendConnection)
 	}
 	// Journal: native librbd's replay of the entry.
-	want := rbdJournalLostAppendEvent{Type: "AioWrite", Offset: e.ImageOffset, Length: e.ImageLength,
+	event := rbdJournalLostAppendEvent{Type: "AioWrite", Offset: e.ImageOffset, Length: e.ImageLength,
 		Timestamp: time.Unix(int64(e.Timestamp.Seconds), int64(e.Timestamp.Nanoseconds)/1000*1000).UTC().Format(time.RFC3339Nano)}
 	if replay.InspectTotal == nil || replay.InspectErrors == nil || setup.InspectTotal == nil || *replay.InspectTotal != *setup.InspectTotal+1 || *replay.InspectErrors != 0 ||
-		len(replay.InspectOwned) != 1 || replay.InspectOwned[0] != want || !slices.Equal(replay.InspectOther, setup.InspectOther) {
+		len(replay.InspectOwned) != 1 || replay.InspectOwned[0] != event || !slices.Equal(replay.InspectOther, setup.InspectOther) {
 		fail("replay: rbd journal inspect does not replay the setup entries and the owned entry once (%v)", replay.InspectOwned)
 	}
 	entryAt("replay", replay)

@@ -103,7 +103,9 @@ func TestCephRBDJournalFencedHoldIntegration(t *testing.T) {
 // the up and acting sets keep every shard in its slot, and the PG is
 // active+clean with H answering for its own shard. The subject's append to
 // journal object 0 then travels on its connection to H, the one that took
-// the lock. The member paused is the last acting member other than H. P
+// the lock; under an override the subject's read of the journal object
+// before the alignment went to the CRUSH primary on a second connection,
+// which carries nothing afterwards. The member paused is the last acting member other than H. P
 // lists the op at "started" with its own shard's sub-write started and
 // committed, as in the erasure hold; the fence, the -108 refusal of the
 // stat, the known answer 0 after the resume and the native postconditions
