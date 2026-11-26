@@ -477,7 +477,8 @@ func fsidString(f [16]byte) string {
 // legacy configure on the first session, OSD variant configure after reconnect,
 // and populated OSD variant reports matched by a separate native client's
 // global ID to its six verified requests and 10758 data bytes. Each phase
-// observes explicit empty-variant query withdrawal on two reports. See
+// observes explicit empty-variant query withdrawal with fresh native I/O
+// and schema-fenced empty reports. See
 // mgr_perf_metrics_test.go and tools/osd_pool_mode_mgrperf_oracle.py.
 //
 // Not verified here: MMgrUpdate (only a stock MON sends it, after its own

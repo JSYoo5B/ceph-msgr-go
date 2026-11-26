@@ -144,36 +144,7 @@ func mgrPerfLive(t *testing.T, ctx context.Context, peer *cephmsgr.MgrPeer, vari
 	}
 	for len(next().Declare) == 0 {
 	}
-	var native struct {
-		Workload struct {
-			GlobalID  uint64 `json:"global_id"`
-			Namespace string `json:"namespace"`
-			Objects   []struct {
-				Object      string `json:"object"`
-				Size        int    `json:"size"`
-				WriteReturn int    `json:"write_return"`
-				ReadReturn  int    `json:"read_return"`
-				SHA256      string `json:"sha256"`
-			} `json:"objects"`
-			Ops, Bytes uint64
-		} `json:"workload"`
-	}
-	call, cancel := context.WithTimeout(ctx, 60*time.Second)
-	nativePoolResult(t, call, "mgrperf", map[string]any{"slot": 1}, &native)
-	cancel()
-	if native.Workload.GlobalID == 0 || native.Workload.Ops != 6 || native.Workload.Bytes != 10758 || len(native.Workload.Objects) != 3 {
-		t.Fatalf("unexpected native workload %+v", native)
-	}
-	for i, row := range native.Workload.Objects {
-		size := []int{257, 1025, 4097}[i]
-		data := make([]byte, size)
-		for j := range data {
-			data[j] = byte((j + i) % 251)
-		}
-		if row.Object != fmt.Sprintf("object-%d", i) || row.Size != size || row.WriteReturn != 0 || row.ReadReturn != size || row.SHA256 != fmt.Sprintf("%x", sha256.Sum256(data)) {
-			t.Fatalf("native readback %d: %+v", i, row)
-		}
-	}
+	native := mgrPerfWorkload(t, ctx)
 	key := fmt.Sprintf("client.%d", native.Workload.GlobalID)
 	total := mgrPerfCounts{}
 	var rawReports [][]byte
@@ -194,27 +165,61 @@ func mgrPerfLive(t *testing.T, ctx context.Context, peer *cephmsgr.MgrPeer, vari
 	if total.Ops != native.Workload.Ops || total.Bytes != native.Workload.Bytes {
 		t.Fatalf("metric totals %+v differ from native %+v", total, native)
 	}
-	// Empty legacy queries mean no update in stock MgrClient; an explicit empty
-	// OSD variant is needed to withdraw. Observe it on two consecutive reports.
+	// Empty legacy queries mean no update; explicitly withdraw via OSD variant.
 	var empty wire.Encoder
 	empty.Struct(1, 1, []byte{0, 0, 0, 0})
-	if err := peer.Configure(ctx, cephmsgr.MgrConfigure{StatsPeriod: 1, MetricConfig: &cephmsgr.MgrMetricPayload{Type: 0, Payload: empty.Data}}); err != nil {
+	if err := peer.Configure(ctx, cephmsgr.MgrConfigure{StatsPeriod: 1, StatsThreshold: 5, MetricConfig: &cephmsgr.MgrMetricPayload{Type: 0, Payload: empty.Data}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		r := next()
+		if len(r.Undeclare) > 0 {
+			projection(r)
+			if !bytes.Equal(r.MetricReport.Payload, empty.Data) {
+				t.Fatal("query remained on withdrawal acknowledgement")
+			}
+			break
+		}
+	}
+	if err := peer.Configure(ctx, cephmsgr.MgrConfigure{StatsPeriod: 1}); err != nil {
+		t.Fatal(err)
+	}
+	for len(next().Declare) == 0 {
+	}
+	negative := mgrPerfWorkload(t, ctx)
+	// A second schema transition fences reports after the negative workload.
+	// Empty reports without traffic cannot prove withdrawal: stock OSD also
+	// emits an empty map when an installed query has no populated groups.
+	if err := peer.Configure(ctx, cephmsgr.MgrConfigure{StatsPeriod: 1, StatsThreshold: 5}); err != nil {
 		t.Fatal(err)
 	}
 	cleared := 0
-	for i := 0; i < 5 && cleared < 2; i++ {
+	for {
 		r := next()
 		projection(r)
-		if bytes.Equal(r.MetricReport.Payload, empty.Data) {
-			cleared++
-		} else {
-			cleared = 0
+		if !bytes.Equal(r.MetricReport.Payload, empty.Data) {
+			t.Fatal("withdrawn query reported new native workload")
+		}
+		cleared++
+		if len(r.Undeclare) > 0 {
+			break
 		}
 	}
-	if cleared != 2 {
-		t.Fatal("query withdrawal was not observed")
+	if err := peer.Configure(ctx, cephmsgr.MgrConfigure{StatsPeriod: 1}); err != nil {
+		t.Fatal(err)
 	}
-	receipt := map[string]any{"variant_config": variant, "generation": peer.Identity().Generation, "native": native, "query": query, "reports": rawReports, "totals": total, "withdrawal_reports": cleared}
+	for {
+		r := next()
+		projection(r)
+		if !bytes.Equal(r.MetricReport.Payload, empty.Data) {
+			t.Fatal("withdrawn query reappeared")
+		}
+		cleared++
+		if len(r.Declare) > 0 {
+			break
+		}
+	}
+	receipt := map[string]any{"variant_config": variant, "generation": peer.Identity().Generation, "native": native, "withdrawn_workload": negative, "query": query, "reports": rawReports, "totals": total, "withdrawal_reports": cleared}
 	encoded, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +228,7 @@ func mgrPerfLive(t *testing.T, ctx context.Context, peer *cephmsgr.MgrPeer, vari
 	if err := os.WriteFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), name), encoded, 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("stock OSD metric report: variant configure=%t, generation=%d, native %s, OPS=%d BYTES=%d; explicit withdrawal observed twice", variant, peer.Identity().Generation, key, total.Ops, total.Bytes)
+	t.Logf("stock OSD metric report: variant configure=%t, generation=%d, native %s, OPS=%d BYTES=%d; explicit withdrawal checked with new native traffic", variant, peer.Identity().Generation, key, total.Ops, total.Bytes)
 }
 
 func TestMgrPerfMetricProjection(t *testing.T) {
@@ -323,4 +328,43 @@ func TestMgrPerfMetricProjectionBounds(t *testing.T) {
 			}
 		})
 	}
+}
+
+type mgrPerfNative struct {
+	Workload struct {
+		GlobalID  uint64 `json:"global_id"`
+		Namespace string `json:"namespace"`
+		Objects   []struct {
+			Object      string `json:"object"`
+			Size        int    `json:"size"`
+			WriteReturn int    `json:"write_return"`
+			ReadReturn  int    `json:"read_return"`
+			SHA256      string `json:"sha256"`
+		} `json:"objects"`
+		Ops, Bytes uint64
+	} `json:"workload"`
+}
+
+func mgrPerfWorkload(t *testing.T, ctx context.Context) mgrPerfNative {
+	t.Helper()
+	var native mgrPerfNative
+
+	call, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	nativePoolResult(t, call, "mgrperf", map[string]any{"slot": 1}, &native)
+	if native.Workload.GlobalID == 0 || native.Workload.Ops != 6 || native.Workload.Bytes != 10758 || len(native.Workload.Objects) != 3 {
+		t.Fatalf("unexpected native workload %+v", native)
+	}
+	for i, row := range native.Workload.Objects {
+		size := []int{257, 1025, 4097}[i]
+		data := make([]byte, size)
+		for j := range data {
+			data[j] = byte((j + i) % 251)
+		}
+		if row.Object != fmt.Sprintf("object-%d", i) || row.Size != size || row.WriteReturn != 0 || row.ReadReturn != size || row.SHA256 != fmt.Sprintf("%x", sha256.Sum256(data)) {
+			t.Fatalf("native readback %d: %+v", i, row)
+		}
+	}
+
+	return native
 }
