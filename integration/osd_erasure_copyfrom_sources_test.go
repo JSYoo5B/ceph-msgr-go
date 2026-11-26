@@ -473,12 +473,22 @@ func TestCopyFromErasureSourceJudgements(t *testing.T) {
 // fails ok, whose placement passes it, and returns that source's primary;
 // want says what ok requires.
 func (r *copyPrimaryChangeRun) sourceWhere(want string, ok func(osdFixtureOracle) bool) int32 {
+	r.t.Helper()
+	if !r.trySourceWhere(64, ok) {
+		r.t.Fatalf("no fresh source name in 64 has %s", want)
+	}
+	return r.srcRoute.ID
+}
+
+// trySourceWhere is sourceWhere over at most names fresh names; it reports
+// whether the source's placement passes ok.
+func (r *copyPrimaryChangeRun) trySourceWhere(names int, ok func(osdFixtureOracle) bool) bool {
 	t, ctx := r.t, r.ctx
 	t.Helper()
 	base := r.source
 	for i := 0; !ok(r.srcRoute); i++ {
-		if i == 64 {
-			t.Fatalf("no fresh source name in 64 has %s", want)
+		if i == names {
+			return false
 		}
 		name := fmt.Sprintf("%s-%d", base, i)
 		route := poolPlace(t, ctx, 1, name, "")
@@ -486,7 +496,42 @@ func (r *copyPrimaryChangeRun) sourceWhere(want string, ok func(osdFixtureOracle
 			r.source, r.srcRoute = name, route
 		}
 	}
-	return r.srcRoute.ID
+	return true
+}
+
+// heldCommitPlacement picks the destination and source objects of the held
+// final transaction and returns the destination primary and the OSD to
+// freeze, shard 1 of the destination PG. A replicated source keeps the
+// destination and is named until heldCommitSource accepts it. An
+// erasure-coded source of k data shards may admit no source PG at all for
+// one destination PG: the owned pools have eight PGs each, so on four OSDs
+// a k=3,m=1 source has the frozen OSD on its one parity shard in only some
+// of them, and its primary must still be neither OSD. The destination is
+// then renamed, onto another settled PG, until some source name fits.
+func (r *copyPrimaryChangeRun) heldCommitPlacement(facts erasureFacts, k int) (int32, int32) {
+	t, ctx := r.t, r.ctx
+	t.Helper()
+	fits := func() bool {
+		primary, frozen := r.dstRoute.ID, r.dstRoute.Acting[1]
+		ok := func(src osdFixtureOracle) bool { return heldCommitSource(src, primary, frozen, k) }
+		if k == 0 {
+			r.sourceWhere(fmt.Sprintf("a primary other than osd.%d and osd.%d", primary, frozen), ok)
+			return true
+		}
+		return r.trySourceWhere(24, ok)
+	}
+	base := r.dest
+	for i := 0; !fits(); i++ {
+		if i == 32 {
+			t.Fatalf("no fresh destination name in 32 has a source of %d data shards that leaves shard 1 of the destination unread", k)
+		}
+		name := fmt.Sprintf("%s-%d", base, i)
+		route := poolPlace(t, ctx, 2, name, "")
+		if _, err := facts.placementControl(route); err == nil && !route.PGTemp && slices.Equal(route.Up, route.Acting) && poolObserve(t, ctx, 2, name, "", "").Code == -2 {
+			r.dest, r.dstRoute = name, route
+		}
+	}
+	return r.dstRoute.ID, r.dstRoute.Acting[1]
 }
 
 // heldCommitSource says whether a source placement suits the held final
@@ -606,12 +651,11 @@ func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPoo
 	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("echeld-%d", cell.code))
 	facts.checkPlacement(t, r.dstRoute)
 	r.chunkMax = limit
-	primary, frozen := r.dstRoute.ID, r.dstRoute.Acting[1]
+	primary, frozen := r.heldCommitPlacement(facts, sourceK)
+	facts.checkPlacement(t, r.dstRoute)
 	held := &copyHeldCommit{Frozen: frozen, BlockerShard: 1}
 	receipt.Held, receipt.Lost, receipt.Shard = held, primary, int(r.dstRoute.Shard)
-	receipt.SourcePrimary = r.sourceWhere(fmt.Sprintf("a primary other than osd.%d and osd.%d, and none of its first %d shards on osd.%d", primary, frozen, sourceK, frozen),
-		func(src osdFixtureOracle) bool { return heldCommitSource(src, primary, frozen, sourceK) })
-	receipt.Primary = primary
+	receipt.SourcePrimary, receipt.Primary = r.srcRoute.ID, primary
 	r.lowerCopyChunk(&receipt.ChunkRestore, &receipt.ChunkReadback)
 	seeded := r.seedDestination()
 

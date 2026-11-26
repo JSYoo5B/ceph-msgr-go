@@ -57,7 +57,9 @@ func TestCephOSDErasureOptimizedK3M1ToK2M2CopyFromErasureToErasureIntegration(t 
 // source's min_size is three of four shards and the destination's three of
 // four, so every single loss leaves both PGs active. The held final
 // transaction needs a source whose three data shards avoid the frozen
-// destination shard, which leaves its parity shard there.
+// destination shard, which leaves its parity shard there; when none of the
+// source pool's eight PGs has that shape for a destination PG, the
+// destination is renamed onto another PG (heldCommitPlacement).
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1tok2m2copyfromerasuretoerasureloss key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
