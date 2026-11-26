@@ -319,8 +319,8 @@ func classifyHandshake(e *mgrHandshakeEvent, function, message string) bool {
 // (pinned ProtocolV2.cc), as it logs accept and any fault before
 // identification. Such a line is held with its connection (process and
 // pointer) until a later line of that connection names a peer: it is kept
-// when that peer is requested and dropped when it is another, and a new
-// accept or connect of the pointer ends the lifetime. Lines whose
+// when that peer is requested and dropped when it is another, and its stop
+// or a new accept or connect of the pointer ends the lifetime. Lines whose
 // connection never names a peer are returned as unattributed, so that an
 // absence verdict can see what it could not attribute. Kept events are in
 // log order (Line).
@@ -403,6 +403,13 @@ func scanMgrHandshakes(r io.Reader, endpoints []string, limit, maxEvents int) ([
 			pending[key] = append(pending[key], e)
 			if held++; len(events)+len(unattributed)+held > maxEvents {
 				return nil, nil, nil, errHandshakeEventsExceedBound
+			}
+			if e.Kind == "stop" {
+				// The lifetime ended without naming a peer; the pointer may
+				// be reused by another connection.
+				if err := end(key); err != nil {
+					return nil, nil, nil, err
+				}
 			}
 			continue
 		}
