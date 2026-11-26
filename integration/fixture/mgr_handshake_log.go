@@ -168,14 +168,15 @@ func addressNames(vector, entry string) bool {
 
 // classifyHandshake turns one function's message into an event, or reports
 // false for a line the receipt does not keep.
-func classifyHandshake(e *mgrHandshakeEvent, function, message string, cookies cookieLabels) bool {
+// Cookies are left raw here; scanMgrHandshakes labels those of kept events.
+func classifyHandshake(e *mgrHandshakeEvent, function, message string) bool {
 	ident := func(kind string) bool {
 		m := handshakeIdent.FindStringSubmatch(message)
 		if m == nil {
 			return false
 		}
 		e.Kind, e.Addrs, e.Target, e.GID, e.GlobalSeq = kind, m[1], m[2], m[3], m[4]
-		e.Supported, e.Required, e.Flags, e.Cookie = m[5], m[6], m[7], cookies.label(m[8])
+		e.Supported, e.Required, e.Flags, e.Cookie = m[5], m[6], m[7], m[8]
 		return true
 	}
 	reconnect := func(kind string) bool {
@@ -183,7 +184,7 @@ func classifyHandshake(e *mgrHandshakeEvent, function, message string, cookies c
 		if m == nil {
 			return false
 		}
-		e.Kind, e.Cookie, e.PeerCookie = kind, cookies.label(m[1]), cookies.label(m[2])
+		e.Kind, e.Cookie, e.PeerCookie = kind, m[1], m[2]
 		e.GlobalSeq, e.ConnectSeq, e.MessageSeq = m[3], m[4], m[5]
 		return true
 	}
@@ -248,7 +249,7 @@ func classifyHandshake(e *mgrHandshakeEvent, function, message string, cookies c
 		if m == nil {
 			return false
 		}
-		e.Kind, e.Entity, e.Cookie, e.PeerCookie = "ready", m[1], cookies.label(m[2]), cookies.label(m[3])
+		e.Kind, e.Entity, e.Cookie, e.PeerCookie = "ready", m[1], m[2], m[3]
 		return true
 	case "_fault":
 		switch {
@@ -310,10 +311,10 @@ func scanMgrHandshakes(r io.Reader, endpoints []string, limit, maxEvents int) ([
 		e := mgrHandshakeEvent{Time: stamp[1], Process: len(processes)}
 		if m := handshakeV2Prefix.FindStringSubmatch(line); m != nil {
 			e.Peer, e.Conn, e.State, e.Lossy = m[2], m[3], m[4], m[5]
-			if !classifyHandshake(&e, m[8], m[9], cookies) {
+			if !classifyHandshake(&e, m[8], m[9]) {
 				continue
 			}
-			e.ClientCookie, e.ServerCookie = cookies.label(m[6]), cookies.label(m[7])
+			e.ClientCookie, e.ServerCookie = m[6], m[7]
 		} else if m := handshakeConnPrefix.FindStringSubmatch(line); m != nil {
 			e.Peer, e.Conn, e.State, e.Lossy, e.Kind = m[2], m[3], m[4], m[5], "socket_failure_injected"
 		} else {
@@ -330,6 +331,14 @@ func scanMgrHandshakes(r io.Reader, endpoints []string, limit, maxEvents int) ([
 		}
 		if e.Endpoint = match(peer...); e.Endpoint < 0 {
 			continue
+		}
+		// Labels are assigned in the order of kept events only, so two
+		// receipts of one log label a cookie alike when their earlier
+		// events match.
+		for _, c := range []*string{&e.ClientCookie, &e.ServerCookie, &e.Cookie, &e.PeerCookie} {
+			if *c != "" {
+				*c = cookies.label(*c)
+			}
 		}
 		if len(events) == maxEvents {
 			return nil, nil, errHandshakeEventsExceedBound

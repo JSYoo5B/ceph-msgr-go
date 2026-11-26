@@ -658,13 +658,22 @@ func resetSpecimen(t *testing.T, ctx context.Context, control string, admin *cep
 			sequence = append(sequence, e)
 		}
 	}
+	// Cookie labels are per receipt: take the claimed server cookie's label
+	// from this receipt's READY of the stateful session.
+	stateful := slices.IndexFunc(log.Events, func(e handshakeEvent) bool {
+		return e.Conn == claimed.Conn && e.Kind == "ready" && e.Lossy == "0" && e.ServerCookie != "0"
+	})
+	if stateful < 0 {
+		t.Fatal("osd.0 log lost the stateful READY of connection", claimed.Conn)
+	}
+	serverCookie := log.Events[stateful].ServerCookie
 	for _, e := range sequence {
-		t.Logf("specimen osd.0 %v", e)
+		t.Logf("specimen osd.0 %v (prefix cookies %s/%s)", e, e.ClientCookie, e.ServerCookie)
 	}
 	want := []func(handshakeEvent) bool{
 		func(e handshakeEvent) bool { return e.Kind == "fault_reconnect" },
 		func(e handshakeEvent) bool {
-			return e.Kind == "reconnect_sent" && e.PeerCookie == claimed.ServerCookie && e.Cookie == "0"
+			return e.Kind == "reconnect_sent" && e.PeerCookie == serverCookie && e.Cookie == "0"
 		},
 		func(e handshakeEvent) bool { return e.Kind == "reset_received" && e.Full == "1" },
 		func(e handshakeEvent) bool { return e.Kind == "reset_session" },
@@ -683,7 +692,7 @@ func resetSpecimen(t *testing.T, ctx context.Context, control string, admin *cep
 		}
 	}
 	if step != len(want) {
-		t.Fatalf("osd.0 connection %s: reset specimen stopped at step %d of %d; no decoded SESSION_RESET full=1 in that order: %v", claimed.Conn, step, len(want), sequence)
+		t.Fatalf("osd.0 connection %s: reset specimen stopped at step %d of %d (claimed server cookie %s); no decoded SESSION_RESET full=1 in that order: %v", claimed.Conn, step, len(want), serverCookie, sequence)
 	}
 	t.Logf("reset specimen: osd.0 connection %s resumed with the claimed server cookie, decoded SESSION_RESET full=1 from the Go acceptor, reset its session and identified afresh", claimed.Conn)
 

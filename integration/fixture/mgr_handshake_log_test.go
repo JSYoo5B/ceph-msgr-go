@@ -10,9 +10,11 @@ import (
 // The lines are shaped like pinned ProtocolV2.cc and AsyncConnection.cc
 // output at debug_ms 5; addresses, pointers and values are synthetic. The
 // connection 0x1 goes to the MGR endpoint 192.0.2.1:41000/77 and resets;
-// 0x2 goes to another nonce on the same port; 0x3 is an accepted
+// 0x2 goes to another nonce on the same port, and its cookie must not
+// shift the labels of kept events; 0x3 is an accepted
 // connection whose peer is the requested OSD endpoint.
 const mgrHandshakeSampleLog = `2026-11-20T00:00:00.000+0000 7f0 0 ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable), process ceph-osd, pid 7
+2026-11-20T00:00:00.500+0000 7f0  1 --2- [v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] >> v2:192.0.2.1:41000/78 conn(0x2 0x21 crc :-1 s=READY pgs=1 gs=1 cs=0 l=0 c_cookie=0 s_cookie=beef reconnecting=0 rev1=1 crypto rx=0 tx=0 comp rx=0 tx=0).ready entity=mgr.1 client_cookie=0 server_cookie=beef in_seq=0 out_seq=0
 2026-11-20T00:00:01.000+0000 7f0  1 --2- [v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] >> v2:192.0.2.1:41000/77 conn(0x1 0x11 unknown :-1 s=START_CONNECT pgs=0 gs=0 cs=0 l=1 c_cookie=0 s_cookie=0 reconnecting=0 rev1=0 crypto rx=0 tx=0 comp rx=0 tx=0).connect
 2026-11-20T00:00:01.100+0000 7f0  5 --2- [v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] >> v2:192.0.2.1:41000/77 conn(0x1 0x11 crc :-1 s=SESSION_CONNECTING pgs=0 gs=12 cs=0 l=1 c_cookie=0 s_cookie=0 reconnecting=0 rev1=1 crypto rx=0 tx=0 comp rx=0 tx=0).send_client_ident sending identification: addrs=[v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] target=v2:192.0.2.1:41000/77 gid=0 global_seq=12 features_supported=3f01cfbffffdffff features_required=800000000002201 flags=1 cookie=0
 2026-11-20T00:00:01.200+0000 7f0  5 --2- [v2:192.0.2.20:6802/9,v1:192.0.2.20:6803/9] >> v2:192.0.2.1:41000/77 conn(0x1 0x11 crc :-1 s=SESSION_CONNECTING pgs=0 gs=12 cs=0 l=1 c_cookie=0 s_cookie=0 reconnecting=0 rev1=1 crypto rx=0 tx=0 comp rx=0 tx=0).handle_server_ident received server identification: addrs=v2:192.0.2.1:41000/77 gid=4242 global_seq=3 features_supported=2a00040010a0a237 features_required=800000000200000 flags=0 cookie=a1b2c3d4
