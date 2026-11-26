@@ -486,23 +486,33 @@ func TestCephMgrDaemonRotatingWipeIntegration(t *testing.T) {
 	before := readMap()
 
 	// 2. One wipe. Never repeated: an uncertain submission ends the test.
+	// The MON replies after the commit; the daemon may see the raised auth
+	// epoch first, and the retained ticket is presented as soon as it does.
 	wipeAt := time.Now()
-	result, err := admin.MonCommand(ctx, Command{JSON: []byte(`{"prefix":"auth wipe-rotating-service-keys"}`)})
-	if err != nil || result.Code != 0 {
-		t.Fatalf("wipe submitted once: code %d %q %v", result.Code, result.Message, err)
+	type wipeResult struct {
+		result Result
+		err    error
 	}
-	after := readMap()
-	if after.Epoch <= before.Epoch || *after.AuthEpoch <= *before.AuthEpoch {
-		t.Fatal("the wipe did not advance the native MonMap and auth epochs", before, after)
-	}
-	t.Logf("wipe committed in %v: native MonMap epoch %d -> %d, auth_epoch %d -> %d", time.Since(wipeAt).Round(time.Millisecond), before.Epoch, after.Epoch, *before.AuthEpoch, *after.AuthEpoch)
-	reached := time.Now()
-	for daemon.State().Monitor.AuthEpoch < *after.AuthEpoch {
-		if time.Since(reached) > 30*time.Second {
-			t.Fatal("the daemon's MON session did not reach the native auth epoch", daemon.State().Monitor)
+	submitted := make(chan wipeResult, 1)
+	go func() {
+		result, err := admin.MonCommand(ctx, Command{JSON: []byte(`{"prefix":"auth wipe-rotating-service-keys"}`)})
+		submitted <- wipeResult{result, err}
+	}()
+	var reply *wipeResult
+	for daemon.State().Monitor.AuthEpoch <= pre.Monitor.AuthEpoch {
+		select {
+		case r := <-submitted:
+			if r.err != nil || r.result.Code != 0 {
+				t.Fatalf("wipe submitted once: code %d %q %v", r.result.Code, r.result.Message, r.err)
+			}
+			reply = &r
+		case <-time.After(20 * time.Millisecond):
 		}
-		time.Sleep(20 * time.Millisecond)
+		if time.Since(wipeAt) > time.Minute {
+			t.Fatal("the daemon's MON session did not see a raised auth epoch", daemon.State().Monitor)
+		}
 	}
+	seen := time.Since(wipeAt).Round(time.Millisecond)
 
 	// 3. The retained pre-wipe ticket, still valid, is refused.
 	if !time.Now().Before(retainedTicket.Expires) {
@@ -514,8 +524,19 @@ func TestCephMgrDaemonRotatingWipeIntegration(t *testing.T) {
 	} else if !refusal.Refused || refusal.Stage != "authentication" {
 		t.Fatalf("pre-wipe MGR ticket ended without an authentication refusal: %+v", refusal)
 	} else {
-		t.Logf("post-wipe: the retained ticket (secret ID %d, %v of validity left) was refused at %s: %s", retainedTicket.SecretID, left, refusal.Stage, refusal.Reason)
+		t.Logf("post-wipe: the daemon saw auth epoch %d %v after the wipe was sent; the retained ticket (secret ID %d, %v of validity left) was refused at %s: %s", daemon.State().Monitor.AuthEpoch, seen, retainedTicket.SecretID, left, refusal.Stage, refusal.Reason)
 	}
+	if reply == nil {
+		r := <-submitted
+		if r.err != nil || r.result.Code != 0 {
+			t.Fatalf("wipe submitted once: code %d %q %v", r.result.Code, r.result.Message, r.err)
+		}
+	}
+	after := readMap()
+	if after.Epoch <= before.Epoch || *after.AuthEpoch <= *before.AuthEpoch || daemon.State().Monitor.AuthEpoch != *after.AuthEpoch {
+		t.Fatal("native MonMap and auth epochs", before, after, "daemon auth epoch", daemon.State().Monitor.AuthEpoch)
+	}
+	t.Logf("wipe committed in %v: native MonMap epoch %d -> %d, auth_epoch %d -> %d, equal to the daemon's", time.Since(wipeAt).Round(time.Millisecond), before.Epoch, after.Epoch, *before.AuthEpoch, *after.AuthEpoch)
 
 	// 4. The invalidation and the post-wipe set.
 	var post MgrRotatingKeys
