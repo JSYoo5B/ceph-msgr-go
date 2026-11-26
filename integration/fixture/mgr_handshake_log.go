@@ -31,7 +31,7 @@ var errHandshakeEventsExceedBound = errors.New("handshake log has more events th
 // Pinned ceph/ceph/blob/v20.2.4/src/msg/async/ProtocolV2.cc prefixes every
 // line with _conn_prefix: "--2- <own addrs> >> <peer addrs> conn(<connection>
 // <protocol> <mode> :<port> s=<state> pgs=.. gs=.. cs=.. l=<lossy>
-// c_cookie=<hex> s_cookie=<hex> reconnecting=.. rev1=.. crypto rx=.. tx=..
+// c_cookie=<decimal> s_cookie=<decimal> reconnecting=.. rev1=.. crypto rx=.. tx=..
 // comp rx=.. tx=..).<function>", and AsyncConnection.cc its own lines with
 // "-- <own addrs> >> <peer addrs> conn(<connection> msgr2=<protocol> <mode>
 // :<port> s=<state> l=<lossy>).<function>"; an accepted connection's peer
@@ -39,7 +39,7 @@ var errHandshakeEventsExceedBound = errors.New("handshake log has more events th
 // line starts with its
 // timestamp, after an optional stderr prefix word (log_stderr_prefix).
 var (
-	handshakeV2Prefix   = regexp.MustCompile(`--2- (\S+) >> (\S*) conn\((0x[0-9a-f]+) 0x[0-9a-f]+ \S+ :-?\d+ s=(\S+) pgs=\d+ gs=\d+ cs=\d+ l=([01]) c_cookie=([0-9a-f]+) s_cookie=([0-9a-f]+) reconnecting=[01] rev1=[01] crypto rx=\S+ tx=\S+ comp rx=\S+ tx=\S+\)\.(\w+)(.*)$`)
+	handshakeV2Prefix   = regexp.MustCompile(`--2- (\S+) >> (\S*) conn\((0x[0-9a-f]+) 0x[0-9a-f]+ \S+ :-?\d+ s=(\S+) pgs=\d+ gs=\d+ cs=\d+ l=([01]) c_cookie=(\d+) s_cookie=(\d+) reconnecting=[01] rev1=[01] crypto rx=\S+ tx=\S+ comp rx=\S+ tx=\S+\)\.(\w+)(.*)$`)
 	handshakeConnPrefix = regexp.MustCompile(`-- (\S+) >> (\S*) conn\((0x[0-9a-f]+) msgr2=0x[0-9a-f]+ \S+ :-?\d+ s=(\S+) l=([01])\)\.(\w+) injecting socket failure`)
 	handshakeStamp      = regexp.MustCompile(`^(?:\S+ )?(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+[+-]\d{4}) `)
 	handshakeBanner     = regexp.MustCompile(`, process (\S+), pid (\d+)`)
@@ -153,6 +153,16 @@ func (l cookieLabels) label(raw string) string {
 	name := "k" + strconv.Itoa(len(l)+1)
 	l[key] = name
 	return name
+}
+
+// decimalCookie rewrites a decimal cookie in hex, or "x" when it is not a
+// 64-bit value (labelled "invalid").
+func decimalCookie(raw string) string {
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return "x"
+	}
+	return strconv.FormatUint(value, 16)
 }
 
 // addressNames reports whether an address vector as Ceph prints it (one
@@ -314,7 +324,9 @@ func scanMgrHandshakes(r io.Reader, endpoints []string, limit, maxEvents int) ([
 			if !classifyHandshake(&e, m[8], m[9]) {
 				continue
 			}
-			e.ClientCookie, e.ServerCookie = m[6], m[7]
+			// The prefix prints its cookies in decimal, the frames in
+			// hex; labels compare the values.
+			e.ClientCookie, e.ServerCookie = decimalCookie(m[6]), decimalCookie(m[7])
 		} else if m := handshakeConnPrefix.FindStringSubmatch(line); m != nil {
 			e.Peer, e.Conn, e.State, e.Lossy, e.Kind = m[2], m[3], m[4], m[5], "socket_failure_injected"
 		} else {
