@@ -875,7 +875,11 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	forcedPending := variant == rbdJournalVariantForcedBreakPending
 	inflight, trim := variant == rbdJournalVariantForcedBreakInflight, variant == rbdJournalVariantTrim
 	erasure := rbdJournalErasure(variant)
-	held := variant == rbdJournalVariantReplicaHold || variant == rbdJournalVariantHeldPrimaryChange || variant == rbdJournalVariantDeadPrimary || rbdJournalHeldPendingMode(variant) || erasure
+	held := variant == rbdJournalVariantReplicaHold || variant == rbdJournalVariantHeldPrimaryChange || variant == rbdJournalVariantDeadPrimary || rbdJournalHeldPendingMode(variant) || erasure ||
+		variant == rbdJournalVariantFencedHold
+	// The fenced erasure cell gives the journal PG a primary override, so
+	// its acting primary need not be the first member of its acting set.
+	primaryOverride := variant == "erasure-"+rbdJournalVariantFencedHold
 	consumer := variant == rbdJournalVariantConsumer
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
@@ -941,7 +945,8 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		results = "rbd-journal-trim-results.json"
 	case rbdJournalVariantConsumer:
 		results = "rbd-journal-consumer-results.json"
-	case rbdJournalVariantReplicaHold, rbdJournalVariantHeldPrimaryChange, rbdJournalVariantDeadPrimary, rbdJournalVariantPendingHold, rbdJournalVariantPrimaryRestart, rbdJournalVariantErasureHold:
+	case rbdJournalVariantReplicaHold, rbdJournalVariantHeldPrimaryChange, rbdJournalVariantDeadPrimary, rbdJournalVariantPendingHold, rbdJournalVariantPrimaryRestart, rbdJournalVariantErasureHold,
+		rbdJournalVariantPrimaryRestartBeforeDown, rbdJournalVariantFencedHold:
 		results, outcomeFile = "rbd-journal-"+variant+"-results.json", "rbd-journal-"+variant+"-outcome.json"
 	}
 
@@ -1206,7 +1211,8 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 			t.Fatal(err)
 		}
 		r := rbdRoute{Object: object, Pool: p.PoolID, Hash: p.Hash, Epoch: p.Epoch, RawPGID: p.RawPGID, PGID: p.PGID, Primary: p.Primary, Address: addresses[p.Primary]}
-		if r.Pool != poolID || r.Primary < 0 || r.Address == "" || p.Acting[0] != p.Primary {
+		overridden := primaryOverride && strings.HasPrefix(object, prefix) && slices.Contains(p.Acting, p.Primary)
+		if r.Pool != poolID || r.Primary < 0 || r.Address == "" || p.Acting[0] != p.Primary && !overridden {
 			t.Fatal("caller-side RBD object placement differs", r)
 		}
 		return r
@@ -1310,7 +1316,7 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	watchRequest := request(headerRoute)
 	watchRequest.Operations = nil
 	watchTimeout := uint32(rbdJournalLostAppendWatchTimeout)
-	if variant == rbdJournalVariantPrimaryRestart {
+	if variant == rbdJournalVariantPrimaryRestart || variant == rbdJournalVariantPrimaryRestartBeforeDown {
 		watchTimeout = rbdJournalPrimaryRestartWatchTimeout
 	}
 	w, reply, err := first.WatchObject(ctx, watchRequest, cephmsgr.OSDWatchOptions{TimeoutSeconds: watchTimeout})

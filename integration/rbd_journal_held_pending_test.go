@@ -49,10 +49,10 @@ import (
 // and native librbd's replay is the only consumer of what the journal holds.
 // Consumer choices kept explicit here are the number of appends and which of
 // them is held for its map, which local wait is canceled, the paused
-// replica, and the watch timeout of the restart cell. Not covered: an
-// erasure-coded pool, a PG log trimmed past the entries, appends on several
-// connections or to several PGs, a fenced owner while several appends are
-// held, and a primary that is started again before it was marked down.
+// replica, the watch timeout of the restart cells and the nodown flag of the
+// pre-down restart cell. Not covered: a PG log trimmed past the entries,
+// appends on several connections or to several PGs, a fenced owner while
+// several appends are held, and an erasure-coded pool in the restart cells.
 //
 // Everything journal-specific is the test-only consumer code of
 // rbd_journal_test.go. The product is unchanged.
@@ -127,12 +127,54 @@ func TestCephRBDJournalPrimaryRestartIntegration(t *testing.T) {
 	runRBDJournalLostAppend(t, rbdJournalVariantPrimaryRestart)
 }
 
+// TestCephRBDJournalPrimaryRestartBeforeDownIntegration is the restart
+// cell with P started again before the OSDMap marks it down. Before the
+// appends the fixture's keep-up flags P nodown (`osd add-nodown`, after which
+// the OSDMap lists P up with the flag at its address), so the MON ignores the
+// failure reports of P's peers (ceph/ceph/blob/v20.2.4/src/mon/OSDMonitor.cc
+// can_mark_down). The appends, their holds and the SIGKILL of P are the
+// restart cell's: both calls end with the loss of the connection as unknown
+// outcomes of one invocation each, and the paused replica is resumed. For the
+// next 10 s (several times the 2.2 s and 2.3 s the cluster took to mark P down
+// by itself in the restart rows) every OSDMap read lists P up at its old
+// address with the PG on its original acting set led by P, and the subject's
+// own reread of the OSD addresses still routes to that address. No native
+// observation is made then: every read of the PG goes to P, which the map
+// names up and which is dead.
+//
+// The subject then has the fixture start P again. OSDMonitor::prepare_boot
+// finds P up at another address and first marks the old instance down, then
+// boots the new one in a later epoch: once the PG is active+clean on its
+// original acting set led by P, in an interval newer than the one the lock
+// was taken in, P's OSDMap entry shows it marked down at an epoch after every
+// read of the window and up from a later one, at a new address (a new nonce),
+// which the subject's reread finds. A native observation through the
+// restarted P shows journal object 0 as its earlier bytes followed by exactly
+// entry 0 and journal object 1 unchanged, the image and the image client's
+// commit position unchanged and the lock record still the subject's. The
+// subject closes its connections, reattaches its watch on P, reads its lock
+// there, releases it and unwatches; it never resends either append. Native
+// librbd's replay applies entry 0 once and finds no entry 1.
+//
+//scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimaryrestartbeforedown key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-primary-restart-before-down
+//scenario:row rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimaryrestartbeforedown key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-primary-restart-before-down
+//scenario:covers RBD underlying I/O
+//fixture:isolated flags the PG primary nodown, pauses one replica, kills the primary and starts it again
+func TestCephRBDJournalPrimaryRestartBeforeDownIntegration(t *testing.T) {
+	runRBDJournalLostAppend(t, rbdJournalVariantPrimaryRestartBeforeDown)
+}
+
 // The variants of runRBDJournalLostAppend this file adds, and the record's
 // Mode of each.
 const (
-	rbdJournalVariantPendingHold    = "pending-hold"
-	rbdJournalVariantPrimaryRestart = "primary-restart"
+	rbdJournalVariantPendingHold              = "pending-hold"
+	rbdJournalVariantPrimaryRestart           = "primary-restart"
+	rbdJournalVariantPrimaryRestartBeforeDown = "primary-restart-before-down"
 )
+
+// rbdJournalBeforeDownWindow is how long after the kill request the
+// pre-down restart cell's last read of the window must be.
+const rbdJournalBeforeDownWindow = 8 * time.Second
 
 // rbdJournalPrimaryRestartWatchTimeout is the restart cell's image header
 // watch timeout in seconds: long enough for the kill, the restart and both
@@ -149,8 +191,9 @@ const (
 // rbdJournalHeldPendingHolds are the holds of the appends of each mode, in
 // entry order.
 var rbdJournalHeldPendingHolds = map[string][]string{
-	rbdJournalVariantPendingHold:    {rbdJournalHoldSubOps, rbdJournalHoldSubOps, rbdJournalHoldSubOps},
-	rbdJournalVariantPrimaryRestart: {rbdJournalHoldSubOps, rbdJournalHoldMap},
+	rbdJournalVariantPendingHold:              {rbdJournalHoldSubOps, rbdJournalHoldSubOps, rbdJournalHoldSubOps},
+	rbdJournalVariantPrimaryRestart:           {rbdJournalHoldSubOps, rbdJournalHoldMap},
+	rbdJournalVariantPrimaryRestartBeforeDown: {rbdJournalHoldSubOps, rbdJournalHoldMap},
 }
 
 // rbdJournalHeldPendingCanceled is the entry whose local wait the
@@ -167,7 +210,47 @@ var (
 		"primary_killed", "outcomes_recorded", "replica_resumed", "observe-primary-lost", "observe-recorded", "primary_started", "observe-primary-back", "observe-restarted",
 		"blocked_connection_closed", "watch_reconnected", "unlock", "unwatch", "replay"}
 	rbdJournalPrimaryRestartStages = []string{"observe-held", "observe-recorded", "observe-restarted", "replay"}
+
+	rbdJournalPrimaryRestartBeforeDownOrder = []string{"setup", "lock", "tag_create", "observe-locked", "ping", "observe-placed", "keep-up", "replica_paused", "appends_submitted",
+		"observe-held", "primary_killed", "outcomes_recorded", "replica_resumed", "observe-primary-dead", "primary_started", "observe-primary-back", "observe-restarted",
+		"blocked_connection_closed", "watch_reconnected", "unlock", "unwatch", "replay"}
+	rbdJournalPrimaryRestartBeforeDownStages = []string{"observe-held", "observe-primary-dead", "observe-restarted", "replay"}
 )
+
+// nativeRBDJournalOSDInfo, nativeRBDJournalKeepUp and
+// nativeRBDJournalPrimaryDead mirror the fixture's OSDMap entry, keep-up and
+// observe-primary-dead receipts (integration/fixture/rbd_journal_fenced.go).
+type nativeRBDJournalOSDInfo struct {
+	Epoch   uint32   `json:"epoch"`
+	OSD     int32    `json:"osd"`
+	Up      bool     `json:"up"`
+	State   []string `json:"state"`
+	UpFrom  uint32   `json:"up_from"`
+	DownAt  uint32   `json:"down_at"`
+	Address string   `json:"address"`
+	Down    []int32  `json:"down"`
+}
+
+type nativeRBDJournalKeepUp struct {
+	OSD       int32                   `json:"osd"`
+	Commands  []string                `json:"commands"`
+	Before    nativeRBDJournalOSDInfo `json:"before"`
+	After     nativeRBDJournalOSDInfo `json:"after"`
+	ElapsedMS int64                   `json:"elapsed_ms"`
+}
+
+type nativeRBDJournalPrimaryDead struct {
+	OSD       int32                       `json:"osd"`
+	Address   string                      `json:"address"`
+	First     nativeRBDJournalOSDInfo     `json:"first"`
+	Last      nativeRBDJournalOSDInfo     `json:"last"`
+	Objects   []nativeRBDJournalPlacement `json:"objects"`
+	Up        bool                        `json:"up"`
+	Polls     int                         `json:"polls"`
+	FirstUTC  string                      `json:"first_utc"`
+	LastUTC   string                      `json:"last_utc"`
+	ElapsedMS int64                       `json:"elapsed_ms"`
+}
 
 // rbdJournalHeldCall is one pending append: its entry, how it is held, the
 // epoch it names, and its journal object's bytes before it (as native
@@ -200,12 +283,18 @@ type rbdJournalHeldPending struct {
 	// the OSDMap before its death and once it was back, as the subject's
 	// routing read them.
 	AddressBefore, AddressAfter string
+	// The pre-down restart mode only: the keep-up receipt, the fixture's
+	// reads while the dead primary was still up in the OSDMap, and the
+	// primary's address the subject's reread found then.
+	KeepUp      *nativeRBDJournalKeepUp
+	Dead        *nativeRBDJournalPrimaryDead
+	AddressDead string
 }
 
 // rbdJournalHeldPendingMode says whether a held mode is one of this file's.
 func rbdJournalHeldPendingMode(mode string) bool {
 	mode = rbdJournalHeldMode(mode)
-	return mode == rbdJournalVariantPendingHold || mode == rbdJournalVariantPrimaryRestart
+	return mode == rbdJournalVariantPendingHold || mode == rbdJournalVariantPrimaryRestart || mode == rbdJournalVariantPrimaryRestartBeforeDown
 }
 
 // runRBDJournalHeldPending is a pending-append mode after the observation of
@@ -216,7 +305,8 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 	h.Pending = p
 	ctx := s.ctx
 	mode := rbdJournalHeldMode(s.mode)
-	restart := mode == rbdJournalVariantPrimaryRestart
+	beforeDown := mode == rbdJournalVariantPrimaryRestartBeforeDown
+	restart := mode == rbdJournalVariantPrimaryRestart || beforeDown
 	erasure := rbdJournalErasure(s.mode)
 	classOp := func(class, method string, mode cephmsgr.OSDCallMode, input []byte) cephmsgr.OSDOperation {
 		return cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: class, Method: method, Mode: mode, MaxOutputBytes: 65536}}
@@ -237,6 +327,12 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 	s.done("ping")
 
 	h.Placed = rbdJournalHeldReadOf(t, ctx, s, "observe-placed")
+	if beforeDown {
+		// P keeps its OSDMap state up whatever its peers report, from
+		// before the subject places its appends.
+		p.KeepUp = &nativeRBDJournalKeepUp{}
+		rbdJournalFencedReceipt(t, s, "keep-up", "keep_up", p.KeepUp)
+	}
 	followed, pool := 3, s.plan.Pool
 	if erasure {
 		followed, pool = 1, h.JournalPool
@@ -429,6 +525,8 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 		}
 		r.ExpectedHeadAfter, r.ExpectedCommitAfter = digest(expected), rbdJournalCommitPosition(imageCommit, committed, s.splay)
 	} else {
+		// The address of the instance that is killed, as the subject routes.
+		p.AddressBefore = s.address(h.Primary)
 		h.Kill = &rbdJournalHeldKill{Daemon: fmt.Sprintf("osd.%d", h.Primary), RequestedUTC: time.Now().UTC().Format(time.RFC3339Nano)}
 		crash := filepath.Join(s.dir, "osd-crash-state.json")
 		if err := os.Remove(crash); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -458,9 +556,19 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 			t.Fatal(err)
 		}
 		resume(t)
-		h.Lost = rbdJournalHeldReadOf(t, ctx, s, "observe-primary-lost")
-		s.native(t, "observe-recorded")
-		s.judge(t, "observe-recorded")
+		if beforeDown {
+			// The OSDMap still names the dead instance up; the subject's
+			// routing finds its old address.
+			p.Dead = &nativeRBDJournalPrimaryDead{}
+			rbdJournalFencedReceipt(t, s, "observe-primary-dead", "dead", p.Dead)
+			s.readdress(t)
+			p.AddressDead = s.address(h.Primary)
+			s.judge(t, "observe-primary-dead")
+		} else {
+			h.Lost = rbdJournalHeldReadOf(t, ctx, s, "observe-primary-lost")
+			s.native(t, "observe-recorded")
+			s.judge(t, "observe-recorded")
+		}
 		// The killed primary comes back; nothing of the subject is sent
 		// meanwhile.
 		p.StartedUTC = time.Now().UTC().Format(time.RFC3339Nano)
@@ -471,7 +579,6 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 		p.Back = rbdJournalHeldReadOf(t, ctx, s, "observe-primary-back")
 		// The restarted OSD has a new address: its messenger binds afresh,
 		// with a new nonce.
-		p.AddressBefore = s.address(h.Primary)
 		s.readdress(t)
 		p.AddressAfter = s.address(h.Primary)
 		s.native(t, "observe-restarted")
