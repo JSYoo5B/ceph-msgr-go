@@ -144,3 +144,59 @@ func mgrHandshakeLog(t *testing.T, ctx context.Context, control, label, kind, na
 	}
 	return receipt.handshakeLog
 }
+
+// handshakeLifetime is one connection lifetime of a daemon log: the events
+// of one process and connection pointer from its connect or accept to its
+// stop. A daemon frees and reuses pointers, and message sequences and a
+// process's global sequence restart, so neither a pointer nor a sequence
+// identifies a connection by itself. Sessions splits it further at each
+// identification exchange.
+type handshakeLifetime struct {
+	Process int
+	Conn    string
+	Events  []handshakeEvent
+}
+
+// lifetimes splits the events keep selects into connection lifetimes, in
+// order of their first event. A connect or accept of a pointer starts a new
+// lifetime and its stop ends it; events of a pointer seen without a start
+// form their own lifetime.
+func (l handshakeLog) lifetimes(keep func(handshakeEvent) bool) []handshakeLifetime {
+	var out []handshakeLifetime
+	open := map[[2]string]int{}
+	for _, e := range l.Events {
+		if !keep(e) {
+			continue
+		}
+		key := [2]string{fmt.Sprint(e.Process), e.Conn}
+		i, ok := open[key]
+		if !ok || e.Kind == "connect" || e.Kind == "accept" {
+			out = append(out, handshakeLifetime{Process: e.Process, Conn: e.Conn})
+			i = len(out) - 1
+			open[key] = i
+		}
+		out[i].Events = append(out[i].Events, e)
+		if e.Kind == "stop" {
+			delete(open, key)
+		}
+	}
+	return out
+}
+
+// sessions splits a lifetime at each identification exchange it starts or
+// answers (client_ident_sent or client_ident_received): a lossy client
+// retrying while connecting, or a reset session identifying afresh, is a
+// new session whose message sequences restart. Events before the first
+// identification are dropped.
+func (t handshakeLifetime) sessions() [][]handshakeEvent {
+	var out [][]handshakeEvent
+	for _, e := range t.Events {
+		if e.Kind == "client_ident_sent" || e.Kind == "client_ident_received" {
+			out = append(out, nil)
+		}
+		if len(out) > 0 {
+			out[len(out)-1] = append(out[len(out)-1], e)
+		}
+	}
+	return out
+}

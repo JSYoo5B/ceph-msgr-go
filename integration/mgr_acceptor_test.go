@@ -111,6 +111,31 @@ func acceptOSD(t *testing.T, ctx context.Context, listener *cephmsgr.MgrListener
 	return peer, drainPeer(peer)
 }
 
+// identExchange returns the CLIENT_IDENT osd.0 sent with clientSeq and
+// the SERVER_IDENT with serverSeq it received in answer, both within one
+// session of one connection lifetime of its latest process: a pointer is
+// reused and a global sequence restarts with the OSD process, so neither
+// alone binds the two lines.
+func identExchange(l handshakeLog, clientSeq, serverSeq string) (handshakeEvent, handshakeEvent, bool) {
+	process := 0
+	if len(l.Processes) > 0 {
+		process = l.Processes[len(l.Processes)-1].Process
+	}
+	for _, lifetime := range l.lifetimes(func(e handshakeEvent) bool { return e.Process == process }) {
+		for _, session := range lifetime.sessions() {
+			if session[0].Kind != "client_ident_sent" || session[0].GlobalSeq != clientSeq {
+				continue
+			}
+			for _, e := range session[1:] {
+				if e.Kind == "server_ident_received" && e.GlobalSeq == serverSeq {
+					return session[0], e, true
+				}
+			}
+		}
+	}
+	return handshakeEvent{}, handshakeEvent{}, false
+}
+
 // TestCephMgrAcceptorIntegration accepts the stock osd.0's own MGR
 // connections on a Go MGR endpoint (MgrDaemon.Listen) on a disposable
 // one-OSD fixture, with the row's key type and connection mode.
@@ -127,11 +152,12 @@ func acceptOSD(t *testing.T, ctx context.Context, listener *cephmsgr.MgrListener
 // CLIENT_IDENT numeric ID 0 and address vector, which must equal its
 // public addrs in the native OSDMap), the MGR global ID and the connection
 // generation. The OSD's own debug_ms 5 log (control mgr-handshake-log, for
-// the exact advertised endpoint and nonce) must show, on one connection, a
+// the exact advertised endpoint and nonce) must show a
 // CLIENT_IDENT to the advertised target with the global sequence and
 // supported mask the acceptor received, and a SERVER_IDENT naming the MGR's
 // global ID, the generation the acceptor assigned, its supported mask, the
-// native required mask 0x800000000200000, the lossy flag and a zero cookie;
+// native required mask 0x800000000200000, the lossy flag and a zero cookie,
+// both within one session of one connection lifetime (identExchange);
 // it must log no SESSION_RECONNECT, SESSION_RESET or retry for that
 // endpoint, since a lossy server's peer never resumes. The first
 // message the OSD sends is its MMgrOpen naming daemon "0".
@@ -495,21 +521,15 @@ func TestCephMgrAcceptorIntegration(t *testing.T) {
 	osdLog := mgrHandshakeLog(t, ctx, control, "acceptor-sessions", "osd", "0", fmt.Sprintf("%s/%d", advertised[0].Endpoint, advertised[0].Nonce))
 	idents := osdLog.kinds("client_ident_sent", "server_ident_received")
 	for _, s := range sessions {
-		client := slices.IndexFunc(idents, func(i handshakeEvent) bool {
-			return i.Kind == "client_ident_sent" && i.Target == formatAddress(advertised[0]) && i.GlobalSeq == strconv.FormatUint(s.PeerGlobalSeq, 10)
-		})
-		server := slices.IndexFunc(idents, func(i handshakeEvent) bool {
-			return i.Kind == "server_ident_received" && i.GlobalSeq == strconv.FormatUint(s.Generation, 10)
-		})
-		if client < 0 || server < 0 || server < client || idents[client].Conn != idents[server].Conn {
-			t.Fatalf("generation %d: osd.0 log lacks the CLIENT_IDENT (global_seq %d) and SERVER_IDENT pair on one connection: %v", s.Generation, s.PeerGlobalSeq, idents)
-		}
 		// The CLIENT_IDENT line is the OSD's write attempt; its delivery is
 		// the acceptor's own record of the same global_seq (s). The
 		// SERVER_IDENT line is the OSD's receipt.
+		c, v, ok := identExchange(osdLog, strconv.FormatUint(s.PeerGlobalSeq, 10), strconv.FormatUint(s.Generation, 10))
+		if !ok || c.Target != formatAddress(advertised[0]) {
+			t.Fatalf("generation %d: osd.0 log lacks the CLIENT_IDENT (global_seq %d) and SERVER_IDENT pair within one session: %v", s.Generation, s.PeerGlobalSeq, idents)
+		}
 		// A one-entry address vector prints without brackets
 		// (entity_addrvec_t's operator<<).
-		c, v := idents[client], idents[server]
 		if c.GID != "0" || c.Supported != strconv.FormatUint(s.PeerSupported, 16) || c.Required != strconv.FormatUint(s.PeerRequired, 16) ||
 			v.GID != strconv.FormatUint(gid, 10) || v.Addrs != formatAddress(advertised[0]) ||
 			v.Supported != strconv.FormatUint(session.MgrOSDPeerFeatures, 16) || v.Required != "800000000200000" || v.Flags != "1" || v.Cookie != "0" {
@@ -520,7 +540,7 @@ func TestCephMgrAcceptorIntegration(t *testing.T) {
 	// never sends SESSION_RECONNECT here and never receives SESSION_RESET,
 	// also on no connection whose peer its log did not name.
 	osdLog.absent(t, "lossy Go acceptor", "reconnect_sent", "reset_received", "retry_received", "retry_global_received")
-	t.Logf("osd.0 log: %d identification lines and no SESSION_RECONNECT or SESSION_RESET for the MGR endpoint; every one of the %d accepted sessions matches its CLIENT_IDENT global_seq and its SERVER_IDENT MGR global ID %d and generation on one connection", len(idents), len(sessions), gid)
+	t.Logf("osd.0 log: %d identification lines and no SESSION_RECONNECT or SESSION_RESET for the MGR endpoint; every one of the %d accepted sessions matches its CLIENT_IDENT global_seq and its SERVER_IDENT MGR global ID %d and generation within one session", len(idents), len(sessions), gid)
 	authorizedMu.Lock()
 	t.Logf("Authorize hook calls: %d, every one for osd.0", len(authorized))
 	authorizedMu.Unlock()

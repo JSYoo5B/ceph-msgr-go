@@ -162,82 +162,86 @@ type pairSession struct {
 }
 
 // healthyPair finds, from since on, a fresh lossy session of osd.0 with
-// the MGR (gid) and its delivery evidence. On osd.0's log (endpoint 0 is
-// the MGR): CLIENT_IDENT (flags 1, cookie 0), SERVER_IDENT from gid (flags
-// 1, cookie 0), READY with no server cookie, then write attempts of
-// MMgrOpen and MMgrReport. Those are attempts only (write_message logs
-// before _try_send), so the MGR's log, in its latest process, must show
-// the same session: a received CLIENT_IDENT with the OSD's global_seq, a
-// sent SERVER_IDENT with the global_seq the OSD received, and the received
-// MMgrOpen and MMgrReport with the sequences the OSD attempted. The error
+// the MGR (gid) and its delivery evidence, each side within one session of
+// one connection lifetime in that daemon's latest process (lifetimes,
+// sessions): pointers are reused, message sequences restart with every
+// lossy session and a global sequence restarts with every process. On
+// osd.0's session (endpoint 0 is the MGR): CLIENT_IDENT (flags 1, cookie
+// 0), SERVER_IDENT from gid (flags 1, cookie 0), READY with no server
+// cookie, then write attempts of MMgrOpen and MMgrReport. Those are
+// attempts only (write_message logs before _try_send), so one MGR session
+// must show the same exchange, a received CLIENT_IDENT with the OSD's
+// global_seq and a sent SERVER_IDENT with the global_seq the OSD received,
+// and the receipt of that MMgrOpen and MMgrReport by sequence. The error
 // names how far the best candidate got.
 func healthyPair(osd, mgr handshakeLog, since time.Time, gid uint64) (pairSession, error) {
-	group := func(l handshakeLog, keep func(handshakeEvent) bool) ([]string, map[string][]handshakeEvent) {
-		conns := map[string][]handshakeEvent{}
-		var order []string
-		for _, e := range l.Events {
-			at, err := e.stamp()
-			if err != nil || at.Before(since) || !keep(e) {
-				continue
-			}
-			if _, ok := conns[e.Conn]; !ok {
-				order = append(order, e.Conn)
-			}
-			conns[e.Conn] = append(conns[e.Conn], e)
+	latest := func(l handshakeLog) int {
+		if len(l.Processes) == 0 {
+			return 0
 		}
-		return order, conns
+		return l.Processes[len(l.Processes)-1].Process
+	}
+	recent := func(process int, endpoint bool) func(handshakeEvent) bool {
+		return func(e handshakeEvent) bool {
+			at, err := e.stamp()
+			return err == nil && !at.Before(since) && e.Process == process && (!endpoint || e.Endpoint == 0)
+		}
 	}
 	if len(mgr.Processes) == 0 {
 		return pairSession{}, fmt.Errorf("%s log has no daemon start banner", mgr.Daemon)
 	}
-	current := mgr.Processes[len(mgr.Processes)-1].Process
-	osdOrder, osdConns := group(osd, func(e handshakeEvent) bool { return e.Endpoint == 0 })
-	mgrOrder, mgrConns := group(mgr, func(e handshakeEvent) bool { return e.Process == current })
+	current := latest(mgr)
+	osdLifetimes := osd.lifetimes(recent(latest(osd), true))
+	mgrLifetimes := mgr.lifetimes(recent(current, false))
 	want := fmt.Sprint(gid)
 	best := fmt.Errorf("osd.0 logged no fresh lossy CLIENT_IDENT to the MGR since %s", since.UTC().Format(time.RFC3339Nano))
-	for _, conn := range osdOrder {
-		var clientSeq, serverSeq, openSeq, reportSeq string
-		step := 0
-		for _, e := range osdConns[conn] {
-			switch {
-			case step == 0 && e.Kind == "client_ident_sent" && e.Flags == "1" && e.Cookie == "0":
-				step, clientSeq = 1, e.GlobalSeq
-			case step == 1 && e.Kind == "server_ident_received" && e.GID == want && e.Flags == "1" && e.Cookie == "0":
-				step, serverSeq = 2, e.GlobalSeq
-			case step == 2 && e.Kind == "ready" && e.Lossy == "1" && e.ServerCookie == "0":
-				step = 3
-			case step == 3 && e.Kind == "message_write_attempt" && e.Message == "mgropen":
-				step, openSeq = 4, e.Seq
-			case step == 4 && e.Kind == "message_write_attempt" && e.Message == "mgrreport":
-				step, reportSeq = 5, e.Seq
-			}
-			if step == 5 {
-				break
-			}
-		}
-		if step < 5 {
-			if step > 0 {
-				best = fmt.Errorf("osd.0 connection %s stopped at step %d of 5 (ident, server ident, ready, open and report attempts)", conn, step)
-			}
-			continue
-		}
-		best = fmt.Errorf("osd.0 connection %s attempted MMgrOpen and MMgrReport, but %s process %d logged no matching session", conn, mgr.Daemon, current)
-		for _, served := range mgrOrder {
-			got := 0
-			for _, e := range mgrConns[served] {
+	for _, lifetime := range osdLifetimes {
+		for _, session := range lifetime.sessions() {
+			var clientSeq, serverSeq, openSeq, reportSeq string
+			step := 0
+			for _, e := range session {
 				switch {
-				case got == 0 && e.Kind == "client_ident_received" && e.GlobalSeq == clientSeq && e.Flags == "1" && e.Cookie == "0":
-					got = 1
-				case got == 1 && e.Kind == "server_ident_sent" && e.GID == want && e.GlobalSeq == serverSeq && e.Flags == "1" && e.Cookie == "0":
-					got = 2
-				case got == 2 && e.Kind == "message_received" && e.Message == "mgropen" && e.Seq == openSeq:
-					got = 3
-				case got == 3 && e.Kind == "message_received" && e.Message == "mgrreport" && e.Seq == reportSeq:
-					return pairSession{OSDConn: conn, MGRConn: served, OSDEvents: osdConns[conn], MGREvents: mgrConns[served]}, nil
+				case step == 0 && e.Kind == "client_ident_sent" && e.Flags == "1" && e.Cookie == "0":
+					step, clientSeq = 1, e.GlobalSeq
+				case step == 1 && e.Kind == "server_ident_received" && e.GID == want && e.Flags == "1" && e.Cookie == "0":
+					step, serverSeq = 2, e.GlobalSeq
+				case step == 2 && e.Kind == "ready" && e.Lossy == "1" && e.ServerCookie == "0":
+					step = 3
+				case step == 3 && e.Kind == "message_write_attempt" && e.Message == "mgropen":
+					step, openSeq = 4, e.Seq
+				case step == 4 && e.Kind == "message_write_attempt" && e.Message == "mgrreport":
+					step, reportSeq = 5, e.Seq
+				}
+				if step == 5 {
+					break
 				}
 			}
-			if got > 0 {
-				best = fmt.Errorf("osd.0 connection %s attempted MMgrOpen seq %s and MMgrReport seq %s, but %s connection %s stopped at receipt step %d of 4 (ident, server ident, open, report)", conn, openSeq, reportSeq, mgr.Daemon, served, got)
+			if step < 5 {
+				if step > 0 {
+					best = fmt.Errorf("osd.0 connection %s stopped at step %d of 5 (ident, server ident, ready, open and report attempts)", lifetime.Conn, step)
+				}
+				continue
+			}
+			best = fmt.Errorf("osd.0 connection %s attempted MMgrOpen and MMgrReport, but %s process %d logged no matching session", lifetime.Conn, mgr.Daemon, current)
+			for _, served := range mgrLifetimes {
+				for _, receipt := range served.sessions() {
+					got := 0
+					for _, e := range receipt {
+						switch {
+						case got == 0 && e.Kind == "client_ident_received" && e.GlobalSeq == clientSeq && e.Flags == "1" && e.Cookie == "0":
+							got = 1
+						case got == 1 && e.Kind == "server_ident_sent" && e.GID == want && e.GlobalSeq == serverSeq && e.Flags == "1" && e.Cookie == "0":
+							got = 2
+						case got == 2 && e.Kind == "message_received" && e.Message == "mgropen" && e.Seq == openSeq:
+							got = 3
+						case got == 3 && e.Kind == "message_received" && e.Message == "mgrreport" && e.Seq == reportSeq:
+							return pairSession{OSDConn: lifetime.Conn, MGRConn: served.Conn, OSDEvents: session, MGREvents: receipt}, nil
+						}
+					}
+					if got > 0 {
+						best = fmt.Errorf("osd.0 connection %s attempted MMgrOpen seq %s and MMgrReport seq %s, but %s connection %s stopped at receipt step %d of 4 (ident, server ident, open, report) within its session", lifetime.Conn, openSeq, reportSeq, mgr.Daemon, served.Conn, got)
+					}
+				}
 			}
 		}
 	}
@@ -245,18 +249,21 @@ func healthyPair(osd, mgr handshakeLog, since time.Time, gid uint64) (pairSessio
 }
 
 // injectedCut returns the first socket failure injected at or after
-// activated on a connection to endpoint 0 whose fault followed it on the
-// same connection, with that connection. A lossy fault without an
-// injected failure, or an injection before activation, does not count.
+// activated on a connection to endpoint 0 whose fault followed it within
+// the same connection lifetime, with that connection. A lossy fault
+// without an injected failure, an injection before activation, and a fault
+// of a later lifetime of a reused pointer do not count.
 func injectedCut(l handshakeLog, activated time.Time) (time.Time, string, bool) {
-	for i, e := range l.Events {
-		at, err := e.stamp()
-		if e.Kind != "socket_failure_injected" || e.Endpoint != 0 || err != nil || at.Before(activated) {
-			continue
-		}
-		for _, f := range l.Events[i+1:] {
-			if f.Conn == e.Conn && f.Process == e.Process && (f.Kind == "fault_lossy" || f.Kind == "fault_backoff") {
-				return at, e.Conn, true
+	for _, lifetime := range l.lifetimes(func(e handshakeEvent) bool { return e.Endpoint == 0 }) {
+		for i, e := range lifetime.Events {
+			at, err := e.stamp()
+			if e.Kind != "socket_failure_injected" || err != nil || at.Before(activated) {
+				continue
+			}
+			for _, f := range lifetime.Events[i+1:] {
+				if f.Kind == "fault_lossy" || f.Kind == "fault_backoff" {
+					return at, e.Conn, true
+				}
 			}
 		}
 	}
@@ -295,8 +302,10 @@ func injectedCut(l handshakeLog, activated time.Time) (time.Time, string, bool) 
 //     active MGR container restarts; MON drops its old GID and promotes the
 //     new process (new nonce)
 //
-// For each, a healthy post-fault session is required (healthyPair): on one
-// OSD connection, CLIENT_IDENT (lossy, cookie 0), SERVER_IDENT from the
+// For each, a healthy post-fault session is required (healthyPair), each
+// side matched within one session of one connection lifetime of its
+// daemon's latest process (pointers are reused and sequences restart):
+// on osd.0, CLIENT_IDENT (lossy, cookie 0), SERVER_IDENT from the
 // expected GID (lossy, cookie 0), READY and write attempts of MMgrOpen and
 // MMgrReport; on the MGR's log, the same session by both global sequences
 // and the receipt of that MMgrOpen and MMgrReport by sequence. The OSD's
@@ -308,7 +317,7 @@ func injectedCut(l handshakeLog, activated time.Time) (time.Time, string, bool) 
 // Reset-observer positive control: the stock MGRs stop, a Go MgrDaemon
 // becomes active, and statefulIdentListener rewrites its first SERVER_IDENT
 // so that osd.0 holds a stateful session with a nonzero server cookie.
-// Closing that session must make the same OSD connection log
+// Closing that session must make the same OSD connection lifetime log
 // fault_reconnect, a SESSION_RECONNECT carrying that cookie, a decoded
 // SESSION_RESET full=1 (written by the Go acceptor, internal/session
 // Accept), reset_session, and a fresh CLIENT_IDENT and SERVER_IDENT, after
@@ -547,6 +556,59 @@ func osdInject(t *testing.T, ctx context.Context, control, label string, period 
 	}
 }
 
+// specimenStepCount is the number of steps specimenSteps requires.
+const specimenStepCount = 7
+
+// specimenSteps follows the reset specimen on osd.0's log within the one
+// connection lifetime that holds claimed, the stateful READY (matched by
+// process, pointer and log line, since a pointer is reused and labels are
+// per receipt), from cut on: fault_reconnect, SESSION_RECONNECT carrying
+// the claimed server cookie with no client cookie, a decoded SESSION_RESET
+// full=1, reset_session, the fresh CLIENT_IDENT with clientSeq (the Go
+// listener's record of the session it admitted), SERVER_IDENT from gid
+// with serverSeq (that session's generation), lossy and without a cookie,
+// and READY lossy. It returns the steps reached and the lifetime's events
+// from cut on, write attempts left out.
+func specimenSteps(l handshakeLog, claimed handshakeEvent, cut time.Time, clientSeq, serverSeq string, gid uint64) (int, []handshakeEvent) {
+	var lifetime []handshakeEvent
+	for _, t := range l.lifetimes(func(e handshakeEvent) bool { return e.Process == claimed.Process && e.Conn == claimed.Conn }) {
+		if slices.ContainsFunc(t.Events, func(e handshakeEvent) bool { return e.Line == claimed.Line && e.Kind == "ready" }) {
+			lifetime = t.Events
+		}
+	}
+	at := slices.IndexFunc(lifetime, func(e handshakeEvent) bool { return e.Line == claimed.Line })
+	if at < 0 || lifetime[at].Lossy != "0" || lifetime[at].ServerCookie == "0" {
+		return 0, nil
+	}
+	serverCookie := lifetime[at].ServerCookie
+	var sequence []handshakeEvent
+	for _, e := range lifetime[at:] {
+		if when, err := e.stamp(); err == nil && !when.Before(cut) && e.Kind != "message_write_attempt" {
+			sequence = append(sequence, e)
+		}
+	}
+	want := []func(handshakeEvent) bool{
+		func(e handshakeEvent) bool { return e.Kind == "fault_reconnect" },
+		func(e handshakeEvent) bool {
+			return e.Kind == "reconnect_sent" && e.PeerCookie == serverCookie && e.Cookie == "0"
+		},
+		func(e handshakeEvent) bool { return e.Kind == "reset_received" && e.Full == "1" },
+		func(e handshakeEvent) bool { return e.Kind == "reset_session" },
+		func(e handshakeEvent) bool { return e.Kind == "client_ident_sent" && e.GlobalSeq == clientSeq },
+		func(e handshakeEvent) bool {
+			return e.Kind == "server_ident_received" && e.GID == fmt.Sprint(gid) && e.Flags == "1" && e.Cookie == "0" && e.GlobalSeq == serverSeq
+		},
+		func(e handshakeEvent) bool { return e.Kind == "ready" && e.Lossy == "1" },
+	}
+	step := 0
+	for _, e := range sequence {
+		if step < len(want) && want[step](e) {
+			step++
+		}
+	}
+	return step, sequence
+}
+
 // resetSpecimen is the reset observer's native positive control: a stock
 // OSD decoding a SESSION_RESET on its connection to a Go MGR acceptor.
 func resetSpecimen(t *testing.T, ctx context.Context, control string, admin *cephmsgr.Client, base cephmsgr.Options) {
@@ -717,47 +779,12 @@ func resetSpecimen(t *testing.T, ctx context.Context, control string, admin *cep
 	}
 	t.Logf("Go listener admitted session %d after the reset: CLIENT_IDENT flags %d, cookie nonzero %v", id.Generation, id.PeerFlags, id.PeerCookie != 0)
 	log := mgrHandshakeLog(t, ctx, control, "specimen-reset", "osd", "0", endpoint)
-	var sequence []handshakeEvent
-	for _, e := range log.Events {
-		if e.Conn == claimed.Conn && !e.at(t).Before(cut) && e.Kind != "message_write_attempt" {
-			sequence = append(sequence, e)
-		}
-	}
-	// Cookie labels are per receipt: take the claimed server cookie's label
-	// from this receipt's READY of the stateful session.
-	stateful := slices.IndexFunc(log.Events, func(e handshakeEvent) bool {
-		return e.Conn == claimed.Conn && e.Kind == "ready" && e.Lossy == "0" && e.ServerCookie != "0"
-	})
-	if stateful < 0 {
-		t.Fatal("osd.0 log lost the stateful READY of connection", claimed.Conn)
-	}
-	serverCookie := log.Events[stateful].ServerCookie
+	step, sequence := specimenSteps(log, claimed, cut, fmt.Sprint(id.PeerGlobalSeq), fmt.Sprint(id.Generation), gid)
 	for _, e := range sequence {
 		t.Logf("specimen osd.0 %v (prefix cookies %s/%s)", e, e.ClientCookie, e.ServerCookie)
 	}
-	want := []func(handshakeEvent) bool{
-		func(e handshakeEvent) bool { return e.Kind == "fault_reconnect" },
-		func(e handshakeEvent) bool {
-			return e.Kind == "reconnect_sent" && e.PeerCookie == serverCookie && e.Cookie == "0"
-		},
-		func(e handshakeEvent) bool { return e.Kind == "reset_received" && e.Full == "1" },
-		func(e handshakeEvent) bool { return e.Kind == "reset_session" },
-		func(e handshakeEvent) bool {
-			return e.Kind == "client_ident_sent" && e.GlobalSeq == fmt.Sprint(id.PeerGlobalSeq)
-		},
-		func(e handshakeEvent) bool {
-			return e.Kind == "server_ident_received" && e.GID == fmt.Sprint(gid) && e.Flags == "1" && e.Cookie == "0" && e.GlobalSeq == fmt.Sprint(id.Generation)
-		},
-		func(e handshakeEvent) bool { return e.Kind == "ready" && e.Lossy == "1" },
-	}
-	step := 0
-	for _, e := range sequence {
-		if step < len(want) && want[step](e) {
-			step++
-		}
-	}
-	if step != len(want) {
-		t.Fatalf("osd.0 connection %s: reset specimen stopped at step %d of %d (claimed server cookie %s); no decoded SESSION_RESET full=1 in that order: %v", claimed.Conn, step, len(want), serverCookie, sequence)
+	if step != specimenStepCount {
+		t.Fatalf("osd.0 connection %s: reset specimen stopped at step %d of %d within the claimed lifetime; no decoded SESSION_RESET full=1 in that order: %v", claimed.Conn, step, specimenStepCount, sequence)
 	}
 	t.Logf("reset specimen: osd.0 connection %s resumed with the claimed server cookie, decoded SESSION_RESET full=1 from the Go acceptor, reset its session and identified afresh", claimed.Conn)
 
@@ -929,5 +956,156 @@ func TestInjectedCutNeedsTheInjectionMarker(t *testing.T) {
 	at, conn, ok := injectedCut(log(early, injected, fault), activated)
 	if !ok || conn != "0xa" || !at.Equal(time.Date(2026, 11, 20, 0, 0, 1, 500_000_000, time.UTC)) {
 		t.Fatal("injected cut", at, conn, ok)
+	}
+}
+
+// ev is a synthetic handshake event at second.millis of 2026-11-20T00:00.
+func ev(at string, process int, conn, kind string, set func(*handshakeEvent)) handshakeEvent {
+	e := handshakeEvent{Time: "2026-11-20T00:00:" + at + "+0000", Process: process, Conn: conn, Kind: kind}
+	if set != nil {
+		set(&e)
+	}
+	return e
+}
+
+// TestHealthyPairKeepsEachMatchWithinOneSession covers the reused-pointer
+// shapes on both sides (round-2 review of #281): a MGR pointer that stops,
+// is accepted again for another session and receives a new open seq 1 and
+// report seq 2; an OSD pointer whose report attempt belongs to a later
+// lifetime or to a retried identification; and a receipt only in an
+// earlier MGR process. Each must be rejected; the single-session receipt
+// is still accepted.
+func TestHealthyPairKeepsEachMatchWithinOneSession(t *testing.T) {
+	since := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+	received := func(at, conn, msg, seq string) handshakeEvent {
+		return ev(at, 1, conn, "message_received", func(e *handshakeEvent) { e.Message, e.Seq = msg, seq })
+	}
+	// Reviewer's case: old open seq 1 on 0xb, stop, accept, another
+	// session's idents (13/41), then that session's open and report.
+	osd, mgr := pairLogs(nil, []handshakeEvent{
+		received("01.005", "0xb", "mgropen", "1"),
+		ev("01.006", 1, "0xb", "stop", nil),
+		ev("01.007", 1, "0xb", "accept", nil),
+		ev("01.008", 1, "0xb", "client_ident_received", func(e *handshakeEvent) { e.Flags, e.Cookie, e.GlobalSeq = "1", "0", "13" }),
+		ev("01.009", 1, "0xb", "server_ident_sent", func(e *handshakeEvent) { e.GID, e.Flags, e.Cookie, e.GlobalSeq = "4167", "1", "0", "41" }),
+		received("01.010", "0xb", "mgropen", "1"),
+		received("01.011", "0xb", "mgrreport", "2"),
+	}, false)
+	if _, err := healthyPair(osd, mgr, since, 4167); err == nil {
+		t.Error("accepted a report from a new MGR connection lifetime with different global sequences")
+	}
+	// The same, with the second session on one accepted lifetime (a new
+	// identification exchange, no stop in between).
+	osd, mgr = pairLogs(nil, []handshakeEvent{
+		received("01.005", "0xb", "mgropen", "1"),
+		ev("01.008", 1, "0xb", "client_ident_received", func(e *handshakeEvent) { e.Flags, e.Cookie, e.GlobalSeq = "1", "0", "13" }),
+		received("01.011", "0xb", "mgrreport", "2"),
+	}, false)
+	if _, err := healthyPair(osd, mgr, since, 4167); err == nil {
+		t.Error("accepted a report from a later identification exchange of the MGR connection")
+	}
+	// OSD side: the report attempt belongs to a later lifetime of 0xa.
+	osd, mgr = pairLogs(nil, nil, true)
+	osd.Events = append(osd.Events[:4],
+		ev("01.004", 0, "0xa", "stop", nil),
+		ev("01.005", 0, "0xa", "connect", nil),
+		ev("01.006", 0, "0xa", "message_write_attempt", func(e *handshakeEvent) { e.Message, e.Seq = "mgrreport", "2" }))
+	for i := range osd.Events {
+		osd.Events[i].Endpoint = 0
+	}
+	if _, err := healthyPair(osd, mgr, since, 4167); err == nil {
+		t.Error("accepted an OSD report attempt from a later lifetime of the pointer")
+	}
+	// OSD side: a lossy retry identifies again before the report.
+	osd, mgr = pairLogs(nil, nil, true)
+	osd.Events = append(osd.Events[:4],
+		ev("01.005", 0, "0xa", "client_ident_sent", func(e *handshakeEvent) { e.Flags, e.Cookie, e.GlobalSeq = "1", "0", "14" }),
+		ev("01.006", 0, "0xa", "message_write_attempt", func(e *handshakeEvent) { e.Message, e.Seq = "mgrreport", "2" }))
+	if _, err := healthyPair(osd, mgr, since, 4167); err == nil {
+		t.Error("accepted an OSD report attempt from a retried identification")
+	}
+	// MGR side: the receipt is only in an earlier process; the latest
+	// process restarted global sequences and has no receipt.
+	osd, mgr = pairLogs(nil, nil, true)
+	mgr.Processes = append(mgr.Processes, handshakeProcess{Process: 2})
+	if _, err := healthyPair(osd, mgr, since, 4167); err == nil {
+		t.Error("accepted a receipt from an earlier MGR process")
+	}
+	osd, mgr = pairLogs(nil, nil, true)
+	if _, err := healthyPair(osd, mgr, since, 4167); err != nil {
+		t.Error("single-session receipt rejected:", err)
+	}
+}
+
+// TestInjectedCutStaysWithinTheInjectedLifetime: an injection on a lifetime
+// that stops without a fault does not borrow the fault of a reused
+// pointer's next lifetime.
+func TestInjectedCutStaysWithinTheInjectedLifetime(t *testing.T) {
+	activated := time.Date(2026, 11, 20, 0, 0, 1, 0, time.UTC)
+	mgrEndpoint := func(e *handshakeEvent) { e.Endpoint = 0 }
+	l := handshakeLog{Events: []handshakeEvent{
+		ev("01.500", 0, "0xa", "socket_failure_injected", mgrEndpoint),
+		ev("01.501", 0, "0xa", "stop", mgrEndpoint),
+		ev("01.600", 0, "0xa", "connect", mgrEndpoint),
+		ev("01.700", 0, "0xa", "fault_lossy", mgrEndpoint),
+	}}
+	if _, _, ok := injectedCut(l, activated); ok {
+		t.Error("an injection borrowed the fault of a reused pointer's next lifetime")
+	}
+	l.Events = []handshakeEvent{l.Events[0], ev("01.501", 0, "0xa", "fault_lossy", mgrEndpoint), ev("01.502", 0, "0xa", "stop", mgrEndpoint)}
+	if _, conn, ok := injectedCut(l, activated); !ok || conn != "0xa" {
+		t.Error("native order (injection, lossy fault, stop) rejected")
+	}
+}
+
+// TestSpecimenStepsStayWithinTheClaimedLifetime: the specimen's reconnect,
+// reset and fresh identification must follow the stateful READY on the
+// same lifetime; a reused pointer's later events do not complete it.
+func TestSpecimenStepsStayWithinTheClaimedLifetime(t *testing.T) {
+	cut := time.Date(2026, 11, 20, 0, 0, 1, 0, time.UTC)
+	claimed := ev("01.000", 2, "0xa", "ready", func(e *handshakeEvent) { e.Line, e.Lossy, e.ServerCookie = 10, "0", "k1" })
+	rest := []handshakeEvent{
+		ev("01.100", 2, "0xa", "fault_reconnect", nil),
+		ev("01.101", 2, "0xa", "reconnect_sent", func(e *handshakeEvent) { e.Cookie, e.PeerCookie = "0", "k1" }),
+		ev("01.102", 2, "0xa", "reset_received", func(e *handshakeEvent) { e.Full = "1" }),
+		ev("01.103", 2, "0xa", "reset_session", nil),
+		ev("01.104", 2, "0xa", "client_ident_sent", func(e *handshakeEvent) { e.GlobalSeq = "63" }),
+		ev("01.105", 2, "0xa", "server_ident_received", func(e *handshakeEvent) { e.GID, e.Flags, e.Cookie, e.GlobalSeq = "4788", "1", "0", "2" }),
+		ev("01.106", 2, "0xa", "ready", func(e *handshakeEvent) { e.Lossy = "1" }),
+	}
+	one := handshakeLog{Events: append([]handshakeEvent{claimed}, rest...)}
+	if step, _ := specimenSteps(one, claimed, cut, "63", "2", 4788); step != specimenStepCount {
+		t.Error("specimen in one lifetime stopped at step", step)
+	}
+	reused := handshakeLog{Events: append([]handshakeEvent{claimed, ev("01.050", 2, "0xa", "stop", nil), ev("01.060", 2, "0xa", "connect", nil)}, rest...)}
+	if step, _ := specimenSteps(reused, claimed, cut, "63", "2", 4788); step == specimenStepCount {
+		t.Error("specimen completed by a reused pointer's next lifetime")
+	}
+}
+
+// TestIdentExchangeStaysWithinOneSession: the acceptor test's CLIENT_IDENT
+// and SERVER_IDENT must be one session of osd.0's latest process.
+func TestIdentExchangeStaysWithinOneSession(t *testing.T) {
+	client := ev("01.000", 2, "0xa", "client_ident_sent", func(e *handshakeEvent) { e.GlobalSeq = "12" })
+	server := ev("01.001", 2, "0xa", "server_ident_received", func(e *handshakeEvent) { e.GlobalSeq = "3" })
+	l := handshakeLog{Processes: []handshakeProcess{{Process: 1}, {Process: 2}}, Events: []handshakeEvent{client, server}}
+	if _, _, ok := identExchange(l, "12", "3"); !ok {
+		t.Error("one session rejected")
+	}
+	l.Events = []handshakeEvent{client, ev("01.000", 2, "0xa", "stop", nil), ev("01.000", 2, "0xa", "connect", nil), server}
+	if _, _, ok := identExchange(l, "12", "3"); ok {
+		t.Error("paired across a reused pointer's lifetimes")
+	}
+	l.Events = []handshakeEvent{client, ev("01.000", 2, "0xa", "client_ident_sent", func(e *handshakeEvent) { e.GlobalSeq = "13" }), server}
+	if _, _, ok := identExchange(l, "12", "3"); ok {
+		t.Error("paired across a retried identification")
+	}
+	old := client
+	old.Process = 1
+	oldServer := server
+	oldServer.Process = 1
+	l.Events = []handshakeEvent{old, oldServer}
+	if _, _, ok := identExchange(l, "12", "3"); ok {
+		t.Error("paired in an earlier OSD process whose global sequences restarted")
 	}
 }
