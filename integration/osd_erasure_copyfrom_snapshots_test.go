@@ -164,15 +164,15 @@ func copyErasureSnapshotChange(t *testing.T, ctx context.Context, pools ownedPoo
 	r.settleChunkCopy(h, reply, seeded, copied, sourceKeys, false, receipt)
 }
 
-// copyErasureToErasureFixture starts the four-OSD fixture with an owned
-// optimized isa k=2,m=2 source pool (slot 1) and an owned optimized isa
-// k=3,m=1 destination pool (slot 2), each with its own owned profile, and
-// returns the run-level recovery and both pools' facts.
-func copyErasureToErasureFixture(t *testing.T, bound time.Duration) (context.Context, ownedPools, *copyPrimaryRecovery, erasureFacts, erasureFacts) {
+// copyErasureToErasureFixture starts the fixture of pair's topology with an
+// owned optimized isa source pool (slot 1) and an owned optimized isa
+// destination pool (slot 2) of pair's widths, each with its own owned
+// profile, and returns the run-level recovery and both pools' facts.
+func copyErasureToErasureFixture(t *testing.T, bound time.Duration, pair erasureCopyPair) (context.Context, ownedPools, *copyPrimaryRecovery, erasureFacts, erasureFacts) {
 	t.Helper()
-	source, dest := erasureK2M2, erasureK3M1
-	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != source.topology || source.topology != dest.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
-		t.Skipf("%s and %s with overwrites need the BlueStore OSD topology %q", source, dest, source.topology)
+	source, dest := pair.source, pair.dest
+	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != pair.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
+		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", pair, pair.topology)
 	}
 	if !isReplicatedPGFixtureProfile() {
 		t.Skip("separate source and destination primaries need the hashed owned pools of a replicated-PG profile")
@@ -275,20 +275,25 @@ func copyErasureToErasureAnswer(source string, copiedUser uint64) (int32, uint64
 // version, the destination is natively the clone, and the PG log holds the
 // copy once without any source request ID.
 //
-// Daemon loss between chunks of an unversioned head copy on this pool pair
-// is exercised in osd_erasure_copyfrom_pair_loss_test.go. Other pairs of
-// widths and plugins, unoptimized pools, pinned/snapshot loss and a held
-// final transaction on this pair remain outside these cells.
+// The same cells run on the k=3,m=1 to k=2,m=2 and k=4,m=2 to k=3,m=1 pairs
+// (osd_erasure_copyfrom_pairs_test.go). Daemon losses on these pairs are
+// exercised in osd_erasure_copyfrom_pair_loss_test.go and
+// osd_erasure_copyfrom_snapshot_loss_test.go. Other plugins and unoptimized
+// pools remain outside these cells.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedcopyfromerasuretoerasure key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
 //fixture:isolated pauses OSDs, sets pause, lowers a copy chunk at runtime, allocates owned snapshots
 func TestCephOSDErasureOptimizedCopyFromErasureToErasureIntegration(t *testing.T) {
-	ctx, pools, recovery, srcFacts, dstFacts := copyErasureToErasureFixture(t, 2400*time.Second)
-	limit := erasureCopyGetMax(dstFacts, erasureK3M1)
-	t.Logf("source pool %d: %s, stripe width %d; destination pool %d: %s, stripe width %d, copy-get max %d", srcFacts.pool, erasureK2M2, srcFacts.chunk*erasureK2M2.k,
-		dstFacts.pool, erasureK3M1, dstFacts.chunk*erasureK3M1.k, limit)
-	keep := copyChunkReceipts(t, recovery, "osd-erasure-copyfrom-erasure-to-erasure-results.json")
+	runCopyErasureToErasure(t, erasurePairK2M2ToK3M1, "osd-erasure-copyfrom-erasure-to-erasure-results.json")
+}
+
+func runCopyErasureToErasure(t *testing.T, pair erasureCopyPair, name string) {
+	ctx, pools, recovery, srcFacts, dstFacts := copyErasureToErasureFixture(t, 2400*time.Second, pair)
+	limit := erasureCopyGetMax(dstFacts, pair.dest)
+	t.Logf("source pool %d: %s, stripe width %d; destination pool %d: %s, stripe width %d, copy-get max %d", srcFacts.pool, pair.source, srcFacts.chunk*pair.source.k,
+		dstFacts.pool, pair.dest, dstFacts.chunk*pair.dest.k, limit)
+	keep := copyChunkReceipts(t, recovery, name)
 	for _, tc := range copyPrimaryChangeCases {
 		for _, source := range []string{"data", "head-change", "snapshot-head-change"} {
 			for _, pinned := range []bool{false, true} {
