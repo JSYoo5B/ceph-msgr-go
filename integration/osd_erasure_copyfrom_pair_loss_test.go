@@ -35,6 +35,9 @@ type copyErasurePairLossReceipt struct {
 	// SnapID and Clone name the copied clone of a snapshot cell.
 	SnapID uint64 `json:"snap_id,omitempty"`
 	Clone  string `json:"clone,omitempty"`
+	// ShardHistory is the offline capture of every acting shard's own log
+	// after recovery (osd_erasure_copyfrom_loss_history_test.go).
+	ShardHistory []copyLossShardReceipt `json:"shard_history,omitempty"`
 }
 
 type copyErasureSourceMove struct {
@@ -134,7 +137,9 @@ func copyErasurePairHeadLossCells() []copyErasurePairLossCell {
 // The shared loss helpers retain signed aggregate/per-op results, independently
 // compare bytes/xattrs/version/mtime, inspect the serving primary's PG log and
 // check a fresh-session read plus delayed native readback after recovery.
-// Those live PG-log observations do not prove every shard's history.
+// Those live PG-log observations do not prove every shard's history; the
+// offline per-shard capture of osd_erasure_copyfrom_loss_history_test.go
+// does that for the two destination-primary losses.
 //
 // After recovery both pool placements are checked again, source and destination
 // are read natively and every destination shard is free of temporary objects.
