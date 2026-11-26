@@ -375,6 +375,9 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 		p.Calls[i].Outcome = &rbdJournalLostAppendOutcome{Label: p.Calls[i].Label, CallerInvocations: 1, Class: class, UnknownOutcome: errors.As(c.err, &unknown),
 			Canceled: errors.Is(c.err, context.Canceled), Error: detail, Submission: c.reply.Submission, ReplyTransaction: c.reply.Transaction, ReplyCode: c.reply.Code,
 			RecordedUTC: time.Now().UTC().Format(time.RFC3339Nano)}
+		if c.reply.Transaction != 0 && len(c.reply.Operations) == 1 {
+			p.Calls[i].Outcome.OperationCode = &c.reply.Operations[0].Result
+		}
 	}
 	recorded := func(t *testing.T) {
 		t.Helper()

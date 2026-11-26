@@ -178,8 +178,9 @@ type rbdBaseScope struct {
 	// journalImageID is the journaling image's id once its setup returned.
 	// osdsMarkedOut are the OSDs the primary-change sequence marked out,
 	// recorded before the command; the cleanup marks them in again.
-	journalImageID string
-	osdsMarkedOut  []int
+	journalImageID     string
+	osdsMarkedOut      []int
+	journalPrimaryTemp string
 	// journalHeldPrimary is the PG primary the held-request sequences'
 	// observe-placed found (rbd_journal_held.go), -1 before it, and
 	// journalHeldActing the PG's acting set it found.
@@ -242,6 +243,9 @@ func (c *fixtureCluster) rbdBaseJournal() error {
 		// Recorded before the `osd out` command of the primary-change
 		// sequence.
 		owned["osds_marked_out"] = x.osdsMarkedOut
+	}
+	if x.journalPrimaryTemp != "" {
+		owned["journal_primary_temp"] = x.journalPrimaryTemp
 	}
 	if x.group.secondPoolIntent {
 		// Recorded before the group acceptance creates its second pool.
@@ -918,8 +922,10 @@ type rbdBaseCleanup struct {
 	LockBlocklistRemoved []mdsSessionsBlock `json:"lock_blocklist_removed,omitempty"`
 	// The primary-change sequence only: the OSDs it marked out, and those
 	// the cleanup read back in.
-	OSDsMarkedOut []int `json:"osds_marked_out,omitempty"`
-	OSDsMarkedIn  []int `json:"osds_marked_in,omitempty"`
+	OSDsMarkedOut              []int  `json:"osds_marked_out,omitempty"`
+	OSDsMarkedIn               []int  `json:"osds_marked_in,omitempty"`
+	JournalPrimaryTemp         string `json:"journal_primary_temp,omitempty"`
+	JournalPrimaryTempRestored *bool  `json:"journal_primary_temp_restored,omitempty"`
 	// The group-snapshot sequence only: its second owned pool, removed and
 	// proven absent from a native OSDMap like the first.
 	SecondPool               string   `json:"second_pool,omitempty"`
@@ -1002,6 +1008,18 @@ func (c *fixtureCluster) finishRBDBase(ctx context.Context) error {
 		removed, err := rbdLockRemoveBlocklist(ctx, x.lockOwnerAddresses, c.mdsCephFSBlocklistOps())
 		receipt.LockOwnerAddresses, receipt.LockBlocklistRemoved = x.lockOwnerAddresses, removed
 		fail(err)
+	}
+	if pgid := x.journalPrimaryTemp; pgid != "" {
+		receipt.JournalPrimaryTemp = pgid
+		_, err := c.cluster.Ceph(ctx, "osd", "rm-primary-temp", pgid)
+		fail(err)
+		set, err := c.rbdJournalReadPrimaryTemp(ctx, pgid)
+		fail(err)
+		restored := err == nil && !set
+		receipt.JournalPrimaryTempRestored = &restored
+		if set {
+			fail(errors.New("owned journal PG retained its primary override"))
+		}
 	}
 	if len(x.osdsMarkedOut) != 0 {
 		in, read := c.rbdJournalMarkInOps()

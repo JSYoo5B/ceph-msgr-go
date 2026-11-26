@@ -438,7 +438,7 @@ func admitSingleProfile(p profile, getenv func(string) string) (profile, error) 
 		admitted := p.admitsExclusive(fixtureRBD)
 		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != p.rbdReplicas() || p.osdReplicas == "3" && p.osdStore != "bluestore" || p.mdsFresh != "0" ||
 			(p.sparseReadOracle != "" || p.mapExtOracle != "") || !ownSelection(p.testRun, selected, admitted) {
-			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s or one capability-admitted test, the single-OSD legacy-v6 fixture (three BlueStore OSDs for capabilities %s, %s, %s, %s, %s, %s and %s alone) and no MDS profile", selected, capRBDJournalPrimaryChange.name, capRBDJournalReplicaHold.name, capRBDJournalHeldPrimaryChange.name, capRBDJournalDeadPrimary.name, capRBDJournalPendingHold.name, capRBDJournalPrimaryRestart.name, capRBDJournalErasureHold.name)
+			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s or one capability-admitted test, legacy-v6 with one OSD (three BlueStore OSDs for journal fault capabilities), and no MDS profile", selected)
 		}
 	}
 	if p.monPing == "1" {

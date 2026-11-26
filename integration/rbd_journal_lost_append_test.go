@@ -264,6 +264,7 @@ type rbdJournalLostAppendOutcome struct {
 	Submission        cephmsgr.OSDSubmission
 	ReplyTransaction  uint64
 	ReplyCode         int32
+	OperationCode     *int32 `json:",omitempty"`
 	RecordedUTC       string
 }
 
@@ -889,8 +890,8 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 		t.Fatal(err)
 	}
 	token, identity := oracle.Token, os.Getenv("CEPH_MSGR_RBD_BASE_IDENTITY")
-	// The erasure-hold sequence's journal data objects are in the
-	// erasure-coded second owned pool; no other variant has a second pool.
+	// The erasure sequences put the journal data objects in the second
+	// owned pool, while the image and journal headers stay replicated.
 	wantCaps := "profile rbd pool=" + oracle.Plan.Pool
 	journalPool, journalPoolID := oracle.Plan.Pool, oracle.Pool.ID
 	if erasure {

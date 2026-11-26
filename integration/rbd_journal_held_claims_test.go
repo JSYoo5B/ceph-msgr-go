@@ -386,6 +386,9 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 			fail("outcome: missing")
 			return &rbdJournalLostAppendOutcome{}
 		}
+		if erasure && mode != rbdJournalVariantReplicaHold && o.OperationCode != nil {
+			fail("outcome: an unanswered append has an operation result: %s", text(o))
+		}
 		if o.CallerInvocations != 1 || o.Submission.Transaction == 0 || o.Submission.GlobalID != r.SubjectGlobalID || o.Submission.Transaction != op.Transaction ||
 			o.Submission.MapEpoch != h.NamedEpoch || o.RecordedUTC == "" {
 			fail("outcome: not one invocation submitted as the transaction %d the primary listed: %s", op.Transaction, text(o))
@@ -461,7 +464,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		} else {
 			replacement := lost.Objects[0].ActingPrimary
 			placedOn("observe-primary-lost", lost, after, replacement)
-			if !slices.Contains(live, replacement) || erasure && !rbdJournalECSlots(acting, after, h.Primary, false) {
+			if !slices.Contains(live, replacement) || erasure && !rbdJournalECSlots(acting, after, h.Primary) {
 				fail("observe-primary-lost: the replacement primary or shard slots differ: %s", text(lost.Objects[0]))
 			}
 			q := lost.Query
@@ -488,9 +491,17 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 		}
 	case change:
 		n := h.PrimaryChange
-		if n == nil || len(n.Objects) != len(followed) || n.Out != h.Primary || !slices.Equal(n.Commands, []string{fmt.Sprintf("osd out %d", h.Primary)}) {
-			fail("change-primary: not one `osd out` of the primary osd.%d: %s", h.Primary, text(n))
+		if n == nil || len(n.Objects) != len(followed) {
+			fail("change-primary: missing native primary-change observations: %s", text(n))
 			return problems
+		}
+		if erasure {
+			replacement := acting[1]
+			if n.Out != -1 || !slices.Equal(n.Commands, []string{fmt.Sprintf("osd primary-temp %s %d", pl.PGID, replacement)}) {
+				fail("change-primary: expected one override to osd.%d for the owned journal PG: %s", replacement, text(n))
+			}
+		} else if n.Out != h.Primary || !slices.Equal(n.Commands, []string{fmt.Sprintf("osd out %d", h.Primary)}) {
+			fail("change-primary: not one `osd out` of the primary osd.%d: %s", h.Primary, text(n))
 		}
 		for _, m := range n.Objects {
 			a := m.After
@@ -498,8 +509,8 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 			shape := len(a.Up) == 2 && slices.Equal(members(a.Up), rest) &&
 				slices.Equal(a.Acting, append(slices.Clone(a.Up), n.Out)) && a.ActingPrimary == a.Up[0]
 			if erasure {
-				shape = rbdJournalECSlots(m.Before.Acting, a.Up, n.Out, false) &&
-					rbdJournalECSlots(m.Before.Acting, a.Acting, n.Out, true) && slices.Contains(rest, a.ActingPrimary)
+				shape = a.ActingPrimary == acting[1] && a.UpPrimary == h.Primary &&
+					slices.Equal(m.Before.Acting, acting) && slices.Equal(a.Up, acting) && slices.Equal(a.Acting, acting)
 			}
 			if !m.Moved || m.Before.ActingPrimary != h.Primary || a.PGID != pl.PGID || !shape || a.Epoch >= h.NamedEpoch || m.Before.Epoch < h.SentAtEpoch {
 				fail("change-primary: %s did not move to another member before the named epoch %d: %s", m.Object, h.NamedEpoch, text(m))

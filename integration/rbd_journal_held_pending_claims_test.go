@@ -341,6 +341,10 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 			if o == nil {
 				continue
 			}
+			if erasure && (i == rbdJournalHeldPendingCanceled && o.OperationCode != nil ||
+				i != rbdJournalHeldPendingCanceled && (o.OperationCode == nil || *o.OperationCode != 0)) {
+				fail("outcome: entry %d has the wrong operation result: %s", i, text(o))
+			}
 			if i == rbdJournalHeldPendingCanceled {
 				if o.Class != "uncertain" || !o.UnknownOutcome || !o.Canceled || o.ReplyTransaction != 0 || o.ReplyCode != 0 {
 					fail("outcome: entry %d is not an unknown outcome of a canceled wait: %s", i, text(o))

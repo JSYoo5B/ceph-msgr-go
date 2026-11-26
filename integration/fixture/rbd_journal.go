@@ -295,23 +295,14 @@ func (p rbdJournalPlacement) movedFrom(before rbdJournalPlacement, out int) bool
 		slices.Equal(p.Acting, append(slices.Clone(p.Up), out)) && p.UpPrimary == p.Up[0] && p.ActingPrimary == p.Up[0]
 }
 
-func (p rbdJournalPlacement) erasureMovedFrom(before rbdJournalPlacement, out int) bool {
-	if p.Epoch <= before.Epoch || p.Pool != before.Pool || p.PoolID != before.PoolID || p.Object != before.Object ||
-		p.PGID != before.PGID || p.ActingPrimary == out || !slices.Contains(before.Acting, p.ActingPrimary) ||
-		len(p.Up) != len(before.Acting) || len(p.Acting) != len(before.Acting) {
-		return false
-	}
-	for i, osd := range before.Acting {
-		if osd == out {
-			if p.Up[i] != -1 && p.Up[i] != 0x7fffffff ||
-				p.Acting[i] != out && p.Acting[i] != -1 && p.Acting[i] != 0x7fffffff {
-				return false
-			}
-		} else if p.Up[i] != osd || p.Acting[i] != osd {
-			return false
-		}
-	}
-	return true
+// erasureMovedFrom checks that a primary override leaves every shard in
+// its original slot and changes only the acting primary of this PG.
+func (p rbdJournalPlacement) erasureMovedFrom(before rbdJournalPlacement, replacement int) bool {
+	return p.Epoch > before.Epoch && p.Pool == before.Pool && p.PoolID == before.PoolID &&
+		p.Object == before.Object && p.PGID == before.PGID &&
+		replacement != before.ActingPrimary && slices.Contains(before.Acting, replacement) &&
+		p.UpPrimary == before.UpPrimary && p.ActingPrimary == replacement &&
+		slices.Equal(p.Up, before.Up) && slices.Equal(p.Acting, before.Acting)
 }
 
 // rbdJournalPrimaryMove is one object's placement before and after the
@@ -337,12 +328,12 @@ type rbdJournalPrimaryChange struct {
 // marking is called before that command with the OSD it is about to change,
 // so that the cleanup marks it in again whatever the command's outcome.
 type rbdJournalPrimaryOps struct {
-	place   func(ctx context.Context, object string) (rbdJournalPlacement, error)
-	out     func(ctx context.Context, osd int) error
-	marking func(osd int) error
-	bound   time.Duration
-	pause   time.Duration
-	erasure bool
+	place       func(ctx context.Context, object string) (rbdJournalPlacement, error)
+	out         func(ctx context.Context, osd int) error
+	marking     func(osd int) error
+	bound       time.Duration
+	pause       time.Duration
+	primaryTemp func(context.Context, string, int) error
 }
 
 // rbdJournalChangePrimary moves the acting primary of the objects' PG by
@@ -372,13 +363,26 @@ func rbdJournalChangePrimary(ctx context.Context, pool string, objects []string,
 		r.Objects = append(r.Objects, rbdJournalPrimaryMove{Object: object, Before: before, After: before})
 	}
 	osd := r.Objects[0].Before.ActingPrimary
-	if err := ops.marking(osd); err != nil {
-		return r, err
-	}
-	r.Out = osd
-	r.Commands = append(r.Commands, fmt.Sprintf("osd out %d", osd))
-	if err := ops.out(ctx, osd); err != nil {
-		return r, err
+	replacement := -1
+	if ops.primaryTemp != nil {
+		if len(r.Objects) != 1 {
+			return r, errors.New("an erasure-coded primary override requires one owned PG")
+		}
+		before := r.Objects[0].Before
+		replacement = before.Acting[1]
+		r.Commands = append(r.Commands, fmt.Sprintf("osd primary-temp %s %d", before.PGID, replacement))
+		if err := ops.primaryTemp(ctx, before.PGID, replacement); err != nil {
+			return r, err
+		}
+	} else {
+		if err := ops.marking(osd); err != nil {
+			return r, err
+		}
+		r.Out = osd
+		r.Commands = append(r.Commands, fmt.Sprintf("osd out %d", osd))
+		if err := ops.out(ctx, osd); err != nil {
+			return r, err
+		}
 	}
 	for deadline := time.Now().Add(ops.bound); ; {
 		r.Polls++
@@ -390,8 +394,8 @@ func rbdJournalChangePrimary(ctx context.Context, pool string, objects []string,
 				return r, err
 			}
 			m.After = after
-			if ops.erasure {
-				m.Moved = after.erasureMovedFrom(m.Before, osd)
+			if ops.primaryTemp != nil {
+				m.Moved = after.erasureMovedFrom(m.Before, replacement)
 			} else {
 				m.Moved = after.movedFrom(m.Before, osd)
 			}
@@ -447,6 +451,29 @@ func (c *fixtureCluster) rbdJournalPrimaryOps() rbdJournalPrimaryOps {
 		},
 		bound: 30 * time.Second, pause: 200 * time.Millisecond,
 	}
+}
+
+// rbdJournalReadPrimaryTemp checks the stock OSDMap for this owned PG.
+func (c *fixtureCluster) rbdJournalReadPrimaryTemp(ctx context.Context, pgid string) (bool, error) {
+	data, err := c.cluster.Ceph(ctx, "osd", "dump", "--format", "json")
+	if err != nil {
+		return false, err
+	}
+	var dump struct {
+		FSID        string `json:"fsid"`
+		PrimaryTemp []struct {
+			PGID string `json:"pgid"`
+		} `json:"primary_temp"`
+	}
+	if len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &dump) != nil || dump.FSID != c.profile.fsid || dump.PrimaryTemp == nil {
+		return false, errors.New("native OSDMap primary_temp unavailable")
+	}
+	for _, temp := range dump.PrimaryTemp {
+		if temp.PGID == pgid {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // rbdJournalMarkIn marks every OSD the `change-primary` action marked out in
@@ -1768,6 +1795,9 @@ func rbdJournalTarget(plan rbdJournalPlan, action string) string {
 	case "concurrent":
 		return plan.Image + ":exclusive-lock-handoff,native-write,journal-replay"
 	case "change-primary":
+		if plan.JournalPool != "" {
+			return plan.JournalPool + ":primary-temp,acting-primary"
+		}
 		return plan.Image + ":osd-out,acting-primary"
 	case "force-break":
 		return plan.Image + ":exclusive-lock-break,osd-blocklist"
@@ -1831,7 +1861,25 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 		pool, objects := x.plan.Pool, rbdJournalPrimaryObjects(x.poolID, x.journalImageID)
 		ops := c.rbdJournalPrimaryOps()
 		if c.profile.admits(capRBDJournalErasureHeldPrimaryChange) {
-			pool, objects, ops.erasure = x.journalPlan.JournalPool, objects[1:2], true
+			pool, objects = x.journalPlan.JournalPool, objects[1:2]
+			ops.primaryTemp = func(ctx context.Context, pgid string, replacement int) error {
+				if x.group.secondPool == nil || !strings.HasPrefix(pgid, strconv.FormatInt(x.group.secondPool.ID, 10)+".") {
+					return errors.New("primary override does not name the owned journal PG")
+				}
+				set, err := c.rbdJournalReadPrimaryTemp(ctx, pgid)
+				if err != nil {
+					return err
+				}
+				if set {
+					return errors.New("owned journal PG already has a primary override")
+				}
+				x.journalPrimaryTemp = pgid
+				if err := c.rbdBaseJournal(); err != nil {
+					return err
+				}
+				_, err = c.cluster.Ceph(ctx, "osd", "primary-temp", pgid, strconv.Itoa(replacement))
+				return err
+			}
 		}
 		change, err := rbdJournalChangePrimary(ctx, pool, objects, ops)
 		result["primary_change"] = change
@@ -1856,7 +1904,11 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 		if c.profile.admits(capRBDJournalHeldPrimaryChange) || c.profile.admits(capRBDJournalErasureHeldPrimaryChange) {
 			// On three OSDs the samples are the old primary's, which holds
 			// the append (rbd_journal_held.go).
-			if x.journalHeldPrimary < 0 || len(x.osdsMarkedOut) != 1 || x.osdsMarkedOut[0] != x.journalHeldPrimary {
+			moved := len(x.osdsMarkedOut) == 1 && x.osdsMarkedOut[0] == x.journalHeldPrimary
+			if c.profile.admits(capRBDJournalErasureHeldPrimaryChange) {
+				moved = x.journalPrimaryTemp != ""
+			}
+			if x.journalHeldPrimary < 0 || !moved {
 				return c.rbdBaseFinish(m, errors.New("the held append's primary was not the one OSD marked out"))
 			}
 			held := x.journalHeldPrimary
@@ -1945,8 +1997,11 @@ var _ = collectDiagnosticFiles(
 	"rbd-journal-primary-change-results.json",
 	"rbd-journal-primary-restart-outcome.json",
 	"rbd-journal-primary-restart-results.json",
+	"rbd-journal-erasure-dead-primary-outcome.json",
 	"rbd-journal-erasure-dead-primary-results.json",
+	"rbd-journal-erasure-held-primary-change-outcome.json",
 	"rbd-journal-erasure-held-primary-change-results.json",
+	"rbd-journal-erasure-pending-hold-outcome.json",
 	"rbd-journal-erasure-pending-hold-results.json",
 	"rbd-journal-produce.json",
 	"rbd-journal-replay.json",

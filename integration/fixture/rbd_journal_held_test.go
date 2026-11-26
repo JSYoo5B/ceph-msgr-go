@@ -16,6 +16,9 @@ const (
 	rbdJournalPendingHoldSelector       = "^TestCephRBDJournalPendingHoldIntegration$"
 	rbdJournalPrimaryRestartSelector    = "^TestCephRBDJournalPrimaryRestartIntegration$"
 	rbdJournalErasureHoldSelector       = "^TestCephRBDJournalErasureHoldIntegration$"
+	rbdJournalErasureDeadSelector       = "^TestCephRBDJournalErasureDeadPrimaryIntegration$"
+	rbdJournalErasureChangeSelector     = "^TestCephRBDJournalErasureHeldPrimaryChangeIntegration$"
+	rbdJournalErasurePendingSelector    = "^TestCephRBDJournalErasurePendingHoldIntegration$"
 )
 
 // rbdJournalProfile loads the profile of one selector with its catalog
@@ -41,7 +44,8 @@ func TestRBDJournalHeldSelectorsAreExclusive(t *testing.T) {
 	one := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1"}
 	for selector, want := range map[string][]string{rbdJournalReplicaHoldSelector: rbdJournalReplicaHoldActions, rbdJournalHeldPrimaryChangeSelector: rbdJournalHeldPrimaryChangeActions,
 		rbdJournalDeadPrimarySelector: rbdJournalDeadPrimaryActions, rbdJournalPendingHoldSelector: rbdJournalPendingHoldActions,
-		rbdJournalPrimaryRestartSelector: rbdJournalPrimaryRestartActions, rbdJournalErasureHoldSelector: rbdJournalErasureHoldActions} {
+		rbdJournalPrimaryRestartSelector: rbdJournalPrimaryRestartActions, rbdJournalErasureHoldSelector: rbdJournalErasureHoldActions, rbdJournalErasureDeadSelector: rbdJournalDeadPrimaryActions,
+		rbdJournalErasureChangeSelector: rbdJournalHeldPrimaryChangeActions, rbdJournalErasurePendingSelector: rbdJournalPendingHoldActions} {
 		p, err := rbdJournalProfile(t, three, selector)
 		if err != nil || p.testRun != selector || p.rbdReplicas() != "3" || p.osdTopology().poolSize != 3 || p.osdTopology().poolMinSize != 2 ||
 			!slices.Equal(rbdJournalActionsFor(p), want) || !slices.Equal(rbdLockActionsFor(p), rbdLockActions) {
@@ -90,6 +94,9 @@ func TestRBDJournalHeldSelectorsAreExclusive(t *testing.T) {
 		rbdJournalPendingHoldSelector:       {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", true}, {"journal_data.3.ab.2", true}},
 		rbdJournalPrimaryRestartSelector:    {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", false}},
 		rbdJournalErasureHoldSelector:       {{"journal_data.3.ab.0", true}},
+		rbdJournalErasureDeadSelector:       {{"journal_data.3.ab.0", true}},
+		rbdJournalErasureChangeSelector:     {{"journal_data.3.ab.0", false}},
+		rbdJournalErasurePendingSelector:    {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", true}, {"journal_data.3.ab.2", true}},
 	} {
 		p, err := rbdJournalProfile(t, three, selector)
 		if got := rbdJournalHeldAwaited(p, 3, "ab"); err != nil || !slices.Equal(got, want) {
@@ -298,5 +305,32 @@ func TestRBDJournalHeldObserveWaits(t *testing.T) {
 	f = &rbdJournalHeldFake{placements: [][]rbdJournalPlacement{placed("3.0", []int{0, 1, 2})}, down: [][]int{{}}, queries: []rbdJournalPGQuery{query}, queryErr: errors.New("down")}
 	if _, err = rbdJournalHeldObserve(ctx, "observe-settled", objects, rbdJournalHeldWait{osd: -1}, f.reads()); err == nil {
 		t.Fatal("a failed PG query accepted")
+	}
+}
+
+func TestRBDJournalErasurePrimaryMoveKeepsShardSlots(t *testing.T) {
+	before := rbdJournalPlacement{
+		Epoch: 20, Pool: "journal", PoolID: 4, Object: "journal_data.3.ab.0", PGID: "4.0",
+		Up: []int{0, 2, 1}, Acting: []int{0, 2, 1}, UpPrimary: 0, ActingPrimary: 0,
+	}
+	after := before
+	after.Epoch++
+	after.ActingPrimary = 2
+	if !after.erasureMovedFrom(before, 2) {
+		t.Fatal("valid replacement primary with preserved shard slots was rejected")
+	}
+	for name, alter := range map[string]func(*rbdJournalPlacement){
+		"surviving shards swapped": func(p *rbdJournalPlacement) { p.Acting = []int{0, 1, 2} },
+		"missing shard compacted":  func(p *rbdJournalPlacement) { p.Up = []int{2, 1} },
+		"former primary retained":  func(p *rbdJournalPlacement) { p.ActingPrimary = 0 },
+		"wrong pool identity":      func(p *rbdJournalPlacement) { p.PoolID++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := after
+			alter(&got)
+			if got.erasureMovedFrom(before, 2) {
+				t.Fatal("accepted a move without the original shard slots and a replacement primary")
+			}
+		})
 	}
 }

@@ -277,13 +277,13 @@ func rbdJournalMissingShard(osd int32) bool {
 }
 
 // rbdJournalECSlots checks that surviving shards retain their original slots.
-func rbdJournalECSlots(before, after []int32, lost int32, allowOld bool) bool {
+func rbdJournalECSlots(before, after []int32, lost int32) bool {
 	if len(before) != len(after) {
 		return false
 	}
 	for i, osd := range before {
 		if osd == lost {
-			if !rbdJournalMissingShard(after[i]) && !(allowOld && after[i] == osd) {
+			if !rbdJournalMissingShard(after[i]) {
 				return false
 			}
 		} else if after[i] != osd {
@@ -603,6 +603,9 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 		r.Outcome = &rbdJournalLostAppendOutcome{Label: "journal_append", CallerInvocations: 1, Class: class, UnknownOutcome: errors.As(got.err, &unknown),
 			Canceled: errors.Is(got.err, context.Canceled), Error: detail, Submission: got.reply.Submission, ReplyTransaction: got.reply.Transaction, ReplyCode: got.reply.Code,
 			RecordedUTC: time.Now().UTC().Format(time.RFC3339Nano)}
+		if got.reply.Transaction != 0 && len(got.reply.Operations) == 1 {
+			r.Outcome.OperationCode = &got.reply.Operations[0].Result
+		}
 		if err := s.outcome(); err != nil {
 			t.Fatal("record the append's outcome", err)
 		}
