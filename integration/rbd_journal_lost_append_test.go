@@ -877,9 +877,9 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	erasure := rbdJournalErasure(variant)
 	held := variant == rbdJournalVariantReplicaHold || variant == rbdJournalVariantHeldPrimaryChange || variant == rbdJournalVariantDeadPrimary || rbdJournalHeldPendingMode(variant) || erasure ||
 		variant == rbdJournalVariantFencedHold
-	// The fenced erasure cell gives the journal PG a primary override, so
+	// The fenced erasure cells give the journal PG a primary override, so
 	// its acting primary need not be the first member of its acting set.
-	primaryOverride := variant == "erasure-"+rbdJournalVariantFencedHold
+	primaryOverride := variant == "erasure-"+rbdJournalVariantFencedHold || variant == "erasure-"+rbdJournalVariantFencedPendingHold
 	consumer := variant == rbdJournalVariantConsumer
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
@@ -946,7 +946,7 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	case rbdJournalVariantConsumer:
 		results = "rbd-journal-consumer-results.json"
 	case rbdJournalVariantReplicaHold, rbdJournalVariantHeldPrimaryChange, rbdJournalVariantDeadPrimary, rbdJournalVariantPendingHold, rbdJournalVariantPrimaryRestart, rbdJournalVariantErasureHold,
-		rbdJournalVariantPrimaryRestartBeforeDown, rbdJournalVariantFencedHold:
+		rbdJournalVariantPrimaryRestartBeforeDown, rbdJournalVariantFencedHold, rbdJournalVariantFencedPendingHold:
 		results, outcomeFile = "rbd-journal-"+variant+"-results.json", "rbd-journal-"+variant+"-outcome.json"
 	}
 
@@ -1316,7 +1316,7 @@ func runRBDJournalLostAppend(t *testing.T, variant string) {
 	watchRequest := request(headerRoute)
 	watchRequest.Operations = nil
 	watchTimeout := uint32(rbdJournalLostAppendWatchTimeout)
-	if variant == rbdJournalVariantPrimaryRestart || variant == rbdJournalVariantPrimaryRestartBeforeDown {
+	if mode := rbdJournalHeldMode(variant); mode == rbdJournalVariantPrimaryRestart || mode == rbdJournalVariantPrimaryRestartBeforeDown {
 		watchTimeout = rbdJournalPrimaryRestartWatchTimeout
 	}
 	w, reply, err := first.WatchObject(ctx, watchRequest, cephmsgr.OSDWatchOptions{TimeoutSeconds: watchTimeout})

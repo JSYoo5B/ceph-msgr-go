@@ -215,7 +215,11 @@ func rbdJournalActionsFor(p profile) []string {
 		return rbdJournalFencedHoldActions
 	case p.admits(capRBDJournalErasureFencedHold):
 		return rbdJournalErasureFencedHoldActions
-	case p.admits(capRBDJournalPrimaryRestartBeforeDown):
+	case p.admits(capRBDJournalFencedPendingHold):
+		return rbdJournalFencedHoldActions
+	case p.admits(capRBDJournalErasureFencedPendingHold):
+		return rbdJournalErasureFencedHoldActions
+	case p.rbdJournalBeforeDownSequence():
 		return rbdJournalPrimaryRestartBeforeDownActions
 	case p.admits(capRBDJournalForcedBreakInflight):
 		return rbdJournalForcedBreakInflightActions

@@ -143,3 +143,123 @@ func TestRBDJournalBeforeDownClaims(t *testing.T) {
 		}
 	}
 }
+
+// rbdJournalErasureBeforeDownSample is the pre-down restart sample with the
+// journal objects in the erasure-coded pool 4 on acting set [0, 1, 2] led by
+// P (osd.0), whose header's primary is osd.1: the appends travel on the
+// subject's second connection, and the handoff reattaches the watch on
+// osd.1. With rollback the restarted observation and the replay find
+// journal object 0 as the locked image left it.
+func rbdJournalErasureBeforeDownSample(rollback bool) *rbdJournalLostAppendRecord {
+	n := func(v int) *int { return &v }
+	r := rbdJournalBeforeDownSample()
+	h := r.Held
+	rbdJournalPendingErasure(r, []int32{0, 1, 2})
+	h.HeaderPrimary, h.HandoffPrimary, h.AppendConnection = 1, 1, 2
+	r.DialsBeforeClose, r.DialsTotal, r.Gate.Connections = n(2), n(3), 3
+	if rollback {
+		locked := r.Views["observe-locked"]
+		for _, name := range []string{"observe-restarted", "replay"} {
+			v := r.Views[name]
+			v.ObjectSizes[0], v.ObjectSHA256[0] = locked.ObjectSizes[0], locked.ObjectSHA256[0]
+		}
+		replay, setup := r.Views["replay"], r.Views["setup"]
+		replay.InspectOwned, replay.InspectTotal = nil, n(*setup.InspectTotal)
+		replay.ImageHeadSHA256, replay.ImageCommit = r.ExpectedHeadBefore, slices.Clone(setup.ImageCommit)
+		replay.LastTag = rbdJournalLostAppendTag{TID: r.Entry.Tag + 1}
+	}
+	return r
+}
+
+// TestRBDJournalErasureBeforeDownClaims feeds the erasure-coded pre-down
+// restart claims contradictory records: both consistent samples, entry 0
+// kept and entry 0 rolled back, pass at every stage, and each change fails
+// at the stage named and not before it.
+func TestRBDJournalErasureBeforeDownClaims(t *testing.T) {
+	n := func(v int) *int { return &v }
+	stages := rbdJournalPrimaryRestartBeforeDownStages
+	judge := func(r *rbdJournalLostAppendRecord, stage string) []string {
+		r.Order = r.Order[:min(len(r.Order), slices.Index(rbdJournalPrimaryRestartBeforeDownOrder, stage)+1)]
+		return rbdJournalLostAppendClaims(r, stage)
+	}
+	for _, rollback := range []bool{false, true} {
+		for _, stage := range stages {
+			if problems := judge(rbdJournalErasureBeforeDownSample(rollback), stage); len(problems) != 0 {
+				t.Fatalf("consistent erasure-coded pre-down restart record (rollback %v) refused at %s: %v", rollback, stage, problems)
+			}
+		}
+	}
+	type rec = rbdJournalLostAppendRecord
+	p := func(r *rec) *rbdJournalHeldPending { return r.Held.Pending }
+	s := func(r *rec, i int) *nativeRBDJournalPrimarySample { return &r.Held.Pending.Dead.Samples[i] }
+	view := func(r *rec, name string) *rbdJournalLostAppendView { return r.Views[name] }
+	cases := map[string]struct {
+		rollback bool
+		stage    string
+		change   func(*rec)
+	}{
+		"journal pool missing": {false, "observe-held", func(r *rec) { r.Held.JournalPool = "" }},
+		"journal PG followed with the headers": {false, "observe-held", func(r *rec) {
+			r.Held.Placed.Objects = append(r.Held.Placed.Objects, r.Held.Placed.Objects[0])
+		}},
+		"entry 0 held for replicas": {false, "observe-held", func(r *rec) {
+			op := &r.Held.Held.Ops[slices.IndexFunc(r.Held.Held.Ops, func(o nativeRBDJournalHeldOp) bool { return o.FlagPoint == "started" })]
+			op.FlagPoint = "waiting for sub ops"
+		}},
+		"primary not at its shard": {false, "observe-held", func(r *rec) { *r.Held.Held.Query.Shard = 1 }},
+		"window follows the headers": {false, "observe-primary-dead", func(r *rec) {
+			s(r, 1).Objects = append(s(r, 1).Objects, s(r, 1).Objects[0])
+		}},
+		"window shard moved": {false, "observe-primary-dead", func(r *rec) { s(r, 2).Objects[0].Acting = []int32{0, 2, 1} }},
+		"back on moved shards": {false, "observe-restarted", func(r *rec) {
+			b := p(r).Back
+			b.Objects[0].Acting, b.Objects[0].Up = []int32{0, 2, 1}, []int32{0, 2, 1}
+		}},
+		"back with a peer on another shard": {false, "observe-restarted", func(r *rec) { *p(r).Back.Query.Peers[0].Shard = 2 }},
+		"entry 0 half applied":              {false, "observe-restarted", func(r *rec) { view(r, "observe-restarted").ObjectSizes[0] += 100 }},
+		"entry 1 executed": {false, "observe-restarted", func(r *rec) {
+			v := view(r, "observe-restarted")
+			v.ObjectSizes[1], v.ObjectSHA256[1] = p(r).Calls[1].BeforeSize+4198, p(r).Calls[1].AppliedSHA256
+		}},
+		"rolled back, entry 1 executed": {true, "observe-restarted", func(r *rec) {
+			v := view(r, "observe-restarted")
+			v.ObjectSizes[1], v.ObjectSHA256[1] = p(r).Calls[1].BeforeSize+4198, p(r).Calls[1].AppliedSHA256
+		}},
+		"kept, replay without it": {false, "replay", func(r *rec) {
+			v := view(r, "replay")
+			v.ObjectSizes[0], v.ObjectSHA256[0] = view(r, "observe-locked").ObjectSizes[0], view(r, "observe-locked").ObjectSHA256[0]
+		}},
+		"rolled back, replay with it": {true, "replay", func(r *rec) {
+			v := view(r, "replay")
+			v.ObjectSizes[0], v.ObjectSHA256[0] = p(r).Calls[0].BeforeSize+4198, p(r).Calls[0].AppliedSHA256
+		}},
+		"rolled back, replay applied it": {true, "replay", func(r *rec) {
+			v := view(r, "replay")
+			v.InspectOwned, *v.InspectTotal = []rbdJournalLostAppendEvent{rbdJournalEntryEvent(r.Entry)}, *v.InspectTotal+1
+		}},
+		"rolled back, image moved":           {true, "replay", func(r *rec) { view(r, "replay").ImageHeadSHA256 = r.ExpectedHeadAfter }},
+		"rolled back, no new tag":            {true, "replay", func(r *rec) { view(r, "replay").LastTag.TID = r.Entry.Tag }},
+		"handoff on the journal primary":     {false, "replay", func(r *rec) { r.Held.HandoffPrimary = 0 }},
+		"appends on the header's connection": {false, "replay", func(r *rec) { r.Held.AppendConnection = 1 }},
+		"one connection fewer": {false, "replay", func(r *rec) {
+			r.DialsBeforeClose, r.DialsTotal, r.Gate.Connections = n(1), n(2), 2
+		}},
+		"append resent": {true, "observe-held", func(r *rec) { r.Gate.LargeWrites = 3 }},
+	}
+	for name, c := range cases {
+		at := slices.Index(stages, c.stage)
+		if at < 0 {
+			t.Fatalf("%s: unknown stage %s", name, c.stage)
+		}
+		for _, stage := range stages {
+			r := rbdJournalErasureBeforeDownSample(c.rollback)
+			c.change(r)
+			problems := judge(r, stage)
+			if before := slices.Index(stages, stage) < at; before && len(problems) != 0 {
+				t.Errorf("%s: refused at %s, before %s: %v", name, stage, c.stage, problems)
+			} else if !before && len(problems) == 0 {
+				t.Errorf("%s: admitted at %s", name, stage)
+			}
+		}
+	}
+}

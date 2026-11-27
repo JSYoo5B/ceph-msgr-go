@@ -154,9 +154,6 @@ func rbdJournalFencedHoldClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		}
 		return mine
 	}
-	blocked := func(blocks []nativeRBDBlock, address string) bool {
-		return slices.ContainsFunc(blocks, func(b nativeRBDBlock) bool { return !b.Range && b.Address == address })
-	}
 	g := r.Gate
 	if g == nil {
 		fail("transmission: gate state missing")
@@ -177,21 +174,7 @@ func rbdJournalFencedHoldClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		return problems
 	}
 	if erasure {
-		a := f.Align
-		target := h.Primary
-		if a == nil || h.HeaderPrimary != target || a.Header.ActingPrimary != target || a.Header.Object != "rbd_header."+r.ImageID || a.Header.Pool != r.Pool ||
-			a.Before.Object != e.ObjectName || a.Before.PGID != pl.PGID || !slices.Equal(a.Before.Acting, acting) || a.Before.ActingPrimary != acting[0] ||
-			a.After.PGID != pl.PGID || !slices.Equal(a.After.Acting, acting) || !slices.Equal(a.After.Up, acting) || a.After.ActingPrimary != target || a.After.Epoch < a.Before.Epoch {
-			fail("align-primary: the erasure-coded journal PG is not led by the header's primary osd.%d with every shard in its slot: %s", target, text(a))
-		} else {
-			want := []string{}
-			if a.Before.ActingPrimary != target {
-				want = append(want, fmt.Sprintf("osd primary-temp %s %d", pl.PGID, target))
-			}
-			if !slices.Equal(a.Commands, want) || a.Query == nil || a.Query.State != "active+clean" || !slices.Equal(a.Query.Acting, acting) {
-				fail("align-primary: not %v with the PG clean afterwards: %s", want, text(a))
-			}
-		}
+		rbdJournalFencedAlignClaims(r, pl, acting, fail)
 	} else if f.Align != nil {
 		fail("align-primary: the replicated cell aligned a primary: %s", text(f.Align))
 	}
@@ -261,37 +244,7 @@ func rbdJournalFencedHoldClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		return problems
 	}
 
-	// Fence: the lock record's address goes into the MON's blocklist with
-	// the one command, P's PG reaches a map with it, P still holds the
-	// append, and P refuses the subject's next request on the same
-	// connection.
-	fc := f.Fence
-	if fc == nil {
-		fail("fence: the fixture's receipt is missing")
-		return problems
-	}
-	if fc.Address != f.LockerAddress || fc.OSD != h.Primary || fc.PGID != pl.PGID || !slices.Equal(fc.Commands, []string{"osd blocklist add " + f.LockerAddress}) {
-		fail("fence: not one blocklist entry of the lock record's address %s for the PG on osd.%d: %s", f.LockerAddress, h.Primary, text(fc))
-	}
-	if blocked(fc.BlocklistBefore, f.LockerAddress) || !blocked(fc.Blocklist, f.LockerAddress) {
-		fail("fence: the MON did not list the address only after the fence: before %s, after %s", text(fc.BlocklistBefore), text(fc.Blocklist))
-	}
-	if fc.Epoch <= hd.Epoch || fc.PGEpoch < fc.Epoch || fc.PGState != "active+clean" || len(fc.Down) != 0 || fc.Polls < 1 {
-		fail("fence: the PG did not reach the OSDMap epoch after the fence, clean with every OSD up (held at %d): %s", hd.Epoch, text(fc))
-	}
-	still := subjectOps(fc.Ops)
-	if len(still) != 1 || still[0].OSD != h.Primary || still[0].Transaction != op.Transaction || still[0].Description != op.Description || still[0].FlagPoint != op.FlagPoint {
-		fail("fence: the primary no longer lists the held append unchanged once its PG had the fence: %s", text(still))
-	}
-	if !f.PendingAfterFence || !f.PendingAfterRefusal {
-		fail("fence: the append's caller was answered during the fence or the probe (after fence %v, after probe %v)", f.PendingAfterFence, f.PendingAfterRefusal)
-	}
-	x := f.Refusal
-	if x == nil || x.Label != "stat_fenced" || x.Invocations != 1 || x.Class != "refused" || x.Code != rbdOSDBlocklisted || x.ErrorCode != rbdOSDBlocklisted || x.UnknownOutcome ||
-		x.Canceled || x.Submission.GlobalID != r.SubjectGlobalID || x.Submission.Transaction == 0 || x.Submission.Transaction == op.Transaction ||
-		x.ReplyTransaction != x.Submission.Transaction || x.ReplyMapEpoch < fc.Epoch {
-		fail("fence: the subject's stat on the append's connection was not refused once with %d at the fenced epoch %d or later: %s", rbdOSDBlocklisted, fc.Epoch, text(x))
-	}
+	rbdJournalFencedFenceClaims(r, pl.PGID, hd.Epoch, held, fail)
 	if reached < 2 {
 		return problems
 	}
@@ -373,4 +326,81 @@ func rbdJournalFencedHoldClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		fail("replay: native tag differs (tag=%+v next=%d)", replay.LastTag, replay.NextTag)
 	}
 	return problems
+}
+
+// rbdJournalFencedAlignClaims checks the align-primary receipt of a fenced
+// cell on the erasure-coded journal pool: the journal PG on acting, placed
+// as pl names it, is led by the header's primary P afterwards with every
+// shard in its slot, by one primary override exactly when the CRUSH primary
+// was another member, and is clean again.
+func rbdJournalFencedAlignClaims(r *rbdJournalLostAppendRecord, pl *nativeRBDJournalHeldRead, acting []int32, fail func(string, ...any)) {
+	h, e, text := r.Held, r.Entry, rbdJournalHeldText
+	a := h.Fenced.Align
+	target := h.Primary
+	if a == nil || h.HeaderPrimary != target || a.Header.ActingPrimary != target || a.Header.Object != "rbd_header."+r.ImageID || a.Header.Pool != r.Pool ||
+		a.Before.Object != e.ObjectName || a.Before.PGID != pl.PGID || !slices.Equal(a.Before.Acting, acting) || a.Before.ActingPrimary != acting[0] ||
+		a.After.PGID != pl.PGID || !slices.Equal(a.After.Acting, acting) || !slices.Equal(a.After.Up, acting) || a.After.ActingPrimary != target || a.After.Epoch < a.Before.Epoch {
+		fail("align-primary: the erasure-coded journal PG is not led by the header's primary osd.%d with every shard in its slot: %s", target, text(a))
+		return
+	}
+	want := []string{}
+	if a.Before.ActingPrimary != target {
+		want = append(want, fmt.Sprintf("osd primary-temp %s %d", pl.PGID, target))
+	}
+	if !slices.Equal(a.Commands, want) || a.Query == nil || a.Query.State != "active+clean" || !slices.Equal(a.Query.Acting, acting) {
+		fail("align-primary: not %v with the PG clean afterwards: %s", want, text(a))
+	}
+}
+
+// rbdJournalFencedFenceClaims checks the fence of a fenced cell and the stat
+// that probed it: the lock record's address goes into the MON's blocklist
+// with the one command, P's PG pgid reaches a map with it after the held
+// read's epoch, P still lists every held operation of the subject unchanged
+// and no other, every caller is still pending, and P refuses the subject's
+// next request on the same connection once with -108.
+func rbdJournalFencedFenceClaims(r *rbdJournalLostAppendRecord, pgid string, heldEpoch uint32, held []nativeRBDJournalHeldOp, fail func(string, ...any)) {
+	h, f, text := r.Held, r.Held.Fenced, rbdJournalHeldText
+	client := fmt.Sprintf("client.%d", r.SubjectGlobalID)
+	blocked := func(blocks []nativeRBDBlock, address string) bool {
+		return slices.ContainsFunc(blocks, func(b nativeRBDBlock) bool { return !b.Range && b.Address == address })
+	}
+	fc := f.Fence
+	if fc == nil {
+		fail("fence: the fixture's receipt is missing")
+		return
+	}
+	if fc.Address != f.LockerAddress || fc.OSD != h.Primary || fc.PGID != pgid || !slices.Equal(fc.Commands, []string{"osd blocklist add " + f.LockerAddress}) {
+		fail("fence: not one blocklist entry of the lock record's address %s for the PG on osd.%d: %s", f.LockerAddress, h.Primary, text(fc))
+	}
+	if blocked(fc.BlocklistBefore, f.LockerAddress) || !blocked(fc.Blocklist, f.LockerAddress) {
+		fail("fence: the MON did not list the address only after the fence: before %s, after %s", text(fc.BlocklistBefore), text(fc.Blocklist))
+	}
+	if fc.Epoch <= heldEpoch || fc.PGEpoch < fc.Epoch || fc.PGState != "active+clean" || len(fc.Down) != 0 || fc.Polls < 1 {
+		fail("fence: the PG did not reach the OSDMap epoch after the fence, clean with every OSD up (held at %d): %s", heldEpoch, text(fc))
+	}
+	var still []nativeRBDJournalHeldOp
+	for _, o := range fc.Ops {
+		if o.Client == client {
+			still = append(still, o)
+		}
+	}
+	same := len(still) == len(held) && len(held) != 0
+	for _, op := range held {
+		same = same && slices.ContainsFunc(still, func(o nativeRBDJournalHeldOp) bool {
+			return o.OSD == h.Primary && o.Transaction == op.Transaction && o.Description == op.Description && o.FlagPoint == op.FlagPoint
+		})
+	}
+	if !same {
+		fail("fence: the primary no longer lists the %d held appends unchanged once its PG had the fence: %s", len(held), text(still))
+	}
+	if !f.PendingAfterFence || !f.PendingAfterRefusal {
+		fail("fence: an append's caller was answered during the fence or the probe (after fence %v, after probe %v)", f.PendingAfterFence, f.PendingAfterRefusal)
+	}
+	x := f.Refusal
+	if x == nil || x.Label != "stat_fenced" || x.Invocations != 1 || x.Class != "refused" || x.Code != rbdOSDBlocklisted || x.ErrorCode != rbdOSDBlocklisted || x.UnknownOutcome ||
+		x.Canceled || x.Submission.GlobalID != r.SubjectGlobalID || x.Submission.Transaction == 0 ||
+		slices.ContainsFunc(held, func(o nativeRBDJournalHeldOp) bool { return o.Transaction == x.Submission.Transaction }) ||
+		x.ReplyTransaction != x.Submission.Transaction || x.ReplyMapEpoch < fc.Epoch {
+		fail("fence: the subject's stat on the appends' connection was not refused once with %d at the fenced epoch %d or later: %s", rbdOSDBlocklisted, fc.Epoch, text(x))
+	}
 }

@@ -15,7 +15,9 @@ import (
 // invocation (outcome), what the PG's interval history says around the
 // fault and the restart (interval), and what native clients found in each
 // append's journal object afterwards, up to native librbd's replay
-// (journal).
+// (journal). In the fenced pending modes it also keeps apart what the fence
+// put into the OSDMap and what the primary then refused or still held
+// (fence).
 func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []string {
 	var problems []string
 	fail := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
@@ -32,7 +34,12 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	mode := rbdJournalHeldMode(h.Mode)
 	beforeDown := mode == rbdJournalVariantPrimaryRestartBeforeDown
 	restart := mode == rbdJournalVariantPrimaryRestart || beforeDown
+	fenced := mode == rbdJournalVariantFencedPendingHold
 	erasure := rbdJournalErasure(h.Mode)
+	f := h.Fenced
+	if fenced != (f != nil) || fenced && f.LockerAddress == "" {
+		return []string{"record: the fenced part or the lock record's address does not match the mode"}
+	}
 	followed, journalIndex := []string{"rbd_header." + r.ImageID, e.ObjectName, r.JournalHeader}, 1
 	pool, poolID := r.Pool, r.PoolID
 	if erasure {
@@ -47,7 +54,7 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	if p == nil || len(p.Calls) != len(holds) {
 		return []string{fmt.Sprintf("record: the pending appends are missing or not %d", len(holds))}
 	}
-	if !beforeDown && (p.KeepUp != nil || p.Dead != nil || p.AddressDead != "") || beforeDown && (erasure || h.Lost != nil) {
+	if !beforeDown && (p.KeepUp != nil || p.Dead != nil || p.AddressDead != "") || beforeDown && h.Lost != nil {
 		return []string{"record: the pre-down restart's part does not match the mode"}
 	}
 	// inventory is the setup observation's journal object count: every
@@ -76,6 +83,8 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	setup, locked := view("setup", 0), view("observe-locked", 0)
 	var answered, recorded, restarted, replay *rbdJournalLostAppendView
 	switch {
+	case fenced:
+		answered, replay = view("observe-fenced", 2), view("replay", 3)
 	case beforeDown:
 		restarted, replay = view("observe-restarted", 2), view("replay", 3)
 	case restart:
@@ -189,7 +198,7 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 			index := slices.Index(acting, osd)
 			return index >= 0 && shard != nil && *shard == int32(index)
 		}
-		if erasure && !atIndex(q.Shard, acting[0]) || !erasure && q.Shard != nil {
+		if erasure && !atIndex(q.Shard, h.Primary) || !erasure && q.Shard != nil {
 			fail("%s: query primary shard differs from placement: %s", name, text(q))
 		}
 		peers := []int32{}
@@ -202,7 +211,7 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 				fail("%s: peer osd.%d is at %s, the primary at %s", name, peer.Peer, peer.LastUpdate, q.LastUpdate)
 			}
 		}
-		if want := slices.DeleteFunc(members(acting), func(o int32) bool { return o == acting[0] }); !slices.Equal(members(peers), want) {
+		if want := slices.DeleteFunc(members(acting), func(o int32) bool { return o == h.Primary }); !slices.Equal(members(peers), want) {
 			fail("%s: the PG query lists peers %v, want %v", name, peers, want)
 		}
 		return q
@@ -213,16 +222,24 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 		return problems
 	}
 
-	// Held: before the appends, the PG on three members led by P, clean.
+	// Held: before the appends, the PG on three members led by P, clean; P
+	// leads from the first slot except under the fenced erasure cell's
+	// primary override, which makes it the header's primary.
 	pl := h.Placed
 	if pl == nil || len(pl.Objects) != len(followed) {
 		fail("observe-placed: the fixture's placement is missing: %s", text(pl))
 		return problems
 	}
 	acting := pl.Objects[0].Acting
-	if len(acting) != 3 || len(slices.Compact(members(acting))) != 3 || h.Primary != acting[0] || h.Primary < 0 || !slices.Equal(h.GoActing, acting) {
+	if len(acting) != 3 || len(slices.Compact(members(acting))) != 3 || h.Primary < 0 || !slices.Contains(acting, h.Primary) || !(fenced && erasure) && h.Primary != acting[0] ||
+		!slices.Equal(h.GoActing, acting) {
 		fail("observe-placed: the PG is not on three distinct members led by osd.%d as the subject placed it (%v): %v", h.Primary, h.GoActing, acting)
 		return problems
+	}
+	if fenced && erasure {
+		rbdJournalFencedAlignClaims(r, pl, acting, fail)
+	} else if f != nil && f.Align != nil {
+		fail("align-primary: the replicated cell aligned a primary: %s", text(f.Align))
 	}
 	placedOn("observe-placed", pl, acting, h.Primary)
 	placedQuery := queried("observe-placed", pl, "active+clean", acting)
@@ -245,8 +262,12 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	if h.SentAtEpoch == 0 || h.SentAtEpoch < pl.Objects[journalIndex].Epoch || h.SentAtEpoch > hd.Objects[journalIndex].Epoch || h.NamedEpoch != h.SentAtEpoch {
 		fail("append: the subject placed the appends at epoch %d, outside the fixture's reads around it", h.SentAtEpoch)
 	}
-	if h.Replica != acting[2] || h.Lease == nil || h.Lease.Daemon != fmt.Sprintf("osd.%d", h.Replica) || h.Lease.Deadline == 0 {
-		fail("pause: the last acting member osd.%d was not the one paused under a lease: replica osd.%d, lease %s", acting[2], h.Replica, text(h.Lease))
+	paused := acting[2]
+	if paused == h.Primary {
+		paused = acting[1]
+	}
+	if h.Replica != paused || h.Lease == nil || h.Lease.Daemon != fmt.Sprintf("osd.%d", h.Replica) || h.Lease.Deadline == 0 {
+		fail("pause: the last acting member other than the primary, osd.%d, was not the one paused under a lease: replica osd.%d, lease %s", paused, h.Replica, text(h.Lease))
 	}
 	placedOn("observe-held", hd, acting, h.Primary)
 	if q := queried("observe-held", hd, "active+clean", acting); q != nil && placedQuery != nil && q.SameIntervalSince != placedQuery.SameIntervalSince {
@@ -306,6 +327,21 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	if reached < 1 {
 		return problems
 	}
+	if fenced {
+		// Fence: the lock record's address goes into the MON's blocklist, P's
+		// PG reaches a map with it, P still holds every append unchanged, and
+		// P refuses the subject's next request on the same connection.
+		mine := []nativeRBDJournalHeldOp{}
+		for _, o := range hd.Ops {
+			if o.Client == client {
+				mine = append(mine, o)
+			}
+		}
+		rbdJournalFencedFenceClaims(r, pl.PGID, hd.Epoch, mine, fail)
+		if reached < 2 {
+			return problems
+		}
+	}
 
 	// Outcome: one invocation per entry, submitted as the transaction the
 	// primary listed for it, at the epoch it names.
@@ -348,11 +384,22 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 			if o == nil {
 				continue
 			}
-			if erasure && (i == rbdJournalHeldPendingCanceled && o.OperationCode != nil ||
-				i != rbdJournalHeldPendingCanceled && (o.OperationCode == nil || *o.OperationCode != 0)) {
+			// The fenced cells cancel no wait: every append is answered.
+			canceled := !fenced && i == rbdJournalHeldPendingCanceled
+			if erasure && (canceled && o.OperationCode != nil || !canceled && (o.OperationCode == nil || *o.OperationCode != 0)) ||
+				!canceled && o.OperationCode != nil && *o.OperationCode != 0 {
 				fail("outcome: entry %d has the wrong operation result: %s", i, text(o))
 			}
-			if i == rbdJournalHeldPendingCanceled {
+			if fenced {
+				// A fenced owner's append is answered only once the member
+				// resumed.
+				if l := lease(); l != nil {
+					if at, err := time.Parse(time.RFC3339Nano, o.RecordedUTC); err != nil || l.EndedAt >= at.UnixNano() {
+						fail("replica_resumed: entry %d was answered before the member was resumed", i)
+					}
+				}
+			}
+			if canceled {
 				if o.Class != "uncertain" || !o.UnknownOutcome || !o.Canceled || o.ReplyTransaction != 0 || o.ReplyCode != 0 {
 					fail("outcome: entry %d is not an unknown outcome of a canceled wait: %s", i, text(o))
 				}
@@ -380,10 +427,16 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 		if len(st.Down) != 0 {
 			fail("observe-settled: OSDs %v are down", st.Down)
 		}
-		// Journal: every entry once, the canceled one included.
-		journal("observe-answered", answered, every(true))
-		lockRecord("observe-answered", answered, true)
-		unmoved("observe-answered", answered)
+		// Journal: every entry once, the canceled one included. A fenced
+		// owner's lock record is still there, its watch gone and its address
+		// blocklisted.
+		journal(answered.Action, answered, every(true))
+		lockRecord(answered.Action, answered, !fenced)
+		unmoved(answered.Action, answered)
+		if fenced && (answered.SubjectWatcher || !rbdJournalBlocked(answered.Blocklist, f.LockerAddress)) {
+			fail("observe-fenced: the subject's watch is listed or the lock record's address is not blocklisted: watcher %v, blocklist %s", answered.SubjectWatcher,
+				text(answered.Blocklist))
+		}
 	} else {
 		if k := h.Kill; k == nil || k.Daemon != fmt.Sprintf("osd.%d", h.Primary) || k.ExitCode != rbdJournalHeldKilledExit || k.OOMKilled {
 			fail("kill: the primary osd.%d was not killed with SIGKILL: %s", h.Primary, text(k))
@@ -404,26 +457,37 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 			// Interval: the OSDMap kept P up at its old address through the
 			// window, then P came back in a newer interval after a down
 			// marking of its own boot.
-			rbdJournalBeforeDownWindowClaims(r, acting, fail)
+			rbdJournalBeforeDownWindowClaims(r, acting, followed, fail)
 			if reached < 2 {
 				return problems
 			}
-			if !rbdJournalBeforeDownBackClaims(r, placedQuery, fail) {
+			if !rbdJournalBeforeDownBackClaims(r, placedQuery, len(followed), fail) {
 				return problems
 			}
 			placedOn("observe-primary-back", p.Back, acting, h.Primary)
 			queried("observe-primary-back", p.Back, "active+clean", acting)
 			// Journal: entry 0 survived on the members that committed it;
-			// entry 1 never reached the PG.
+			// entry 1 never reached the PG. On the erasure-coded pool entry 0
+			// may instead have been rolled back on every shard, which the
+			// native readback shows and the replay must then agree with.
+			applied = rbdJournalBeforeDownApplied(r, restarted, locked)
 			journal("observe-restarted", restarted, applied)
 			lockRecord("observe-restarted", restarted, false)
 			unmoved("observe-restarted", restarted)
 			if reached < 3 {
 				return problems
 			}
+			// The header's primary: P itself, or on the erasure-coded pool
+			// the replicated header PG's primary, which the restart left in
+			// place.
+			header := h.Primary
+			if erasure {
+				header = h.HeaderPrimary
+			}
 			x := h.Reconnect
-			if x == nil || x.Class != "applied" || x.Code != 0 || x.Invocations != 1 || h.HandoffPrimary != h.Primary || h.LockerAddress == "" || h.WatcherAddress == "" {
-				fail("handoff: the watch was not reattached on the restarted primary with the lock record read there: %s (primary osd.%d, lock %q, watch %q)", text(x), h.HandoffPrimary, h.LockerAddress, h.WatcherAddress)
+			if x == nil || x.Class != "applied" || x.Code != 0 || x.Invocations != 1 || h.HandoffPrimary != header || h.LockerAddress == "" || h.WatcherAddress == "" {
+				fail("handoff: the watch was not reattached on the header's primary osd.%d with the lock record read there: %s (primary osd.%d, lock %q, watch %q)", header, text(x),
+					h.HandoffPrimary, h.LockerAddress, h.WatcherAddress)
 			}
 		} else {
 			// Interval: P down, the PG active again in a newer interval led by
@@ -490,11 +554,30 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	if reached < len(stages)-1 {
 		return problems
 	}
-	if restart {
-		if r.DialsBeforeClose == nil || *r.DialsBeforeClose != 1 || r.DialsTotal == nil || *r.DialsTotal != 2 || g.Connections != 2 || h.AppendConnection != 1 {
-			fail("transmission: not one subject connection to the primary before its death and one after its restart: gate %s, dials before close %s, in total %s", text(g), text(r.DialsBeforeClose), text(r.DialsTotal))
+	switch {
+	case restart:
+		// One connection to P before its death, and one to the header's
+		// primary first when that is another OSD; one after the restart.
+		before := 1
+		if erasure && h.HeaderPrimary != h.Primary {
+			before++
 		}
-	} else {
+		if r.DialsBeforeClose == nil || *r.DialsBeforeClose != before || r.DialsTotal == nil || *r.DialsTotal != before+1 || g.Connections != before+1 || h.AppendConnection != before {
+			fail("transmission: not %d subject connections with the appends on the primary's before its death and one after its restart: gate %s, dials before close %s, in total %s",
+				before, text(g), text(r.DialsBeforeClose), text(r.DialsTotal))
+		}
+	case fenced:
+		// The connection that took the lock carried the appends and the
+		// stat. Under an override the subject read journal object 0 before
+		// the alignment from its CRUSH primary, on a second connection.
+		want := 1
+		if erasure && f.Align != nil && len(f.Align.Commands) != 0 {
+			want = 2
+		}
+		if r.DialsTotal == nil || *r.DialsTotal != want || g.Connections != want || h.AppendConnection != 1 {
+			fail("transmission: not %d subject connections with the appends on the lock's: gate %s, dials %s, appends on %d", want, text(g), text(r.DialsTotal), h.AppendConnection)
+		}
+	default:
 		want := 1
 		if erasure && h.HeaderPrimary != h.Primary {
 			want++
@@ -509,7 +592,10 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 
 	// Journal: native librbd's replay of the entries that exist.
 	applied := every(true)
-	if restart {
+	switch {
+	case beforeDown:
+		applied = rbdJournalBeforeDownApplied(r, restarted, locked)
+	case restart:
 		applied = []bool{true, false}
 	}
 	journal("replay", replay, applied)
@@ -529,6 +615,15 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	}
 	if !replay.LockFree || replay.SubjectWatcher {
 		fail("replay: the lock is held or the subject's watch is listed after the replay")
+	}
+	if len(owned) == 0 {
+		// Nothing of the subject's survived: the replay moves neither the
+		// image nor the image client's position and allocates its own tag.
+		if replay.ImageHeadSHA256 != r.ExpectedHeadBefore || !reflect.DeepEqual(replay.ImageCommit, setup.ImageCommit) || replay.LastTag.TID != e.Tag+1 || replay.NextTag != e.Tag+2 {
+			fail("replay: native librbd's replay moved the image or the image client's position, or allocated no tag (head=%s commit=%v tag=%+v)", replay.ImageHeadSHA256,
+				replay.ImageCommit, replay.LastTag)
+		}
+		return problems
 	}
 	if replay.ImageHeadSHA256 != r.ExpectedHeadAfter || r.ExpectedHeadAfter == r.ExpectedHeadBefore || len(r.ExpectedCommitAfter) == 0 ||
 		r.ExpectedCommitAfter[0] != (rbdJournalPosition{e.Object + last, e.Tag, last}) || !reflect.DeepEqual(replay.ImageCommit, r.ExpectedCommitAfter) {
