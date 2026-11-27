@@ -29,13 +29,19 @@ import (
 //     lock, so `align-primary` first makes the erasure-coded PG's acting
 //     primary the image header's primary with a primary override (shards
 //     keep their slots), as the erasure-coded held primary change does.
+//   - fenced pending hold: the fenced hold with the pending hold's three
+//     appends, to journal objects 0, 1 and 2, all applied at the primary and
+//     held there for the paused replica when the fence comes; on the
+//     erasure-coded journal pool after `align-primary`, as in the erasure
+//     fenced hold.
 //   - primary restart before down: the primary-restart sequence with the
 //     primary flagged nodown (`keep-up`) before the fault, so that the MON
 //     ignores its peers' failure reports (mon/OSDMonitor.cc can_mark_down)
 //     and the OSDMap still names the killed instance up at its old address
 //     (`observe-primary-dead`) until the new instance boots: prepare_boot
 //     then marks the old instance down and the new one up in separate
-//     epochs.
+//     epochs. The erasure-coded variant follows the journal data PG of the
+//     erasure-coded journal pool alone, whose primary is the one flagged.
 //
 // `fence`, `align-primary` and `keep-up` are the fixture's own
 // administrative commands; `observe-primary-dead` is a read like the other
@@ -57,8 +63,25 @@ var capRBDJournalPrimaryRestartBeforeDown = defineExclusiveCapability(fixtureRBD
 	"run one test alone on a fresh three-OSD RBD fixture with the journal sequence whose appends are held at a nodown primary that is killed and started again before the OSDMap marks it down",
 	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
 
-// The three sequences. `observe-settled` and `observe-primary-back` are the
-// held-request reads, `observe-fenced` and `observe-restarted` the driver's
+// capRBDJournalFencedPendingHold and capRBDJournalErasureFencedPendingHold
+// admit the fenced pending-hold sequences.
+var capRBDJournalFencedPendingHold = defineExclusiveCapability(fixtureRBD, "rbd-journal-fenced-pending-hold",
+	"run one test alone on a fresh three-OSD RBD fixture with the journal sequence whose lock owner is blocklisted while three of its appends are held for a paused replica's commit",
+	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
+
+var capRBDJournalErasureFencedPendingHold = defineExclusiveCapability(fixtureRBD, "rbd-journal-erasure-fenced-pending-hold",
+	"run one test alone on a fresh three-OSD RBD fixture whose journal data objects are in an erasure-coded pool, with the journal sequence whose lock owner is blocklisted while three of its appends are held for a paused shard's commit",
+	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
+
+// capRBDJournalErasurePrimaryRestartBeforeDown admits the pre-down restart
+// sequence on the erasure-coded journal pool.
+var capRBDJournalErasurePrimaryRestartBeforeDown = defineExclusiveCapability(fixtureRBD, "rbd-journal-erasure-primary-restart-before-down",
+	"run one test alone on a fresh three-OSD RBD fixture whose journal data objects are in an erasure-coded pool, with the journal sequence whose appends are held at a nodown primary that is killed and started again before the OSDMap marks it down",
+	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
+
+// The three sequences; the fenced pending holds and the erasure-coded
+// pre-down restart run those of their single-append and replicated forms.
+// `observe-settled` and `observe-primary-back` are the held-request reads, `observe-fenced` and `observe-restarted` the driver's
 // ordinary observation and `replay` the native replay, which acquires the
 // lock librbd's way: it breaks the lock of an owner whose watch is gone.
 var (
@@ -71,7 +94,20 @@ var (
 // rbdJournalFencedSequence says whether the profile selects a fenced-hold
 // sequence.
 func (p profile) rbdJournalFencedSequence() bool {
-	return p.declares(capRBDJournalFencedHold) || p.declares(capRBDJournalErasureFencedHold)
+	return p.declares(capRBDJournalFencedHold) || p.declares(capRBDJournalErasureFencedHold) || p.declares(capRBDJournalFencedPendingHold) ||
+		p.declares(capRBDJournalErasureFencedPendingHold)
+}
+
+// rbdJournalAlignedSequence says whether the profile admits a fenced-hold
+// sequence on the erasure-coded journal pool, which aligns its primary.
+func (p profile) rbdJournalAlignedSequence() bool {
+	return p.admits(capRBDJournalErasureFencedHold) || p.admits(capRBDJournalErasureFencedPendingHold)
+}
+
+// rbdJournalBeforeDownSequence says whether the profile admits a pre-down
+// restart sequence.
+func (p profile) rbdJournalBeforeDownSequence() bool {
+	return p.admits(capRBDJournalPrimaryRestartBeforeDown) || p.admits(capRBDJournalErasurePrimaryRestartBeforeDown)
 }
 
 // rbdJournalOSDInfo is one OSD's entry of `ceph osd dump`: its state, the
@@ -421,7 +457,7 @@ func (c *fixtureCluster) rbdJournalFencedControl(ctx context.Context, action str
 		fence, err := rbdJournalFenceAddress(ctx, x.lockOwnerAddresses[0], x.journalHeldPrimary, p.PGID, ops)
 		return "fence", fence, err
 	case "align-primary":
-		if !c.profile.admits(capRBDJournalErasureFencedHold) || x.group.secondPool == nil {
+		if !c.profile.rbdJournalAlignedSequence() || x.group.secondPool == nil {
 			return "align", nil, errors.New("the primary alignment has no erasure-coded journal pool")
 		}
 		ops := rbdJournalAlignOps{place: held.place, query: held.query, bound: 30 * time.Second, pause: 200 * time.Millisecond,
@@ -448,7 +484,7 @@ func (c *fixtureCluster) rbdJournalFencedControl(ctx context.Context, action str
 		align, err := rbdJournalAlignPrimary(ctx, x.plan.Pool, x.journalPlan.JournalPool, objects[0], objects[1], ops)
 		return "align", align, err
 	case "keep-up":
-		if !c.profile.admits(capRBDJournalPrimaryRestartBeforeDown) || x.journalHeldPrimary < 0 {
+		if !c.profile.rbdJournalBeforeDownSequence() || x.journalHeldPrimary < 0 {
 			return "keep_up", nil, errors.New("keep-up has no primary")
 		}
 		started := time.Now()
@@ -478,10 +514,17 @@ func (c *fixtureCluster) rbdJournalFencedControl(ctx context.Context, action str
 		x.journalHeldAddress = r.After.Address
 		return "keep_up", r, err
 	case "observe-primary-dead":
-		if !c.profile.admits(capRBDJournalPrimaryRestartBeforeDown) || x.journalHeldPrimary < 0 || x.journalHeldAddress == "" {
+		if !c.profile.rbdJournalBeforeDownSequence() || x.journalHeldPrimary < 0 || x.journalHeldAddress == "" {
 			return "dead", nil, errors.New("the primary-dead observation has no primary")
 		}
-		dead, err := rbdJournalObservePrimaryDead(ctx, x.journalHeldPrimary, x.journalHeldAddress, objects, c.rbdJournalOSDInfo, held.place, rbdJournalPrimaryDeadDwell,
+		followed := objects
+		if x.journalPlan.JournalPool != "" {
+			// The journal object's erasure-coded PG alone, as the
+			// held-request reads follow it: the headers are in another
+			// pool's PG.
+			followed = objects[1:2]
+		}
+		dead, err := rbdJournalObservePrimaryDead(ctx, x.journalHeldPrimary, x.journalHeldAddress, followed, c.rbdJournalOSDInfo, held.place, rbdJournalPrimaryDeadDwell,
 			500*time.Millisecond)
 		return "dead", dead, err
 	}
@@ -518,9 +561,15 @@ var _ = collectDiagnosticFiles(
 	"rbd-journal-align-primary.json",
 	"rbd-journal-erasure-fenced-hold-outcome.json",
 	"rbd-journal-erasure-fenced-hold-results.json",
+	"rbd-journal-erasure-fenced-pending-hold-outcome.json",
+	"rbd-journal-erasure-fenced-pending-hold-results.json",
+	"rbd-journal-erasure-primary-restart-before-down-outcome.json",
+	"rbd-journal-erasure-primary-restart-before-down-results.json",
 	"rbd-journal-fence.json",
 	"rbd-journal-fenced-hold-outcome.json",
 	"rbd-journal-fenced-hold-results.json",
+	"rbd-journal-fenced-pending-hold-outcome.json",
+	"rbd-journal-fenced-pending-hold-results.json",
 	"rbd-journal-keep-up.json",
 	"rbd-journal-observe-primary-dead.json",
 	"rbd-journal-primary-restart-before-down-outcome.json",
