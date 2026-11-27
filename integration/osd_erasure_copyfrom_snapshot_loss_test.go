@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,11 +12,12 @@ import (
 )
 
 // copyErasurePairSnapshotLossCells are the snapshot cells: each loss
-// between chunks of a copy from a clone, unversioned and pinned.
+// between chunks of a copy from a clone, and the destination primary lost
+// before its local commit, unversioned and pinned.
 func copyErasurePairSnapshotLossCells() []copyErasurePairLossCell {
 	var cells []copyErasurePairLossCell
 	for _, tc := range copyPrimaryChangeCases {
-		for _, lost := range []string{"destination", "shard", "source"} {
+		for _, lost := range []string{"destination", "shard", "source", "destination-before-commit"} {
 			for _, pinned := range []bool{false, true} {
 				cells = append(cells, copyErasurePairLossCell{tc, lost, pinned, true})
 			}
@@ -71,14 +73,22 @@ func copyErasurePairSnapshotLossCells() []copyErasurePairLossCell {
 // session reads the clone and a delayed native readback agrees, and no
 // destination shard lists a temporary object.
 //
-// Not verified: snapshot sources of the other width pairs, a trimmed clone,
-// pool snapshots and a held final transaction of a snapshot copy.
+// Two more cells, unversioned and pinned, hold the copy's final transaction
+// instead (copyErasureHeldCommitLoss with a snapshot copy): the clone is
+// read completely, the destination primary is lost before its local commit,
+// and one explicit resubmission with the same snap id and version copies
+// the clone once, with the blocker kept as its seed. The same cells run on
+// the k=3,m=1 onto k=2,m=2 and k=4,m=2 onto k=3,m=1 pairs
+// (osd_erasure_copyfrom_pairs_test.go).
+//
+// Not verified: a trimmed clone, pool snapshots, and a replica lost in the
+// held interval of a snapshot copy.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedcopyfromerasuretoerasuresnapshotloss key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
-//fixture:isolated pauses and SIGKILLs OSDs, sets pause, lowers a copy chunk at runtime, allocates owned snapshots
+//fixture:isolated freezes and SIGKILLs OSDs, sets pause, lowers a copy chunk at runtime, allocates owned snapshots
 func TestCephOSDErasureOptimizedCopyFromErasureToErasureSnapshotLossIntegration(t *testing.T) {
-	runCopyErasurePairLoss(t, erasurePairK2M2ToK3M1, "osd-erasure-copyfrom-snapshot-loss-results.json", copyErasurePairSnapshotLossCells(), nil)
+	runCopyErasurePairLoss(t, erasurePairK2M2ToK3M1, "osd-erasure-copyfrom-snapshot-loss-results.json", copyErasurePairSnapshotLossCells(), copyErasurePairLossHooks{})
 }
 
 // checkSnapshotSource reads the source head and the clone natively: both
@@ -110,6 +120,26 @@ func (r *copyPrimaryChangeRun) entryOnly(route osdFixtureOracle, copyKey pgHisto
 // on the survivors, an empty PG log on the new primary and one explicit
 // resubmission of request, which must copy the clone once.
 func (r *copyPrimaryChangeRun) settleSnapshotDestinationLoss(h *copyChunkHold, code cephmsgr.OSDOpcode, request cephmsgr.OSDRequest, seeded nativeXattrSnapshot, copyKey pgHistoryTarget, want copySnapshotLossWant, receipt *copyChunkLossReceipt) {
+	t := r.t
+	t.Helper()
+	lost, moved := r.settleLostCopy(h, seeded, receipt)
+	r.checkSnapshotSource(want)
+	s := r.history(moved, copyKey, want.sourceKeys...)
+	for i := range 1 + len(want.sourceKeys) {
+		if len(s.Targets[i].Locations) != 0 {
+			t.Fatalf("the new primary's PG log names %s: %+v", s.Targets[i].Reqid, s.Targets[i].Locations)
+		}
+	}
+	t.Logf("seed kept after losing osd.%d while it held the snapshot copy: new primary osd.%d at epoch %d; temporary removed on osd %v", h.route.ID, moved.ID, moved.Epoch, receipt.TempRemoved)
+	r.resubmitSnapshotCopy(h, code, request, lost, moved, copyKey, want, receipt)
+}
+
+// settleLostCopy checks what a destination primary SIGKILLed while it held
+// the copy left before any resubmission: the caller's unknown outcome with
+// the barrier's identity, the temporary object's removal on every survivor
+// of the moved PG and the seed kept natively. It returns the lost outcome
+// and the new placement.
+func (r *copyPrimaryChangeRun) settleLostCopy(h *copyChunkHold, seeded nativeXattrSnapshot, receipt *copyChunkLossReceipt) (copyChunkOutcome, osdFixtureOracle) {
 	t, ctx := r.t, r.ctx
 	t.Helper()
 	primary := h.route.ID
@@ -127,7 +157,7 @@ func (r *copyPrimaryChangeRun) settleSnapshotDestinationLoss(h *copyChunkHold, c
 	receipt.Unknown = &copyChunkUnknown{TID: lost.reply.Submission.Transaction, GlobalID: lost.reply.Submission.GlobalID,
 		Incarnation: lost.reply.Submission.ClientIncarnation, Epoch: lost.reply.Submission.MapEpoch, Cause: outcomeCause(lost.err)}
 	h.o.Close()
-	t.Logf("osd.%d killed (exit %d) between chunks of the snapshot copy; it ended unknown (%s): %v", primary, receipt.KillExit, receipt.Unknown.Cause, lost.err)
+	t.Logf("osd.%d killed (exit %d) while it held the copy; it ended unknown (%s): %v", primary, receipt.KillExit, receipt.Unknown.Cause, lost.err)
 	r.recovery.markDown(t, ctx, primary)
 	r.restartedPrimary = true
 	moved := r.waitMoved()
@@ -150,15 +180,15 @@ func (r *copyPrimaryChangeRun) settleSnapshotDestinationLoss(h *copyChunkHold, c
 	if !sameNative(native, seeded) {
 		t.Fatalf("the destination is not the seed after the loss: %s; seed %s", nativeDigest(native), nativeDigest(seeded))
 	}
-	r.checkSnapshotSource(want)
-	s := r.history(moved, copyKey, want.sourceKeys...)
-	for i := range 1 + len(want.sourceKeys) {
-		if len(s.Targets[i].Locations) != 0 {
-			t.Fatalf("the new primary's PG log names %s: %+v", s.Targets[i].Reqid, s.Targets[i].Locations)
-		}
-	}
-	t.Logf("seed kept after losing osd.%d between chunks of the snapshot copy: new primary osd.%d at epoch %d; temporary removed on osd %v", primary, moved.ID, moved.Epoch, receipt.TempRemoved)
+	return lost, moved
+}
 
+// resubmitSnapshotCopy resubmits request once, explicitly, to the moved
+// primary with the lost submission's identity and attempt 1: it must copy
+// the clone once.
+func (r *copyPrimaryChangeRun) resubmitSnapshotCopy(h *copyChunkHold, code cephmsgr.OSDOpcode, request cephmsgr.OSDRequest, lost copyChunkOutcome, moved osdFixtureOracle, copyKey pgHistoryTarget, want copySnapshotLossWant, receipt *copyChunkLossReceipt) {
+	t, ctx := r.t, r.ctx
+	t.Helper()
 	again := r.copyRequest(code, moved)
 	again.Operations[0].CopyFrom = request.Operations[0].CopyFrom
 	again.Resubmit, again.RetryAttempt = &lost.reply.Submission, 1
@@ -251,19 +281,40 @@ func TestCopyFromErasureSnapshotLossCells(t *testing.T) {
 		labels = append(labels, cell.label())
 	}
 	want := []string{
-		"COPY_FROM/destination", "COPY_FROM/shard", "COPY_FROM/source", "COPY_FROM/source-pinned", "COPY_FROM/destination-before-commit",
-		"COPY_FROM2/destination", "COPY_FROM2/shard", "COPY_FROM2/source", "COPY_FROM2/source-pinned", "COPY_FROM2/destination-before-commit",
+		"COPY_FROM/destination", "COPY_FROM/shard", "COPY_FROM/source", "COPY_FROM/source-pinned",
+		"COPY_FROM/destination-before-commit", "COPY_FROM/destination-before-commit-pinned", "COPY_FROM/replica-before-commit",
+		"COPY_FROM2/destination", "COPY_FROM2/shard", "COPY_FROM2/source", "COPY_FROM2/source-pinned",
+		"COPY_FROM2/destination-before-commit", "COPY_FROM2/destination-before-commit-pinned", "COPY_FROM2/replica-before-commit",
 		"COPY_FROM/snapshot/destination", "COPY_FROM/snapshot/destination-pinned", "COPY_FROM/snapshot/shard", "COPY_FROM/snapshot/shard-pinned",
 		"COPY_FROM/snapshot/source", "COPY_FROM/snapshot/source-pinned",
+		"COPY_FROM/snapshot/destination-before-commit", "COPY_FROM/snapshot/destination-before-commit-pinned",
 		"COPY_FROM2/snapshot/destination", "COPY_FROM2/snapshot/destination-pinned", "COPY_FROM2/snapshot/shard", "COPY_FROM2/snapshot/shard-pinned",
 		"COPY_FROM2/snapshot/source", "COPY_FROM2/snapshot/source-pinned",
+		"COPY_FROM2/snapshot/destination-before-commit", "COPY_FROM2/snapshot/destination-before-commit-pinned",
 	}
 	if !slices.Equal(labels, want) {
 		t.Fatalf("cells %q", labels)
 	}
 	for _, cell := range head {
-		if cell.snapshot || cell.pinned && cell.lost != "source" {
+		if cell.snapshot || cell.pinned && cell.lost != "source" && cell.lost != "destination-before-commit" {
 			t.Fatalf("head cell %s", cell.label())
+		}
+	}
+	// A replica lost in the held interval is a head copy, unversioned; the
+	// held cells are exactly the before-commit ones.
+	for _, cell := range append(head, snapshot...) {
+		if cell.held() != strings.HasSuffix(strings.TrimSuffix(cell.lost, "-pinned"), "-before-commit") ||
+			cell.lost == "replica-before-commit" && (cell.pinned || cell.snapshot) {
+			t.Fatalf("held cell %s", cell.label())
+		}
+	}
+	for _, c := range []struct {
+		kind copyHeldCopy
+		want string
+	}{{copyHeldCopy{}, ""}, {copyHeldCopy{pinned: true}, "-pinned"}, {copyHeldCopy{snapshot: true}, "-snap"},
+		{copyHeldCopy{snapshot: true, pinned: true}, "-snap-pinned"}, {copyHeldCopy{replica: true}, "-replica"}} {
+		if got := c.kind.suffix(); got != c.want {
+			t.Errorf("%+v: suffix %q, want %q", c.kind, got, c.want)
 		}
 	}
 }

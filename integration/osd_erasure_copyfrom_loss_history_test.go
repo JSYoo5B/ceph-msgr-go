@@ -174,7 +174,7 @@ func TestCephOSDErasureOptimizedCopyFromErasureToErasureLossHistoryIntegration(t
 	for _, tc := range copyPrimaryChangeCases {
 		cells = append(cells, copyErasurePairLossCell{tc, "destination", false, false}, copyErasurePairLossCell{tc, "destination-before-commit", false, false})
 	}
-	runCopyErasurePairLoss(t, erasurePairK2M2ToK3M1, "osd-erasure-copyfrom-loss-history-results.json", cells, copyLossShardHistory)
+	runCopyErasurePairLoss(t, erasurePairK2M2ToK3M1, "osd-erasure-copyfrom-loss-history-results.json", cells, copyErasurePairLossHooks{after: copyLossShardHistory})
 }
 
 func TestCopyLossShardObservation(t *testing.T) {
