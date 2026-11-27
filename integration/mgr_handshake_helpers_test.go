@@ -1,0 +1,202 @@
+package integration_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
+)
+
+// handshakeEvent is one messenger event a stock daemon logged on a
+// connection to a requested endpoint, read by the fixture (control
+// mgr-handshake-log, integration/fixture/mgr_handshake_log.go, which lists
+// the kinds) from the daemon's own container log, never through the Go
+// library. Cookies are "0" or labels equal exactly when the raw values are.
+type handshakeEvent struct {
+	Line         int    `json:"line"`
+	Time         string `json:"time"`
+	Process      int    `json:"process"`
+	Endpoint     int    `json:"endpoint"`
+	Conn         string `json:"conn"`
+	Kind         string `json:"kind"`
+	State        string `json:"state"`
+	Lossy        string `json:"lossy"`
+	Peer         string `json:"peer"`
+	ClientCookie string `json:"client_cookie"`
+	ServerCookie string `json:"server_cookie"`
+	Addrs        string `json:"addrs"`
+	Target       string `json:"target"`
+	GID          string `json:"gid"`
+	GlobalSeq    string `json:"global_seq"`
+	ConnectSeq   string `json:"connect_seq"`
+	Supported    string `json:"features_supported"`
+	Required     string `json:"features_required"`
+	Flags        string `json:"flags"`
+	Cookie       string `json:"cookie"`
+	PeerCookie   string `json:"peer_cookie"`
+	Full         string `json:"full"`
+	Entity       string `json:"entity"`
+	Message      string `json:"message"`
+	Seq          string `json:"seq"`
+}
+
+func (e handshakeEvent) String() string {
+	s := fmt.Sprintf("%s p%d %s %s s=%s l=%s", e.Time, e.Process, e.Conn, e.Kind, e.State, e.Lossy)
+	switch {
+	case strings.Contains(e.Kind, "ident"):
+		s += fmt.Sprintf(" addrs=%s target=%s gid=%s gs=%s flags=%s cookie=%s", e.Addrs, e.Target, e.GID, e.GlobalSeq, e.Flags, e.Cookie)
+	case strings.HasPrefix(e.Kind, "reconnect"):
+		s += fmt.Sprintf(" cookies=%s/%s gs=%s cs=%s", e.Cookie, e.PeerCookie, e.GlobalSeq, e.ConnectSeq)
+	case strings.HasPrefix(e.Kind, "reset"):
+		s += " full=" + e.Full
+	case e.Kind == "ready":
+		s += fmt.Sprintf(" entity=%s cookies=%s/%s", e.Entity, e.Cookie, e.PeerCookie)
+	case strings.HasPrefix(e.Kind, "message_"):
+		s += fmt.Sprintf(" %s seq=%s", e.Message, e.Seq)
+	}
+	return s
+}
+
+// at parses the log timestamp.
+func (e handshakeEvent) at(t *testing.T) time.Time {
+	t.Helper()
+	at, err := e.stamp()
+	if err != nil {
+		t.Fatal("handshake event time", e.Time, err)
+	}
+	return at
+}
+
+func (e handshakeEvent) stamp() (time.Time, error) {
+	return time.Parse("2006-01-02T15:04:05.999999-0700", e.Time)
+}
+
+// handshakeProcess is one daemon start banner of the container log.
+type handshakeProcess struct {
+	Process int    `json:"process"`
+	Time    string `json:"time"`
+	Name    string `json:"name"`
+	PID     string `json:"pid"`
+}
+
+type handshakeLog struct {
+	Daemon    string             `json:"daemon"`
+	Endpoints []string           `json:"endpoints"`
+	Processes []handshakeProcess `json:"processes"`
+	Events    []handshakeEvent   `json:"events"`
+	// Unattributed are events of connections that never named a peer; an
+	// absence verdict must not count one of its kinds there as absent.
+	Unattributed []handshakeEvent `json:"unattributed"`
+}
+
+// absent fails the test unless no event of kinds is attributed to the
+// requested endpoints, and calls the verdict inconclusive when one is
+// among the unattributed events. It returns the unattributed count.
+func (l handshakeLog) absent(t *testing.T, label string, kinds ...string) int {
+	t.Helper()
+	if found := l.kinds(kinds...); len(found) != 0 {
+		t.Fatalf("%s: %s logged %v", label, l.Daemon, found)
+	}
+	for _, e := range l.Unattributed {
+		if slices.Contains(kinds, e.Kind) {
+			t.Fatalf("%s: inconclusive, %s logged %v on a connection whose peer it never named", label, l.Daemon, e)
+		}
+	}
+	return len(l.Unattributed)
+}
+
+// kinds returns the events of the given kinds.
+func (l handshakeLog) kinds(kinds ...string) []handshakeEvent {
+	var out []handshakeEvent
+	for _, e := range l.Events {
+		for _, k := range kinds {
+			if e.Kind == k {
+				out = append(out, e)
+			}
+		}
+	}
+	return out
+}
+
+// mgrHandshakeLog requests the handshake events daemon ("osd" or "mgr" and
+// its name) logged for connections to endpoints ("<ip>:<port>/<nonce>").
+func mgrHandshakeLog(t *testing.T, ctx context.Context, control, label, kind, name string, endpoints ...string) handshakeLog {
+	t.Helper()
+	args := append([]string{label, kind, name}, endpoints...)
+	if err := testcluster.RequestControl(ctx, control, "mgr-handshake-log", "mgr-handshake-log-completed", args...); err != nil {
+		t.Fatal("handshake log", label, err)
+	}
+	data, err := os.ReadFile(filepath.Join(control, "mgr-handshake-log.json"))
+	var receipt struct {
+		Label    string `json:"label"`
+		Admitted bool   `json:"admitted"`
+		handshakeLog
+	}
+	if err != nil || json.Unmarshal(data, &receipt) != nil || receipt.Label != label || !receipt.Admitted || len(receipt.Endpoints) != len(endpoints) {
+		t.Fatal("handshake log receipt", label, err)
+	}
+	return receipt.handshakeLog
+}
+
+// handshakeLifetime is one connection lifetime of a daemon log: the events
+// of one process and connection pointer from its connect or accept to its
+// stop. A daemon frees and reuses pointers, and message sequences and a
+// process's global sequence restart, so neither a pointer nor a sequence
+// identifies a connection by itself. Sessions splits it further at each
+// identification exchange.
+type handshakeLifetime struct {
+	Process int
+	Conn    string
+	Events  []handshakeEvent
+}
+
+// lifetimes splits the events keep selects into connection lifetimes, in
+// order of their first event. A connect or accept of a pointer starts a new
+// lifetime and its stop ends it; events of a pointer seen without a start
+// form their own lifetime.
+func (l handshakeLog) lifetimes(keep func(handshakeEvent) bool) []handshakeLifetime {
+	var out []handshakeLifetime
+	open := map[[2]string]int{}
+	for _, e := range l.Events {
+		if !keep(e) {
+			continue
+		}
+		key := [2]string{fmt.Sprint(e.Process), e.Conn}
+		i, ok := open[key]
+		if !ok || e.Kind == "connect" || e.Kind == "accept" {
+			out = append(out, handshakeLifetime{Process: e.Process, Conn: e.Conn})
+			i = len(out) - 1
+			open[key] = i
+		}
+		out[i].Events = append(out[i].Events, e)
+		if e.Kind == "stop" {
+			delete(open, key)
+		}
+	}
+	return out
+}
+
+// sessions splits a lifetime at each identification exchange it starts or
+// answers (client_ident_sent or client_ident_received): a lossy client
+// retrying while connecting, or a reset session identifying afresh, is a
+// new session whose message sequences restart. Events before the first
+// identification are dropped.
+func (t handshakeLifetime) sessions() [][]handshakeEvent {
+	var out [][]handshakeEvent
+	for _, e := range t.Events {
+		if e.Kind == "client_ident_sent" || e.Kind == "client_ident_received" {
+			out = append(out, nil)
+		}
+		if len(out) > 0 {
+			out[len(out)-1] = append(out[len(out)-1], e)
+		}
+	}
+	return out
+}

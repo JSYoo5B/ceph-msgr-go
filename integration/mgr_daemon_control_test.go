@@ -395,7 +395,8 @@ func awaitOSDHello(ctx context.Context, in <-chan connectorHello, want msgr.Addr
 //
 // It does not verify accepting the OSD session (#135), service authorizers
 // or MGR reports, VIP addresses, IPv6 or CRC mode, or the auth-epoch
-// invalidation path natively (synthetic only). The fixture's ticket TTL is
+// invalidation path (cephmsgr TestCephMgrDaemonRotatingWipeIntegration has
+// its own isolated fixture). The fixture's ticket TTL is
 // short (12 s service and AUTH), so renewal and rotation happen within the
 // test; ServiceTicketTTL is the value every MON runs with
 // (runningServiceTicketTTL).
