@@ -663,6 +663,17 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 		p.AddressAfter = s.address(h.Primary)
 		s.native(t, "observe-restarted")
 		s.judge(t, "observe-restarted")
+		if v := r.Views["observe-restarted"]; v != nil {
+			// Which entries the restarted PG kept, as native librados read
+			// them; on the erasure-coded pool entry 0 may have been rolled
+			// back.
+			for _, c := range p.Calls {
+				if o := c.Entry.Object; int(o) < len(v.ObjectSizes) {
+					t.Logf("go journal held restart mode=%s entry=%d object=%s size_before=%d size_restarted=%d", s.mode, c.Entry.EntryTID, c.Entry.ObjectName, c.BeforeSize,
+						v.ObjectSizes[o])
+				}
+			}
+		}
 		rbdJournalHeldHandoff(t, s, watchRequest)
 	}
 
