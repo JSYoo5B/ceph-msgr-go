@@ -337,6 +337,8 @@ func rbdJournalHeldPlan(mode string) (stages, order []string) {
 		return rbdJournalPrimaryRestartBeforeDownStages, rbdJournalPrimaryRestartBeforeDownOrder
 	case rbdJournalVariantFencedHold:
 		return rbdJournalFencedPlan(mode)
+	case rbdJournalVariantFencedPendingHold:
+		return rbdJournalFencedPendingPlan(mode)
 	}
 	return nil, nil
 }
@@ -434,7 +436,8 @@ type rbdJournalHeld struct {
 	AppendConnection int
 	// Pending is set in the pending-append modes
 	// (rbd_journal_held_pending_test.go) only, Fenced in the fenced-hold
-	// modes (rbd_journal_fenced_hold_test.go) only.
+	// modes (rbd_journal_fenced_hold_test.go) only; the fenced pending modes
+	// (rbd_journal_fenced_pending_test.go) set both.
 	Pending *rbdJournalHeldPending
 	Fenced  *rbdJournalFenced
 	// The handoff after a change or death of the primary: the watch

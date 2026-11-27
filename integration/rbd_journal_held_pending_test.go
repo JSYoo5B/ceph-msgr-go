@@ -50,9 +50,11 @@ import (
 // Consumer choices kept explicit here are the number of appends and which of
 // them is held for its map, which local wait is canceled, the paused
 // replica, the watch timeout of the restart cells and the nodown flag of the
-// pre-down restart cell. Not covered: a PG log trimmed past the entries,
-// appends on several connections or to several PGs, a fenced owner while
-// several appends are held, and an erasure-coded pool in the restart cells.
+// pre-down restart cells. A fenced owner while several appends are held is
+// the fenced pending cells of rbd_journal_fenced_pending_test.go. Not
+// covered: a PG log trimmed past the entries, appends on several connections
+// or to several PGs, and an erasure-coded pool in the restart cell whose
+// primary is marked down by its peers.
 //
 // Everything journal-specific is the test-only consumer code of
 // rbd_journal_test.go. The product is unchanged.
@@ -164,6 +166,50 @@ func TestCephRBDJournalPrimaryRestartBeforeDownIntegration(t *testing.T) {
 	runRBDJournalLostAppend(t, rbdJournalVariantPrimaryRestartBeforeDown)
 }
 
+// TestCephRBDJournalErasurePrimaryRestartBeforeDownIntegration is the
+// pre-down restart cell with the journal's data objects in the
+// erasure-coded journal pool (k=2, m=1 over the three BlueStore OSDs,
+// overwrites allowed, one PG, min_size 2), as in
+// TestCephRBDJournalErasureHoldIntegration. P is that PG's primary, which the
+// fixture flags nodown before the appends, and the member paused is the last
+// of its acting set, one shard. Entry 0 is held at "started" with P's own
+// shard sub-write started and committed, entry 1 for its map; the subject
+// sends both on its connection to P, which is a second connection when the
+// image header's primary is another OSD. The kill, the outcomes, the window
+// in which every OSDMap read lists P up at its old address with the journal
+// object on the original acting set led by P, the restart and the new
+// address are those of the replicated cell. The header stays in the
+// replicated pool, whose PG keeps P as a member; nothing of the subject goes
+// to it before the restart.
+//
+// Whether entry 0 survives is the erasure-coded pipeline's: the source at
+// ceph/ceph/blob/v20.2.4/src/ gives two outcomes and the test does not choose
+// between them. The running shard committed its sub-write; the paused shard
+// holds its sub-write unread until it is resumed, and as long as the OSDMap
+// lists P up a replica applies a sub-write of P's in the same interval
+// (osd/PG.cc can_discard_replica_op). If it does, all three shards hold the
+// entry. Otherwise peering takes the shard with the oldest last update as
+// authoritative and rolls the entry back on the others before activation
+// (osd/PeeringState.cc find_best_info, "oldest for ec_pool", and
+// proc_master_log). Once the PG is active+clean on its original
+// acting set led by P in an interval that began once P was up again, a
+// native observation through the restarted P shows journal object 0 either
+// as its earlier bytes followed by exactly entry 0 or unchanged, journal
+// object 1 unchanged, the image and the image client's commit position
+// unchanged and the lock record still the subject's. The subject closes its
+// connections, reattaches its watch on the header's primary, reads its lock
+// there, releases it and unwatches; it never resends either append. Native
+// librbd's replay then agrees with that observation: it applies entry 0 once
+// when the observation showed it, nothing otherwise, and never entry 1.
+//
+//scenario:row rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasureprimaryrestartbeforedown key=aes service=aes mode=crc family=4 stress= runtime=host osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-primary-restart-before-down
+//scenario:row rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalerasureprimaryrestartbeforedown key=aes256k service=aes256k family=6 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=3 osd_profile=legacy-v6 rbd=1 capabilities=rbd-journal-erasure-primary-restart-before-down
+//scenario:covers RBD underlying I/O
+//fixture:isolated adds an erasure-coded journal pool, flags its PG primary nodown, pauses one shard, kills the primary and starts it again
+func TestCephRBDJournalErasurePrimaryRestartBeforeDownIntegration(t *testing.T) {
+	runRBDJournalLostAppend(t, "erasure-"+rbdJournalVariantPrimaryRestartBeforeDown)
+}
+
 // The variants of runRBDJournalLostAppend this file adds, and the record's
 // Mode of each.
 const (
@@ -192,6 +238,7 @@ const (
 // entry order.
 var rbdJournalHeldPendingHolds = map[string][]string{
 	rbdJournalVariantPendingHold:              {rbdJournalHoldSubOps, rbdJournalHoldSubOps, rbdJournalHoldSubOps},
+	rbdJournalVariantFencedPendingHold:        {rbdJournalHoldSubOps, rbdJournalHoldSubOps, rbdJournalHoldSubOps},
 	rbdJournalVariantPrimaryRestart:           {rbdJournalHoldSubOps, rbdJournalHoldMap},
 	rbdJournalVariantPrimaryRestartBeforeDown: {rbdJournalHoldSubOps, rbdJournalHoldMap},
 }
@@ -294,7 +341,8 @@ type rbdJournalHeldPending struct {
 // rbdJournalHeldPendingMode says whether a held mode is one of this file's.
 func rbdJournalHeldPendingMode(mode string) bool {
 	mode = rbdJournalHeldMode(mode)
-	return mode == rbdJournalVariantPendingHold || mode == rbdJournalVariantPrimaryRestart || mode == rbdJournalVariantPrimaryRestartBeforeDown
+	return mode == rbdJournalVariantPendingHold || mode == rbdJournalVariantPrimaryRestart || mode == rbdJournalVariantPrimaryRestartBeforeDown ||
+		mode == rbdJournalVariantFencedPendingHold
 }
 
 // runRBDJournalHeldPending is a pending-append mode after the observation of
@@ -307,6 +355,7 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 	mode := rbdJournalHeldMode(s.mode)
 	beforeDown := mode == rbdJournalVariantPrimaryRestartBeforeDown
 	restart := mode == rbdJournalVariantPrimaryRestart || beforeDown
+	fenced := mode == rbdJournalVariantFencedPendingHold
 	erasure := rbdJournalErasure(s.mode)
 	classOp := func(class, method string, mode cephmsgr.OSDCallMode, input []byte) cephmsgr.OSDOperation {
 		return cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: class, Method: method, Mode: mode, MaxOutputBytes: 65536}}
@@ -326,6 +375,15 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 	}
 	s.done("ping")
 
+	if fenced {
+		// The address the fence names, and on the erasure-coded pool the
+		// journal PG led by the header's primary.
+		h.Fenced = &rbdJournalFenced{LockerAddress: rbdJournalFencedLocker(t, s)}
+		if erasure {
+			h.Fenced.Align = &nativeRBDJournalAlign{}
+			rbdJournalFencedReceipt(t, s, "align-primary", "align", h.Fenced.Align)
+		}
+	}
 	h.Placed = rbdJournalHeldReadOf(t, ctx, s, "observe-placed")
 	if beforeDown {
 		// P keeps its OSDMap state up whatever its peers report, from
@@ -346,6 +404,11 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 		t.Fatalf("the subject's placement of the journal object and the header is not one three-member acting set (%v, osd.%d, osd.%d): %v", goPlacement.Acting, targetRoute.Primary, headerRoute.Primary, err)
 	}
 	h.Primary, h.Replica, h.GoActing = targetRoute.Primary, goPlacement.Acting[2], goPlacement.Acting
+	if h.Replica == h.Primary {
+		// The last acting member other than P: P leads from the first slot
+		// except under the fenced erasure cell's primary override.
+		h.Replica = goPlacement.Acting[1]
+	}
 	h.SentAtEpoch, h.NamedEpoch = targetRoute.Epoch, targetRoute.Epoch
 	if erasure {
 		h.HeaderPrimary = headerRoute.Primary
@@ -491,31 +554,48 @@ func runRBDJournalHeldPending(t *testing.T, s rbdJournalHeldSteps, imageCommit [
 	}
 	s.judge(t, "observe-held")
 
-	if !restart {
-		// Only the local wait for entry 1 ends; the append stays at P.
-		calls[rbdJournalHeldPendingCanceled].cancel()
-		settle(t, rbdJournalHeldPendingCanceled, 10*time.Second)
-		p.CanceledUTC = time.Now().UTC().Format(time.RFC3339Nano)
-		s.done("pending_canceled")
+	if fenced {
+		// The fence while the three appends are held, then the stat that
+		// probes it on their connection. Every append's caller is answered
+		// only after the resume; the fenced owner releases nothing.
+		rbdJournalHeldFence(t, s, appendConn, targetRoute, allPending)
+		s.judge(t, "refusal_recorded")
 		resume(t)
 		for i := range calls {
-			if i != rbdJournalHeldPendingCanceled {
-				settle(t, i, rbdJournalHeldAnswerWait)
-			}
+			settle(t, i, rbdJournalHeldAnswerWait)
 		}
 		recorded(t)
 		h.Settled = rbdJournalHeldReadOf(t, ctx, s, "observe-settled")
-		s.native(t, "observe-answered")
-		s.judge(t, "observe-answered")
-		s.send(t, nil, s.gid, "lock_unlock", s.header, classOp("lock", "unlock", cephmsgr.OSDCallWrite, rbdLockUnlockInput(r.LockCookie)))
-		s.unlocked()
-		s.done("unlock")
-		reply, err := s.w.Unwatch(ctx, headerRoute.Epoch)
-		s.keep("image_watch_unwatch", headerRoute, watchRequest, reply, err)
-		if err != nil {
-			t.Fatal("subject image header unwatch", err)
+		s.native(t, "observe-fenced")
+		s.judge(t, "observe-fenced")
+	}
+	if !restart {
+		if !fenced {
+			// Only the local wait for entry 1 ends; the append stays at P.
+			calls[rbdJournalHeldPendingCanceled].cancel()
+			settle(t, rbdJournalHeldPendingCanceled, 10*time.Second)
+			p.CanceledUTC = time.Now().UTC().Format(time.RFC3339Nano)
+			s.done("pending_canceled")
+			resume(t)
+			for i := range calls {
+				if i != rbdJournalHeldPendingCanceled {
+					settle(t, i, rbdJournalHeldAnswerWait)
+				}
+			}
+			recorded(t)
+			h.Settled = rbdJournalHeldReadOf(t, ctx, s, "observe-settled")
+			s.native(t, "observe-answered")
+			s.judge(t, "observe-answered")
+			s.send(t, nil, s.gid, "lock_unlock", s.header, classOp("lock", "unlock", cephmsgr.OSDCallWrite, rbdLockUnlockInput(r.LockCookie)))
+			s.unlocked()
+			s.done("unlock")
+			reply, err := s.w.Unwatch(ctx, headerRoute.Epoch)
+			s.keep("image_watch_unwatch", headerRoute, watchRequest, reply, err)
+			if err != nil {
+				t.Fatal("subject image header unwatch", err)
+			}
+			s.done("unwatch")
 		}
-		s.done("unwatch")
 		// Native librbd replays the three entries.
 		expected := rbdJournalHeldPendingImage(s.plan, s.token)
 		var committed []rbdJournalEntry
