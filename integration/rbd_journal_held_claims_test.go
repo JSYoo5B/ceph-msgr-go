@@ -100,6 +100,12 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	fail := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	text := rbdJournalHeldText
 	h, e := r.Held, r.Entry
+	if rbdJournalHeldMode(h.Mode) == rbdJournalVariantFencedHold {
+		return rbdJournalFencedHoldClaims(r, stage)
+	}
+	if h.Fenced != nil {
+		return []string{"record: a held record of another mode carries a fence"}
+	}
 	if rbdJournalHeldPendingMode(h.Mode) {
 		return rbdJournalHeldPendingClaims(r, stage)
 	}

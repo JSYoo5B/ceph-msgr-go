@@ -19,7 +19,8 @@ RBD_JOURNAL_PRIMARY_CHANGE_SELECTOR = "^TestCephRBDJournalPrimaryChangeIntegrati
 # cell and the held-request cells (tools/test_ci_rows_rbd_journal_held.py).
 RBD_THREE_OSD_CAPABILITIES = {"rbd-journal-primary-change", "rbd-journal-replica-hold", "rbd-journal-held-primary-change", "rbd-journal-dead-primary",
                               "rbd-journal-pending-hold", "rbd-journal-primary-restart", "rbd-journal-erasure-hold",
-                              "rbd-journal-erasure-dead-primary", "rbd-journal-erasure-held-primary-change", "rbd-journal-erasure-pending-hold"}
+                              "rbd-journal-erasure-dead-primary", "rbd-journal-erasure-held-primary-change", "rbd-journal-erasure-pending-hold",
+                              "rbd-journal-fenced-hold", "rbd-journal-erasure-fenced-hold", "rbd-journal-primary-restart-before-down"}
 
 
 def broad_rbd_rows(rows):

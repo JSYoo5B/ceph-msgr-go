@@ -60,8 +60,9 @@ import (
 // object-map or data companion request travels with the append. Several
 // pending appends and a primary that is started again are the cells of
 // rbd_journal_held_pending_test.go, an erasure-coded journal pool that of
-// TestCephRBDJournalErasureHoldIntegration. Not covered: a PG log trimmed
-// past the entry and a fenced owner.
+// TestCephRBDJournalErasureHoldIntegration, and an owner fenced while its
+// append is held those of rbd_journal_fenced_hold_test.go. Not covered: a PG
+// log trimmed past the entry.
 //
 // Everything journal-specific is the test-only consumer code of
 // rbd_journal_test.go. The product is unchanged.
@@ -332,6 +333,10 @@ func rbdJournalHeldPlan(mode string) (stages, order []string) {
 		return rbdJournalPendingHoldStages, rbdJournalPendingHoldOrder
 	case rbdJournalVariantPrimaryRestart:
 		return rbdJournalPrimaryRestartStages, rbdJournalPrimaryRestartOrder
+	case rbdJournalVariantPrimaryRestartBeforeDown:
+		return rbdJournalPrimaryRestartBeforeDownStages, rbdJournalPrimaryRestartBeforeDownOrder
+	case rbdJournalVariantFencedHold:
+		return rbdJournalFencedPlan(mode)
 	}
 	return nil, nil
 }
@@ -380,6 +385,9 @@ type nativeRBDJournalHeldRead struct {
 	Settled   bool                        `json:"settled"`
 	Polls     int                         `json:"polls"`
 	ElapsedMS int64                       `json:"elapsed_ms"`
+	// OSDInfo is the restarted primary's OSDMap entry once it was back
+	// (pre-down restart mode only).
+	OSDInfo *nativeRBDJournalOSDInfo `json:"osd_info"`
 }
 
 // rbdJournalHeldLease is the paused replica's lease as the fixture recorded
@@ -425,8 +433,10 @@ type rbdJournalHeld struct {
 	// The subject's connection that carried the append, by dial order.
 	AppendConnection int
 	// Pending is set in the pending-append modes
-	// (rbd_journal_held_pending_test.go) only.
+	// (rbd_journal_held_pending_test.go) only, Fenced in the fenced-hold
+	// modes (rbd_journal_fenced_hold_test.go) only.
 	Pending *rbdJournalHeldPending
+	Fenced  *rbdJournalFenced
 	// The handoff after a change or death of the primary: the watch
 	// reattached on the new primary, the lock record's address and the
 	// address the new primary lists the reattached watch at.
@@ -537,6 +547,15 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 		// The fixture follows the journal object's erasure-coded PG alone.
 		followed = 1
 	}
+	if mode == rbdJournalVariantFencedHold {
+		// The address the fence names, and on the erasure-coded pool the
+		// journal PG led by the header's primary.
+		h.Fenced = &rbdJournalFenced{LockerAddress: rbdJournalFencedLocker(t, s)}
+		if erasure {
+			h.Fenced.Align = &nativeRBDJournalAlign{}
+			rbdJournalFencedReceipt(t, s, "align-primary", "align", h.Fenced.Align)
+		}
+	}
 	h.Placed = rbdJournalHeldReadOf(t, ctx, s, "observe-placed")
 	if len(h.Placed.Objects) != followed || len(h.Placed.Objects[0].Acting) != 3 {
 		t.Fatal("the PG is not on three acting members", h.Placed.Objects)
@@ -562,7 +581,12 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 	// The replica modes pause the last acting member under a lease.
 	var pause *heldPause
 	if mode != rbdJournalVariantHeldPrimaryChange {
+		// The last acting member other than P: P leads from the first slot
+		// except under the fenced erasure cell's primary override.
 		h.Replica = h.GoActing[2]
+		if h.Replica == h.Primary {
+			h.Replica = h.GoActing[1]
+		}
 		pause = startHeldPause(t, ctx, s.dir, "osd", strconv.Itoa(int(h.Replica)), time.Now().Add(rbdJournalHeldLeaseBudget), rbdJournalHeldLeaseReserve)
 		h.Lease = &rbdJournalHeldLease{Daemon: pause.daemon(), Deadline: pause.lease.Deadline.UnixNano()}
 		s.done("replica_paused")
@@ -667,6 +691,20 @@ func runRBDJournalHeld(t *testing.T, s rbdJournalHeldSteps) {
 			t.Fatal("subject image header unwatch", err)
 		}
 		s.done("unwatch")
+	case rbdJournalVariantFencedHold:
+		// The fence while the append is held, then the stat that probes it.
+		rbdJournalHeldFence(t, s, appendConn, targetRoute, pending)
+		s.judge(t, "refusal_recorded")
+		resume(t)
+		select {
+		case got := <-finished:
+			outcome(t, got)
+		case <-time.After(rbdJournalHeldAnswerWait):
+			t.Fatal("the append was not answered after the replica was resumed")
+		}
+		h.Settled = rbdJournalHeldReadOf(t, ctx, s, "observe-settled")
+		s.native(t, "observe-fenced")
+		s.judge(t, "observe-fenced")
 	case rbdJournalVariantDeadPrimary:
 		h.Kill = &rbdJournalHeldKill{Daemon: fmt.Sprintf("osd.%d", h.Primary), RequestedUTC: time.Now().UTC().Format(time.RFC3339Nano)}
 		crash := filepath.Join(s.dir, "osd-crash-state.json")

@@ -186,6 +186,12 @@ type rbdBaseScope struct {
 	// journalHeldActing the PG's acting set it found.
 	journalHeldPrimary int
 	journalHeldActing  []int
+	// osdsNoDown are the OSDs the pre-down restart sequence flagged nodown
+	// (rbd_journal_fenced.go), recorded before the command; the cleanup
+	// clears the flag. journalHeldAddress is the held primary's public
+	// address when it was flagged.
+	osdsNoDown         []int
+	journalHeldAddress string
 	// The RBD group-snapshot acceptance's group and two images in the same
 	// owned pool (rbd_group.go). Its second owned pool also holds the
 	// migration acceptance's destinations, and it is the erasure-hold
@@ -246,6 +252,9 @@ func (c *fixtureCluster) rbdBaseJournal() error {
 	}
 	if x.journalPrimaryTemp != "" {
 		owned["journal_primary_temp"] = x.journalPrimaryTemp
+	}
+	if len(x.osdsNoDown) != 0 {
+		owned["osds_nodown"] = x.osdsNoDown
 	}
 	if x.group.secondPoolIntent {
 		// Recorded before the group acceptance creates its second pool.
@@ -926,6 +935,10 @@ type rbdBaseCleanup struct {
 	OSDsMarkedIn               []int  `json:"osds_marked_in,omitempty"`
 	JournalPrimaryTemp         string `json:"journal_primary_temp,omitempty"`
 	JournalPrimaryTempRestored *bool  `json:"journal_primary_temp_restored,omitempty"`
+	// The pre-down restart sequence only: the OSDs it flagged nodown, and
+	// those a following OSDMap read shows without the flag.
+	OSDsNoDown        []int `json:"osds_nodown,omitempty"`
+	OSDsNoDownCleared []int `json:"osds_nodown_cleared,omitempty"`
 	// The group-snapshot sequence only: its second owned pool, removed and
 	// proven absent from a native OSDMap like the first.
 	SecondPool               string   `json:"second_pool,omitempty"`
@@ -1020,6 +1033,11 @@ func (c *fixtureCluster) finishRBDBase(ctx context.Context) error {
 		if set {
 			fail(errors.New("owned journal PG retained its primary override"))
 		}
+	}
+	if len(x.osdsNoDown) != 0 {
+		cleared, err := c.rbdJournalRemoveNoDown(ctx, x.osdsNoDown)
+		receipt.OSDsNoDown, receipt.OSDsNoDownCleared = x.osdsNoDown, cleared
+		fail(err)
 	}
 	if len(x.osdsMarkedOut) != 0 {
 		in, read := c.rbdJournalMarkInOps()

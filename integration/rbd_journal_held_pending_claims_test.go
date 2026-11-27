@@ -30,7 +30,8 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 		return []string{"record: a held-request record carries another variant's part"}
 	}
 	mode := rbdJournalHeldMode(h.Mode)
-	restart := mode == rbdJournalVariantPrimaryRestart
+	beforeDown := mode == rbdJournalVariantPrimaryRestartBeforeDown
+	restart := mode == rbdJournalVariantPrimaryRestart || beforeDown
 	erasure := rbdJournalErasure(h.Mode)
 	followed, journalIndex := []string{"rbd_header." + r.ImageID, e.ObjectName, r.JournalHeader}, 1
 	pool, poolID := r.Pool, r.PoolID
@@ -45,6 +46,9 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	holds := rbdJournalHeldPendingHolds[mode]
 	if p == nil || len(p.Calls) != len(holds) {
 		return []string{fmt.Sprintf("record: the pending appends are missing or not %d", len(holds))}
+	}
+	if !beforeDown && (p.KeepUp != nil || p.Dead != nil || p.AddressDead != "") || beforeDown && (erasure || h.Lost != nil) {
+		return []string{"record: the pre-down restart's part does not match the mode"}
 	}
 	// inventory is the setup observation's journal object count: every
 	// later observation must list exactly as many objects, each with its
@@ -71,9 +75,12 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 	}
 	setup, locked := view("setup", 0), view("observe-locked", 0)
 	var answered, recorded, restarted, replay *rbdJournalLostAppendView
-	if restart {
+	switch {
+	case beforeDown:
+		restarted, replay = view("observe-restarted", 2), view("replay", 3)
+	case restart:
 		recorded, restarted, replay = view("observe-recorded", 1), view("observe-restarted", 2), view("replay", 3)
-	} else {
+	default:
 		answered, replay = view("observe-answered", 1), view("replay", 2)
 	}
 	if len(problems) != 0 {
@@ -392,65 +399,92 @@ func rbdJournalHeldPendingClaims(r *rbdJournalLostAppendRecord, stage string) []
 			}
 			recordedBefore(fmt.Sprintf("entry %d's outcome was recorded", i), o.RecordedUTC, l)
 		}
-		// Interval: P down, the PG active again in a newer interval led by
-		// one of the two others, without P.
-		lost := h.Lost
-		if lost == nil || len(lost.Objects) != 3 || lost.Query == nil {
-			fail("observe-primary-lost: the fixture's read is missing: %s", text(lost))
-			return problems
-		}
-		after := lost.Objects[0].Acting
-		if !lost.Settled || !slices.Contains(lost.Down, h.Primary) || !slices.Equal(members(after), replicas) {
-			fail("observe-primary-lost: osd.%d is not down with the PG on the two others: %s", h.Primary, text(lost))
-		} else {
-			placedOn("observe-primary-lost", lost, after, after[0])
-			q := lost.Query
-			if !strings.HasPrefix(q.State, "active") || !slices.Equal(q.Acting, after) || placedQuery != nil && (q.SameIntervalSince <= placedQuery.SameIntervalSince ||
-				q.SamePrimarySince <= placedQuery.SamePrimarySince) || q.SameIntervalSince > q.Epoch {
-				fail("observe-primary-lost: the PG is not active in a newer interval with a new primary: %s, before %s", text(q), text(placedQuery))
-			}
-		}
-		// Journal: entry 0 survived on the member that committed it; entry
-		// 1 never reached the PG.
 		applied := []bool{true, false}
-		journal("observe-recorded", recorded, applied)
-		lockRecord("observe-recorded", recorded, false)
-		unmoved("observe-recorded", recorded)
-		if reached < 2 {
-			return problems
-		}
-		// Interval: P up again and leading the PG on its original members,
-		// clean, in an interval newer than the one without P.
-		back := p.Back
-		if back == nil || len(back.Objects) != 3 || back.Query == nil || p.StartedUTC == "" {
-			fail("observe-primary-back: the fixture's read is missing: %s", text(back))
-			return problems
-		}
-		if !back.Settled || slices.Contains(back.Down, h.Primary) || len(back.Down) != 0 || back.OSD != -1 || len(back.Ops) != 0 {
-			fail("observe-primary-back: osd.%d is not up again with every OSD up: %s", h.Primary, text(back))
-		}
-		placedOn("observe-primary-back", back, acting, h.Primary)
-		if q := queried("observe-primary-back", back, "active+clean", acting); q != nil && lost.Query != nil &&
-			(q.SameIntervalSince <= lost.Query.SameIntervalSince || q.SamePrimarySince <= lost.Query.SamePrimarySince) {
-			fail("observe-primary-back: the PG is not in an interval newer than the one without osd.%d: %s, before %s", h.Primary, text(q), text(lost.Query))
-		}
-		if p.AddressBefore == "" || p.AddressAfter == "" || p.AddressAfter == p.AddressBefore {
-			fail("observe-primary-back: the restarted osd.%d kept its address %q (now %q)", h.Primary, p.AddressBefore, p.AddressAfter)
-		}
-		// Journal: byte-identical to the observation without P.
-		journal("observe-restarted", restarted, applied)
-		if !slices.Equal(restarted.ObjectSHA256, recorded.ObjectSHA256) || !slices.Equal(restarted.ObjectSizes, recorded.ObjectSizes) {
-			fail("observe-restarted: the journal objects differ from the observation without the primary")
-		}
-		lockRecord("observe-restarted", restarted, false)
-		unmoved("observe-restarted", restarted)
-		if reached < 3 {
-			return problems
-		}
-		// The handoff on the restarted primary.
-		x := h.Reconnect
-		if x == nil || x.Class != "applied" || x.Code != 0 || x.Invocations != 1 || h.HandoffPrimary != h.Primary || h.LockerAddress == "" || h.WatcherAddress == "" {
-			fail("handoff: the watch was not reattached on the restarted primary with the lock record read there: %s (primary osd.%d, lock %q, watch %q)", text(x), h.HandoffPrimary, h.LockerAddress, h.WatcherAddress)
+		if beforeDown {
+			// Interval: the OSDMap kept P up at its old address through the
+			// window, then P came back in a newer interval after a down
+			// marking of its own boot.
+			rbdJournalBeforeDownWindowClaims(r, acting, fail)
+			if reached < 2 {
+				return problems
+			}
+			if !rbdJournalBeforeDownBackClaims(r, placedQuery, fail) {
+				return problems
+			}
+			placedOn("observe-primary-back", p.Back, acting, h.Primary)
+			queried("observe-primary-back", p.Back, "active+clean", acting)
+			// Journal: entry 0 survived on the members that committed it;
+			// entry 1 never reached the PG.
+			journal("observe-restarted", restarted, applied)
+			lockRecord("observe-restarted", restarted, false)
+			unmoved("observe-restarted", restarted)
+			if reached < 3 {
+				return problems
+			}
+			x := h.Reconnect
+			if x == nil || x.Class != "applied" || x.Code != 0 || x.Invocations != 1 || h.HandoffPrimary != h.Primary || h.LockerAddress == "" || h.WatcherAddress == "" {
+				fail("handoff: the watch was not reattached on the restarted primary with the lock record read there: %s (primary osd.%d, lock %q, watch %q)", text(x), h.HandoffPrimary, h.LockerAddress, h.WatcherAddress)
+			}
+		} else {
+			// Interval: P down, the PG active again in a newer interval led by
+			// one of the two others, without P.
+			lost := h.Lost
+			if lost == nil || len(lost.Objects) != 3 || lost.Query == nil {
+				fail("observe-primary-lost: the fixture's read is missing: %s", text(lost))
+				return problems
+			}
+			after := lost.Objects[0].Acting
+			if !lost.Settled || !slices.Contains(lost.Down, h.Primary) || !slices.Equal(members(after), replicas) {
+				fail("observe-primary-lost: osd.%d is not down with the PG on the two others: %s", h.Primary, text(lost))
+			} else {
+				placedOn("observe-primary-lost", lost, after, after[0])
+				q := lost.Query
+				if !strings.HasPrefix(q.State, "active") || !slices.Equal(q.Acting, after) || placedQuery != nil && (q.SameIntervalSince <= placedQuery.SameIntervalSince ||
+					q.SamePrimarySince <= placedQuery.SamePrimarySince) || q.SameIntervalSince > q.Epoch {
+					fail("observe-primary-lost: the PG is not active in a newer interval with a new primary: %s, before %s", text(q), text(placedQuery))
+				}
+			}
+			// Journal: entry 0 survived on the member that committed it; entry
+			// 1 never reached the PG.
+			journal("observe-recorded", recorded, applied)
+			lockRecord("observe-recorded", recorded, false)
+			unmoved("observe-recorded", recorded)
+			if reached < 2 {
+				return problems
+			}
+			// Interval: P up again and leading the PG on its original members,
+			// clean, in an interval newer than the one without P.
+			back := p.Back
+			if back == nil || len(back.Objects) != 3 || back.Query == nil || p.StartedUTC == "" {
+				fail("observe-primary-back: the fixture's read is missing: %s", text(back))
+				return problems
+			}
+			if !back.Settled || slices.Contains(back.Down, h.Primary) || len(back.Down) != 0 || back.OSD != -1 || len(back.Ops) != 0 {
+				fail("observe-primary-back: osd.%d is not up again with every OSD up: %s", h.Primary, text(back))
+			}
+			placedOn("observe-primary-back", back, acting, h.Primary)
+			if q := queried("observe-primary-back", back, "active+clean", acting); q != nil && lost.Query != nil &&
+				(q.SameIntervalSince <= lost.Query.SameIntervalSince || q.SamePrimarySince <= lost.Query.SamePrimarySince) {
+				fail("observe-primary-back: the PG is not in an interval newer than the one without osd.%d: %s, before %s", h.Primary, text(q), text(lost.Query))
+			}
+			if p.AddressBefore == "" || p.AddressAfter == "" || p.AddressAfter == p.AddressBefore {
+				fail("observe-primary-back: the restarted osd.%d kept its address %q (now %q)", h.Primary, p.AddressBefore, p.AddressAfter)
+			}
+			// Journal: byte-identical to the observation without P.
+			journal("observe-restarted", restarted, applied)
+			if !slices.Equal(restarted.ObjectSHA256, recorded.ObjectSHA256) || !slices.Equal(restarted.ObjectSizes, recorded.ObjectSizes) {
+				fail("observe-restarted: the journal objects differ from the observation without the primary")
+			}
+			lockRecord("observe-restarted", restarted, false)
+			unmoved("observe-restarted", restarted)
+			if reached < 3 {
+				return problems
+			}
+			// The handoff on the restarted primary.
+			x := h.Reconnect
+			if x == nil || x.Class != "applied" || x.Code != 0 || x.Invocations != 1 || h.HandoffPrimary != h.Primary || h.LockerAddress == "" || h.WatcherAddress == "" {
+				fail("handoff: the watch was not reattached on the restarted primary with the lock record read there: %s (primary osd.%d, lock %q, watch %q)", text(x), h.HandoffPrimary, h.LockerAddress, h.WatcherAddress)
+			}
 		}
 	}
 	if reached < len(stages)-1 {

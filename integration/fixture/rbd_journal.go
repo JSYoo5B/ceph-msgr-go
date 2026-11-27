@@ -211,6 +211,12 @@ var rbdJournalTrimActions = []string{"setup", "observe-locked", "observe-committ
 // rbdJournalActionsFor returns the action sequence the profile admits.
 func rbdJournalActionsFor(p profile) []string {
 	switch {
+	case p.admits(capRBDJournalFencedHold):
+		return rbdJournalFencedHoldActions
+	case p.admits(capRBDJournalErasureFencedHold):
+		return rbdJournalErasureFencedHoldActions
+	case p.admits(capRBDJournalPrimaryRestartBeforeDown):
+		return rbdJournalPrimaryRestartBeforeDownActions
 	case p.admits(capRBDJournalForcedBreakInflight):
 		return rbdJournalForcedBreakInflightActions
 	case p.admits(capRBDJournalTrim):
@@ -1803,6 +1809,12 @@ func rbdJournalTarget(plan rbdJournalPlan, action string) string {
 		return plan.Image + ":exclusive-lock-break,osd-blocklist,journal-replay,native-write"
 	case "advance-map":
 		return plan.Pool + ":pool-flag-" + rbdLockAdvanceFlag + ",osdmap-epoch"
+	case "fence":
+		return plan.Image + ":osd-blocklist"
+	case "align-primary":
+		return plan.JournalPool + ":primary-temp,acting-primary"
+	case "keep-up":
+		return plan.Pool + ":osd-nodown"
 	case "disconnect-oracle":
 		return plan.Image + ",journal-client:" + plan.OracleClient + ":disconnected"
 	case "produce":
@@ -1885,6 +1897,15 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 			return c.rbdBaseFinish(m, err)
 		}
 	}
+	if rbdJournalFencedAdmin(action) {
+		// The fixture's own commands and reads of the fenced-hold and
+		// pre-down restart sequences (rbd_journal_fenced.go); no driver.
+		key, receipt, err := c.rbdJournalFencedControl(ctx, action)
+		if key != "" {
+			result[key] = receipt
+		}
+		return c.rbdBaseFinish(m, err)
+	}
 	if rbdJournalHeldAdmin(action) {
 		// The fixture's own reads of a held-request sequence; no driver.
 		read, err := c.rbdJournalHeldControl(ctx, action)
@@ -1940,7 +1961,7 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	// blocklisted by whoever breaks its lock; the cleanup removes that
 	// entry.
 	if action == "observe-locked" && (c.profile.admits(capRBDJournalOwnerLoss) || c.profile.admits(capRBDJournalForcedBreak) || c.profile.admits(capRBDJournalForcedBreakPending) ||
-		c.profile.admits(capRBDJournalForcedBreakInflight) || c.profile.admits(capRBDJournalTrim)) &&
+		c.profile.admits(capRBDJournalForcedBreakInflight) || c.profile.admits(capRBDJournalTrim) || c.profile.rbdJournalFencedSequence()) &&
 		native.Lockers != nil {
 		for _, l := range native.Lockers.Lockers {
 			x.lockOwnerAddresses = append(x.lockOwnerAddresses, l.Address)
