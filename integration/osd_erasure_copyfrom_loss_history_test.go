@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+
+	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
 // copyLossShardReceipt is one acting shard's part of a cell's offline
@@ -90,17 +92,8 @@ func copyLossShardHistory(t *testing.T, ctx context.Context, r *copyPrimaryChang
 	if route.ID != r.dstRoute.ID || !slices.Equal(route.Acting, r.dstRoute.Acting) || route.PGID != r.dstRoute.PGID {
 		t.Fatalf("the destination PG is not back on its original placement: %+v; was %+v", route, r.dstRoute)
 	}
-	copyKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryCopyIncarnation, TID: h.op.TID}
-	writeKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryWriteIncarnation, TID: h.write.Transaction}
-	targets := []pgHistoryTarget{copyKey, writeKey,
-		{Type: "client", Num: copyKey.Num, Inc: copyKey.Inc + 1, TID: copyKey.TID},
-		{Type: "client", Num: copyKey.Num, Inc: copyKey.Inc, TID: copyKey.TID + 1<<20}}
-	if receipt.Held != nil {
-		if receipt.Held.BlockerSubmitTID == 0 {
-			t.Fatal("the held cell recorded no blocker submission")
-		}
-		targets = append(targets, pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyHeldBlockerIncarnation, TID: receipt.Held.BlockerSubmitTID})
-	}
+	targets := copyLossTargets(t, r, h, receipt)
+	copyKey, writeKey := targets[0], targets[1]
 	object, version := hobjectHead(route), receipt.Reply.Replay
 	judge := func(where string, got []struct {
 		Reqid     string              `json:"reqid"`
@@ -140,6 +133,136 @@ func copyLossShardHistory(t *testing.T, ctx context.Context, r *copyPrimaryChang
 	waitOSDFixtureClean(t, ctx, r.recovery.base)
 }
 
+// copyLossTargets are the identities a lost-copy history looks up: the
+// copy, the first source write, two near misses of the copy and, after a
+// held final transaction, the blocker write lost with the primary.
+func copyLossTargets(t *testing.T, r *copyPrimaryChangeRun, h *copyChunkHold, receipt *copyErasurePairLossReceipt) []pgHistoryTarget {
+	t.Helper()
+	copyKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryCopyIncarnation, TID: h.op.TID}
+	writeKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryWriteIncarnation, TID: h.write.Transaction}
+	targets := []pgHistoryTarget{copyKey, writeKey,
+		{Type: "client", Num: copyKey.Num, Inc: copyKey.Inc + 1, TID: copyKey.TID},
+		{Type: "client", Num: copyKey.Num, Inc: copyKey.Inc, TID: copyKey.TID + 1<<20}}
+	if receipt.Held != nil {
+		if receipt.Held.BlockerSubmitTID == 0 {
+			t.Fatal("the held cell recorded no blocker submission")
+		}
+		targets = append(targets, pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyHeldBlockerIncarnation, TID: receipt.Held.BlockerSubmitTID})
+	}
+	return targets
+}
+
+// copyLossDegradedReceipt is one offline capture of the degraded
+// destination PG: its stage, the placement it was bracketed by, the empty
+// position of the lost primary and every present shard's part.
+type copyLossDegradedReceipt struct {
+	Stage   string                 `json:"stage"`
+	Epoch   uint32                 `json:"epoch"`
+	Primary int32                  `json:"primary"`
+	Acting  []int32                `json:"acting"`
+	Absent  []int                  `json:"absent_shards"`
+	Shards  []copyLossShardReceipt `json:"shards"`
+}
+
+// copyLossLostShardObservation judges one complete PG log of a survivor of
+// the lost primary before any resubmission: none of the identities occurs.
+// It is an observation of that log only.
+func copyLossLostShardObservation(targets [][]pgHistoryLocation) error {
+	for i, locations := range targets {
+		if len(locations) != 0 {
+			return fmt.Errorf("identity %d occurs at %+v before any resubmission", i, locations)
+		}
+	}
+	return nil
+}
+
+// copyLossDegradedHistory runs inside settleDestinationLoss while the
+// destination PG is degraded by its lost primary: route is the PG under its
+// new primary (a pg_temp), and the lost primary's shard is an empty position
+// of its acting vector. The live primary's log is judged first, then every
+// present shard's store is copied and read offline (shardPGHistory), which
+// records the empty position as absent and reads nothing for it: the lost
+// OSD is down and no other OSD holds that shard yet.
+//
+//   - Stage "lost", before the second source write: no log, the live
+//     primary's or any survivor's own, holds the copy, the first source
+//     write, a near miss or the blocker lost with the primary. Chunk writes
+//     to the temporary object carry no log entry (simple_opc_submit,
+//     src/osd/PrimaryLogPG.cc:11608-11626, from process_copy_chunk
+//     :9784-9790), and the final transaction was never applied on the
+//     survivors.
+//   - Stage "resubmitted", after the one explicit resubmission and before
+//     recovery: every survivor holds the copy once at the resubmission's
+//     version with the first source write as its second extra request ID
+//     (copyLossShardObservation), from the sub-write the new primary sent it
+//     and not by peering with the lost shard.
+//
+// The new primary's offline log must equal its live answer at both stages.
+// No log is evidence of absence elsewhere, and nothing is said about the
+// lost OSD's own store.
+func copyLossDegradedHistory(t *testing.T, ctx context.Context, r *copyPrimaryChangeRun, h *copyChunkHold, facts erasureFacts, receipt *copyErasurePairLossReceipt, stage string, route osdFixtureOracle, answered *cephmsgr.OSDReply) {
+	t.Helper()
+	lost := int(h.route.Shard)
+	if receipt.Unknown == nil || route.ID == h.route.ID || route.Shard < 0 || lost < 0 || lost >= len(route.Acting) || route.Acting[lost] != crushItemNone || slices.Contains(route.Acting, h.route.ID) {
+		t.Fatalf("the destination PG is not degraded by its lost primary osd.%d (shard %d): %+v, unknown %+v", h.route.ID, lost, route, receipt.Unknown)
+	}
+	if (stage == "resubmitted") != (answered != nil) || stage != "lost" && stage != "resubmitted" {
+		t.Fatalf("degraded capture at stage %q with reply %v", stage, answered != nil)
+	}
+	targets := copyLossTargets(t, r, h, receipt)
+	object, version := hobjectHead(route), ""
+	if answered != nil {
+		version = replayVersion(*answered)
+	}
+	judge := func(where string, got []struct {
+		Reqid     string              `json:"reqid"`
+		Locations []pgHistoryLocation `json:"locations"`
+	}) int {
+		var all [][]pgHistoryLocation
+		for _, target := range got {
+			all = append(all, target.Locations)
+		}
+		if answered == nil {
+			if err := copyLossLostShardObservation(all); err != nil {
+				t.Fatalf("%s before the resubmission: %v", where, err)
+			}
+			return -1
+		}
+		index, err := copyLossShardObservation(all[0], all[1], all[2:], object, version, h.write.UserVersion)
+		if err != nil {
+			t.Fatalf("%s after the resubmission: %v", where, err)
+		}
+		return index
+	}
+	live := primaryPGHistory(t, ctx, 2, r.dest, targets)
+	requirePGHistoryOnRoute(t, live, route)
+	judge(fmt.Sprintf("live primary osd.%d", route.ID), live.Targets)
+
+	shards := shardPGHistory(t, ctx, 2, r.dest, route, targets, facts.nonprimary)
+	capture := copyLossDegradedReceipt{Stage: stage, Epoch: shards.Before.Epoch, Primary: route.ID, Acting: slices.Clone(route.Acting), Absent: shards.AbsentShards}
+	if !slices.Equal(shards.AbsentShards, []int{lost}) {
+		t.Fatalf("the degraded capture reports absent shards %v; the lost primary held shard %d", shards.AbsentShards, lost)
+	}
+	for i, shard := range shards.Shards {
+		if shard.Absent {
+			t.Logf("shard %s: absent, the lost osd.%d's position; nothing read", shard.SPG, h.route.ID)
+			continue
+		}
+		index := judge(fmt.Sprintf("shard %s (osd.%d)", shard.SPG, shard.OSD), shard.Targets)
+		if shard.DupEntries != 0 {
+			t.Fatalf("shard %s holds %d duplicate entries; nothing was trimmed", shard.SPG, shard.DupEntries)
+		}
+		if i == int(route.Shard) && (shard.OSD != live.OSD || shard.Head != live.Head || shard.Tail != live.Tail || shard.LogEntries != live.LogEntries ||
+			shard.ExtraReqidEntries != live.ExtraReqidEntries || !reflect.DeepEqual(shard.Targets, live.Targets)) {
+			t.Fatalf("the new primary's store copy %s differs from its live PG log: head %s tail %s vs live head %s tail %s", shard.SPG, shard.Head, shard.Tail, live.Head, live.Tail)
+		}
+		capture.Shards = append(capture.Shards, copyLossShardReceipt{SPG: shard.SPG, OSD: shard.OSD, SHA256: shard.SHA256, Head: shard.Head, LastEntry: shard.LastEntry,
+			LogEntries: shard.LogEntries, ExtraReqids: shard.ExtraReqidEntries, DupEntries: shard.DupEntries, CopyVersion: version, SourceExtra: index, PausedMillis: shard.PausedMillis})
+		t.Logf("degraded shard %s (osd.%d) at stage %s: copy at %q, first source write as extra %d; %d entries, head %s", shard.SPG, shard.OSD, stage, version, index, shard.LogEntries, shard.Head)
+	}
+	receipt.DegradedHistory = append(receipt.DegradedHistory, capture)
+}
+
 // For COPY_FROM and COPY_FROM2, the two destination-primary loss cells of
 // TestCephOSDErasureOptimizedCopyFromErasureToErasureLossIntegration on the
 // owned optimized isa k=2,m=2 source and k=3,m=1 destination, each followed
@@ -157,11 +280,15 @@ func copyLossShardHistory(t *testing.T, ctx context.Context, r *copyPrimaryChang
 // original primary recovered and leads again, every shard of the four must
 // hold the copy once at the resubmission's version, bound to the source
 // lineage, and none may hold the lost blocker write. A shard that rejoined
-// after the loss received the entries by peering; the capture does not tell
-// whether a shard held something before recovery, and absence outside these
-// complete logs is not established. Not exercised: a capture of the degraded
-// PG before recovery (an empty acting slot has no store to read), the other
-// width pairs and snapshot sources.
+// after the loss received the entries by peering, so the degraded PG is
+// captured too, twice, before recovery (copyLossDegradedHistory): once
+// after the loss is settled, when no survivor's log holds the copy, the
+// source write or the blocker, and once after the resubmission, when every
+// survivor holds the copy once with the source lineage. The lost primary's
+// shard is then an empty acting position: the capture records it absent and
+// reads nothing for it. Absence outside these complete logs is not
+// established, and the lost OSD's own store is not read. Not exercised: the
+// other width pairs and snapshot sources.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedcopyfromerasuretoerasurelosshistory key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width,osd-shard-history
 //scenario:covers CLIENT to OSD
@@ -174,7 +301,7 @@ func TestCephOSDErasureOptimizedCopyFromErasureToErasureLossHistoryIntegration(t
 	for _, tc := range copyPrimaryChangeCases {
 		cells = append(cells, copyErasurePairLossCell{tc, "destination", false, false}, copyErasurePairLossCell{tc, "destination-before-commit", false, false})
 	}
-	runCopyErasurePairLoss(t, erasurePairK2M2ToK3M1, "osd-erasure-copyfrom-loss-history-results.json", cells, copyErasurePairLossHooks{after: copyLossShardHistory})
+	runCopyErasurePairLoss(t, erasurePairK2M2ToK3M1, "osd-erasure-copyfrom-loss-history-results.json", cells, copyErasurePairLossHooks{after: copyLossShardHistory, degraded: copyLossDegradedHistory})
 }
 
 func TestCopyLossShardObservation(t *testing.T) {
@@ -212,6 +339,21 @@ func TestCopyLossShardObservation(t *testing.T) {
 	} {
 		if _, err := copyLossShardObservation(c.copyKey, c.write, c.absent, object, version, user); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestCopyLossLostShardObservation(t *testing.T) {
+	zero := 0
+	entry := pgHistoryLocation{Tier: "log", Index: 7, Version: "33'12", Op: "modify", Object: "4:a1b2c3d4:::dst:head", ReturnCode: &zero}
+	if err := copyLossLostShardObservation([][]pgHistoryLocation{nil, nil, nil, nil, nil}); err != nil {
+		t.Fatal("an empty log refused:", err)
+	}
+	for i := range 5 {
+		targets := make([][]pgHistoryLocation, 5)
+		targets[i] = []pgHistoryLocation{entry}
+		if err := copyLossLostShardObservation(targets); err == nil {
+			t.Errorf("identity %d before any resubmission accepted", i)
 		}
 	}
 }

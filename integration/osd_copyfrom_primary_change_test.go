@@ -305,6 +305,11 @@ type copyPrimaryRecovery struct {
 	leases    map[int32]*testcluster.DaemonLease
 	killed    map[int32]bool
 	restarted bool
+	// degraded, when set, runs inside settleDestinationLoss while the
+	// destination PG is degraded: at stage "lost" once the loss is settled,
+	// before the second source write, and at stage "resubmitted" with the
+	// resubmission's reply, before recovery. It may only observe.
+	degraded func(r *copyPrimaryChangeRun, h *copyChunkHold, stage string, route osdFixtureOracle, answered *cephmsgr.OSDReply)
 }
 
 func copyMonCommand(ctx context.Context, c *cephmsgr.Client, command string) error {

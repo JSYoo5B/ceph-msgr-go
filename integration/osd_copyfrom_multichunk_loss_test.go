@@ -842,6 +842,9 @@ func (r *copyPrimaryChangeRun) settleDestinationLoss(h *copyChunkHold, code ceph
 		t.Fatalf("the new primary's PG log names the lost copy: %+v %+v", s.Targets[0].Locations, s.Targets[1].Locations)
 	}
 	t.Logf("seed kept after losing osd.%d between chunks: new primary osd.%d at epoch %d; temporary removed on osd %v", primary, moved.ID, moved.Epoch, receipt.TempRemoved)
+	if r.recovery.degraded != nil {
+		r.recovery.degraded(r, h, "lost", moved, nil)
+	}
 
 	second, secondSource := r.writeSource("second source write", 1700009200, []byte("multi-chunk loss second source bytes"), []byte{6, 0xfe})
 	again := r.copyRequest(code, moved)
@@ -866,6 +869,9 @@ func (r *copyPrimaryChangeRun) settleDestinationLoss(h *copyChunkHold, code ceph
 	s := r.history(moved, copyKey, secondKey)
 	if err := copyFromDestinationBinding(s.Targets[0].Locations, s.Targets[1].Locations, binding); err != nil {
 		t.Fatalf("new primary osd.%d after the resubmission: %v", moved.ID, err)
+	}
+	if r.recovery.degraded != nil {
+		r.recovery.degraded(r, h, "resubmitted", moved, &answered)
 	}
 	r.finish(after, answered.Transaction, copyKey, secondKey, binding)
 	receipt.Final = nativeDigest(after)

@@ -38,6 +38,9 @@ type copyErasurePairLossReceipt struct {
 	// ShardHistory is the offline capture of every acting shard's own log
 	// after recovery (osd_erasure_copyfrom_loss_history_test.go).
 	ShardHistory []copyLossShardReceipt `json:"shard_history,omitempty"`
+	// DegradedHistory are the offline captures of the degraded PG before
+	// recovery (copyLossDegradedHistory).
+	DegradedHistory []copyLossDegradedReceipt `json:"degraded_shard_history,omitempty"`
 }
 
 type copyErasureSourceMove struct {
@@ -174,15 +177,22 @@ func TestCephOSDErasureOptimizedCopyFromErasureToErasureLossIntegration(t *testi
 // run, hold, destination facts and receipt.
 type copyErasurePairLossAfter func(*testing.T, context.Context, *copyPrimaryChangeRun, *copyChunkHold, erasureFacts, *copyErasurePairLossReceipt)
 
+// copyErasurePairLossDegraded runs inside settleDestinationLoss while the
+// destination PG is degraded (copyPrimaryRecovery.degraded), with the cell's
+// destination facts and receipt.
+type copyErasurePairLossDegraded func(*testing.T, context.Context, *copyPrimaryChangeRun, *copyChunkHold, erasureFacts, *copyErasurePairLossReceipt, string, osdFixtureOracle, *cephmsgr.OSDReply)
+
 // copyErasurePairLossHooks are a row's additions to its cells; nil hooks add
 // nothing.
 type copyErasurePairLossHooks struct {
-	after copyErasurePairLossAfter
+	after    copyErasurePairLossAfter
+	degraded copyErasurePairLossDegraded
 }
 
 // runCopyErasurePairLoss runs cells on the owned pools of pair and publishes
 // their receipts as name after every cleanup. A non-nil hooks.after follows
-// every cell.
+// every cell, and a non-nil hooks.degraded runs in every cell whose
+// destination primary is lost and resubmitted by settleDestinationLoss.
 func runCopyErasurePairLoss(t *testing.T, pair erasureCopyPair, name string, cells []copyErasurePairLossCell, hooks copyErasurePairLossHooks) {
 	ctx, pools, recovery, srcFacts, dstFacts := copyErasureToErasureFixture(t, 1800*time.Second, pair)
 	limit := erasureCopyGetMax(dstFacts, pair.dest)
@@ -213,6 +223,12 @@ func runCopyErasurePairLoss(t *testing.T, pair erasureCopyPair, name string, cel
 				receipts = append(receipts, receipt)
 				mu.Unlock()
 			})
+			if hooks.degraded != nil {
+				recovery.degraded = func(r *copyPrimaryChangeRun, h *copyChunkHold, stage string, route osdFixtureOracle, answered *cephmsgr.OSDReply) {
+					hooks.degraded(t, ctx, r, h, dstFacts, &receipt, stage, route, answered)
+				}
+				t.Cleanup(func() { recovery.degraded = nil })
+			}
 			var r *copyPrimaryChangeRun
 			var h *copyChunkHold
 			if cell.held() {
