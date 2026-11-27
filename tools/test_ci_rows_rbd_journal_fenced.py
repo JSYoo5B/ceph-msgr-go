@@ -1,5 +1,5 @@
-"""Admission checks for the rows of the fenced-hold and pre-down restart
-journal cells.
+"""Admission checks for the rows of the fenced-hold, fenced pending and
+pre-down restart journal cells.
 
 They run on three replicated BlueStore OSDs like the other held-request
 cells. Each row selects its test alone under its own capability, and no
@@ -16,6 +16,9 @@ FENCED = {
     "^TestCephRBDJournalFencedHoldIntegration$": "rbd-journal-fenced-hold",
     "^TestCephRBDJournalErasureFencedHoldIntegration$": "rbd-journal-erasure-fenced-hold",
     "^TestCephRBDJournalPrimaryRestartBeforeDownIntegration$": "rbd-journal-primary-restart-before-down",
+    "^TestCephRBDJournalFencedPendingHoldIntegration$": "rbd-journal-fenced-pending-hold",
+    "^TestCephRBDJournalErasureFencedPendingHoldIntegration$": "rbd-journal-erasure-fenced-pending-hold",
+    "^TestCephRBDJournalErasurePrimaryRestartBeforeDownIntegration$": "rbd-journal-erasure-primary-restart-before-down",
 }
 
 
