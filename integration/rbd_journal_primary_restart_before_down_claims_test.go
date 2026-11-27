@@ -16,7 +16,7 @@ import (
 // that recovers before the window ends is still refused. The subject's own
 // reread in the window found that address too. The caller outcomes and the
 // kill itself are the restart cell's claims.
-func rbdJournalBeforeDownWindowClaims(r *rbdJournalLostAppendRecord, acting []int32, fail func(string, ...any)) {
+func rbdJournalBeforeDownWindowClaims(r *rbdJournalLostAppendRecord, acting []int32, followed []string, fail func(string, ...any)) {
 	h, p := r.Held, r.Held.Pending
 	text := rbdJournalHeldText
 	address := p.AddressBefore
@@ -42,7 +42,6 @@ func rbdJournalBeforeDownWindowClaims(r *rbdJournalLostAppendRecord, acting []in
 	// Every sample is judged on its own: a state that changed and
 	// recovered within the window is a violation like one that lasted.
 	killed, killErr := time.Parse(time.RFC3339Nano, h.Kill.RequestedUTC)
-	followed := []string{"rbd_header." + r.ImageID, r.Entry.ObjectName, r.JournalHeader}
 	var previous time.Time
 	var epoch uint32
 	for i, sample := range d.Samples {
@@ -82,11 +81,11 @@ func rbdJournalBeforeDownWindowClaims(r *rbdJournalLostAppendRecord, acting []in
 // epoch, at a new address, which the subject's reread found; the PG is
 // clean in an interval that began no earlier than that and later than the
 // one the lock was taken in. It returns false if the read is missing.
-func rbdJournalBeforeDownBackClaims(r *rbdJournalLostAppendRecord, placed *nativeRBDJournalPGQuery, fail func(string, ...any)) bool {
+func rbdJournalBeforeDownBackClaims(r *rbdJournalLostAppendRecord, placed *nativeRBDJournalPGQuery, followed int, fail func(string, ...any)) bool {
 	h, p := r.Held, r.Held.Pending
 	text := rbdJournalHeldText
 	back := p.Back
-	if back == nil || len(back.Objects) != 3 || back.Query == nil || back.OSDInfo == nil || p.Dead == nil || len(p.Dead.Samples) == 0 {
+	if back == nil || len(back.Objects) != followed || back.Query == nil || back.OSDInfo == nil || p.Dead == nil || len(p.Dead.Samples) == 0 {
 		fail("observe-primary-back: the fixture's read is missing: %s", text(back))
 		return false
 	}
@@ -115,4 +114,19 @@ func rbdJournalBeforeDownBackClaims(r *rbdJournalLostAppendRecord, placed *nativ
 		fail("observe-primary-back: the PG is not in an interval that began once osd.%d was up again (epoch %d): %s, before %s", h.Primary, info.UpFrom, text(q), text(placed))
 	}
 	return true
+}
+
+// rbdJournalBeforeDownApplied is which pending entries a pre-down restart
+// left in the journal: entry 0, which the members that committed it kept,
+// and never entry 1, which was held for its map. On the erasure-coded pool
+// the restarted observation decides entry 0: a journal object 0 unchanged
+// from the locked image is the rolled-back branch, anything else is judged
+// as the surviving one.
+func rbdJournalBeforeDownApplied(r *rbdJournalLostAppendRecord, restarted, locked *rbdJournalLostAppendView) []bool {
+	applied := []bool{true, false}
+	if o := r.Entry.Object; rbdJournalErasure(r.Held.Mode) && restarted != nil && locked != nil && int(o) < len(restarted.ObjectSizes) && int(o) < len(locked.ObjectSizes) &&
+		restarted.ObjectSizes[o] == locked.ObjectSizes[o] && restarted.ObjectSHA256[o] == locked.ObjectSHA256[o] {
+		applied[0] = false
+	}
+	return applied
 }

@@ -127,11 +127,12 @@ var capRBDJournalErasurePendingHold = defineExclusiveCapability(fixtureRBD, "rbd
 	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore", nil)
 
 func (p profile) rbdJournalErasureFault() bool {
-	return p.declares(capRBDJournalErasureDeadPrimary) || p.declares(capRBDJournalErasureHeldPrimaryChange) || p.declares(capRBDJournalErasurePendingHold)
+	return p.declares(capRBDJournalErasureDeadPrimary) || p.declares(capRBDJournalErasureHeldPrimaryChange) || p.declares(capRBDJournalErasurePendingHold) ||
+		p.declares(capRBDJournalErasurePrimaryRestartBeforeDown)
 }
 
 func (p profile) rbdJournalErasure() bool {
-	return p.declares(capRBDJournalErasureHold) || p.declares(capRBDJournalErasureFencedHold) || p.rbdJournalErasureFault()
+	return p.declares(capRBDJournalErasureHold) || p.declares(capRBDJournalErasureFencedHold) || p.declares(capRBDJournalErasureFencedPendingHold) || p.rbdJournalErasureFault()
 }
 
 // rbdJournalErasureK and rbdJournalErasureM are the erasure-coded journal
@@ -613,7 +614,7 @@ func (c *fixtureCluster) rbdJournalHeldControl(ctx context.Context, action strin
 		wait.osd, wait.acting = x.journalHeldPrimary, x.journalHeldActing
 	}
 	read, err := rbdJournalHeldObserve(ctx, action, objects, wait, c.rbdJournalHeldOps())
-	if err == nil && action == "observe-primary-back" && c.profile.admits(capRBDJournalPrimaryRestartBeforeDown) {
+	if err == nil && action == "observe-primary-back" && c.profile.rbdJournalBeforeDownSequence() {
 		// When and how the restarted primary came back: the epochs its old
 		// instance was marked down at and its new one up from.
 		info, infoErr := c.rbdJournalOSDInfo(ctx, x.journalHeldPrimary)
@@ -629,16 +630,16 @@ func (c *fixtureCluster) rbdJournalHeldControl(ctx context.Context, action strin
 // selected sequence: the append to journal object 0, with a replica's commit
 // (an erasure-coded primary's own shard commit) recorded unless it is held
 // for its map; in the pending-hold sequence the
-// appends to journal objects 0, 1 and 2, each with a replica's commit; in
-// the primary-restart sequence the append to journal object 0 with a
+// appends to journal objects 0, 1 and 2, each with a replica's commit, also
+// in the fenced pending-hold sequences; in the primary-restart sequences the append to journal object 0 with a
 // replica's commit and the one to journal object 1, which is held for its
 // map.
 func rbdJournalHeldAwaited(p profile, poolID int64, imageID string) []rbdJournalHeldAwait {
 	object := func(n int) string { return fmt.Sprintf("journal_data.%d.%s.%d", poolID, imageID, n) }
 	switch {
-	case p.admits(capRBDJournalPendingHold) || p.admits(capRBDJournalErasurePendingHold):
+	case p.admits(capRBDJournalPendingHold) || p.admits(capRBDJournalErasurePendingHold) || p.admits(capRBDJournalFencedPendingHold) || p.admits(capRBDJournalErasureFencedPendingHold):
 		return []rbdJournalHeldAwait{{object(0), true}, {object(1), true}, {object(2), true}}
-	case p.admits(capRBDJournalPrimaryRestart) || p.admits(capRBDJournalPrimaryRestartBeforeDown):
+	case p.admits(capRBDJournalPrimaryRestart) || p.rbdJournalBeforeDownSequence():
 		return []rbdJournalHeldAwait{{object(0), true}, {object(1), false}}
 	}
 	return []rbdJournalHeldAwait{{object(0), !(p.admits(capRBDJournalHeldPrimaryChange) || p.admits(capRBDJournalErasureHeldPrimaryChange))}}

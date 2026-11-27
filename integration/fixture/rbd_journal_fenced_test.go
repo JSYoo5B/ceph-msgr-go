@@ -13,27 +13,36 @@ const (
 	rbdJournalFencedHoldSelector        = "^TestCephRBDJournalFencedHoldIntegration$"
 	rbdJournalErasureFencedHoldSelector = "^TestCephRBDJournalErasureFencedHoldIntegration$"
 	rbdJournalRestartBeforeDownSelector = "^TestCephRBDJournalPrimaryRestartBeforeDownIntegration$"
+
+	rbdJournalFencedPendingSelector            = "^TestCephRBDJournalFencedPendingHoldIntegration$"
+	rbdJournalErasureFencedPendingSelector     = "^TestCephRBDJournalErasureFencedPendingHoldIntegration$"
+	rbdJournalErasureRestartBeforeDownSelector = "^TestCephRBDJournalErasurePrimaryRestartBeforeDownIntegration$"
 )
 
-// The fenced-hold and pre-down restart sequences are admitted only under
-// their exact selectors on three BlueStore OSDs, each with its own actions;
-// only the erasure fenced hold gets the erasure-coded journal pool, and
-// their fixture-own actions are admitted in no other sequence.
+// The fenced-hold, fenced pending and pre-down restart sequences are
+// admitted only under their exact selectors on three BlueStore OSDs, each
+// with its own actions; only the erasure-coded cells get the erasure-coded
+// journal pool, and their fixture-own actions are admitted in no other
+// sequence.
 func TestRBDJournalFencedSelectorsAreExclusive(t *testing.T) {
 	three := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1", "CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"}
 	one := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1"}
 	token := strings.Repeat("a1", 16)
 	for selector, want := range map[string][]string{rbdJournalFencedHoldSelector: rbdJournalFencedHoldActions, rbdJournalErasureFencedHoldSelector: rbdJournalErasureFencedHoldActions,
-		rbdJournalRestartBeforeDownSelector: rbdJournalPrimaryRestartBeforeDownActions} {
+		rbdJournalRestartBeforeDownSelector: rbdJournalPrimaryRestartBeforeDownActions, rbdJournalFencedPendingSelector: rbdJournalFencedHoldActions,
+		rbdJournalErasureFencedPendingSelector: rbdJournalErasureFencedHoldActions, rbdJournalErasureRestartBeforeDownSelector: rbdJournalPrimaryRestartBeforeDownActions} {
 		p, err := rbdJournalProfile(t, three, selector)
 		if err != nil || p.testRun != selector || p.rbdReplicas() != "3" || p.osdTopology().poolSize != 3 || !slices.Equal(rbdJournalActionsFor(p), want) ||
 			!slices.Equal(rbdLockActionsFor(p), rbdLockActions) {
 			t.Fatal("selector admission differs", selector, p.testRun, err)
 		}
-		if erasure := selector == rbdJournalErasureFencedHoldSelector; p.rbdJournalErasure() != erasure || (rbdJournalPlanOf(token, p).JournalPool != "") != erasure {
+		erasure := selector == rbdJournalErasureFencedHoldSelector || selector == rbdJournalErasureFencedPendingSelector || selector == rbdJournalErasureRestartBeforeDownSelector
+		if p.rbdJournalErasure() != erasure || (rbdJournalPlanOf(token, p).JournalPool != "") != erasure {
 			t.Fatal("erasure-coded journal pool selection differs", selector)
 		}
-		if p.rbdJournalFencedSequence() != (selector != rbdJournalRestartBeforeDownSelector) {
+		beforeDown := selector == rbdJournalRestartBeforeDownSelector || selector == rbdJournalErasureRestartBeforeDownSelector
+		if p.rbdJournalFencedSequence() == beforeDown || p.rbdJournalBeforeDownSequence() != beforeDown ||
+			p.rbdJournalAlignedSequence() != (erasure && !beforeDown) {
 			t.Fatal("fenced-sequence classification differs", selector)
 		}
 		if _, err := rbdJournalProfile(t, one, selector); err == nil {
@@ -48,9 +57,18 @@ func TestRBDJournalFencedSelectorsAreExclusive(t *testing.T) {
 			}
 		}
 	}
-	p, err := rbdJournalProfile(t, three, rbdJournalRestartBeforeDownSelector)
-	if got := rbdJournalHeldAwaited(p, 3, "ab"); err != nil || !slices.Equal(got, []rbdJournalHeldAwait{{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", false}}) {
-		t.Fatal("awaited held operations differ", got, err)
+	for selector, want := range map[string][]rbdJournalHeldAwait{
+		rbdJournalFencedHoldSelector:               {{"journal_data.3.ab.0", true}},
+		rbdJournalErasureFencedHoldSelector:        {{"journal_data.3.ab.0", true}},
+		rbdJournalRestartBeforeDownSelector:        {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", false}},
+		rbdJournalErasureRestartBeforeDownSelector: {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", false}},
+		rbdJournalFencedPendingSelector:            {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", true}, {"journal_data.3.ab.2", true}},
+		rbdJournalErasureFencedPendingSelector:     {{"journal_data.3.ab.0", true}, {"journal_data.3.ab.1", true}, {"journal_data.3.ab.2", true}},
+	} {
+		p, err := rbdJournalProfile(t, three, selector)
+		if got := rbdJournalHeldAwaited(p, 3, "ab"); err != nil || !slices.Equal(got, want) {
+			t.Fatal("awaited held operations differ", selector, got, err)
+		}
 	}
 	for _, action := range []string{"fence", "align-primary", "keep-up", "observe-primary-dead"} {
 		for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions, rbdJournalForcedBreakActions, rbdJournalReplicaHoldActions, rbdJournalPrimaryRestartActions,

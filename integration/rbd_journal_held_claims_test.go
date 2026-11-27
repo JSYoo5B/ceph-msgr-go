@@ -103,7 +103,7 @@ func rbdJournalHeldClaims(r *rbdJournalLostAppendRecord, stage string) []string 
 	if rbdJournalHeldMode(h.Mode) == rbdJournalVariantFencedHold {
 		return rbdJournalFencedHoldClaims(r, stage)
 	}
-	if h.Fenced != nil {
+	if h.Fenced != nil && rbdJournalHeldMode(h.Mode) != rbdJournalVariantFencedPendingHold {
 		return []string{"record: a held record of another mode carries a fence"}
 	}
 	if rbdJournalHeldPendingMode(h.Mode) {
