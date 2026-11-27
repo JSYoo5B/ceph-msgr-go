@@ -46,6 +46,12 @@ last entry and its head. The receipt reports that shape per shard as
 when every index of the acting vector has a complete shard and the two
 placement records are identical. Anything else fails closed.
 
+A degraded erasure-coded PG keeps a lost shard's position in its acting
+vector as CRUSH_ITEM_NONE. The fixture copies nothing for it and records it
+as absent; the receipt lists those positions in ``absent_shards`` and then
+does not claim ``all_acting_shards``. Such a position has no store to read,
+so nothing is reported for it.
+
 A complete receipt reports where an exact identity occurs in each acting
 shard's own log at that bracketed placement. The copies are sequential and
 are not one atomic snapshot. A shard without a position is an observation of
@@ -63,12 +69,19 @@ MAX_SHARD_BYTES = 64 << 10
 MAX_RECORD_BYTES = 64 << 10
 MAX_SHARDS = 8
 SOURCE_COMMIT = "7f793731f1b39eb4f465e960113d2363c311b964"
-SHARD_KEYS = {"index", "osd", "spg", "reader_isolated", "paused", "resumed", "paused_ms", "store_archive_bytes", "whoami",
+SHARD_KEYS = {"index", "osd", "spg", "absent", "reader_isolated", "paused", "resumed", "paused_ms", "store_archive_bytes", "whoami",
               "unsupported_layout", "info_exit_code", "info_bytes", "info_stderr", "info_file", "log_exit_code", "log_bytes",
               "log_stderr", "log_file", "reader_removed"}
 HistoryError = history.HistoryError
 # shard_id_set is a 128-bit set printed in ascending order.
 MAX_SHARD_ID = 128
+# CRUSH_ITEM_NONE: an empty position of an erasure-coded acting vector.
+CRUSH_ITEM_NONE = 0x7fffffff
+# What the fixture records for an empty position: nothing copied or read.
+ABSENT_RECORD = {"absent": True, "reader_isolated": False, "paused": False, "resumed": False, "paused_ms": 0,
+                 "store_archive_bytes": 0, "whoami": "", "unsupported_layout": "", "info_exit_code": None, "info_bytes": 0,
+                 "info_stderr": "", "info_file": "", "log_exit_code": None, "log_bytes": 0, "log_stderr": "", "log_file": "",
+                 "reader_removed": False}
 SHARD_SET = re.compile(r"\{(?:(?:0|[1-9][0-9]{0,2})(?:,(?:0|[1-9][0-9]{0,2}))*)?\}")
 
 
@@ -182,7 +195,14 @@ def _shard(index, osd, pgid, record, dumps, identities, nonprimary=()):
     failures = []
     if not isinstance(record, dict) or not SHARD_KEYS <= set(record) or set(record) - SHARD_KEYS - {"failure"}:
         return dict(receipt, complete=False, failures=["capture record has an unexpected shape"])
+    if osd == CRUSH_ITEM_NONE:
+        # An empty position: the fixture must have copied and read nothing.
+        empty = (record["index"] == index and record["osd"] == osd and record["spg"] == spg and "failure" not in record
+                 and all(record[key] == value and type(record[key]) is type(value) for key, value in ABSENT_RECORD.items()))
+        return dict(receipt, absent=True, complete=empty, failures=[] if empty else ["an empty position has a capture"])
     receipt.update(whoami=record["whoami"], paused_ms=record["paused_ms"], store_archive_bytes=record["store_archive_bytes"])
+    if record["absent"] is not False:
+        failures.append("a present member is recorded absent")
     if record.get("failure"):
         failures.append("capture failed: " + str(record["failure"])[:200])
     if record["index"] != index or record["osd"] != osd or record["spg"] != spg:
@@ -308,10 +328,16 @@ def snapshot(before_raw, after, capture_raw, dumps, targets, nonprimary=()):
         failures.append("the capture is incomplete")
     if capture.get("pgid") != pgid or capture.get("acting") != acting:
         failures.append("the capture is for %r acting %r" % (capture.get("pgid"), capture.get("acting")))
-    if (not 2 <= len(acting) <= MAX_SHARDS or len(set(map(repr, acting))) != len(acting)
+    # Only an erasure-coded PG keeps an empty position (a lost shard) in its
+    # acting vector; at least two members must be present.
+    present = [osd for osd in acting if osd != CRUSH_ITEM_NONE]
+    if (not 2 <= len(acting) <= MAX_SHARDS or len(present) < 2 or len(set(map(repr, present))) != len(present)
+            or len(present) != len(acting) and before.get("pool_type") != 3
             or any(type(osd) is not int or not 0 <= osd < 1 << 31 for osd in acting)):
         failures.append("the acting vector is not between 2 and %d distinct OSDs" % MAX_SHARDS)
         return finish()
+    receipt["absent_shards"] = [index for index, osd in enumerate(acting) if osd == CRUSH_ITEM_NONE]
+    receipt["all_acting_shards"] = not receipt["absent_shards"]
     if len(capture["shards"]) != len(acting):
         failures.append("the capture has %d shards for %d acting members" % (len(capture["shards"]), len(acting)))
     for index, osd in enumerate(acting):

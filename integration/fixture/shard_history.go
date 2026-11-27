@@ -116,6 +116,9 @@ type shardHistoryShard struct {
 	Index int    `json:"index"`
 	OSD   int    `json:"osd"`
 	SPG   string `json:"spg"`
+	// Absent: the position is empty in the bracket's acting vector (a lost
+	// shard of a degraded erasure-coded PG) and nothing was copied.
+	Absent bool `json:"absent"`
 	shardStoreCopy
 	InfoCode   *int   `json:"info_exit_code"`
 	InfoBytes  int    `json:"info_bytes"`
@@ -140,7 +143,10 @@ type shardHistoryReceipt struct {
 
 // shardHistoryPlan reads the PG and the ordered acting vector from the
 // placement record the owned-pool oracle wrote as the capture's first
-// bracket. Every acting member must be a distinct owned OSD.
+// bracket. Every acting member must be a distinct owned OSD. An empty
+// position (crushItemNone, a lost shard of a degraded erasure-coded PG) is
+// kept in place, so the vector still gives each shard ID, and is recorded as
+// absent; at least two members must be present.
 func shardHistoryPlan(before []byte, owned []int) (string, []int, error) {
 	var placement struct {
 		PGID   string `json:"pgid"`
@@ -158,8 +164,11 @@ func shardHistoryPlan(before []byte, owned []int) (string, []int, error) {
 	if len(placement.Acting) < 2 {
 		return "", nil, fmt.Errorf("shard-history bracket has %d acting members", len(placement.Acting))
 	}
-	seen := map[int]bool{}
+	seen, present := map[int]bool{}, 0
 	for _, osd := range placement.Acting {
+		if osd == crushItemNone {
+			continue
+		}
 		known := false
 		for _, id := range owned {
 			known = known || id == osd
@@ -168,6 +177,10 @@ func shardHistoryPlan(before []byte, owned []int) (string, []int, error) {
 			return "", nil, fmt.Errorf("acting member %d is not a distinct owned OSD", osd)
 		}
 		seen[osd] = true
+		present++
+	}
+	if present < 2 {
+		return "", nil, fmt.Errorf("shard-history bracket has %d present acting members", present)
 	}
 	return placement.PGID, placement.Acting, nil
 }
@@ -327,8 +340,9 @@ func captureShardHistory(ctx context.Context, engine shardHistoryEngine, out, pg
 	return shard
 }
 
-// captureShardHistories captures every index of the acting vector in order
-// and stops at the first shard that failed.
+// captureShardHistories captures every present index of the acting vector
+// in order, records an empty one as absent without touching any OSD, and
+// stops at the first shard that failed.
 func captureShardHistories(ctx context.Context, engine shardHistoryEngine, out string, before []byte, owned []int) (shardHistoryReceipt, error) {
 	digest := sha256.Sum256(before)
 	receipt := shardHistoryReceipt{Schema: 1, Source: nativeEncoderCommit, BeforeSHA256: hex.EncodeToString(digest[:]), Shards: []shardHistoryShard{}}
@@ -338,6 +352,10 @@ func captureShardHistories(ctx context.Context, engine shardHistoryEngine, out s
 	}
 	receipt.PGID, receipt.Acting = pgid, acting
 	for index, osd := range acting {
+		if osd == crushItemNone {
+			receipt.Shards = append(receipt.Shards, shardHistoryShard{Index: index, OSD: osd, SPG: pgid + "s" + strconv.Itoa(index), Absent: true})
+			continue
+		}
 		shard := captureShardHistory(ctx, engine, out, pgid, index, osd)
 		receipt.Shards = append(receipt.Shards, shard)
 		if shard.Failure != "" || !shard.ReaderRemoved {

@@ -34,9 +34,12 @@ import (
 // tools/osd_shard_history_oracle.py: the attribution of its private store
 // copy and where the requested identities occur in that copy's own log.
 type shardHistoryShard struct {
-	Index             int      `json:"index"`
-	OSD               int32    `json:"osd"`
-	SPG               string   `json:"spg"`
+	Index int    `json:"index"`
+	OSD   int32  `json:"osd"`
+	SPG   string `json:"spg"`
+	// Absent: the position is empty in a degraded erasure-coded acting
+	// vector; nothing was copied or read for it.
+	Absent            bool     `json:"absent"`
 	Whoami            string   `json:"whoami"`
 	PausedMillis      int64    `json:"paused_ms"`
 	ArchiveBytes      int64    `json:"store_archive_bytes"`
@@ -86,6 +89,7 @@ type shardHistorySnapshot struct {
 	PGID               string              `json:"pgid"`
 	Acting             []int32             `json:"acting"`
 	AllActingShards    bool                `json:"all_acting_shards"`
+	AbsentShards       []int               `json:"absent_shards"`
 	AbsenceEstablished bool                `json:"absence_established"`
 	Shards             []shardHistoryShard `json:"shards"`
 	// NonprimaryShards are the pool's native nonprimary shard IDs as the
@@ -166,7 +170,10 @@ func shardHistoryAwaitAttributed(observe func() copyIntervalObservation, s shard
 
 // checkShardHistory requires a complete receipt whose brackets are identical
 // and equal the placement the requests used, with one attributed and
-// complete shard for every index of that acting vector. It rechecks each
+// complete shard for every index of that acting vector. An index that is
+// empty (crushItemNone) in a degraded erasure-coded acting vector must be
+// reported absent, with nothing read, and the receipt must then not claim
+// every acting shard; no other index may be absent. It rechecks each
 // dump's length and digest and counts every exact quoted identity
 // independently of the Python parser. Every log must end at its head, except
 // on the shards listed in past: those may show a head newer than their last
@@ -176,8 +183,14 @@ func checkShardHistory(s shardHistorySnapshot, route osdFixtureOracle, targets [
 	if !s.Complete || len(s.Failures) != 0 {
 		return fmt.Errorf("shard-history receipt is incomplete: %q", s.Failures)
 	}
-	if !s.AllActingShards || s.AbsenceEstablished {
-		return errors.New("shard-history receipt scope differs")
+	var absent []int
+	for i, osd := range route.Acting {
+		if osd == crushItemNone {
+			absent = append(absent, i)
+		}
+	}
+	if s.AllActingShards != (len(absent) == 0) || !slices.Equal(s.AbsentShards, absent) || s.AbsenceEstablished {
+		return fmt.Errorf("shard-history receipt scope differs: all acting shards %t, absent %v (want %v)", s.AllActingShards, s.AbsentShards, absent)
 	}
 	if !reflect.DeepEqual(s.Before, s.After) {
 		return fmt.Errorf("placement changed between the brackets: before %+v after %+v", s.Before, s.After)
@@ -194,6 +207,16 @@ func checkShardHistory(s shardHistorySnapshot, route osdFixtureOracle, targets [
 	}
 	for i, shard := range s.Shards {
 		osd := route.Acting[i]
+		if shard.Absent != (osd == crushItemNone) {
+			return fmt.Errorf("shard %d of osd.%d is reported absent %t", i, osd, shard.Absent)
+		}
+		if shard.Absent {
+			if !shard.Complete || len(shard.Failures) != 0 || shard.Index != i || shard.OSD != osd || shard.SPG != route.PGID+"s"+strconv.Itoa(i) ||
+				shard.Raw != "" || shard.Whoami != "" || len(shard.Targets) != 0 {
+				return fmt.Errorf("the empty position %d has a capture: %+v", i, shard)
+			}
+			continue
+		}
 		if !shard.Complete || len(shard.Failures) != 0 {
 			return fmt.Errorf("shard %d is incomplete: %q", i, shard.Failures)
 		}
@@ -781,6 +804,45 @@ func TestCheckShardHistory(t *testing.T) {
 		if err := checkShardHistory(s, route, targets, nil); err == nil {
 			t.Error("shard-history receipt accepted:", name)
 		}
+	}
+
+	// A degraded PG: acting index 2 is empty. Its absent entry is accepted
+	// in place, and only there, and the receipt claims no full acting set.
+	degraded := route
+	degraded.Up, degraded.Acting = []int32{1, 3, crushItemNone, 0}, []int32{1, 3, crushItemNone, 0}
+	lost := func() shardHistorySnapshot {
+		s := build()
+		s.Before.Up, s.Before.Acting = slices.Clone(degraded.Up), slices.Clone(degraded.Acting)
+		s.After.Up, s.After.Acting = slices.Clone(degraded.Up), slices.Clone(degraded.Acting)
+		s.Acting, s.AllActingShards, s.AbsentShards = slices.Clone(degraded.Acting), false, []int{2}
+		s.Shards[2] = shardHistoryShard{Index: 2, OSD: crushItemNone, SPG: "4.2s2", Absent: true, Complete: true, LimitBytes: 64 << 10}
+		return s
+	}
+	if err := checkShardHistory(lost(), degraded, targets, nil); err != nil {
+		t.Fatal("degraded receipt refused:", err)
+	}
+	for name, edit := range map[string]func(*shardHistorySnapshot){
+		"claims every acting shard":      func(s *shardHistorySnapshot) { s.AllActingShards = true },
+		"no absent shard listed":         func(s *shardHistorySnapshot) { s.AbsentShards = nil },
+		"another absent shard listed":    func(s *shardHistorySnapshot) { s.AbsentShards = []int{1} },
+		"the empty position not absent":  func(s *shardHistorySnapshot) { s.Shards[2].Absent = false },
+		"the empty position incomplete":  func(s *shardHistorySnapshot) { s.Shards[2].Complete = false },
+		"the empty position was read":    func(s *shardHistorySnapshot) { s.Shards[2].Raw = s.Shards[1].Raw },
+		"the empty position has a store": func(s *shardHistorySnapshot) { s.Shards[2].Whoami = "2" },
+		"the empty position has targets": func(s *shardHistorySnapshot) { s.Shards[2].Targets = s.Shards[1].Targets },
+		"the empty position elsewhere":   func(s *shardHistorySnapshot) { s.Shards[2].SPG = "4.2s1" },
+		"a present shard absent": func(s *shardHistorySnapshot) {
+			s.Shards[1].Absent = true
+		},
+	} {
+		s := lost()
+		edit(&s)
+		if err := checkShardHistory(s, degraded, targets, nil); err == nil {
+			t.Error("degraded shard-history receipt accepted:", name)
+		}
+	}
+	if err := checkShardHistory(lost(), route, targets, nil); err == nil {
+		t.Error("a degraded receipt accepted for the full placement")
 	}
 }
 
