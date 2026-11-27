@@ -71,8 +71,9 @@ import (
 // (common/options/global.yaml.in and osd.yaml.in offer dispatch and
 // messenger delays, which act before do_op). So the bounded stock state
 // after the check is the one here: executed and answered, the answer in
-// flight to the caller. Held replica sub-writes (several OSDs) are not
-// covered.
+// flight to the caller. An append held for a replica's sub-write on several
+// OSDs when the fence arrives is the fenced-hold cell of
+// rbd_journal_fenced_hold_test.go.
 //
 // Everything journal-specific is the test-only consumer code of
 // rbd_journal_test.go. The product is unchanged.

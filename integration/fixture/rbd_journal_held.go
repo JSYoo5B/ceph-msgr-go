@@ -131,7 +131,7 @@ func (p profile) rbdJournalErasureFault() bool {
 }
 
 func (p profile) rbdJournalErasure() bool {
-	return p.declares(capRBDJournalErasureHold) || p.rbdJournalErasureFault()
+	return p.declares(capRBDJournalErasureHold) || p.declares(capRBDJournalErasureFencedHold) || p.rbdJournalErasureFault()
 }
 
 // rbdJournalErasureK and rbdJournalErasureM are the erasure-coded journal
@@ -159,7 +159,8 @@ var (
 // the three-OSD topology.
 func (p profile) rbdJournalThreeOSD() bool {
 	return p.declares(capRBDJournalPrimaryChange) || p.declares(capRBDJournalReplicaHold) || p.declares(capRBDJournalHeldPrimaryChange) || p.declares(capRBDJournalDeadPrimary) ||
-		p.declares(capRBDJournalPendingHold) || p.declares(capRBDJournalPrimaryRestart) || p.rbdJournalErasure()
+		p.declares(capRBDJournalPendingHold) || p.declares(capRBDJournalPrimaryRestart) || p.declares(capRBDJournalPrimaryRestartBeforeDown) || p.rbdJournalFencedSequence() ||
+		p.rbdJournalErasure()
 }
 
 // rbdJournalHeldAdmin names the fixture's own read-only actions of the
@@ -364,6 +365,9 @@ type rbdJournalHeldRead struct {
 	Settled   bool                  `json:"settled"`
 	Polls     int                   `json:"polls"`
 	ElapsedMS int64                 `json:"elapsed_ms"`
+	// OSDInfo is the restarted primary's OSDMap entry once it was back, in
+	// the pre-down restart sequence only (rbd_journal_fenced.go).
+	OSDInfo *rbdJournalOSDInfo `json:"osd_info,omitempty"`
 }
 
 // rbdJournalHeldOps reads one object's placement, one PG's query, one OSD's
@@ -609,6 +613,12 @@ func (c *fixtureCluster) rbdJournalHeldControl(ctx context.Context, action strin
 		wait.osd, wait.acting = x.journalHeldPrimary, x.journalHeldActing
 	}
 	read, err := rbdJournalHeldObserve(ctx, action, objects, wait, c.rbdJournalHeldOps())
+	if err == nil && action == "observe-primary-back" && c.profile.admits(capRBDJournalPrimaryRestartBeforeDown) {
+		// When and how the restarted primary came back: the epochs its old
+		// instance was marked down at and its new one up from.
+		info, infoErr := c.rbdJournalOSDInfo(ctx, x.journalHeldPrimary)
+		read.OSDInfo, err = &info, infoErr
+	}
 	if err == nil && action == "observe-placed" {
 		x.journalHeldPrimary, x.journalHeldActing = read.Objects[0].ActingPrimary, slices.Clone(read.Objects[0].Acting)
 	}
@@ -628,7 +638,7 @@ func rbdJournalHeldAwaited(p profile, poolID int64, imageID string) []rbdJournal
 	switch {
 	case p.admits(capRBDJournalPendingHold) || p.admits(capRBDJournalErasurePendingHold):
 		return []rbdJournalHeldAwait{{object(0), true}, {object(1), true}, {object(2), true}}
-	case p.admits(capRBDJournalPrimaryRestart):
+	case p.admits(capRBDJournalPrimaryRestart) || p.admits(capRBDJournalPrimaryRestartBeforeDown):
 		return []rbdJournalHeldAwait{{object(0), true}, {object(1), false}}
 	}
 	return []rbdJournalHeldAwait{{object(0), !(p.admits(capRBDJournalHeldPrimaryChange) || p.admits(capRBDJournalErasureHeldPrimaryChange))}}
