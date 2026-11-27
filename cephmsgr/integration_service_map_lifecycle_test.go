@@ -29,10 +29,11 @@ import (
 // each attempted once. A returned native shutdown is not removal: absence needs
 // fresh native observations two seconds apart and a newer Go map without
 // either daemon, and the stopped MON is restored to the full settled quorum.
-// Before the watch's recovery is judged, a fresh MON session must show the
-// second registration too; a MON that never does fails as a stalled stock
-// MGR->MON report, and every failed watch read reports the fresh MON epoch
-// beside the MGR-answered one (integration_service_map_stall_test.go).
+// Before the watch's recovery is judged, a fresh MON session must read a map
+// holding the second registration too; if it does not, the cell fails
+// without judging the watch. Every failed read of the watch or of that
+// session is reported with later samples of a fresh MON session and of the
+// MGR's received map, and names no cause (integration_service_map_samples_test.go).
 //
 //scenario:covers CLIENT to MON/MGR
 //fixture:isolated cleanup kills live holders without proving their service map entries are gone; the service map is not checked
@@ -122,7 +123,9 @@ func runServiceMapLifecycle(t *testing.T, holdStoppedMONDials bool) {
 	nativeA := waitServiceHolder(t, ctx, control, tokenA, "registered A", func(r nativeServiceHolderReceipt) bool {
 		return serviceHolderPresent(r, readyA) && r.Holder != nil && r.Holder.Alive
 	})
-	first := serviceLifecycleWatch(t, ctx, watch, control, tokenA, func(m ServiceMap) bool {
+	// One cursor follows the stream through every phase.
+	var cursor serviceLifecycleCursor
+	first := serviceLifecycleWatch(t, ctx, watch, &cursor, control, tokenA, func(m ServiceMap) bool {
 		return serviceLifecyclePresent(m, nativeA, readyA)
 	})
 	c.mu.Lock()
@@ -185,17 +188,19 @@ func runServiceMapLifecycle(t *testing.T, holdStoppedMONDials bool) {
 	wantRecovered := func(m ServiceMap) bool {
 		return m.Epoch > first.Epoch && serviceLifecyclePresent(m, heldA, readyA) && serviceLifecyclePresent(m, nativeB, readyB)
 	}
-	// Precondition of the recovery assertion: B is in the MGR's map, and the
-	// MON must hold it too, read on a fresh session independent of the watch.
-	// Nothing else changes the map between the stop and B's registration, so
-	// B's registration is the first report the MON can show from the active
-	// MGR after the leader stopped (serviceLifecycleStall's notes). A MON that
-	// never shows it is a stalled stock MGR->MON report, not a watch fault.
+	// Precondition of the recovery assertion: B is in the map the MGR last
+	// received from a MON (`service dump`), and a fresh session, independent
+	// of the watch, must read a MON map holding it too. Nothing else changes
+	// the map between the stop and B's registration (DaemonServer marks its
+	// pending map dirty only on a registration or removal), so it is the first
+	// change a MON can publish after the stop. A fresh session that does not
+	// read it is reported with its samples; the watch is not judged and no
+	// cause is named.
 	if _, ok, err := serviceLifecycleMonMap(t, ctx, 120*time.Second, wantRecovered); err != nil || !ok {
-		stall := serviceLifecycleObserve(t, control, tokenB, first.Epoch, 15*time.Second, wantRecovered)
-		t.Fatalf("precondition after the mon.%s stop: a fresh MON session never held registered holder B within 120 s (MON read: %v), so the stock MGR's report to the MON stalled and the Go watch is not judged: %s", name, err, stall)
+		samples := serviceLifecycleObserve(t, control, tokenB, serviceLifecycleSamples{Watch: cursor.last, Ended: time.Now()}, 15*time.Second, wantRecovered)
+		t.Fatalf("precondition after the mon.%s stop: a fresh MON session did not read a map holding registered holder B within 120 s (%v); the Go watch is not judged; %s", name, err, samples)
 	}
-	recovered := serviceLifecycleWatch(t, ctx, watch, control, tokenB, wantRecovered)
+	recovered := serviceLifecycleWatch(t, ctx, watch, &cursor, control, tokenB, wantRecovered)
 	if c.Snapshot().GlobalID != initial.GlobalID || c.Snapshot().FSID != initial.FSID {
 		t.Fatal("client identity changed across watch recovery")
 	}
@@ -224,7 +229,7 @@ func runServiceMapLifecycle(t *testing.T, holdStoppedMONDials bool) {
 			return time.Since(since) >= 2*time.Second
 		})
 	}
-	removed := serviceLifecycleWatch(t, absenceCtx, watch, control, tokenB, func(m ServiceMap) bool {
+	removed := serviceLifecycleWatch(t, absenceCtx, watch, &cursor, control, tokenB, func(m ServiceMap) bool {
 		return serviceLifecycleAbsent(m, recovered.Epoch, startA.Daemon, startB.Daemon)
 	})
 	for _, token := range []string{tokenA, tokenB} {
