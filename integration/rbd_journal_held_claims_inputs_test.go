@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -153,6 +154,49 @@ func rbdJournalHeldBreakers(views []string) []rbdJournalHeldBreaker {
 		r.Held.Pending.Calls[len(r.Held.Pending.Calls)-1].Outcome = nil
 		return true
 	})
+	part("fenced part missing", func(r *rbdJournalLostAppendRecord) bool { ok := r.Held.Fenced != nil; r.Held.Fenced = nil; return ok })
+	part("fence receipt missing", func(r *rbdJournalLostAppendRecord) bool {
+		if r.Held.Fenced == nil {
+			return false
+		}
+		r.Held.Fenced.Fence = nil
+		return true
+	})
+	part("fence probe missing", func(r *rbdJournalLostAppendRecord) bool {
+		if r.Held.Fenced == nil {
+			return false
+		}
+		r.Held.Fenced.Refusal = nil
+		return true
+	})
+	part("primary alignment missing", func(r *rbdJournalLostAppendRecord) bool {
+		if r.Held.Fenced == nil || r.Held.Fenced.Align == nil {
+			return false
+		}
+		r.Held.Fenced.Align = nil
+		return true
+	})
+	part("nodown receipt missing", func(r *rbdJournalLostAppendRecord) bool {
+		if r.Held.Pending == nil || r.Held.Pending.KeepUp == nil {
+			return false
+		}
+		r.Held.Pending.KeepUp = nil
+		return true
+	})
+	part("primary-dead window missing", func(r *rbdJournalLostAppendRecord) bool {
+		if r.Held.Pending == nil || r.Held.Pending.Dead == nil {
+			return false
+		}
+		r.Held.Pending.Dead = nil
+		return true
+	})
+	part("primary-dead window without samples", func(r *rbdJournalLostAppendRecord) bool {
+		if r.Held.Pending == nil || r.Held.Pending.Dead == nil {
+			return false
+		}
+		r.Held.Pending.Dead.Samples = nil
+		return true
+	})
 	part("setup inspection missing", func(r *rbdJournalLostAppendRecord) bool {
 		v := r.Views["setup"]
 		v.InspectTotal, v.InspectErrors = nil, nil
@@ -190,13 +234,25 @@ func TestRBDJournalHeldClaimsRefuseMissingInputs(t *testing.T) {
 	for _, mode := range []string{rbdJournalVariantPendingHold, rbdJournalVariantPrimaryRestart} {
 		samples[mode] = func() *rbdJournalLostAppendRecord { return rbdJournalHeldPendingSample(mode) }
 	}
-	for _, mode := range slices.Sorted(maps.Keys(samples)) {
-		sample := samples[mode]
+	samples[rbdJournalVariantPrimaryRestartBeforeDown] = rbdJournalBeforeDownSample
+	samples["erasure-"+rbdJournalVariantPrimaryRestartBeforeDown] = func() *rbdJournalLostAppendRecord { return rbdJournalErasureBeforeDownSample(false) }
+	samples["erasure-"+rbdJournalVariantPrimaryRestartBeforeDown+", rolled back"] = func() *rbdJournalLostAppendRecord { return rbdJournalErasureBeforeDownSample(true) }
+	samples[rbdJournalVariantFencedPendingHold] = func() *rbdJournalLostAppendRecord { return rbdJournalFencedPendingSample(false, false) }
+	samples["erasure-"+rbdJournalVariantFencedPendingHold] = func() *rbdJournalLostAppendRecord { return rbdJournalFencedPendingSample(true, false) }
+	samples["erasure-"+rbdJournalVariantFencedPendingHold+", overridden"] = func() *rbdJournalLostAppendRecord { return rbdJournalFencedPendingSample(true, true) }
+	for _, name := range slices.Sorted(maps.Keys(samples)) {
+		sample := samples[name]
+		mode := sample().Held.Mode
+		// A read of one followed object cannot be cut to one placement.
+		single := len(sample().Held.Placed.Objects) == 1
 		stages, _ := rbdJournalHeldPlan(mode)
 		final := stages[len(stages)-1]
 		breakers := rbdJournalHeldBreakers(slices.Sorted(maps.Keys(sample().Views)))
 		applied := 0
 		for _, b := range breakers {
+			if single && strings.HasSuffix(b.name, " read with one placement") {
+				continue
+			}
 			for _, stage := range stages {
 				r := sample()
 				if !b.apply(r) {
@@ -204,9 +260,9 @@ func TestRBDJournalHeldClaimsRefuseMissingInputs(t *testing.T) {
 				}
 				problems, panicked := rbdJournalHeldJudgeSafely(r, stage)
 				if panicked != nil {
-					t.Errorf("%s, %s: the claims panicked at %s: %v", mode, b.name, stage, panicked)
+					t.Errorf("%s, %s: the claims panicked at %s: %v", name, b.name, stage, panicked)
 				} else if stage == final && len(problems) == 0 {
-					t.Errorf("%s, %s: admitted at %s", mode, b.name, stage)
+					t.Errorf("%s, %s: admitted at %s", name, b.name, stage)
 				}
 				if stage == final {
 					applied++
@@ -214,7 +270,7 @@ func TestRBDJournalHeldClaimsRefuseMissingInputs(t *testing.T) {
 			}
 		}
 		if applied < len(sample().Views)*2+10 {
-			t.Fatal(fmt.Sprintf("%s: only %d breaks applied", mode, applied))
+			t.Fatal(fmt.Sprintf("%s: only %d breaks applied", name, applied))
 		}
 	}
 }
