@@ -75,7 +75,7 @@ class Capture:
             info, log = info_dump(spg), (logs or {}).get(index, copied())
             names = ("osd-shard-history-s%d-info.json" % index, "osd-shard-history-s%d-log.json" % index)
             self.files[names[0]], self.files[names[1]] = info, log
-            shards.append({"index": index, "osd": osd, "spg": spg, "reader_isolated": True, "paused": True, "resumed": True,
+            shards.append({"index": index, "osd": osd, "spg": spg, "absent": False, "reader_isolated": True, "paused": True, "resumed": True,
                            "paused_ms": 800, "store_archive_bytes": 1073762304, "whoami": str(osd), "unsupported_layout": "",
                            "info_exit_code": 0, "info_bytes": len(info), "info_stderr": "", "info_file": names[0],
                            "log_exit_code": 0, "log_bytes": len(log), "log_stderr": "", "log_file": names[1],
@@ -362,6 +362,63 @@ class SnapshotTest(unittest.TestCase):
                 capture = Capture()
                 change(capture)
                 self.refused(capture, text)
+
+    @staticmethod
+    def degraded(lost=2):
+        """The capture of a degraded erasure-coded PG whose acting index lost is empty."""
+        capture = Capture()
+        acting = list(ACTING)
+        acting[lost] = shard_history.CRUSH_ITEM_NONE
+        placement = dict(PLACEMENT, acting=acting, up=acting, pool_type=3)
+        capture.before, capture.after = json.dumps(placement).encode(), placement
+        capture.record.update(before_sha256=hashlib.sha256(capture.before).hexdigest(), acting=acting)
+        capture.record["shards"][lost] = dict(shard_history.ABSENT_RECORD, index=lost, osd=shard_history.CRUSH_ITEM_NONE, spg="%ss%d" % (PGID, lost))
+        for op in ("info", "log"):
+            del capture.files["osd-shard-history-s%d-%s.json" % (lost, op)]
+        return capture
+
+    def test_an_empty_position_of_a_degraded_erasure_coded_pg_is_reported_absent(self):
+        receipt = self.degraded().snapshot()
+        self.assertTrue(receipt["complete"], receipt["failures"])
+        self.assertEqual((receipt["absent_shards"], receipt["all_acting_shards"], receipt["absence_established"]), ([2], False, False))
+        self.assertEqual(receipt["shards"][2], {"index": 2, "osd": shard_history.CRUSH_ITEM_NONE, "spg": "4.2s2", "limit_bytes": shard_history.MAX_SHARD_BYTES,
+                                                "absent": True, "complete": True, "failures": []})
+        for index in (0, 1, 3):
+            self.assertTrue(receipt["shards"][index]["complete"])
+            self.assertNotIn("absent", receipt["shards"][index])
+            self.assertEqual(receipt["shards"][index]["targets"][0]["locations"][0]["version"], "28'3")
+        self.assertEqual((Capture().snapshot()["absent_shards"], Capture().snapshot()["all_acting_shards"]), ([], True))
+
+    def test_an_empty_position_with_a_capture_or_outside_an_erasure_coded_pg_fails_closed(self):
+        for name, change in {
+            "paused": {"paused": True}, "copied": {"store_archive_bytes": 4096}, "whoami": {"whoami": "2"},
+            "log read": {"log_file": "osd-shard-history-s2-log.json"}, "info exit": {"info_exit_code": 0},
+            "not absent": {"absent": False}, "truthy absent": {"absent": 1}, "failure": {"failure": "pause the OSD: no container"},
+            "another index": {"index": 1}, "an OSD": {"osd": 2},
+        }.items():
+            with self.subTest(name=name):
+                capture = self.degraded()
+                capture.record["shards"][2].update(change)
+                self.refused(capture, "shard 2 (osd.%d): " % shard_history.CRUSH_ITEM_NONE, shard=2)
+        capture = Capture()
+        capture.record["shards"][1]["absent"] = True
+        self.refused(capture, "shard 1 (osd.3): a present member is recorded absent", shard=1)
+        for name, (acting, pool_type) in {
+            "replicated": ([1, 3, shard_history.CRUSH_ITEM_NONE, 0], 1),
+            "no pool type": ([1, 3, shard_history.CRUSH_ITEM_NONE, 0], None),
+            "one present member": ([shard_history.CRUSH_ITEM_NONE, 3, shard_history.CRUSH_ITEM_NONE, shard_history.CRUSH_ITEM_NONE], 3),
+            "repeat beside an empty": ([shard_history.CRUSH_ITEM_NONE, 3, 3, 0], 3),
+        }.items():
+            with self.subTest(name=name):
+                capture = self.degraded()
+                placement = dict(capture.after, acting=acting, up=acting)
+                if pool_type is None:
+                    del placement["pool_type"]
+                else:
+                    placement["pool_type"] = pool_type
+                capture.before, capture.after = json.dumps(placement).encode(), placement
+                capture.record.update(before_sha256=hashlib.sha256(capture.before).hexdigest(), acting=acting)
+                self.refused(capture, "the acting vector is not between 2 and 8 distinct OSDs")
 
     def test_unusable_brackets_fail_closed(self):
         for name, before, text in (

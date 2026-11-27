@@ -172,6 +172,11 @@ func TestShardHistoryPlanReadsTheStoredBracket(t *testing.T) {
 	if err != nil || pgid != "4.2" || !slices.Equal(acting, []int{1, 3, 2, 0}) {
 		t.Fatal("plan", pgid, acting, err)
 	}
+	// A degraded PG keeps its empty position in place.
+	pgid, acting, err = shardHistoryPlan([]byte(`{"pgid":"4.2","acting":[2147483647,3,2,0]}`), owned)
+	if err != nil || pgid != "4.2" || !slices.Equal(acting, []int{crushItemNone, 3, 2, 0}) {
+		t.Fatal("degraded plan", pgid, acting, err)
+	}
 	for name, before := range map[string]string{
 		"empty":                    ``,
 		"truncated":                `{"pgid":"4.2","acting":[1,3`,
@@ -186,7 +191,8 @@ func TestShardHistoryPlanReadsTheStoredBracket(t *testing.T) {
 		"more members than OSDs":   `{"pgid":"4.2","acting":[1,3,2,0,4]}`,
 		"repeated member":          `{"pgid":"4.2","acting":[1,3,1,0]}`,
 		"member that is not owned": `{"pgid":"4.2","acting":[1,3,2,7]}`,
-		"empty acting position":    `{"pgid":"4.2","acting":[1,3,2,2147483647]}`,
+		"one present member":       `{"pgid":"4.2","acting":[2147483647,3,2147483647,2147483647]}`,
+		"repeat beside an empty":   `{"pgid":"4.2","acting":[2147483647,3,3,0]}`,
 		"oversized":                `{"pgid":"4.2","acting":[1,3,2,0],"pad":"` + strings.Repeat("x", shardHistoryOutputLimit) + `"}`,
 	} {
 		if pgid, acting, err := shardHistoryPlan([]byte(before), owned); err == nil {
@@ -212,6 +218,26 @@ func TestCaptureShardHistoriesStopsAtTheFirstFailedShard(t *testing.T) {
 	}
 	if _, err := captureShardHistories(context.Background(), newFakeShardHistory(), out, []byte(`{"pgid":"4.2","acting":[9,2]}`), []int{0, 1, 2, 3}); err == nil {
 		t.Fatal("an acting member that is not owned was captured")
+	}
+
+	// An empty position is recorded absent and pauses nothing; the present
+	// shards are captured in order around it.
+	engine = newFakeShardHistory()
+	before = []byte(`{"pgid":"4.2","acting":[2147483647,2,2147483647,2]}`)
+	if _, err := captureShardHistories(context.Background(), engine, out, before, []int{2}); err == nil {
+		t.Fatal("a repeated member beside empty positions was captured")
+	}
+	engine = newFakeShardHistory()
+	before = []byte(`{"pgid":"4.2","acting":[2147483647,2,3]}`)
+	engine.fail = "pause"
+	engine.noResume = true
+	receipt, err = captureShardHistories(context.Background(), engine, out, before, []int{2, 3})
+	if err == nil || len(receipt.Shards) != 2 || !reflect.DeepEqual(receipt.Shards[0], shardHistoryShard{Index: 0, OSD: crushItemNone, SPG: "4.2s0", Absent: true}) ||
+		receipt.Shards[1].Absent || receipt.Shards[1].SPG != "4.2s1" || !strings.Contains(err.Error(), "4.2s1 on osd.2") || !slices.Equal(receipt.Acting, []int{crushItemNone, 2, 3}) {
+		t.Fatalf("degraded capture: %+v %v", receipt, err)
+	}
+	if strings.Count(strings.Join(engine.events, ","), "pause") != 1 {
+		t.Fatal("the absent position or a later OSD was paused", engine.events)
 	}
 
 	engine = newFakeShardHistory()

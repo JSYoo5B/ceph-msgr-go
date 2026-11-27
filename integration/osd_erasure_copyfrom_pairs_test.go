@@ -53,7 +53,8 @@ func TestCephOSDErasureOptimizedK3M1ToK2M2CopyFromErasureToErasureIntegration(t 
 // destination primary, shared non-primary shard and source primary lost
 // between two chunks of a head copy (the source primary also pinned), and
 // the destination primary lost while the copy's final transaction is held
-// behind the destination PG's EC write queue. Four OSDs hold both PGs. The
+// behind the destination PG's EC write queue (also pinned), and a
+// destination replica lost there. Four OSDs hold both PGs. The
 // source's min_size is three of four shards and the destination's three of
 // four, so every single loss leaves both PGs active. The held final
 // transaction needs a source whose three data shards avoid the frozen
@@ -65,7 +66,7 @@ func TestCephOSDErasureOptimizedK3M1ToK2M2CopyFromErasureToErasureIntegration(t 
 //scenario:covers CLIENT to OSD
 //fixture:isolated freezes and SIGKILLs OSDs, sets pause, lowers a copy chunk at runtime, restores owned pools and profiles
 func TestCephOSDErasureOptimizedK3M1ToK2M2CopyFromErasureToErasureLossIntegration(t *testing.T) {
-	runCopyErasurePairLoss(t, erasurePairK3M1ToK2M2, "osd-erasure-copyfrom-k3m1-to-k2m2-loss-results.json", copyErasurePairHeadLossCells(), nil)
+	runCopyErasurePairLoss(t, erasurePairK3M1ToK2M2, "osd-erasure-copyfrom-k3m1-to-k2m2-loss-results.json", copyErasurePairHeadLossCells(), copyErasurePairLossHooks{})
 }
 
 // The baseline cells on the six-OSD topology from an owned optimized isa
@@ -86,13 +87,46 @@ func TestCephOSDErasureOptimizedK4M2ToK3M1CopyFromErasureToErasureIntegration(t 
 // primary must also hold a destination shard, so the source is named until
 // its primary is one of the destination PG's four OSDs. The held final
 // transaction needs the frozen destination shard on one of the source's two
-// parity shards.
+// parity shards; with the destination primary, the frozen OSD and the
+// source primary excluded, a destination replica is left to lose in it.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2tok3m1copyfromerasuretoerasureloss key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
 //scenario:covers CLIENT to OSD
 //fixture:isolated freezes and SIGKILLs OSDs, sets pause, lowers a copy chunk at runtime, restores owned pools and profiles
 func TestCephOSDErasureOptimizedK4M2ToK3M1CopyFromErasureToErasureLossIntegration(t *testing.T) {
-	runCopyErasurePairLoss(t, erasurePairK4M2ToK3M1, "osd-erasure-copyfrom-k4m2-to-k3m1-loss-results.json", copyErasurePairHeadLossCells(), nil)
+	runCopyErasurePairLoss(t, erasurePairK4M2ToK3M1, "osd-erasure-copyfrom-k4m2-to-k3m1-loss-results.json", copyErasurePairHeadLossCells(), copyErasurePairLossHooks{})
+}
+
+// The snapshot cells of
+// TestCephOSDErasureOptimizedCopyFromErasureToErasureSnapshotLossIntegration
+// (osd_erasure_copyfrom_snapshot_loss_test.go) on the k=3,m=1 to k=2,m=2
+// pair: a copy from a clone, unversioned and pinned to the clone's user
+// version, loses the destination primary, a shared non-primary shard or the
+// source primary between its two chunks, or the destination primary while
+// its final transaction is held. A clone lives in its head's PG, so the
+// held cells need the same source placement as a head copy: the frozen
+// destination shard on the source's parity shard (heldCommitPlacement).
+// Every second copy-get starts inside a stripe of the source and reads the
+// clone's extent from its three data shards.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk3m1tok2m2copyfromerasuretoerasuresnapshotloss key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
+//scenario:covers CLIENT to OSD
+//fixture:isolated freezes and SIGKILLs OSDs, sets pause, lowers a copy chunk at runtime, allocates owned snapshots
+func TestCephOSDErasureOptimizedK3M1ToK2M2CopyFromErasureToErasureSnapshotLossIntegration(t *testing.T) {
+	runCopyErasurePairLoss(t, erasurePairK3M1ToK2M2, "osd-erasure-copyfrom-k3m1-to-k2m2-snapshot-loss-results.json", copyErasurePairSnapshotLossCells(), copyErasurePairLossHooks{})
+}
+
+// The snapshot cells on the k=4,m=2 to k=3,m=1 pair of the six-OSD
+// topology. A lost source primary must also hold a destination shard, so
+// the source is named until its primary is one of the destination PG's
+// four OSDs; the held cells need the frozen destination shard on one of the
+// source's two parity shards.
+//
+//scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-6.osd-profile-replicated-pg-v8.t-osderasureoptimizedk4m2tok3m1copyfromerasuretoerasuresnapshotloss key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=6 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width-six
+//scenario:covers CLIENT to OSD
+//fixture:isolated freezes and SIGKILLs OSDs, sets pause, lowers a copy chunk at runtime, allocates owned snapshots
+func TestCephOSDErasureOptimizedK4M2ToK3M1CopyFromErasureToErasureSnapshotLossIntegration(t *testing.T) {
+	runCopyErasurePairLoss(t, erasurePairK4M2ToK3M1, "osd-erasure-copyfrom-k4m2-to-k3m1-snapshot-loss-results.json", copyErasurePairSnapshotLossCells(), copyErasurePairLossHooks{})
 }
 
 func TestErasureCopyPairs(t *testing.T) {

@@ -196,6 +196,8 @@ type copyHeldCommit struct {
 	BlockerOutcome   string   `json:"blocker_outcome"`
 	BlockerSubmitTID uint64   `json:"blocker_submission_tid"`
 	BlockerNative    string   `json:"blocker_native_after"`
+	// Replica is the loss of a destination replica instead of the primary.
+	Replica *copyHeldReplicaLoss `json:"replica_loss,omitempty"`
 }
 
 // copyHeldBlockerIncarnation is the client incarnation of the write that
@@ -323,7 +325,7 @@ func runCopyErasureChunkLoss(t *testing.T, width erasureWidth, name string) {
 					mu.Unlock()
 				})
 				if lost == "destination-before-commit" {
-					copyErasureHeldCommitLoss(t, ctx, pools, recovery, facts, width, limit, cell, &receipt, 0)
+					copyErasureHeldCommitLoss(t, ctx, pools, recovery, facts, width, limit, cell, &receipt, 0, copyHeldCopy{})
 					return
 				}
 				copyErasureChunkLoss(t, ctx, pools, recovery, facts, limit, cell, &receipt)
@@ -588,6 +590,58 @@ func checkCommitHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot,
 	return op, nil
 }
 
+// copyHeldCopy is what the held final transaction copies and what it loses:
+// the source head, unversioned or pinned to the written user version, or the
+// head's clone of a self-managed snapshot (unversioned or pinned to the
+// clone's user version); and the destination primary, or with replica a
+// destination shard that is neither the primary, the frozen OSD nor the
+// source primary (osd_erasure_copyfrom_held_test.go).
+type copyHeldCopy struct {
+	pinned, snapshot, replica bool
+}
+
+// suffix tells the run's object names of the kinds apart; the plain head
+// copy keeps the names it always had.
+func (c copyHeldCopy) suffix() string {
+	suffix := ""
+	if c.snapshot {
+		suffix += "-snap"
+	}
+	if c.replica {
+		suffix += "-replica"
+	}
+	return suffix + copyPinnedSuffix(c.pinned)
+}
+
+// copyErasureHold is the state of a held final transaction between the
+// hold and the loss.
+type copyErasureHold struct {
+	r       *copyPrimaryChangeRun
+	h       *copyChunkHold
+	held    *copyHeldCommit
+	request cephmsgr.OSDRequest
+	// primary is the destination primary and frozen the OSD of shard 1.
+	primary, frozen int32
+	seeded          nativeXattrSnapshot
+	blocker         string
+	blockerSeed     nativeXattrSnapshot
+	// blockerWrite is the 16-byte write held behind the frozen shard, sent
+	// on blockerConn; its outcome arrives on blocked.
+	blockerWrite cephmsgr.OSDOperation
+	blockerAt    osdFixtureOracle
+	blockerConn  *cephmsgr.OSDConnection
+	blocked      chan copyChunkOutcome
+	// start is when the frozen OSD was paused; the fixture resumes it at
+	// thawDeadline. work bounds the hold's observations.
+	start, thawDeadline time.Time
+	work                context.Context
+	stopWork            context.CancelFunc
+	data                []byte
+	copyKey, writeKey   pgHistoryTarget
+	// want is the clone a snapshot copy reads.
+	want copySnapshotLossWant
+}
+
 // For COPY_FROM and COPY_FROM2 onto the optimized isa k=2,m=2 destination,
 // the interval between the copy's source read completing and the destination
 // primary's local commit is held, and the primary is lost there. The pinned
@@ -634,8 +688,10 @@ func checkCommitHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot,
 // The same cell runs on the k=3,m=1 and k=4,m=2 destinations, and the
 // interval on a replicated destination, which queues its final transaction
 // locally in the call that issues it (ReplicatedBackend.cc:551-640), is held
-// in BlueStore instead (osd_copyfrom_precommit_test.go). Not verified: a loss
-// of a replica in this interval.
+// in BlueStore instead (osd_copyfrom_precommit_test.go). The EC-to-EC pairs
+// also hold the final transaction of a pinned head copy and of a copy from
+// a clone, and lose a replica in this interval instead of the primary
+// (copyHeldCopy, osd_erasure_copyfrom_held_test.go).
 //
 // sourceK is zero for a replicated source and the source pool's k for an
 // erasure-coded one. The source primary reads the extents a copy-get asks
@@ -646,9 +702,64 @@ func checkCommitHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot,
 // ECCommon.cc:210-260; fast_read is off on the owned pools). Every chunk of
 // the copy spans more than one stripe, so it reads all k data shards. The
 // frozen OSD must therefore hold no data shard of the source PG, or the
-// source read itself would stall on it. It returns the run and the hold.
-func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, facts erasureFacts, width erasureWidth, limit int, cell copyChunkLossCell, receipt *copyErasureLossReceipt, sourceK int) (*copyPrimaryChangeRun, *copyChunkHold) {
-	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("echeld-%d", cell.code))
+// source read itself would stall on it. A clone lives in its head's PG, so
+// the same holds for a copy from it. It returns the run, the hold and, for a
+// snapshot copy, the clone it read.
+func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, facts erasureFacts, width erasureWidth, limit int, cell copyChunkLossCell, receipt *copyErasureLossReceipt, sourceK int, kind copyHeldCopy) (*copyPrimaryChangeRun, *copyChunkHold, copySnapshotLossWant) {
+	e := holdErasureFinalCommit(t, ctx, pools, recovery, facts, width, limit, cell, receipt, sourceK, kind)
+	defer e.stopWork()
+	r, h, held := e.r, e.h, e.held
+	if kind.replica {
+		r.loseHeldReplica(e, receipt)
+		return r, h, e.want
+	}
+	receipt.KillExit = r.recovery.kill(t, ctx, e.primary)
+	if err := r.recovery.thaw(e.frozen); err != nil {
+		t.Fatalf("resume osd.%d within the freeze budget: %v", e.frozen, err)
+	}
+	e.stopWork()
+	held.FrozenFor = time.Since(e.start).Round(10 * time.Millisecond).String()
+
+	var lost copyChunkOutcome
+	select {
+	case lost = <-e.blocked:
+	case <-time.After(60 * time.Second):
+		t.Fatal("the blocker's wait did not end after the primary was killed")
+	}
+	var unknown *cephmsgr.OutcomeUnknownError
+	if !errors.As(lost.err, &unknown) || lost.reply.Transaction != 0 || lost.reply.Submission.GlobalID != r.gid || lost.reply.Submission.ClientIncarnation != copyHeldBlockerIncarnation {
+		t.Fatalf("the blocker did not end as an unknown outcome: %+v %v", lost.reply, lost.err)
+	}
+	held.BlockerOutcome, held.BlockerSubmitTID = outcomeCause(lost.err), lost.reply.Submission.Transaction
+	e.blockerConn.Close()
+	switch {
+	case kind.snapshot:
+		r.settleSnapshotDestinationLoss(h, cell.code, e.request, e.seeded, e.copyKey, e.want, &receipt.copyChunkLossReceipt)
+	case kind.pinned:
+		r.settlePinnedDestinationLoss(h, cell.code, e.request, e.seeded, e.copyKey, e.writeKey, e.data, &receipt.copyChunkLossReceipt)
+	default:
+		r.settleDestinationLoss(h, cell.code, e.seeded, e.copyKey, e.writeKey, e.data, &receipt.copyChunkLossReceipt)
+	}
+	after := poolObserve(t, ctx, 2, e.blocker, "", "")
+	held.BlockerNative = nativeDigest(after)
+	if !sameNative(after, e.blockerSeed) {
+		t.Fatalf("the held blocker write reached the blocker: %s; seed %s", nativeDigest(after), nativeDigest(e.blockerSeed))
+	}
+	for _, osd := range r.dstRoute.Acting {
+		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute), osd, r.dstRoute, 0); err != nil {
+			t.Fatal("after recovery:", err)
+		}
+		receipt.TempAfter = append(receipt.TempAfter, osd)
+	}
+	return r, h, e.want
+}
+
+// holdErasureFinalCommit builds the hold of copyErasureHeldCommitLoss up to
+// the interval check after the last round of observations: two rounds two
+// seconds apart, or one before a replica loss. The caller owns e.stopWork
+// and calls it once the frozen OSD is resumed.
+func holdErasureFinalCommit(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, facts erasureFacts, width erasureWidth, limit int, cell copyChunkLossCell, receipt *copyErasureLossReceipt, sourceK int, kind copyHeldCopy) *copyErasureHold {
+	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("echeld-%d%s", cell.code, kind.suffix()))
 	facts.checkPlacement(t, r.dstRoute)
 	r.chunkMax = limit
 	primary, frozen := r.heldCommitPlacement(facts, sourceK)
@@ -656,6 +767,13 @@ func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPoo
 	held := &copyHeldCommit{Frozen: frozen, BlockerShard: 1}
 	receipt.Held, receipt.Lost, receipt.Shard = held, primary, int(r.dstRoute.Shard)
 	receipt.SourcePrimary, receipt.Primary = r.srcRoute.ID, primary
+	if kind.replica {
+		lost, shard, err := copyHeldLostReplica(r.dstRoute, frozen, r.srcRoute.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt.Lost, receipt.Shard = lost, shard
+	}
 	r.lowerCopyChunk(&receipt.ChunkRestore, &receipt.ChunkReadback)
 	seeded := r.seedDestination()
 
@@ -693,32 +811,49 @@ func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPoo
 	}
 	write := r.writeSourceHead("source write", 1700009800, data, []byte{9, 0xfe}, cephmsgr.OSDSnapContext{})
 	receipt.SourceBytes, receipt.SourceUser = len(data), write.UserVersion
+	writeKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryWriteIncarnation, TID: write.Transaction}
+	var want copySnapshotLossWant
+	if kind.snapshot {
+		source := poolObserve(t, ctx, 1, r.source, "", "")
+		if source.Code != 0 || !bytes.Equal(source.Data, data) || source.Version != write.UserVersion {
+			t.Fatalf("native source differs from the Go write: code %d version %d (reply %d) %d bytes", source.Code, source.Version, write.UserVersion, len(source.Data))
+		}
+		want = r.snapshotWant(source, data, writeKey)
+	}
 	route, src := r.placeForCopy()
-	h := r.holdAtChunk(r.copyRequest(cell.code, route), route, src, 2, 0, write.UserVersion, []int{0, 0}, &receipt.Steps)
+	request := r.copyRequest(cell.code, route)
+	if kind.snapshot {
+		request.Operations[0].CopyFrom.SourceSnapshot = want.snap
+	}
+	// The clone keeps the written head's user version.
+	firstAssert := pinCopy(&request, kind.pinned, write.UserVersion)
+	h := r.holdAtChunk(request, route, src, 2, firstAssert, write.UserVersion, []int{0, 0}, &receipt.Steps)
 	h.write = write
 	receipt.FirstChunkTID, receipt.BarrierEpoch, receipt.BarrierReqid, receipt.BarrierPoint, receipt.BarrierEvents = h.first.TID, route.Epoch, h.op.Reqid, h.op.FlagPoint, h.op.Events
 	receipt.HeldChunk, receipt.HeldTID, receipt.Temporary = h.read.OSDOps, h.read.TID, h.temp
 	copyKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryCopyIncarnation, TID: h.op.TID}
-	writeKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryWriteIncarnation, TID: write.Transaction}
 
 	start := time.Now()
 	// Resumed well inside the 20 s heartbeat grace and the 16 s read lease;
 	// the fixture resumes it at the lease's deadline all the same.
 	thawDeadline := start.Add(16 * time.Second)
 	work, stopWork := context.WithDeadline(ctx, thawDeadline.Add(-3*time.Second))
-	defer stopWork()
+	e := &copyErasureHold{r: r, h: h, held: held, request: request, primary: primary, frozen: frozen, seeded: seeded, blocker: blocker, blockerSeed: blockerSeed,
+		start: start, thawDeadline: thawDeadline, work: work, stopWork: stopWork, data: data, copyKey: copyKey, writeKey: writeKey, want: want}
 	r.recovery.freeze(t, work, frozen, thawDeadline)
 	blockerAt := poolPlace(t, work, 2, blocker, "")
-	o := mutationConnection(t, r.client, ctx, blockerAt)
-	t.Cleanup(func() { o.Close() })
-	request := r.pools.request(blockerAt, cephmsgr.OSDOperation{Code: cephmsgr.OSDWrite, Offset: uint64(facts.chunk) + 100, Length: 16, Data: []byte("blocks the queue")})
-	request.ClientIncarnation, request.ModificationTime = copyHeldBlockerIncarnation, cephmsgr.OSDTime{Seconds: 1700009810}
-	blocked := make(chan copyChunkOutcome, 1)
+	e.blockerAt = blockerAt
+	e.blockerConn = mutationConnection(t, r.client, ctx, blockerAt)
+	t.Cleanup(func() { e.blockerConn.Close() })
+	e.blockerWrite = cephmsgr.OSDOperation{Code: cephmsgr.OSDWrite, Offset: uint64(facts.chunk) + 100, Length: 16, Data: []byte("blocks the queue")}
+	blockerRequest := r.pools.request(blockerAt, e.blockerWrite)
+	blockerRequest.ClientIncarnation, blockerRequest.ModificationTime = copyHeldBlockerIncarnation, cephmsgr.OSDTime{Seconds: 1700009810}
+	e.blocked = make(chan copyChunkOutcome, 1)
 	call, cancel := context.WithTimeout(ctx, 300*time.Second)
 	t.Cleanup(cancel)
 	go func() {
-		reply, err := o.Request(call, request)
-		blocked <- copyChunkOutcome{reply, err}
+		reply, err := e.blockerConn.Request(call, blockerRequest)
+		e.blocked <- copyChunkOutcome{reply, err}
 	}()
 	seen, raw := -1, ""
 	for {
@@ -734,15 +869,21 @@ func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPoo
 		time.Sleep(100 * time.Millisecond)
 	}
 	r.recovery.clearPauseReads(t, work)
-	var first time.Time
+	// A replica loss needs what is left of the freeze for its own
+	// observations (loseHeldReplica), so its hold is observed once.
+	rounds := 2
+	if kind.replica {
+		rounds = 1
+	}
+	var firstHeld time.Time
 	verdict, raws := errors.New("no observation"), ""
-	for held.Observations < 2 {
+	for held.Observations < rounds {
 		h.pending(t, "while its final transaction was held")
 		if copyBudgetSpent(work) {
 			t.Fatalf("the final copy transaction was not held within the freeze budget: %v%s", verdict, raws)
 		}
 		select {
-		case got := <-blocked:
+		case got := <-e.blocked:
 			t.Fatalf("the blocker write was answered while osd.%d was frozen: code %d err %v", frozen, got.reply.Code, got.err)
 		default:
 		}
@@ -754,8 +895,10 @@ func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPoo
 			held.Observations++
 			held.CopyPoint, held.CopyEvents, held.PrimaryStaging = op.FlagPoint, op.Events, staging.SHA256
 			if held.Observations == 1 {
-				first = time.Now()
-				time.Sleep(2 * time.Second)
+				firstHeld = time.Now()
+				if rounds > 1 {
+					time.Sleep(2 * time.Second)
+				}
 			}
 			continue
 		}
@@ -766,42 +909,11 @@ func copyErasureHeldCommitLoss(t *testing.T, ctx context.Context, pools ownedPoo
 		time.Sleep(100 * time.Millisecond)
 	}
 	// Each round's reads are bracketed by placement only. The interval the
-	// copy was sent in must have held through both rounds: its start only
-	// grows, so one observation after the second round covers them.
+	// copy was sent in must have held through every round: its start only
+	// grows, so one observation after the last round covers them.
 	held.IntervalSince = r.requireIntervalHeld(work, route, "the held final transaction")
-	held.HeldFor = time.Since(first).Round(10 * time.Millisecond).String()
+	held.HeldFor = time.Since(firstHeld).Round(10 * time.Millisecond).String()
 	t.Logf("source read complete and final transaction held on osd.%d for %s: copy %s at %q, blocker %s at %q, temporary %s still listed",
 		primary, held.HeldFor, h.op.Reqid, held.CopyPoint, held.BlockerReqid, held.BlockerPoint, h.temp)
-	receipt.KillExit = r.recovery.kill(t, ctx, primary)
-	if err := r.recovery.thaw(frozen); err != nil {
-		t.Fatalf("resume osd.%d within the freeze budget: %v", frozen, err)
-	}
-	stopWork()
-	held.FrozenFor = time.Since(start).Round(10 * time.Millisecond).String()
-
-	var lost copyChunkOutcome
-	select {
-	case lost = <-blocked:
-	case <-time.After(60 * time.Second):
-		t.Fatal("the blocker's wait did not end after the primary was killed")
-	}
-	var unknown *cephmsgr.OutcomeUnknownError
-	if !errors.As(lost.err, &unknown) || lost.reply.Transaction != 0 || lost.reply.Submission.GlobalID != r.gid || lost.reply.Submission.ClientIncarnation != copyHeldBlockerIncarnation {
-		t.Fatalf("the blocker did not end as an unknown outcome: %+v %v", lost.reply, lost.err)
-	}
-	held.BlockerOutcome, held.BlockerSubmitTID = outcomeCause(lost.err), lost.reply.Submission.Transaction
-	o.Close()
-	r.settleDestinationLoss(h, cell.code, seeded, copyKey, writeKey, data, &receipt.copyChunkLossReceipt)
-	after := poolObserve(t, ctx, 2, blocker, "", "")
-	held.BlockerNative = nativeDigest(after)
-	if !sameNative(after, blockerSeed) {
-		t.Fatalf("the held blocker write reached the blocker: %s; seed %s", nativeDigest(after), nativeDigest(blockerSeed))
-	}
-	for _, osd := range r.dstRoute.Acting {
-		if _, err := checkCopyTemp(copyStaging(t, ctx, osd, r.dstRoute), osd, r.dstRoute, 0); err != nil {
-			t.Fatal("after recovery:", err)
-		}
-		receipt.TempAfter = append(receipt.TempAfter, osd)
-	}
-	return r, h
+	return e
 }
