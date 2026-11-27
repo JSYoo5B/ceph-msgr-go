@@ -1,15 +1,18 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
@@ -29,6 +32,12 @@ type copyErasurePairLossReceipt struct {
 	Seed              string                 `json:"destination_seed"`
 	SourceVersion     uint64                 `json:"requested_source_version"`
 	MovedSource       *copyErasureSourceMove `json:"moved_source,omitempty"`
+	// SnapID and Clone name the copied clone of a snapshot cell.
+	SnapID uint64 `json:"snap_id,omitempty"`
+	Clone  string `json:"clone,omitempty"`
+	// ShardHistory is the offline capture of every acting shard's own log
+	// after recovery (osd_erasure_copyfrom_loss_history_test.go).
+	ShardHistory []copyLossShardReceipt `json:"shard_history,omitempty"`
 }
 
 type copyErasureSourceMove struct {
@@ -38,6 +47,40 @@ type copyErasureSourceMove struct {
 	Acting        []int32 `json:"acting"`
 	Epoch         uint32  `json:"epoch"`
 	IntervalSince uint32  `json:"interval_since"`
+}
+
+// copyErasurePairLossCell is one opcode, the OSD lost and the source of an
+// EC-to-EC copy: the head or a clone, unversioned or pinned.
+type copyErasurePairLossCell struct {
+	copyPrimaryChangeCase
+	// lost is destination, shard, source or destination-before-commit.
+	lost             string
+	pinned, snapshot bool
+}
+
+func (c copyErasurePairLossCell) label() string {
+	source := ""
+	if c.snapshot {
+		source = "snapshot/"
+	}
+	return c.name + "/" + source + c.lost + copyPinnedSuffix(c.pinned)
+}
+
+// copyErasurePairHeadLossCells are the head cells every pair runs: the
+// destination primary, a shared shard and the source primary lost between
+// chunks (the last also pinned), and the destination primary lost before
+// its local commit.
+func copyErasurePairHeadLossCells() []copyErasurePairLossCell {
+	var cells []copyErasurePairLossCell
+	for _, tc := range copyPrimaryChangeCases {
+		cells = append(cells,
+			copyErasurePairLossCell{tc, "destination", false, false},
+			copyErasurePairLossCell{tc, "shard", false, false},
+			copyErasurePairLossCell{tc, "source", false, false},
+			copyErasurePairLossCell{tc, "source", true, false},
+			copyErasurePairLossCell{tc, "destination-before-commit", false, false})
+	}
+	return cells
 }
 
 // COPY_FROM and COPY_FROM2 lose an OSD between two chunks of a head copy
@@ -73,60 +116,135 @@ type copyErasureSourceMove struct {
 //     case, the first copy-get carries the same version assertion both
 //     before and after loss.
 //
+// A fourth cell loses the destination primary after the source read is
+// complete and before the copy's final transaction is generated: the last
+// chunk is let through while an earlier partial-page write of the
+// destination PG waits for a read from a frozen data shard, which holds the
+// PG's one EC write queue (copyErasureHeldCommitLoss,
+// osd_erasure_copyfrom_sources_test.go). The source is named so that the
+// frozen OSD holds none of its data shards, so the copy's own source read
+// never touches it. The copy and the blocker end as unknown outcomes, the
+// seed and the blocker's seed are kept, and one explicit resubmission
+// executes once. The destination's final transaction is generated only in
+// ECCommon::cache_ready (src/osd/ECCommon.cc:773-916), so no shard
+// transaction of the copy exists when the primary is lost; a replicated
+// destination needs the BlueStore commit stall of
+// osd_copyfrom_precommit_test.go instead.
+//
 // These are the same cancellation and temporary-object rules exercised by
 // copyErasureChunkLoss (Ceph v20.2.4, src/osd/PrimaryLogPG.cc on_change,
 // cancel_copy and process_copy_chunk); the source is now erasure-coded too.
 // The shared loss helpers retain signed aggregate/per-op results, independently
 // compare bytes/xattrs/version/mtime, inspect the serving primary's PG log and
 // check a fresh-session read plus delayed native readback after recovery.
-// Those live PG-log observations do not prove every shard's history.
+// Those live PG-log observations do not prove every shard's history; the
+// offline per-shard capture of osd_erasure_copyfrom_loss_history_test.go
+// does that for the two destination-primary losses.
 //
 // After recovery both pool placements are checked again, source and destination
 // are read natively and every destination shard is free of temporary objects.
 // Publication follows cleanup and retains the chunk-setting restore readback.
 // The fixture restores owned daemon/flag state and removes both pools/profiles.
-// This row covers the optimized isa width pair and head copies. Snapshot
-// sources and loss during the final transaction require separate evidence.
+// The same cells run on two more width pairs (osd_erasure_copyfrom_pairs_test.go),
+// and copies from a snapshot on this pair in
+// osd_erasure_copyfrom_snapshot_loss_test.go.
 //
 //scenario:row osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedcopyfromerasuretoerasureloss key=aes256k service=aes256k family=4 stress= runtime=container osd=1 osd_store=bluestore osd_replicas=4 osd_profile=replicated-pg-v8 capabilities=osd-erasure-width
 //scenario:covers CLIENT to OSD
-//fixture:isolated pauses and SIGKILLs OSDs, sets pause, lowers a copy chunk at runtime, restores owned pools and profiles
+//fixture:isolated freezes and SIGKILLs OSDs, sets pause, lowers a copy chunk at runtime, restores owned pools and profiles
 func TestCephOSDErasureOptimizedCopyFromErasureToErasureLossIntegration(t *testing.T) {
-	ctx, pools, recovery, srcFacts, dstFacts := copyErasureToErasureFixture(t, 1800*time.Second)
-	limit := erasureCopyGetMax(dstFacts, erasureK3M1)
+	runCopyErasurePairLoss(t, erasurePairK2M2ToK3M1, "osd-erasure-copyfrom-pair-loss-results.json", copyErasurePairHeadLossCells(), nil)
+}
+
+// copyErasurePairLossAfter runs after a cell's own checks, with the cell's
+// run, hold, destination facts and receipt.
+type copyErasurePairLossAfter func(*testing.T, context.Context, *copyPrimaryChangeRun, *copyChunkHold, erasureFacts, *copyErasurePairLossReceipt)
+
+// runCopyErasurePairLoss runs cells on the owned pools of pair and publishes
+// their receipts as name after every cleanup. A non-nil after follows every
+// cell.
+func runCopyErasurePairLoss(t *testing.T, pair erasureCopyPair, name string, cells []copyErasurePairLossCell, after copyErasurePairLossAfter) {
+	ctx, pools, recovery, srcFacts, dstFacts := copyErasureToErasureFixture(t, 1800*time.Second, pair)
+	limit := erasureCopyGetMax(dstFacts, pair.dest)
+	t.Logf("source pool %d: %s, stripe width %d; destination pool %d: %s, stripe width %d, copy-get max %d", srcFacts.pool, pair.source, srcFacts.chunk*pair.source.k,
+		dstFacts.pool, pair.dest, dstFacts.chunk*pair.dest.k, limit)
+	var mu sync.Mutex
 	var receipts []copyErasurePairLossReceipt
 	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
 		raw, err := json.MarshalIndent(receipts, "", "  ")
 		if err == nil {
-			err = testcluster.WritePublicEvidence(filepath.Join(recovery.dir, "osd-erasure-copyfrom-pair-loss-results.json"), append(raw, '\n'))
+			err = testcluster.WritePublicEvidence(filepath.Join(recovery.dir, name), append(raw, '\n'))
 		}
 		if err != nil {
 			t.Error("EC-to-EC loss receipt", err)
 		}
 	})
-	for _, tc := range copyPrimaryChangeCases {
-		for _, loss := range []struct {
-			target string
-			pinned bool
-		}{{"destination", false}, {"shard", false}, {"source", false}, {"source", true}} {
-			cell := copyChunkLossCell{tc, loss.target}
-			label := cell.name + "/" + cell.lost + copyPinnedSuffix(loss.pinned)
-			t.Run(label, func(t *testing.T) {
-				receipt := copyErasurePairLossReceipt{copyErasureLossReceipt: copyErasureLossReceipt{
-					copyChunkLossReceipt: copyChunkLossReceipt{Cell: label, Chunk: uint64(limit), Paused: -1},
-					Width:                erasureK3M1.name, Lost: -1, Shard: -1, CopyGets: limit},
-					SourcePool: srcFacts.pool, DestinationPool: dstFacts.pool, SourceWidth: erasureK2M2.name, LostSourceShard: -1}
-				publishAfterCleanups(t, func() { receipts = append(receipts, receipt) })
-				copyErasurePairLoss(t, ctx, pools, recovery, srcFacts, dstFacts, limit, cell, loss.pinned, &receipt)
+	for _, cell := range cells {
+		label := cell.label()
+		t.Run(label, func(t *testing.T) {
+			receipt := copyErasurePairLossReceipt{copyErasureLossReceipt: copyErasureLossReceipt{
+				copyChunkLossReceipt: copyChunkLossReceipt{Cell: label, Chunk: uint64(limit), Paused: -1},
+				Width:                pair.dest.name, Lost: -1, Shard: -1, CopyGets: limit},
+				SourcePool: srcFacts.pool, DestinationPool: dstFacts.pool, SourceWidth: pair.source.name, LostSourceShard: -1}
+			publishAfterCleanups(t, func() {
+				mu.Lock()
+				receipts = append(receipts, receipt)
+				mu.Unlock()
 			})
-		}
+			var r *copyPrimaryChangeRun
+			var h *copyChunkHold
+			if cell.lost == "destination-before-commit" {
+				if cell.pinned || cell.snapshot {
+					t.Fatal("the held final transaction runs an unversioned head copy only")
+				}
+				r, h = copyErasureHeldCommitLoss(t, ctx, pools, recovery, dstFacts, pair.dest, limit, copyChunkLossCell{cell.copyPrimaryChangeCase, cell.lost},
+					&receipt.copyErasureLossReceipt, pair.source.k)
+				srcFacts.checkPlacement(t, h.source)
+				receipt.SourceActing, receipt.DestinationActing = slices.Clone(h.source.Acting), slices.Clone(h.route.Acting)
+				receipt.LostSourceShard = slices.Index(h.source.Acting, receipt.Lost)
+				if slices.Contains(h.source.Acting[:pair.source.k], receipt.Held.Frozen) {
+					t.Fatalf("the frozen osd.%d holds a data shard of the source %v", receipt.Held.Frozen, h.source.Acting)
+				}
+			} else {
+				r, h = copyErasurePairLoss(t, ctx, pools, recovery, srcFacts, dstFacts, limit, cell, &receipt)
+			}
+			if after != nil {
+				after(t, ctx, r, h, dstFacts, &receipt)
+			}
+		})
 	}
 }
 
-func copyErasurePairLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, srcFacts, dstFacts erasureFacts, limit int, cell copyChunkLossCell, pinned bool, receipt *copyErasurePairLossReceipt) {
-	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("ecpairloss-%d-%s%s", cell.code, cell.lost, copyPinnedSuffix(pinned)))
+// copySnapshotLossWant is what a copy from a clone of the source must leave
+// whichever OSD is lost: the destination a copy of the clone at its user
+// version, the clone and the source head natively unchanged, and none of
+// the source requests (the write and the cloning write) in the destination
+// PG log, since a copy from a clone carries no request ID.
+type copySnapshotLossWant struct {
+	snap        uint64
+	clone, head nativeXattrSnapshot
+	sourceKeys  []pgHistoryTarget
+}
+
+func copyErasurePairLoss(t *testing.T, ctx context.Context, pools ownedPools, recovery *copyPrimaryRecovery, srcFacts, dstFacts erasureFacts, limit int, cell copyErasurePairLossCell, receipt *copyErasurePairLossReceipt) (*copyPrimaryChangeRun, *copyChunkHold) {
+	snapshot := ""
+	if cell.snapshot {
+		snapshot = "-snap"
+	}
+	r := newCopyPrimaryChangeRun(t, ctx, pools, recovery, fmt.Sprintf("ecpairloss-%d-%s%s%s", cell.code, cell.lost, snapshot, copyPinnedSuffix(cell.pinned)))
 	r.chunkMax = limit
 	receipt.SourcePrimary, receipt.Primary = r.separateSource(), r.dstRoute.ID
+	if cell.lost == "source" {
+		// The lost source primary must hold a destination shard too. Every
+		// OSD of the four-OSD pairs does; on the six-OSD pair the
+		// destination PG spans four of the six.
+		dst := r.dstRoute
+		receipt.SourcePrimary = r.sourceWhere(fmt.Sprintf("a primary other than osd.%d among the destination's %v", dst.ID, dst.Acting), func(src osdFixtureOracle) bool {
+			return src.ID == src.PrimaryID && src.ID != dst.ID && slices.Contains(dst.Acting, src.ID)
+		})
+	}
 	srcFacts.checkPlacement(t, r.srcRoute)
 	dstFacts.checkPlacement(t, r.dstRoute)
 	receipt.SourceActing, receipt.DestinationActing = slices.Clone(r.srcRoute.Acting), slices.Clone(r.dstRoute.Acting)
@@ -139,11 +257,30 @@ func copyErasurePairLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	}
 	write, source := r.writeSource("EC source write", 1700010100, data, []byte{9, 0xfe})
 	receipt.SourceBefore, receipt.SourceBytes, receipt.SourceUser = nativeDigest(source), len(data), source.Version
+	copyKey := func(h *copyChunkHold) pgHistoryTarget {
+		return pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryCopyIncarnation, TID: h.op.TID}
+	}
+	writeKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryWriteIncarnation, TID: write.Transaction}
+	var want copySnapshotLossWant
+	if cell.snapshot {
+		// The clone keeps the written head's data, xattrs and user version.
+		var cloning cephmsgr.OSDReply
+		want.snap, _, cloning = r.cloneSource(source)
+		want.clone, want.head = source, poolObserve(t, ctx, 1, r.source, "", "")
+		if want.head.Code != 0 || !bytes.Equal(want.head.Data, data) || want.head.Version != cloning.UserVersion || want.head.Version <= source.Version {
+			t.Fatalf("native source head after the cloning write: code %d version %d (cloning reply %d, clone %d)", want.head.Code, want.head.Version, cloning.UserVersion, source.Version)
+		}
+		want.sourceKeys = []pgHistoryTarget{writeKey, {Type: "client", Num: r.gid, Inc: copyPrimaryWriteIncarnation, TID: cloning.Transaction}}
+		receipt.SnapID, receipt.Clone, receipt.SourceBefore = want.snap, nativeDigest(source), nativeDigest(want.head)
+	}
 	route, src := r.placeForCopy()
 	srcFacts.checkPlacement(t, src)
 	dstFacts.checkPlacement(t, route)
 	request := r.copyRequest(cell.code, route)
-	firstAssert := pinCopy(&request, pinned, source.Version)
+	if cell.snapshot {
+		request.Operations[0].CopyFrom.SourceSnapshot = want.snap
+	}
+	firstAssert := pinCopy(&request, cell.pinned, source.Version)
 	receipt.SourceVersion = request.Operations[0].CopyFrom.SourceVersion
 	h := r.holdAtChunk(request, route, src, 2, firstAssert, source.Version, []int{0, 0}, &receipt.Steps)
 	h.write = write
@@ -164,25 +301,35 @@ func copyErasurePairLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 	if receipt.Shard < 0 || receipt.LostSourceShard < 0 || (receipt.Lost == src.ID) != (cell.lost == "source") {
 		t.Fatal("the lost OSD does not hold the required shards", receipt.Lost, src.Acting, route.Acting)
 	}
-	copyKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryCopyIncarnation, TID: h.op.TID}
-	writeKey := pgHistoryTarget{Type: "client", Num: r.gid, Inc: copyPrimaryWriteIncarnation, TID: write.Transaction}
-	switch cell.lost {
-	case "destination":
-		r.loseDestinationBetweenChunks(h, cell.code, seeded, copyKey, writeKey, data, &receipt.copyChunkLossReceipt)
-	case "source":
+	switch {
+	case cell.lost == "destination" && cell.snapshot:
+		receipt.KillExit = r.recovery.kill(t, ctx, route.ID)
+		r.settleSnapshotDestinationLoss(h, cell.code, request, seeded, copyKey(h), want, &receipt.copyChunkLossReceipt)
+	case cell.lost == "destination":
+		r.loseDestinationBetweenChunks(h, cell.code, seeded, copyKey(h), writeKey, data, &receipt.copyChunkLossReceipt)
+	default:
 		now := r.restartCopyAfterReplicaLoss(h, receipt.Lost, firstAssert, &receipt.copyChunkLossReceipt)
-		receipt.MovedSource = r.waitErasureCopySourceMoved(src)
-		h.pending(t, "after observing the source primary change")
-		r.finishCopyAfterReplicaLoss(h, now, copyKey, writeKey, data, &receipt.copyChunkLossReceipt)
-	case "shard":
-		r.loseReplicaBetweenChunks(h, receipt.Lost, copyKey, writeKey, data, &receipt.copyChunkLossReceipt)
+		if cell.lost == "source" {
+			receipt.MovedSource = r.waitErasureCopySourceMoved(src)
+			h.pending(t, "after observing the source primary change")
+		}
+		if cell.snapshot {
+			r.finishSnapshotAfterReplicaLoss(h, now, copyKey(h), want, &receipt.copyChunkLossReceipt)
+		} else {
+			r.finishCopyAfterReplicaLoss(h, now, copyKey(h), writeKey, data, &receipt.copyChunkLossReceipt)
+		}
 	}
 	srcFacts.checkPlacement(t, poolPlace(t, ctx, 1, r.source, ""))
 	dstFacts.checkPlacement(t, poolPlace(t, ctx, 2, r.dest, ""))
 	after := poolObserve(t, ctx, 1, r.source, "", "")
 	dest := poolObserve(t, ctx, 2, r.dest, "", "")
 	receipt.SourceAfter = nativeDigest(after)
-	if after.Code != 0 || !sameCopy(dest, after, after.Version) || cell.lost != "destination" && !sameNative(after, source) {
+	if cell.snapshot {
+		clone := poolObserveSnap(t, ctx, 1, r.source, "", "", want.snap)
+		if !sameNative(after, want.head) || !sameNative(clone, want.clone) || !sameCopy(dest, clone, clone.Version) {
+			t.Fatalf("native EC source/clone/destination mismatch after recovery: head %s, clone %s, destination %s", nativeDigest(after), nativeDigest(clone), nativeDigest(dest))
+		}
+	} else if after.Code != 0 || !sameCopy(dest, after, after.Version) || cell.lost != "destination" && !sameNative(after, source) {
 		t.Fatalf("native EC source/destination mismatch after recovery: source %s, destination %s", nativeDigest(after), nativeDigest(dest))
 	}
 	for _, osd := range r.dstRoute.Acting {
@@ -191,6 +338,7 @@ func copyErasurePairLoss(t *testing.T, ctx context.Context, pools ownedPools, re
 		}
 		receipt.TempAfter = append(receipt.TempAfter, osd)
 	}
+	return r, h
 }
 
 func (r *copyPrimaryChangeRun) waitErasureCopySourceMoved(before osdFixtureOracle) *copyErasureSourceMove {
