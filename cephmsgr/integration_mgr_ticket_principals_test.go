@@ -284,74 +284,10 @@ func goCell(t *testing.T, ctx context.Context, admin *Client, base Options, ttl 
 	var targets []principalListener
 	var keys []Key
 	for _, label := range []string{"a", "b"} {
-		name := fmt.Sprintf("gotk%s%d", label, suffix)
-		entity := "mgr." + name
-		var created []struct {
-			Key string `json:"key"`
-		}
-		if err := json.Unmarshal(wipeCommand(t, ctx, admin, map[string]any{"prefix": "auth get-or-create", "entity": entity, "caps": []string{"mon", "allow profile mgr", "osd", "allow *", "mds", "allow *"}, "format": "json"}), &created); err != nil || len(created) != 1 {
-			t.Fatal("scoped MGR credential", entity, err)
-		}
-		defer func() {
-			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
-			defer stop()
-			wipeCommand(t, cleanup, admin, map[string]any{"prefix": "auth rm", "entity": entity})
-		}()
-		key, err := ParseKey(created[0].Key)
-		if err != nil {
-			t.Fatal(err)
-		}
+		target, key, stop := startPrincipalListener(t, ctx, admin, base, ttl, fmt.Sprintf("gotk%s%d", label, suffix))
+		defer stop()
 		keys = append(keys, key)
-		var localMu sync.Mutex
-		var local netip.Addr
-		daemon, err := DialMgrDaemon(ctx, MgrDaemonOptions{
-			Monitors: base.Monitors, Identity: entity, Key: key, ConnectionMode: base.ConnectionMode,
-			ExpectedFSID: base.ExpectedFSID, ServiceTicketTTL: ttl,
-			DialContext: func(ctx context.Context, network, endpoint string) (net.Conn, error) {
-				conn, err := base.DialContext(ctx, network, endpoint)
-				if err == nil {
-					if tcp, ok := conn.LocalAddr().(*net.TCPAddr); ok {
-						localMu.Lock()
-						local = tcp.AddrPort().Addr().Unmap()
-						localMu.Unlock()
-					}
-				}
-				return conn, err
-			},
-		})
-		if err != nil {
-			t.Fatal(entity, err)
-		}
-		defer daemon.Close()
-		if _, err := daemon.WaitRotatingKeys(ctx, 0); err != nil {
-			t.Fatal(entity, "rotating MGR secrets", err)
-		}
-		bound, err := net.Listen("tcp4", ":0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		localMu.Lock()
-		host := local
-		localMu.Unlock()
-		var nonce [4]byte
-		if _, err := rand.Read(nonce[:]); err != nil {
-			t.Fatal(err)
-		}
-		advertised := ManagerAddress{Type: 2, Nonce: binary.LittleEndian.Uint32(nonce[:])&0x7fffffff | 1, Endpoint: netip.AddrPortFrom(host, uint16(bound.Addr().(*net.TCPAddr).Port))}
-		listener, err := daemon.Listen(MgrListenerOptions{
-			Listener: bound, Addresses: []ManagerAddress{advertised}, ConnectionMode: base.ConnectionMode, HandshakeTimeout: 5 * time.Second,
-			Authorize: func(_ context.Context, id MgrPeerIdentity) error {
-				if id.Entity != base.Identity {
-					return errors.New("unexpected peer")
-				}
-				return nil
-			},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer listener.Close()
-		targets = append(targets, principalListener{name: entity, daemon: daemon, listener: listener, advertised: advertised})
+		targets = append(targets, target)
 	}
 	if bytes.Equal(keys[0].value.Signature(probe), keys[1].value.Signature(probe)) {
 		t.Fatal("the two scoped MGR principals share one key")
@@ -429,6 +365,94 @@ func goCell(t *testing.T, ctx context.Context, admin *Client, base Options, ttl 
 	if seen[0] == seen[1] {
 		t.Fatal("the go cohorts share one secret ID", seen)
 	}
+}
+
+// startPrincipalListener creates the scoped principal mgr.<name>,
+// authenticates it as a Go MGR daemon that never beacons, holds its first
+// rotating MGR set and starts its listener, which admits only base's
+// identity. The returned stop closes the listener and the daemon and
+// removes the principal; the caller defers it, and it also runs, through
+// the deferred calls here, when this helper fails.
+func startPrincipalListener(t *testing.T, ctx context.Context, admin *Client, base Options, ttl time.Duration, name string) (target principalListener, key Key, stop func()) {
+	t.Helper()
+	var stops []func()
+	stop = func() {
+		for i := len(stops) - 1; i >= 0; i-- {
+			stops[i]()
+		}
+		stops = nil
+	}
+	defer func() {
+		if t.Failed() {
+			stop()
+		}
+	}()
+	entity := "mgr." + name
+	var created []struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(wipeCommand(t, ctx, admin, map[string]any{"prefix": "auth get-or-create", "entity": entity, "caps": []string{"mon", "allow profile mgr", "osd", "allow *", "mds", "allow *"}, "format": "json"}), &created); err != nil || len(created) != 1 {
+		t.Fatal("scoped MGR credential", entity, err)
+	}
+	stops = append(stops, func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		wipeCommand(t, cleanup, admin, map[string]any{"prefix": "auth rm", "entity": entity})
+	})
+	key, err := ParseKey(created[0].Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var localMu sync.Mutex
+	var local netip.Addr
+	daemon, err := DialMgrDaemon(ctx, MgrDaemonOptions{
+		Monitors: base.Monitors, Identity: entity, Key: key, ConnectionMode: base.ConnectionMode,
+		ExpectedFSID: base.ExpectedFSID, ServiceTicketTTL: ttl,
+		DialContext: func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+			conn, err := base.DialContext(ctx, network, endpoint)
+			if err == nil {
+				if tcp, ok := conn.LocalAddr().(*net.TCPAddr); ok {
+					localMu.Lock()
+					local = tcp.AddrPort().Addr().Unmap()
+					localMu.Unlock()
+				}
+			}
+			return conn, err
+		},
+	})
+	if err != nil {
+		t.Fatal(entity, err)
+	}
+	stops = append(stops, func() { daemon.Close() })
+	if _, err := daemon.WaitRotatingKeys(ctx, 0); err != nil {
+		t.Fatal(entity, "rotating MGR secrets", err)
+	}
+	bound, err := net.Listen("tcp4", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localMu.Lock()
+	host := local
+	localMu.Unlock()
+	var nonce [4]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	advertised := ManagerAddress{Type: 2, Nonce: binary.LittleEndian.Uint32(nonce[:])&0x7fffffff | 1, Endpoint: netip.AddrPortFrom(host, uint16(bound.Addr().(*net.TCPAddr).Port))}
+	listener, err := daemon.Listen(MgrListenerOptions{
+		Listener: bound, Addresses: []ManagerAddress{advertised}, ConnectionMode: base.ConnectionMode, HandshakeTimeout: 5 * time.Second,
+		Authorize: func(_ context.Context, id MgrPeerIdentity) error {
+			if id.Entity != base.Identity {
+				return errors.New("unexpected peer")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stops = append(stops, func() { listener.Close() })
+	return principalListener{name: entity, daemon: daemon, listener: listener, advertised: advertised}, key, stop
 }
 
 func stockCell(t *testing.T, ctx context.Context, control string, admin *Client, fixtureTTL time.Duration) {
