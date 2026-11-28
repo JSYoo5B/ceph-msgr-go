@@ -40,7 +40,10 @@ func lifetimeStock(t *testing.T, ctx context.Context, control string, admin *Cli
 // fresh authorizers of that one copy are presented, at three points of its
 // life, to a Go MGR daemon's listener (scoped mgr.<id> principal, no
 // beacon) and to the stock active MGR, pinned to the native MgrMap address,
-// nonce and GID and bracketed by a second native dump:
+// nonce and GID and bracketed by a second native dump. Every authorizer of
+// the retained ticket is built within its validity, since the Go client
+// builds none of an expired ticket and the authorizer's wire content does
+// not depend on when it is sent:
 //
 //   - within the ticket's validity, both admit it (positive control);
 //   - after the ticket's expiry, while the Go daemon's rotating set (its
@@ -106,13 +109,38 @@ func TestCephMgrTicketLifetimeIntegration(t *testing.T) {
 	step := 0
 	// goPresent presents a fresh authorizer of ticket to the Go listener and
 	// returns its admission or refusal with the Go set's state around it.
+	// The Go client builds no authorizer of an expired ticket
+	// (cephx.Client.Authorizer), and nothing an authorizer puts on the wire
+	// depends on the time it is sent: the ticket blob, the global ID, the
+	// service, a nonce and the answer to the target's challenge. So every
+	// authorizer of the retained ticket is built now, within its validity,
+	// and each one is used for one later presentation.
+	var pool []*cephx.Authorizer
+	for range 4 + int(2*ttl/time.Second) + 4 {
+		pool = append(pool, retained.authorizer(t))
+	}
+	if !time.Now().Before(expires) {
+		t.Fatal("inconclusive, the retained ticket expired while its authorizers were built")
+	}
+	next := func(ticket principalTicket) *cephx.Authorizer {
+		t.Helper()
+		if ticket.ticket.SecretID != id {
+			return ticket.authorizer(t)
+		}
+		if len(pool) == 0 {
+			t.Fatal("no authorizer of the retained ticket left")
+		}
+		a := pool[0]
+		pool = pool[1:]
+		return a
+	}
 	goPresent := func(phase string, ticket principalTicket, wantHeld bool) (MgrPeerIdentity, *MgrListenerRefusal, error) {
 		t.Helper()
 		held, ids := lifetimeHolds(target.daemon, ticket.ticket.SecretID)
 		if held != wantHeld {
 			t.Fatalf("%s: inconclusive, the Go set %v holds secret ID %d: %v, want %v", phase, ids, ticket.ticket.SecretID, held, wantHeld)
 		}
-		admitted, refusal, clientErr := principalPresent(t, ctx, admin, target, phase, ticket.authorizer(t))
+		admitted, refusal, clientErr := principalPresent(t, ctx, admin, target, phase, next(ticket))
 		if after, afterIDs := lifetimeHolds(target.daemon, ticket.ticket.SecretID); after != held {
 			t.Fatalf("%s: inconclusive, the Go set changed during the presentation: %v -> %v", phase, ids, afterIDs)
 		}
@@ -134,7 +162,7 @@ func TestCephMgrTicketLifetimeIntegration(t *testing.T) {
 	stockAdmit := func(phase string, ticket principalTicket) {
 		t.Helper()
 		step++
-		epoch, err := lifetimeStock(t, ctx, control, admin, stock, fmt.Sprintf("lifetime-%d", step), ticket.authorizer(t))
+		epoch, err := lifetimeStock(t, ctx, control, admin, stock, fmt.Sprintf("lifetime-%d", step), next(ticket))
 		if err != nil {
 			_, ids := lifetimeHolds(target.daemon, ticket.ticket.SecretID)
 			t.Fatalf("%s: mgr.%s/%d (native epochs %d..%d) refused secret ID %d with the Go set %v: %v", phase, stock.ActiveName, stock.ActiveGID, stock.Epoch, epoch, ticket.ticket.SecretID, ids, err)
@@ -195,7 +223,7 @@ func TestCephMgrTicketLifetimeIntegration(t *testing.T) {
 	}
 	for attempt := 1; ; attempt++ {
 		step++
-		epoch, err := lifetimeStock(t, ctx, control, admin, stock, fmt.Sprintf("lifetime-%d", step), retained.authorizer(t))
+		epoch, err := lifetimeStock(t, ctx, control, admin, stock, fmt.Sprintf("lifetime-%d", step), next(retained))
 		if err != nil {
 			if !errors.As(err, &rejection) {
 				t.Fatalf("evicted: mgr.%s ended the handshake of secret ID %d without an authentication refusal: %v", stock.ActiveName, id, err)
